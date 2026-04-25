@@ -34,11 +34,15 @@
 
 pub mod commands;
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::audio::{AudioCapture, CpalAudioCapture};
+use crate::db::SqliteDatabase;
+use crate::history::{HistoryRepository, SqliteHistoryRepository};
 use crate::transcription::Transcribe;
 
 // Re-exports kept light: the command functions are referred to by their
@@ -60,13 +64,16 @@ pub struct ForegroundApp {
 /// Long-lived application state, registered with `tauri::Builder::manage`.
 ///
 /// Ownership rules:
-/// - `audio` is `Arc<dyn AudioCapture>` so a future hotkey layer (TODO(#5))
-///   can hold its own clone and call `start`/`stop` without going through a
+/// - `audio` is `Arc<dyn AudioCapture>` so a future hotkey layer can hold
+///   its own clone and call `start`/`stop` without going through a
 ///   Tauri command.
 /// - `transcribe` is `Option<Arc<dyn Transcribe>>` because the production
 ///   backend is gated behind the `whisper` Cargo feature *and* requires a
 ///   model path. When either is absent the `stop_dictation` command returns
 ///   [`commands::IpcError::TranscriptionUnavailable`] rather than crashing.
+/// - `history` is `Arc<dyn HistoryRepository>` so the IPC layer can hold a
+///   handle without knowing about the SQLite-specific impl. Tests of
+///   history-touching commands swap in a deterministic mock at this seam.
 /// - `pending_foreground` is captured on `start_dictation` and taken on
 ///   `stop_dictation`. The `Mutex` is for `&self` interior mutability; it
 ///   is never contended on the hot path because dictation is fundamentally
@@ -74,30 +81,50 @@ pub struct ForegroundApp {
 pub struct AppState {
     pub audio: Arc<dyn AudioCapture>,
     pub transcribe: Option<Arc<dyn Transcribe>>,
+    pub history: Arc<dyn HistoryRepository>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
 }
 
 impl AppState {
-    pub fn new(audio: Arc<dyn AudioCapture>, transcribe: Option<Arc<dyn Transcribe>>) -> Self {
+    pub fn new(
+        audio: Arc<dyn AudioCapture>,
+        transcribe: Option<Arc<dyn Transcribe>>,
+        history: Arc<dyn HistoryRepository>,
+    ) -> Self {
         Self {
             audio,
             transcribe,
+            history,
             pending_foreground: Mutex::new(None),
         }
     }
 
-    /// Build the state used in production: the cpal audio backend, plus
-    /// (when the `whisper` feature is enabled and `HUSH_MODEL_PATH` points
-    /// at a readable GGUF file) a whisper transcriber loaded from that path.
+    /// Build the state used in production: the cpal audio backend, the
+    /// SQLite-backed history repository at `db_path`, plus (when the
+    /// `whisper` feature is enabled and `HUSH_MODEL_PATH` points at a
+    /// readable GGUF file) a whisper transcriber loaded from that path.
     ///
-    /// Why an env var rather than a settings file: the model picker UI is
-    /// a M3 deliverable. For M1/M2 the env var keeps the spike unblocked
-    /// without committing to a settings schema we'd have to migrate later.
-    /// The eventual replacement is `settings.json` in the platform app-data
-    /// directory, populated by the in-app picker.
-    pub fn build_default() -> Self {
+    /// Why `db_path` is a parameter: the platform app-data directory is
+    /// only resolvable from a Tauri `App` / `AppHandle`, which doesn't
+    /// exist until `setup` runs. The caller in `lib.rs::run` does the
+    /// resolution and hands us the path, so this function stays trivially
+    /// testable.
+    ///
+    /// Why an env var for the model and not the database: the model
+    /// picker UI is a M3 deliverable. For M1/M2 the env var keeps the
+    /// spike unblocked without committing to a settings schema we'd have
+    /// to migrate later. The eventual replacement is `settings.json` in
+    /// the platform app-data directory, populated by the in-app picker.
+    pub async fn build_default(db_path: &Path) -> Result<Self> {
         let audio: Arc<dyn AudioCapture> = Arc::new(CpalAudioCapture::new());
-        Self::new(audio, build_default_transcriber())
+
+        let db = SqliteDatabase::open(db_path)
+            .await
+            .with_context(|| format!("open database at {}", db_path.display()))?;
+        let history: Arc<dyn HistoryRepository> =
+            Arc::new(SqliteHistoryRepository::new(Arc::new(db)));
+
+        Ok(Self::new(audio, build_default_transcriber(), history))
     }
 }
 
@@ -260,6 +287,42 @@ mod tests {
         assert!(err.contains("model exploded"), "got: {err}");
     }
 
+    /// Tiny mock for unit tests that need an `Arc<dyn HistoryRepository>`
+    /// in `AppState` but don't exercise its methods. Pinning the count to
+    /// `0` keeps surface minimal — tests that need real behaviour against
+    /// the SQLite-backed impl call the repository directly.
+    pub(crate) struct NoopHistory;
+
+    #[async_trait::async_trait]
+    impl HistoryRepository for NoopHistory {
+        async fn insert(&self, _: crate::history::NewHistoryEntry) -> anyhow::Result<i64> {
+            Ok(0)
+        }
+        async fn list(&self, _: i64, _: i64) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
+            Ok(vec![])
+        }
+        async fn search(
+            &self,
+            _: &str,
+            _: i64,
+            _: i64,
+        ) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
+            Ok(vec![])
+        }
+        async fn delete(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn count(&self) -> anyhow::Result<i64> {
+            Ok(0)
+        }
+    }
+
+    pub(crate) fn mock_state() -> AppState {
+        let audio: Arc<dyn AudioCapture> = Arc::new(MockAudio::new(fake_audio()));
+        let history: Arc<dyn HistoryRepository> = Arc::new(NoopHistory);
+        AppState::new(audio, None, history)
+    }
+
     #[test]
     fn appstate_can_be_constructed_with_no_transcriber() {
         // Mirrors the runtime path where `--features whisper` is off or
@@ -267,8 +330,7 @@ mod tests {
         // works, and the IPC layer surfaces `TranscriptionUnavailable` on
         // stop. We just check construction here; the unavailable behaviour
         // is exercised by the `commands` module's runtime path.
-        let audio: Arc<dyn AudioCapture> = Arc::new(MockAudio::new(fake_audio()));
-        let state = AppState::new(audio, None);
+        let state = mock_state();
         assert!(state.transcribe.is_none());
     }
 }

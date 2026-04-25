@@ -67,6 +67,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Monitoring; Linux requires X11 (Wayland support is compositor-dependent
   and out of scope for this release per PRD §10).
 
+- History persistence (`history` module): each successful transcription
+  is auto-inserted into a SQLite-backed history table via the
+  `HistoryRepository` trait (sqlx pool from #18). New Tauri commands
+  (`history_list`, `history_search`, `history_delete`, `history_count`)
+  back a frontend history view with debounced FTS5 search, per-row copy
+  / delete, and newest-first ordering. The `Transcribe` trait gained a
+  `model_label()` method so the row records which model produced each
+  transcript (whisper-rs returns the GGUF file's basename).
+
 ### Changed
 
 - **M2 polish.** Visible recording and transcribing states (pulsing red
