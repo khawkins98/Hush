@@ -17,6 +17,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::AudioDevice;
+use crate::dictionary::{apply_replacements, NewReplacementRule, ReplacementRule};
 use crate::history::{HistoryEntry, NewHistoryEntry};
 
 use super::{AppState, ForegroundApp};
@@ -64,6 +65,13 @@ pub enum IpcError {
     /// try again") rather than the generic "restart Hush".
     #[error("history: {0}")]
     History(String),
+
+    /// Replacements repository (SQLite) error — failed CRUD on the
+    /// dictionary's replacements table. Same rationale as `History`:
+    /// a kebab-case kind (`replacements`) so the frontend can switch on
+    /// it for tailored recovery copy.
+    #[error("replacements: {0}")]
+    Replacements(String),
 
     /// In-process state guard panicked while a lock was held. Should not
     /// happen in practice — only the IPC commands lock our internal
@@ -124,8 +132,9 @@ fn start_dictation_inner(state: &AppState, device_id: Option<&str>) -> IpcResult
     Ok(())
 }
 
-/// Stop capturing, transcribe, write to clipboard, fire a notification,
-/// and return the text to the frontend.
+/// Stop capturing, transcribe, apply post-transcription replacements,
+/// write to clipboard, fire a notification, and return the text to the
+/// frontend.
 ///
 /// The audio-stop and transcription calls are made inline rather than
 /// being collapsed through a single helper, because we want each layer's
@@ -135,13 +144,24 @@ fn start_dictation_inner(state: &AppState, device_id: Option<&str>) -> IpcResult
 /// error mentioning "device" was being routed to `Audio`. Splitting the
 /// calls makes the boundary obvious and removes the heuristic.
 ///
+/// **Replacement-rule load failure is non-fatal**: if the rules table
+/// can't be read for some reason we log and continue with no
+/// replacements rather than failing the whole dictation. The user
+/// already has the text; surfacing "we couldn't load your rules" as a
+/// hard error would block them on a strictly-secondary feature. The
+/// settings surface (M3) can offer a "rules failed to load — see logs"
+/// banner if this turns out to matter in practice.
+///
 /// Clipboard write is the user's actual artefact; if it fails we surface
 /// the error to the frontend so the user knows the text wasn't pasteable.
 /// The notification is courtesy and best-effort: if the platform refuses
 /// to fire one (Linux without a notification daemon, for example), we
 /// swallow the error and continue.
 #[tauri::command]
-pub fn stop_dictation(app: AppHandle, state: State<'_, AppState>) -> IpcResult<DictationResult> {
+pub async fn stop_dictation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> IpcResult<DictationResult> {
     let transcriber = state
         .transcribe
         .as_ref()
@@ -153,11 +173,20 @@ pub fn stop_dictation(app: AppHandle, state: State<'_, AppState>) -> IpcResult<D
         .stop()
         .map_err(|e| IpcError::Audio(e.to_string()))?;
 
-    let text = transcriber
+    let raw_text = transcriber
         .transcribe(&captured)
-        .map_err(|e| IpcError::Transcription(e.to_string()))?
-        .trim()
-        .to_owned();
+        .map_err(|e| IpcError::Transcription(e.to_string()))?;
+
+    // Pull the replacement rules and apply them. A failure here demotes
+    // to the empty-rules identity rather than failing the dictation.
+    let rules = match state.replacements.list().await {
+        Ok(rules) => rules,
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to load replacement rules; skipping post-processing");
+            Vec::new()
+        }
+    };
+    let text = apply_replacements(raw_text.trim(), &rules);
 
     app.clipboard()
         .write_text(text.clone())
@@ -254,6 +283,70 @@ pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
         .count()
         .await
         .map_err(|e| IpcError::History(e.to_string()))
+}
+
+// -- Replacement-rule CRUD -----------------------------------------------
+//
+// Settings-shaped commands the frontend's "Replacements" panel binds to.
+// All four are async because the underlying repository is async; the IPC
+// surface is intentionally thin — the pure-logic [`apply_replacements`]
+// is in `dictionary` and runs on the dictation hot-path inside
+// `stop_dictation` above.
+
+/// All replacement rules in `(sort_order, id)` order.
+#[tauri::command]
+pub async fn replacements_list(state: State<'_, AppState>) -> IpcResult<Vec<ReplacementRule>> {
+    state
+        .replacements
+        .list()
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+/// Insert a new replacement. Returns the persisted row (with the
+/// database-assigned id) so the frontend can append it to its local list
+/// without a follow-up `list` round-trip.
+#[tauri::command]
+pub async fn replacement_create(
+    state: State<'_, AppState>,
+    find_text: String,
+    replace_text: String,
+    sort_order: i64,
+) -> IpcResult<ReplacementRule> {
+    state
+        .replacements
+        .create(NewReplacementRule {
+            find_text,
+            replace_text,
+            sort_order,
+        })
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+/// Update an existing replacement's fields. The frontend passes the full
+/// rule (not a partial diff) so the backend never has to reason about
+/// "which fields changed". No-op if `id` does not exist.
+#[tauri::command]
+pub async fn replacement_update(
+    state: State<'_, AppState>,
+    rule: ReplacementRule,
+) -> IpcResult<()> {
+    state
+        .replacements
+        .update(rule)
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+/// Delete a single replacement. No-op if `id` does not exist.
+#[tauri::command]
+pub async fn replacement_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
+    state
+        .replacements
+        .delete(id)
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
 }
 
 /// Snapshot the current foreground window via `active-win-pos-rs`.
@@ -367,7 +460,12 @@ mod tests {
     #[test]
     fn start_dictation_does_not_overwrite_foreground_on_audio_start_failure() {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatFailsToStart);
-        let state = AppState::new(audio, None, Arc::new(crate::ipc::tests::NoopHistory));
+        let state = AppState::new(
+            audio,
+            None,
+            Arc::new(crate::ipc::tests::NoopHistory),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
 
         // Pre-populate the slot with a sentinel value so a regression in
         // the assignment order — assigning the new capture before
@@ -400,7 +498,12 @@ mod tests {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatStarts {
             recording: AtomicBool::new(false),
         });
-        let state = AppState::new(audio, None, Arc::new(crate::ipc::tests::NoopHistory));
+        let state = AppState::new(
+            audio,
+            None,
+            Arc::new(crate::ipc::tests::NoopHistory),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
 
         // We can't observe the OS foreground app reliably from a test
         // process, so we just assert the call returned Ok and the slot is

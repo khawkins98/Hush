@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::{AudioCapture, CpalAudioCapture};
 use crate::db::SqliteDatabase;
+use crate::dictionary::{ReplacementRepository, SqliteReplacementRepository};
 use crate::history::{HistoryRepository, SqliteHistoryRepository};
 use crate::transcription::Transcribe;
 
@@ -82,6 +83,7 @@ pub struct AppState {
     pub audio: Arc<dyn AudioCapture>,
     pub transcribe: Option<Arc<dyn Transcribe>>,
     pub history: Arc<dyn HistoryRepository>,
+    pub replacements: Arc<dyn ReplacementRepository>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
 }
 
@@ -90,11 +92,13 @@ impl AppState {
         audio: Arc<dyn AudioCapture>,
         transcribe: Option<Arc<dyn Transcribe>>,
         history: Arc<dyn HistoryRepository>,
+        replacements: Arc<dyn ReplacementRepository>,
     ) -> Self {
         Self {
             audio,
             transcribe,
             history,
+            replacements,
             pending_foreground: Mutex::new(None),
         }
     }
@@ -121,10 +125,19 @@ impl AppState {
         let db = SqliteDatabase::open(db_path)
             .await
             .with_context(|| format!("open database at {}", db_path.display()))?;
-        let history: Arc<dyn HistoryRepository> =
-            Arc::new(SqliteHistoryRepository::new(Arc::new(db)));
+        let db = Arc::new(db);
 
-        Ok(Self::new(audio, build_default_transcriber(), history))
+        let history: Arc<dyn HistoryRepository> =
+            Arc::new(SqliteHistoryRepository::new(Arc::clone(&db)));
+        let replacements: Arc<dyn ReplacementRepository> =
+            Arc::new(SqliteReplacementRepository::new(db));
+
+        Ok(Self::new(
+            audio,
+            build_default_transcriber(),
+            history,
+            replacements,
+        ))
     }
 }
 
@@ -317,10 +330,36 @@ mod tests {
         }
     }
 
+    /// Tiny mock that returns an empty rules list so the dictation
+    /// pipeline behaves as if no replacements are configured. Tests that
+    /// need actual replacement behaviour use the SQLite-backed repo
+    /// directly rather than mocking the trait.
+    pub(crate) struct NoopReplacements;
+
+    #[async_trait::async_trait]
+    impl ReplacementRepository for NoopReplacements {
+        async fn list(&self) -> anyhow::Result<Vec<crate::dictionary::ReplacementRule>> {
+            Ok(vec![])
+        }
+        async fn create(
+            &self,
+            _: crate::dictionary::NewReplacementRule,
+        ) -> anyhow::Result<crate::dictionary::ReplacementRule> {
+            unreachable!("mock does not exercise create")
+        }
+        async fn update(&self, _: crate::dictionary::ReplacementRule) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     pub(crate) fn mock_state() -> AppState {
         let audio: Arc<dyn AudioCapture> = Arc::new(MockAudio::new(fake_audio()));
         let history: Arc<dyn HistoryRepository> = Arc::new(NoopHistory);
-        AppState::new(audio, None, history)
+        let replacements: Arc<dyn ReplacementRepository> = Arc::new(NoopReplacements);
+        AppState::new(audio, None, history, replacements)
     }
 
     #[test]
