@@ -56,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need a real SQLite without touching the filesystem. Not yet wired
   into `AppState` — that lands with the first downstream consumer
   (#7 history or #6 dictionary).
+- Push-to-talk global hotkey (`hotkey::ptt`): an `rdev`-based listener
+  on a dedicated thread emits `hotkey:ptt-press` and `hotkey:ptt-release`
+  events to the frontend on key-down and key-up of the configured key.
+  Default is `RightControl` (overridable via `HUSH_PTT_HOTKEY`; accepts
+  modifier keys, F1–F12, and CapsLock with case-insensitive aliases).
+  Frontend starts dictation on press and stops on release, sharing the
+  existing `recording`/`busy` source of truth with the toggle hotkey.
+  Closes the PTT half of #5. Caveats: macOS first-run prompt for Input
+  Monitoring; Linux requires X11 (Wayland support is compositor-dependent
+  and out of scope for this release per PRD §10).
 
 ---
 

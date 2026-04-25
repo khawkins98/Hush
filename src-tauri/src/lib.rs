@@ -53,6 +53,15 @@ pub fn run() {
             if let Err(e) = hotkey::register_default(app.handle()) {
                 tracing::error!(error = ?e, "failed to register default toggle hotkey");
             }
+            // PTT runs through `rdev` on a dedicated thread (rdev's listen
+            // is blocking and installs a low-level OS hook). On macOS the
+            // first call triggers the Input Monitoring permission prompt.
+            // On Wayland the listener exits with an error and we proceed
+            // without PTT — toggle and button-driven dictation still work.
+            // See `hotkey::ptt` module header for the full rationale.
+            if let Err(e) = hotkey::register_ptt_listener(app.handle()) {
+                tracing::error!(error = ?e, "failed to start PTT listener");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
