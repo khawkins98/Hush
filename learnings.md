@@ -50,6 +50,71 @@ This keeps the audio module's contract narrow ("hand back what the device gave u
 
 ---
 
+## 2026-04-25 — Whisper transcription: linear resampler over `rubato`
+
+Whisper.cpp expects 16 kHz mono f32 PCM but consumer microphones almost
+universally capture at 44.1 or 48 kHz. The transcription pipeline must
+resample. Two viable options for M1:
+
+- `rubato`: production-quality crate offering windowed-sinc, FFT-based, and
+  polyphase resamplers. Higher fidelity, but pulls in `realfft`/`rustfft`
+  and adds a few hundred KB of compiled code.
+- A handwritten linear-interpolation resampler in `transcription::resample`.
+
+Picked the linear resampler. Reasons in priority order:
+1. Whisper's first stage is a mel spectrogram with 25 ms windows and 10 ms
+   hops; aliasing artifacts above ~4 kHz are smoothed away by the mel
+   filterbank long before they reach the encoder. Linear-vs-sinc accuracy
+   delta on dictation audio is within measurement noise.
+2. Zero additional dependencies on the default-feature build. Contributors
+   without cmake can still run the resampler tests; CI without the
+   `whisper` feature stays cheap.
+3. The public surface is `resample_to_mono(samples, in_rate, out_rate) ->
+   Vec<f32>`. If a future quality regression test shows linear is the
+   bottleneck, swap the body for `rubato::FftFixedIn` without touching any
+   caller.
+
+Not addressed: pre-filter for downsampling. With 48 → 16 kHz, energy in the
+8–24 kHz band aliases. For human speech (essentially no useful information
+above 8 kHz) this is benign. If we ever target non-speech audio, this
+assumption breaks and it is reason enough to swap in `rubato` regardless.
+
+## 2026-04-25 — Whisper model path: caller-provided in M1, auto-download in M3
+
+`WhisperTranscription::new` takes a `PathBuf` rather than auto-downloading
+a model. Two reasons:
+
+1. M1 is a transcription spike — we want to confirm the Rust path works
+   end-to-end before building model-management infrastructure. Mixing
+   "does whisper-rs work?" and "does our download/SHA-verify/caching pipe
+   work?" into one milestone hides which side fails when something breaks.
+2. The auto-download flow needs UX decisions (default model? download
+   progress? failure recovery? disk-quota messaging?) that belong with the
+   model picker UI, which lands in M3.
+
+`new` does pre-check `Path::exists()` so the user gets a clean error rather
+than whatever whisper.cpp surfaces from its file open path.
+
+## 2026-04-25 — Whisper inference: `Mutex<WhisperContext>`, fresh state per call
+
+`whisper.cpp` is not thread-safe across `whisper_full` calls on the same
+context, so we hold a single `Mutex<WhisperContext>`. Dictation is
+fundamentally serial (one mic, one user) so the lock is never contended in
+practice; the mutex exists to keep the type `Sync` for IPC use, not for
+real concurrency.
+
+`whisper-rs` 0.14 separates context from state: the context holds the
+model weights, the state holds the decoder KV cache. We create a fresh
+state per `transcribe()` call rather than reusing one — this both avoids
+cross-utterance attention-state leakage and keeps the per-call code path
+simple. Cost is small (state allocation is microseconds against a
+multi-second inference).
+
+Thread count is fixed at 4 rather than `num_cpus`-based. Whisper.cpp
+scales sub-linearly past ~4 threads on Apple Silicon and modern x86, and
+we'd rather not fight the UI thread on small machines. The model picker
+(M3) will expose this as a setting.
+
 ## 2026-04-25 — `cpal::Stream` is `!Send`: dedicated audio worker thread
 
 `cpal::Stream` is `!Send` on most backends — its backing audio thread keeps thread-locals pointing at the host that constructed it, and moving the stream across threads is undefined behaviour on at least the macOS and Windows backends. That rules out the obvious `Mutex<Option<Stream>>`-on-the-public-struct pattern, because the stream cannot be sent across an `&self` boundary that is itself `Send + Sync`.
