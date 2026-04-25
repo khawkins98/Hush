@@ -67,6 +67,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Monitoring; Linux requires X11 (Wayland support is compositor-dependent
   and out of scope for this release per PRD §10).
 
+### Changed
+
+- **M2 polish.** Visible recording and transcribing states (pulsing red
+  dot + status text + window-title indicator), spinner during the
+  Whisper inference window, and an in-app shortcuts hint card so the
+  default hotkeys are discoverable without reading the README.
+- **Friendlier error copy.** IPC errors are now mapped to recovery-
+  oriented strings in the frontend rather than shown as raw `kind:
+  message` pairs. The `transcription-unavailable` case in particular
+  gives an actionable hint about `HUSH_MODEL_PATH` and the `whisper`
+  feature.
+- **Empty input-device list** now surfaces a platform-aware
+  troubleshooting hint instead of silently disabling the start button.
+- **Dark-mode error contrast** raised so the warning text passes WCAG
+  AA on a dark background (was `#ffa0a0` on `#3a1a1a`, flagged as
+  borderline by the UX review).
+- `prefers-reduced-motion` honoured by the new pulse / spin animations.
+
+### Fixed
+
+- IPC `start_dictation` no longer overwrites the foreground-app slot
+  when the underlying audio backend fails to start. Previously a
+  failed start could leave a stale foreground snapshot visible to a
+  subsequent `stop_dictation` call.
+- IPC `stop_dictation` no longer routes errors via substring matching
+  on a merged anyhow message (which could send a Whisper error
+  mentioning "device" to the `audio` variant). Audio and
+  transcription failures are now classified structurally at the call
+  site.
+- Internal mutex acquisition uses `?` with a typed
+  `IpcError::Internal` variant instead of `.expect("…mutex")`, so a
+  poisoned lock no longer panics a Tauri command (which can
+  destabilise the renderer).
+
 ---
 
 *First entry: Hush is a behavioural reimplementation of [VoiceInk](https://github.com/Beingpax/VoiceInk). No source code copied or referenced.*
