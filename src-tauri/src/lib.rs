@@ -11,7 +11,7 @@ pub mod settings;
 pub mod transcription;
 pub mod updater;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Filename for the app's SQLite database, stored in the platform's
 /// per-app data directory (e.g. `~/Library/Application Support/Hush/`
@@ -81,7 +81,43 @@ pub fn run() {
             let state =
                 tauri::async_runtime::block_on(ipc::AppState::build_default(&db_path, models_dir))
                     .map_err(|e| format!("build app state: {e:#}"))?;
+            // Clone the audio Arc out before `manage` takes ownership of
+            // `state` — the level-meter pump task below needs a handle
+            // it can read from without going through `app.state()` on
+            // every tick.
+            let audio_for_pump = std::sync::Arc::clone(&state.audio);
             app.manage(state);
+
+            // HUD level-meter pump (#21). Reads the latest RMS from the
+            // audio backend at ~30 Hz and emits `audio:level` so the HUD
+            // page can animate a bar. Lives here (not in commands.rs)
+            // because the pump's lifetime is the app's, not any single
+            // dictation. The audio backend itself owns the level
+            // computation in its callback; this task is purely a
+            // cross-process push.
+            //
+            // Throttling: 33 ms ≈ 30 fps, matches the HUD's pulse
+            // animation cadence and is well above the audio callback
+            // rate (~100 Hz at 48 kHz / 480-frame chunks). At idle we
+            // still tick — `current_level()` returns `0.0` while not
+            // recording, the emit is cheap, and any HUD listeners get
+            // a clean idle baseline.
+            let app_for_pump = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticker =
+                    tokio::time::interval(std::time::Duration::from_millis(33));
+                loop {
+                    ticker.tick().await;
+                    let level = audio_for_pump.current_level();
+                    if let Err(e) = app_for_pump.emit("audio:level", level) {
+                        // No listener attached yet (HUD window hidden) is
+                        // not an error per se, but the trace level keeps
+                        // it out of the default log unless someone is
+                        // actively investigating.
+                        tracing::trace!(error = ?e, "emit audio:level failed");
+                    }
+                }
+            });
 
             // Hotkey registration is best-effort: if the OS refuses the
             // shortcut (already in use, missing permission, Wayland
