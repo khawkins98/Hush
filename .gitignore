@@ -28,6 +28,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Playwright (test reports + cached Chromium snapshots)
+playwright-report/
+test-results/
+
 # Claude Code runtime artefacts (memory, worktrees, scheduled-task locks).
 # Local to each contributor's machine; not part of the project source.
 .claude/

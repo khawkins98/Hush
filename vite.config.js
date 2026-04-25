@@ -1,12 +1,39 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import path from "path";
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+const isE2E = process.env.HUSH_E2E === "1";
+
+// `import.meta.dirname` is undefined in some toolchains; resolve via
+// `process.cwd()` since vite always invokes with cwd at project root.
+const projectRoot = process.cwd();
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
+
+  // E2E mode (set HUSH_E2E=1) swaps the @tauri-apps/api/{core,event}
+  // imports for in-tree stubs at `tests/e2e/setup/{core,event}-stub.ts`.
+  // The stubs read mock state from `window.__hush_e2e` so a Playwright
+  // test can configure command responses and event payloads via
+  // `page.addInitScript` before navigation. The dev workflow
+  // (`npm run dev`) is unaffected — the alias only activates when the
+  // env var is set.
+  resolve: isE2E
+    ? {
+        alias: {
+          "@tauri-apps/api/core": path.resolve(
+            projectRoot,
+            "tests/e2e/setup/core-stub.ts",
+          ),
+          "@tauri-apps/api/event": path.resolve(
+            projectRoot,
+            "tests/e2e/setup/event-stub.ts",
+          ),
+        },
+      }
+    : {},
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
