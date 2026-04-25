@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # Run on every pull request, regardless of base branch. Stacked PRs
+  # (e.g. feat/* targeting another feat/*) need CI feedback too — a
+  # `branches: [main]` filter would silently skip them.
   pull_request:
-    branches: [main]
 
 # Cancel superseded runs on the same branch to avoid burning CI minutes on
 # obsolete commits during a rapid push sequence.
@@ -63,6 +65,21 @@ jobs:
       - name: clippy (default features)
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+      # The `whisper-rs-sys` build calls into whisper.cpp's GGML, which uses
+      # `vmmlaq_s32` (an i8mm intrinsic) unconditionally on aarch64. Apple
+      # Silicon supports i8mm, but the default macOS clang invocation does
+      # not enable that target feature, so the build fails with
+      # `always_inline ... requires target feature 'i8mm'`. Telling clang to
+      # target armv8.6-a (which includes i8mm in its baseline) on the macOS
+      # runner is the smallest fix that keeps the production target intact.
+      # Linux/Windows runners are x86_64 and unaffected.
+      - name: Set whisper.cpp arch flags (macOS arm64)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "CFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
 
       - name: clippy (whisper feature)
         working-directory: src-tauri
