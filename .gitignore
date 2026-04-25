@@ -27,3 +27,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Claude Code runtime artefacts (memory, worktrees, scheduled-task locks).
+# Local to each contributor's machine; not part of the project source.
+.claude/

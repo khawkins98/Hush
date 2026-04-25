@@ -5,4 +5,4 @@
 //   - Expose a manual "Check for updates" command.
 //   - Emit update progress events to the frontend.
 
-// TODO(#8): implement update check, download progress, and install flow
+// TODO(#10): implement update check, download progress, and install flow

@@ -166,7 +166,7 @@ impl Transcribe for WhisperTranscription {
         // For M1 we always transcribe (never translate). Locale handling is
         // a settings concern that lands with the model picker.
         params.set_translate(false);
-        // No personal-dictionary prompt biasing yet — that is TODO(#4).
+        // No personal-dictionary prompt biasing yet — that is TODO(#6).
 
         // Acquire the context for the duration of inference. A poisoned
         // mutex here means a previous call panicked mid-inference; we
