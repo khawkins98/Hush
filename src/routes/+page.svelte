@@ -23,6 +23,10 @@
     replaceText: string;
     sortOrder: number;
   };
+  type VocabularyTerm = {
+    id: number;
+    term: string;
+  };
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
   // 25 is plenty per page for a dictation history that grows linearly
@@ -49,6 +53,10 @@
   let replacementsError = $state<string | null>(null);
   let newFind = $state("");
   let newReplace = $state("");
+
+  let vocabulary = $state<VocabularyTerm[]>([]);
+  let vocabularyError = $state<string | null>(null);
+  let newVocab = $state("");
 
   // `recording` is "audio is being captured", `busy` covers both the
   // start handshake AND the post-stop transcription window. Splitting
@@ -80,6 +88,7 @@
 
     await refreshHistory();
     await refreshReplacements();
+    await refreshVocabulary();
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
     // press the backend emits `hotkey:toggle`. We dispatch start vs stop
@@ -232,6 +241,45 @@
       replacements = replacements.filter((r) => r.id !== rule.id);
     } catch (err) {
       replacementsError = formatError(err);
+    }
+  }
+
+  async function refreshVocabulary() {
+    vocabularyError = null;
+    try {
+      vocabulary = await invoke<VocabularyTerm[]>("vocabulary_list");
+    } catch (e) {
+      vocabularyError = formatError(e);
+    }
+  }
+
+  async function addVocabulary(e: Event) {
+    e.preventDefault();
+    const trimmed = newVocab.trim();
+    if (trimmed.length === 0) return;
+    try {
+      const created = await invoke<VocabularyTerm>("vocabulary_create", {
+        term: trimmed,
+      });
+      vocabulary = [...vocabulary, created];
+      newVocab = "";
+    } catch (err) {
+      // Surface unique-constraint violations as a friendlier message
+      // than the raw "UNIQUE constraint failed: dictionary_terms.term"
+      // that bubbles up from sqlx.
+      const formatted = formatError(err);
+      vocabularyError = formatted.toLowerCase().includes("unique")
+        ? `"${trimmed}" is already in your vocabulary.`
+        : formatted;
+    }
+  }
+
+  async function deleteVocabulary(term: VocabularyTerm) {
+    try {
+      await invoke("vocabulary_delete", { id: term.id });
+      vocabulary = vocabulary.filter((t) => t.id !== term.id);
+    } catch (err) {
+      vocabularyError = formatError(err);
     }
   }
 
@@ -462,6 +510,55 @@
               class="ghost danger"
               onclick={() => deleteReplacement(rule)}
               aria-label="Delete replacement {rule.findText} to {rule.replaceText}"
+            >
+              Delete
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+
+  <section class="vocabulary" aria-labelledby="vocabulary-heading">
+    <header class="history-header">
+      <h2 id="vocabulary-heading">Vocabulary</h2>
+    </header>
+    <p class="hint-prose">
+      Words Whisper should be primed to recognise — proper nouns,
+      jargon, names it otherwise mishears. Joined into the model's
+      initial prompt on every transcription. Different from
+      Replacements: vocabulary biases the <em>recognition</em>;
+      replacements rewrite the <em>output</em>.
+    </p>
+
+    {#if vocabularyError}
+      <p class="error" role="alert">{vocabularyError}</p>
+    {/if}
+
+    <form class="replacement-form" onsubmit={addVocabulary}>
+      <input
+        type="text"
+        bind:value={newVocab}
+        placeholder="Term (e.g. Tauri, ggml, Beingpax)…"
+        aria-label="Vocabulary term"
+      />
+      <button type="submit" disabled={newVocab.trim().length === 0}>Add</button>
+    </form>
+
+    {#if vocabulary.length === 0}
+      <p class="empty-history">
+        No vocabulary terms yet. Add a word here and Whisper will be
+        more likely to spell it correctly next time.
+      </p>
+    {:else}
+      <ul class="replacement-list">
+        {#each vocabulary as term (term.id)}
+          <li class="replacement-row">
+            <code class="replacement-find">{term.term}</code>
+            <button
+              class="ghost danger"
+              onclick={() => deleteVocabulary(term)}
+              aria-label="Delete vocabulary term {term.term}"
             >
               Delete
             </button>
@@ -772,7 +869,8 @@ button.ghost.danger:hover:not(:disabled) {
   text-align: center;
 }
 
-.replacements {
+.replacements,
+.vocabulary {
   margin-top: 2.5rem;
   text-align: left;
 }

@@ -42,7 +42,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::{AudioCapture, CpalAudioCapture};
 use crate::db::SqliteDatabase;
-use crate::dictionary::{ReplacementRepository, SqliteReplacementRepository};
+use crate::dictionary::{
+    ReplacementRepository, SqliteReplacementRepository, SqliteVocabularyRepository,
+    VocabularyRepository,
+};
 use crate::history::{HistoryRepository, SqliteHistoryRepository};
 use crate::transcription::Transcribe;
 
@@ -84,6 +87,7 @@ pub struct AppState {
     pub transcribe: Option<Arc<dyn Transcribe>>,
     pub history: Arc<dyn HistoryRepository>,
     pub replacements: Arc<dyn ReplacementRepository>,
+    pub vocabulary: Arc<dyn VocabularyRepository>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
 }
 
@@ -93,12 +97,14 @@ impl AppState {
         transcribe: Option<Arc<dyn Transcribe>>,
         history: Arc<dyn HistoryRepository>,
         replacements: Arc<dyn ReplacementRepository>,
+        vocabulary: Arc<dyn VocabularyRepository>,
     ) -> Self {
         Self {
             audio,
             transcribe,
             history,
             replacements,
+            vocabulary,
             pending_foreground: Mutex::new(None),
         }
     }
@@ -130,13 +136,16 @@ impl AppState {
         let history: Arc<dyn HistoryRepository> =
             Arc::new(SqliteHistoryRepository::new(Arc::clone(&db)));
         let replacements: Arc<dyn ReplacementRepository> =
-            Arc::new(SqliteReplacementRepository::new(db));
+            Arc::new(SqliteReplacementRepository::new(Arc::clone(&db)));
+        let vocabulary: Arc<dyn VocabularyRepository> =
+            Arc::new(SqliteVocabularyRepository::new(db));
 
         Ok(Self::new(
             audio,
             build_default_transcriber(),
             history,
             replacements,
+            vocabulary,
         ))
     }
 }
@@ -355,11 +364,37 @@ mod tests {
         }
     }
 
+    /// Same shape as [`NoopReplacements`] / [`NoopHistory`] — empty
+    /// list so the dictation pipeline behaves as if no vocab terms are
+    /// configured. Tests that need real behaviour against the SQLite-
+    /// backed repo call it directly.
+    pub(crate) struct NoopVocabulary;
+
+    #[async_trait::async_trait]
+    impl VocabularyRepository for NoopVocabulary {
+        async fn list(&self) -> anyhow::Result<Vec<crate::dictionary::VocabularyTerm>> {
+            Ok(vec![])
+        }
+        async fn create(
+            &self,
+            _: crate::dictionary::NewVocabularyTerm,
+        ) -> anyhow::Result<crate::dictionary::VocabularyTerm> {
+            unreachable!("mock does not exercise create")
+        }
+        async fn update(&self, _: crate::dictionary::VocabularyTerm) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     pub(crate) fn mock_state() -> AppState {
         let audio: Arc<dyn AudioCapture> = Arc::new(MockAudio::new(fake_audio()));
         let history: Arc<dyn HistoryRepository> = Arc::new(NoopHistory);
         let replacements: Arc<dyn ReplacementRepository> = Arc::new(NoopReplacements);
-        AppState::new(audio, None, history, replacements)
+        let vocabulary: Arc<dyn VocabularyRepository> = Arc::new(NoopVocabulary);
+        AppState::new(audio, None, history, replacements, vocabulary)
     }
 
     #[test]
