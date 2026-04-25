@@ -40,6 +40,13 @@ pub mod keys {
     /// the catalog id (e.g. `whisper-base`); resolution to a filesystem
     /// path happens in the transcription module's setup.
     pub const SELECTED_MODEL_ID: &str = "selected_model_id";
+
+    /// Marks that the macOS first-run welcome flow has been shown and
+    /// dismissed. Stored as the literal string `"true"` once set; any
+    /// other value (including absent) means "show the welcome on
+    /// next launch". Per-platform behaviour: only the macOS frontend
+    /// reads this — Linux/Windows never check.
+    pub const FIRST_RUN_COMPLETED: &str = "first_run_completed";
 }
 
 /// Repository trait at the storage boundary.

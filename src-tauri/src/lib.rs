@@ -120,6 +120,12 @@ pub fn run() {
             ipc::commands::vocabulary_delete,
             ipc::commands::model_list,
             ipc::commands::model_select,
+            ipc::commands::model_download,
+            ipc::commands::model_cancel_download,
+            ipc::commands::model_remove,
+            ipc::commands::get_first_run_completed,
+            ipc::commands::mark_first_run_completed,
+            ipc::commands::open_macos_privacy_pane,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");

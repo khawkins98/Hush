@@ -60,6 +60,25 @@ Worth knowing if anyone later splits commands across files: the macro is path-se
 
 ---
 
+## 2026-04-25 — macOS first-run: explain, don't probe; you can't read grant state
+
+The original instinct on #22 was to add "Test microphone" / "Test Input Monitoring" buttons that programmatically trigger the OS prompts. That's how iOS / Android apps usually do permission onboarding. macOS desktop doesn't work the same way:
+
+- **The OS prompts already fire at app startup.** rdev's `listen()` triggers Input Monitoring the first time it runs (which is on every app start, on the PTT thread). cpal triggers Microphone the first time `build_input_stream(...).play()` runs — which happens the first time the user clicks Start Recording, not at startup. By the time the welcome modal renders, at least the Input Monitoring prompt has already fired.
+- **There's no API to read whether a permission was granted.** macOS deliberately doesn't expose this — it's a privacy stance. Apps can either try and observe failure, or rely on the user to grant.
+
+So the welcome's job becomes "explain what already happened (or is about to happen) and tell the user how to recover if they declined" — not "trigger prompts in a curated order". The deep-link buttons (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, `Privacy_ListenEvent`) open System Settings on the right pane; the user grants or denies there.
+
+**Implementation notes:**
+
+- `open_macos_privacy_pane(target)` is a Tauri command rather than the frontend invoking the URL via `tauri-plugin-shell` because the shell plugin's capability config doesn't whitelist `x-apple.systempreferences:` schemes by default and adding it would broaden permissions further than needed. The command takes an enum-shaped string (`microphone` / `input-monitoring` / `accessibility`) and rejects anything else, so a frontend bug can't pivot it into an arbitrary `open` launcher.
+- The flag is just a settings-table row (`first_run_completed=true`), not a typed wrapper. Reuses the K/V infra; one new command per get/set.
+- The welcome renders on **all** platforms, not just macOS. Linux / Windows users see the explanation copy and click "Got it"; the deep-link buttons no-op via the cfg-gated backend command. Adding platform-specific gating would require a new `host_platform` command or pulling in `@tauri-apps/plugin-os`; not worth the cost when the welcome content is mostly relevant everywhere (Microphone permission exists on every platform).
+
+If we ever want to *avoid* triggering Input Monitoring at startup until the user has dismissed the welcome — e.g. so the prompt fires *after* the welcome is visible to provide context — that requires gating `hotkey::register_ptt_listener` on the first-run flag. Possible follow-up if the prompt-fires-with-no-context UX turns out to be a real problem in user testing.
+
+---
+
 ## 2026-04-25 — Audio test fixture: env-var path + `hound` for WAV parsing, no committed bytes
 
 Two design choices on the file-based integration test in `tests/audio_fixture.rs`:
