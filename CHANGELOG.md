@@ -115,6 +115,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcription path end-to-end once a contributor places a model.
   System-audio loopback variant stays open behind #33.
 
+- First-run welcome modal explains the permissions Hush needs
+  (Microphone for cpal, Input Monitoring for the rdev PTT
+  listener) and links to System Settings → Privacy & Security via
+  a new `open_macos_privacy_pane` command on macOS. Persists
+  dismissal in the settings table so the modal only shows on a
+  fresh install. The OS prompts themselves still fire at app
+  startup — the welcome's job is to explain what just happened,
+  not to trigger anything new. Closes #22.
+- **Bug fix surfaced during #22:** PR #42 added the
+  `model_download` / `model_cancel_download` / `model_remove`
+  Tauri commands but never registered them in `lib.rs`'s
+  `generate_handler!` list. Frontend invokes would have failed at
+  runtime. All three are now wired up.
+
 ### Changed
 
 - **M2 polish.** Visible recording and transcribing states (pulsing red
