@@ -180,6 +180,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   borderline by the UX review).
 - `prefers-reduced-motion` honoured by the new pulse / spin animations.
 
+### Fixed
+
+- **Welcome modal a11y batch (closes #48).** Round-4 reviewer
+  flagged four issues on the recent welcome / model-picker work:
+  - Modal had no Escape-key dismissal — keyboard-only users were
+    locked into clicking "Got it". A window-level keydown listener,
+    gated on `showFirstRun`, now handles Escape (and also persists
+    dismissal via `mark_first_run_completed`, matching button
+    behaviour).
+  - No focus trap — Tab could escape behind the backdrop. The
+    modal now traps Tab within its three buttons (cycle forward
+    from "Got it" wraps to "Open Microphone settings"; Shift+Tab
+    from the first wraps back). Auto-focus lands on the first
+    action on open; focus restores to the previously-focused
+    element on dismiss.
+  - Download progress bar's `aria-valuemax` lied when the total
+    size was unknown — fell back to `100` while `aria-valuenow`
+    held the byte count, so a screen reader announced
+    "3 percent" at 15 MB of an unknown-size file. Indeterminate
+    state now omits `aria-valuenow` / `aria-valuemax` (per
+    WAI-ARIA convention) and adds an `aria-valuetext` that
+    matches what's drawn.
+  - Retry-UX race — the optimistic "downloading" chip was set
+    *before* the IPC call, so a synchronous failure (e.g.
+    SHA-256 not configured) caused a brief flash of progress.
+    The optimistic state now sets after the invoke resolves, so
+    failure paths simply never show the chip.
+
+  Two new Playwright specs pin the Escape and focus-trap
+  behaviour; the previously `fixme`-marked Escape spec is now
+  real and passing.
+
 ### Tests
 
 - **Frontend e2e via Playwright + mocked Tauri IPC.** New
