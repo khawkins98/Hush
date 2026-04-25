@@ -27,6 +27,21 @@
     id: number;
     term: string;
   };
+  // Mirrors `ModelCard` on the Rust side. `metadata` is flattened by
+  // serde so all the catalog fields land at the top level.
+  type ModelCard = {
+    id: string;
+    displayName: string;
+    filename: string;
+    sizeMb: number;
+    speedRating: number;
+    accuracyRating: number;
+    description: string;
+    isDefault: boolean;
+    isDownloaded: boolean;
+    isSelected: boolean;
+    expectedPath: string;
+  };
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
   // 25 is plenty per page for a dictation history that grows linearly
@@ -57,6 +72,10 @@
   let vocabulary = $state<VocabularyTerm[]>([]);
   let vocabularyError = $state<string | null>(null);
   let newVocab = $state("");
+
+  let models = $state<ModelCard[]>([]);
+  let modelsError = $state<string | null>(null);
+  let modelsRestartNotice = $state(false);
 
   // `recording` is "audio is being captured", `busy` covers both the
   // start handshake AND the post-stop transcription window. Splitting
@@ -89,6 +108,7 @@
     await refreshHistory();
     await refreshReplacements();
     await refreshVocabulary();
+    await refreshModels();
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
     // press the backend emits `hotkey:toggle`. We dispatch start vs stop
@@ -280,6 +300,28 @@
       vocabulary = vocabulary.filter((t) => t.id !== term.id);
     } catch (err) {
       vocabularyError = formatError(err);
+    }
+  }
+
+  async function refreshModels() {
+    modelsError = null;
+    try {
+      models = await invoke<ModelCard[]>("model_list");
+    } catch (e) {
+      modelsError = formatError(e);
+    }
+  }
+
+  async function selectModel(card: ModelCard) {
+    if (!card.isDownloaded) return; // greyed-out cards are click-no-ops
+    try {
+      await invoke("model_select", { id: card.id });
+      // Backend has no hot-swap yet; surface a restart hint and update
+      // the local card state optimistically so the badge moves.
+      models = models.map((m) => ({ ...m, isSelected: m.id === card.id }));
+      modelsRestartNotice = true;
+    } catch (err) {
+      modelsError = formatError(err);
     }
   }
 
@@ -517,6 +559,94 @@
         {/each}
       </ul>
     {/if}
+  </section>
+
+  <section class="models" aria-labelledby="models-heading">
+    <header class="history-header">
+      <h2 id="models-heading">Model</h2>
+    </header>
+    <p class="hint-prose">
+      Pick a Whisper variant. Bigger models are slower but more
+      accurate. Hush expects model files in
+      <code class="path-hint" title={models[0]?.expectedPath ?? ""}
+        >&lt;app-data&gt;/models/</code
+      >; download them from
+      <a
+        href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
+        target="_blank"
+        rel="noopener noreferrer">whisper.cpp on Hugging Face</a
+      > and place them in that folder.
+    </p>
+
+    {#if modelsError}
+      <p class="error" role="alert">{modelsError}</p>
+    {/if}
+
+    {#if modelsRestartNotice}
+      <p class="restart-notice" role="status">
+        Saved. Restart Hush to use the new model. (Hot-swap is
+        coming.)
+      </p>
+    {/if}
+
+    <ul class="model-grid">
+      {#each models as card (card.id)}
+        <li
+          class="model-card"
+          class:selected={card.isSelected}
+          class:unavailable={!card.isDownloaded}
+        >
+          <button
+            type="button"
+            class="model-card-button"
+            onclick={() => selectModel(card)}
+            disabled={!card.isDownloaded}
+            aria-label="Select {card.displayName}"
+            aria-pressed={card.isSelected}
+          >
+            <header class="model-card-head">
+              <h3 class="model-name">
+                {card.displayName}
+                {#if card.isSelected}
+                  <span class="badge default-badge">Default</span>
+                {/if}
+              </h3>
+              {#if card.isSelected}
+                <span class="model-card-current" aria-hidden="true">●</span>
+              {/if}
+            </header>
+            <p class="model-stats">
+              <span>{card.sizeMb} MB</span>
+              <span class="stat">
+                Speed
+                <span class="bars" aria-label="{card.speedRating} of 10">
+                  {#each Array(10) as _, i}
+                    <span class:on={i < card.speedRating}></span>
+                  {/each}
+                </span>
+                {card.speedRating.toFixed(1)}
+              </span>
+              <span class="stat">
+                Accuracy
+                <span class="bars" aria-label="{card.accuracyRating} of 10">
+                  {#each Array(10) as _, i}
+                    <span class:on={i < card.accuracyRating}></span>
+                  {/each}
+                </span>
+                {card.accuracyRating.toFixed(1)}
+              </span>
+            </p>
+            <p class="model-desc">{card.description}</p>
+            {#if !card.isDownloaded}
+              <p class="model-status" role="note">
+                Not downloaded — place
+                <code>{card.filename}</code> in the models directory.
+              </p>
+            {/if}
+          </button>
+        </li>
+      {/each}
+    </ul>
   </section>
 
   <section class="vocabulary" aria-labelledby="vocabulary-heading">
@@ -870,9 +1000,153 @@ button.ghost.danger:hover:not(:disabled) {
 }
 
 .replacements,
-.vocabulary {
+.vocabulary,
+.models {
   margin-top: 2.5rem;
   text-align: left;
+}
+
+.path-hint {
+  background-color: #eef2ff;
+  padding: 0.05em 0.4em;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.restart-notice {
+  margin: 0.5rem 0 1rem;
+  padding: 0.6rem 0.85rem;
+  background-color: #e8f5e8;
+  border: 1px solid #b8d8b8;
+  border-radius: 6px;
+  color: #1f5a1f;
+  font-size: 0.9rem;
+}
+
+.model-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.model-card {
+  border-radius: 12px;
+  background-color: white;
+  border: 1px solid #e1e1e1;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.model-card.selected {
+  border-color: #6a8cf0;
+  background-color: #f5f8ff;
+  box-shadow: 0 0 0 1px #6a8cf0;
+}
+
+.model-card.unavailable {
+  opacity: 0.55;
+}
+
+.model-card-button {
+  width: 100%;
+  display: block;
+  background: transparent;
+  border: none;
+  padding: 0.85rem 1.1rem;
+  text-align: left;
+  border-radius: 12px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.model-card-button:disabled {
+  cursor: default;
+}
+
+.model-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.model-name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.badge {
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background-color: #c7d2fe;
+  color: #2c3e8f;
+}
+
+.model-card-current {
+  color: #6a8cf0;
+  font-size: 0.85rem;
+}
+
+.model-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.5rem 0 0.4rem;
+  font-size: 0.8rem;
+  color: #555;
+  align-items: center;
+}
+
+.model-stats .stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.bars {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.bars span {
+  width: 5px;
+  height: 9px;
+  border-radius: 1px;
+  background-color: #d8d8d8;
+  display: inline-block;
+}
+
+.bars span.on {
+  background-color: #6a8cf0;
+}
+
+.model-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #444;
+  line-height: 1.45;
+}
+
+.model-status {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: #6a4a00;
+}
+
+.model-status code {
+  background-color: #fff7e6;
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .hint-prose {
@@ -1031,6 +1305,46 @@ button.ghost.danger:hover:not(:disabled) {
     background-color: #1f1f1f;
     border-color: #3a3a3a;
     color: #999;
+  }
+  .restart-notice {
+    background-color: #1a3a1a;
+    border-color: #2a5a2a;
+    color: #c8e8c8;
+  }
+  .model-card {
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  .model-card.selected {
+    background-color: #2a3050;
+    border-color: #6a8cf0;
+  }
+  .model-stats {
+    color: #aaa;
+  }
+  .model-desc {
+    color: #d0d0d0;
+  }
+  .bars span {
+    background-color: #3a3a3a;
+  }
+  .bars span.on {
+    background-color: #8aa0ff;
+  }
+  .badge {
+    background-color: #3a4a7a;
+    color: #d0d8ff;
+  }
+  .path-hint {
+    background-color: #1e2a4a;
+    color: #c0d0ff;
+  }
+  .model-status {
+    color: #f0d090;
+  }
+  .model-status code {
+    background-color: #3a2e10;
+    color: #f0d090;
   }
   .hint-prose {
     color: #aaa;

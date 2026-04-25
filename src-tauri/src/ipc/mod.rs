@@ -34,7 +34,7 @@
 
 pub mod commands;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -47,6 +47,7 @@ use crate::dictionary::{
     VocabularyRepository,
 };
 use crate::history::{HistoryRepository, SqliteHistoryRepository};
+use crate::settings::{SettingsRepository, SqliteSettingsRepository};
 use crate::transcription::Transcribe;
 
 // Re-exports kept light: the command functions are referred to by their
@@ -88,6 +89,12 @@ pub struct AppState {
     pub history: Arc<dyn HistoryRepository>,
     pub replacements: Arc<dyn ReplacementRepository>,
     pub vocabulary: Arc<dyn VocabularyRepository>,
+    pub settings: Arc<dyn SettingsRepository>,
+    /// Directory the model picker scans for downloaded GGUF files
+    /// (`<app_data>/models/`). Stored on AppState rather than
+    /// re-resolving it on every IPC call so the picker has a single
+    /// source of truth and tests can override it.
+    pub models_dir: PathBuf,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
 }
 
@@ -98,6 +105,8 @@ impl AppState {
         history: Arc<dyn HistoryRepository>,
         replacements: Arc<dyn ReplacementRepository>,
         vocabulary: Arc<dyn VocabularyRepository>,
+        settings: Arc<dyn SettingsRepository>,
+        models_dir: PathBuf,
     ) -> Self {
         Self {
             audio,
@@ -105,6 +114,8 @@ impl AppState {
             history,
             replacements,
             vocabulary,
+            settings,
+            models_dir,
             pending_foreground: Mutex::new(None),
         }
     }
@@ -125,7 +136,7 @@ impl AppState {
     /// spike unblocked without committing to a settings schema we'd have
     /// to migrate later. The eventual replacement is `settings.json` in
     /// the platform app-data directory, populated by the in-app picker.
-    pub async fn build_default(db_path: &Path) -> Result<Self> {
+    pub async fn build_default(db_path: &Path, models_dir: PathBuf) -> Result<Self> {
         let audio: Arc<dyn AudioCapture> = Arc::new(CpalAudioCapture::new());
 
         let db = SqliteDatabase::open(db_path)
@@ -138,46 +149,107 @@ impl AppState {
         let replacements: Arc<dyn ReplacementRepository> =
             Arc::new(SqliteReplacementRepository::new(Arc::clone(&db)));
         let vocabulary: Arc<dyn VocabularyRepository> =
-            Arc::new(SqliteVocabularyRepository::new(db));
+            Arc::new(SqliteVocabularyRepository::new(Arc::clone(&db)));
+        let settings: Arc<dyn SettingsRepository> = Arc::new(SqliteSettingsRepository::new(db));
+
+        // Resolve which transcriber to load at startup. Order:
+        //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
+        //   2. legacy `HUSH_MODEL_PATH` env var (M1/M2 dev workflow)
+        //   3. None — IPC surfaces `TranscriptionUnavailable`.
+        // Step 1 resolves the M3 picker; step 2 keeps the existing dev
+        // setup working until a user actually opens the picker once.
+        let transcribe = build_transcriber(&settings, &models_dir).await;
 
         Ok(Self::new(
             audio,
-            build_default_transcriber(),
+            transcribe,
             history,
             replacements,
             vocabulary,
+            settings,
+            models_dir,
         ))
     }
 }
 
-#[cfg(feature = "whisper")]
-fn build_default_transcriber() -> Option<Arc<dyn Transcribe>> {
-    use std::path::PathBuf;
+/// Resolve the active transcriber backend. Pulled out so a test or a
+/// future "reload model" command can call it without rebuilding the
+/// rest of `AppState`.
+#[cfg_attr(not(feature = "whisper"), allow(unused_variables))]
+async fn build_transcriber(
+    settings: &Arc<dyn SettingsRepository>,
+    models_dir: &Path,
+) -> Option<Arc<dyn Transcribe>> {
+    #[cfg(feature = "whisper")]
+    {
+        use crate::settings::keys;
+        use crate::transcription::catalog;
 
-    let path = std::env::var("HUSH_MODEL_PATH").ok()?;
-    let path = PathBuf::from(path);
-    match crate::transcription::WhisperTranscription::new(&path) {
-        Ok(t) => {
-            tracing::info!(path = %path.display(), "loaded whisper model");
-            Some(Arc::new(t) as Arc<dyn Transcribe>)
+        // 1) Settings-driven path: model id → catalog → models_dir.
+        if let Ok(Some(id)) = settings.get(keys::SELECTED_MODEL_ID).await {
+            if let Some(meta) = catalog::find_by_id(&id) {
+                let path = models_dir.join(&meta.filename);
+                if path.exists() {
+                    match crate::transcription::WhisperTranscription::new(&path) {
+                        Ok(t) => {
+                            tracing::info!(
+                                model_id = %meta.id,
+                                path = %path.display(),
+                                "loaded selected whisper model"
+                            );
+                            return Some(Arc::new(t) as Arc<dyn Transcribe>);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = ?e,
+                                path = %path.display(),
+                                "selected model failed to load; falling back"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        model_id = %id,
+                        path = %path.display(),
+                        "selected model file is missing; falling back"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    model_id = %id,
+                    "selected model id is not in the catalog; falling back"
+                );
+            }
         }
-        Err(e) => {
-            // Don't fail-fast: the rest of the app is still useful (device
-            // enumeration, settings) and the user can fix the env var
-            // without restarting their dev loop.
-            tracing::error!(error = ?e, path = %path.display(), "failed to load whisper model");
-            None
+
+        // 2) Legacy dev path. Removed once the picker is mature enough
+        //    that we can ask users to migrate.
+        if let Ok(path) = std::env::var("HUSH_MODEL_PATH") {
+            let path = std::path::PathBuf::from(path);
+            match crate::transcription::WhisperTranscription::new(&path) {
+                Ok(t) => {
+                    tracing::info!(path = %path.display(), "loaded HUSH_MODEL_PATH whisper model");
+                    return Some(Arc::new(t) as Arc<dyn Transcribe>);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = ?e,
+                        path = %path.display(),
+                        "HUSH_MODEL_PATH failed to load"
+                    );
+                }
+            }
         }
+
+        None
     }
-}
 
-#[cfg(not(feature = "whisper"))]
-fn build_default_transcriber() -> Option<Arc<dyn Transcribe>> {
-    // Without the `whisper` feature there is no production transcriber.
-    // The IPC layer will surface `TranscriptionUnavailable` until either
-    // the feature is enabled or a different `Transcribe` impl is plugged
-    // in via [`AppState::new`].
-    None
+    #[cfg(not(feature = "whisper"))]
+    {
+        // Without the `whisper` feature there is no production
+        // transcriber. The IPC layer surfaces `TranscriptionUnavailable`.
+        None
+    }
 }
 
 /// Pure orchestration function — exposed so unit tests can exercise the
@@ -389,12 +461,48 @@ mod tests {
         }
     }
 
+    /// In-memory settings store backed by a HashMap. Lighter than
+    /// spinning up a SQLite for tests that just need to round-trip a
+    /// few keys.
+    pub(crate) struct MemSettings {
+        pub map: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SettingsRepository for MemSettings {
+        async fn get(&self, key: &str) -> anyhow::Result<Option<String>> {
+            Ok(self.map.lock().unwrap().get(key).cloned())
+        }
+        async fn set(&self, key: &str, value: &str) -> anyhow::Result<()> {
+            self.map
+                .lock()
+                .unwrap()
+                .insert(key.to_owned(), value.to_owned());
+            Ok(())
+        }
+        async fn remove(&self, key: &str) -> anyhow::Result<()> {
+            self.map.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
     pub(crate) fn mock_state() -> AppState {
         let audio: Arc<dyn AudioCapture> = Arc::new(MockAudio::new(fake_audio()));
         let history: Arc<dyn HistoryRepository> = Arc::new(NoopHistory);
         let replacements: Arc<dyn ReplacementRepository> = Arc::new(NoopReplacements);
         let vocabulary: Arc<dyn VocabularyRepository> = Arc::new(NoopVocabulary);
-        AppState::new(audio, None, history, replacements, vocabulary)
+        let settings: Arc<dyn SettingsRepository> = Arc::new(MemSettings {
+            map: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+        AppState::new(
+            audio,
+            None,
+            history,
+            replacements,
+            vocabulary,
+            settings,
+            std::path::PathBuf::from("/tmp/hush-test-models"),
+        )
     }
 
     #[test]

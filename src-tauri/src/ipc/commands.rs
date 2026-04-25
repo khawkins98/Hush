@@ -22,6 +22,8 @@ use crate::dictionary::{
     ReplacementRule, VocabularyTerm,
 };
 use crate::history::{HistoryEntry, NewHistoryEntry};
+use crate::settings::keys as settings_keys;
+use crate::transcription::catalog::{self, ModelMetadata};
 
 use super::{AppState, ForegroundApp};
 
@@ -61,6 +63,13 @@ pub enum IpcError {
 
     #[error("clipboard: {0}")]
     Clipboard(String),
+
+    /// Settings repository (SQLite) error or the picker resolved a
+    /// model id we don't know about. Surfaced separately because the
+    /// frontend recovery copy is "pick a model from the catalog"
+    /// rather than the dictionary-shaped "your settings" framing.
+    #[error("settings: {0}")]
+    Settings(String),
 
     /// History repository (SQLite) error — failed insert, list, search,
     /// or delete. Surfaced separately from `Internal` so the frontend
@@ -417,6 +426,90 @@ pub async fn vocabulary_delete(state: State<'_, AppState>, id: i64) -> IpcResult
         .map_err(|e| IpcError::Replacements(e.to_string()))
 }
 
+// -- Model picker --------------------------------------------------------
+//
+// Static catalog of Whisper variants (see `transcription::catalog`)
+// joined with on-disk presence (does the file exist in
+// `<app_data>/models/`?) and the user's current selection from
+// settings. The frontend renders this as a card grid; selecting a
+// card writes the id to settings. **Auto-download is not part of M3** —
+// the user puts files in the models directory manually for now.
+
+/// Card-friendly view of a model: its catalog metadata plus runtime
+/// state the picker UI cares about.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCard {
+    /// Static metadata from the catalog (id, name, size, ratings, …).
+    #[serde(flatten)]
+    pub metadata: ModelMetadata,
+    /// Whether the GGUF file is present in `<models_dir>/<filename>`.
+    /// `false` cards render greyed-out with a "place this file at …"
+    /// hint until auto-download lands.
+    pub is_downloaded: bool,
+    /// Whether this is the user's currently-selected model — the one
+    /// the running transcriber was loaded from. The catalog's default
+    /// model gets the badge only when no explicit selection is in
+    /// settings.
+    pub is_selected: bool,
+    /// Absolute path the user can copy-and-cd-into to drop the file.
+    /// Surfaced in the picker UI; cheaper than asking the user to
+    /// reconstruct the platform app-data path themselves.
+    pub expected_path: String,
+}
+
+/// Returns one card per catalog entry, decorated with on-disk
+/// presence and the user's selection.
+#[tauri::command]
+pub async fn model_list(state: State<'_, AppState>) -> IpcResult<Vec<ModelCard>> {
+    let selected_id = state
+        .settings
+        .get(settings_keys::SELECTED_MODEL_ID)
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+
+    // Treat "no selection in settings" as "the catalog's default is
+    // implicitly selected". Matches the picker's first-run mental
+    // model where `Whisper Base` shows the Default badge until the
+    // user explicitly picks something else. `default_id` outlives the
+    // map below so the `&str` borrow is sound.
+    let default_id = catalog::default_model().id;
+    let effective_selection: &str = selected_id.as_deref().unwrap_or(default_id.as_str());
+
+    let cards = catalog::whisper_models()
+        .into_iter()
+        .map(|metadata| {
+            let path = state.models_dir.join(&metadata.filename);
+            let is_downloaded = path.exists();
+            let is_selected = metadata.id == effective_selection;
+            ModelCard {
+                expected_path: path.to_string_lossy().into_owned(),
+                metadata,
+                is_downloaded,
+                is_selected,
+            }
+        })
+        .collect();
+    Ok(cards)
+}
+
+/// Persist the user's choice. The new transcriber is loaded on the
+/// next app start (no hot-swap yet — see the `learnings.md` note on
+/// model-picker scope).
+#[tauri::command]
+pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<()> {
+    if catalog::find_by_id(&id).is_none() {
+        return Err(IpcError::Settings(format!(
+            "unknown model id: {id} (not in the Whisper catalog)"
+        )));
+    }
+    state
+        .settings
+        .set(settings_keys::SELECTED_MODEL_ID, &id)
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
 /// Snapshot the current foreground window via `active-win-pos-rs`.
 ///
 /// `active-win-pos-rs` exposes a Result with the unit type as its error,
@@ -534,6 +627,10 @@ mod tests {
             Arc::new(crate::ipc::tests::NoopHistory),
             Arc::new(crate::ipc::tests::NoopReplacements),
             Arc::new(crate::ipc::tests::NoopVocabulary),
+            Arc::new(crate::ipc::tests::MemSettings {
+                map: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }),
+            std::path::PathBuf::from("/tmp/hush-test-models"),
         );
 
         // Pre-populate the slot with a sentinel value so a regression in
@@ -573,6 +670,10 @@ mod tests {
             Arc::new(crate::ipc::tests::NoopHistory),
             Arc::new(crate::ipc::tests::NoopReplacements),
             Arc::new(crate::ipc::tests::NoopVocabulary),
+            Arc::new(crate::ipc::tests::MemSettings {
+                map: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }),
+            std::path::PathBuf::from("/tmp/hush-test-models"),
         );
 
         // We can't observe the OS foreground app reliably from a test

@@ -43,6 +43,7 @@
 //! substitute a deterministic mock without pulling in whisper.cpp or a real
 //! GGUF model.
 
+pub mod catalog;
 pub mod resample;
 
 #[cfg(feature = "whisper")]
