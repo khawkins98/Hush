@@ -9,7 +9,7 @@
 //! is structural rather than heuristic — see the note on
 //! [`stop_dictation`] for the rationale.
 
-use std::sync::PoisonError;
+use std::sync::{Arc, PoisonError};
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -17,6 +17,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::AudioDevice;
+use crate::history::{HistoryEntry, NewHistoryEntry};
 
 use super::{AppState, ForegroundApp};
 
@@ -56,6 +57,13 @@ pub enum IpcError {
 
     #[error("clipboard: {0}")]
     Clipboard(String),
+
+    /// History repository (SQLite) error — failed insert, list, search,
+    /// or delete. Surfaced separately from `Internal` so the frontend
+    /// can offer history-specific recovery copy ("History list failed,
+    /// try again") rather than the generic "restart Hush".
+    #[error("history: {0}")]
+    History(String),
 
     /// In-process state guard panicked while a lock was held. Should not
     /// happen in practice — only the IPC commands lock our internal
@@ -167,7 +175,85 @@ pub fn stop_dictation(app: AppHandle, state: State<'_, AppState>) -> IpcResult<D
 
     let foreground = state.pending_foreground.lock().map_err(poisoned)?.take();
 
+    // Persist to history. Best-effort: a failed insert must not fail the
+    // dictation — the user already has the text on the clipboard, and
+    // surfacing "history insert failed" as a hard error would block them
+    // from getting on with their work. We log and continue. If history
+    // becomes load-bearing (e.g. a future pipeline that re-references
+    // recent rows) this should be revisited.
+    let history = Arc::clone(&state.history);
+    let new_entry = NewHistoryEntry {
+        transcript: text.clone(),
+        app_name: foreground.as_ref().map(|f| f.app_name.clone()),
+        window_title: foreground.as_ref().map(|f| f.window_title.clone()),
+        model: transcriber.model_label(),
+        // Recording duration tracking lands with the HUD overlay (#21);
+        // for now we accept that history rows have None here.
+        duration_ms: None,
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = history.insert(new_entry).await {
+            tracing::error!(error = ?e, "failed to persist transcription to history");
+        }
+    });
+
     Ok(DictationResult { text, foreground })
+}
+
+/// Paginated list of history rows, newest first.
+///
+/// `limit` is hard-capped by the repository to a few hundred rows so a
+/// misbehaving frontend cannot pull the entire table at once. `offset`
+/// is clamped at 0.
+#[tauri::command]
+pub async fn history_list(
+    state: State<'_, AppState>,
+    limit: i64,
+    offset: i64,
+) -> IpcResult<Vec<HistoryEntry>> {
+    state
+        .history
+        .list(limit, offset)
+        .await
+        .map_err(|e| IpcError::History(e.to_string()))
+}
+
+/// FTS5 search over transcript text. Empty / whitespace-only `query`
+/// falls through to the full list, mirroring the UI's "type to filter"
+/// pattern.
+#[tauri::command]
+pub async fn history_search(
+    state: State<'_, AppState>,
+    query: String,
+    limit: i64,
+    offset: i64,
+) -> IpcResult<Vec<HistoryEntry>> {
+    state
+        .history
+        .search(&query, limit, offset)
+        .await
+        .map_err(|e| IpcError::History(e.to_string()))
+}
+
+/// Delete a single history row. No-op (returns Ok) if `id` does not
+/// exist — mirrors the trait contract.
+#[tauri::command]
+pub async fn history_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
+    state
+        .history
+        .delete(id)
+        .await
+        .map_err(|e| IpcError::History(e.to_string()))
+}
+
+/// Total row count, for paginators that need "page X of Y".
+#[tauri::command]
+pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
+    state
+        .history
+        .count()
+        .await
+        .map_err(|e| IpcError::History(e.to_string()))
 }
 
 /// Snapshot the current foreground window via `active-win-pos-rs`.
@@ -281,7 +367,7 @@ mod tests {
     #[test]
     fn start_dictation_does_not_overwrite_foreground_on_audio_start_failure() {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatFailsToStart);
-        let state = AppState::new(audio, None);
+        let state = AppState::new(audio, None, Arc::new(crate::ipc::tests::NoopHistory));
 
         // Pre-populate the slot with a sentinel value so a regression in
         // the assignment order — assigning the new capture before
@@ -314,7 +400,7 @@ mod tests {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatStarts {
             recording: AtomicBool::new(false),
         });
-        let state = AppState::new(audio, None);
+        let state = AppState::new(audio, None, Arc::new(crate::ipc::tests::NoopHistory));
 
         // We can't observe the OS foreground app reliably from a test
         // process, so we just assert the call returned Ok and the slot is

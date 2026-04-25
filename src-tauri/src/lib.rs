@@ -9,20 +9,25 @@ pub mod ipc;
 pub mod transcription;
 pub mod updater;
 
+use tauri::Manager;
+
+/// Filename for the app's SQLite database, stored in the platform's
+/// per-app data directory (e.g. `~/Library/Application Support/Hush/`
+/// on macOS).
+const DB_FILENAME: &str = "hush.db";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialise tracing here so service-construction errors (e.g. the
-    // whisper model failing to load on startup) reach `RUST_LOG` consumers
-    // before the Tauri event loop starts. `try_init` rather than `init` so
-    // re-runs in tests (`cargo tauri dev`-restart-cycle) do not panic.
+    // Initialise tracing here so service-construction errors (database
+    // open, whisper model load) reach `RUST_LOG` consumers before the
+    // Tauri event loop starts. `try_init` rather than `init` so re-runs
+    // in tests (`cargo tauri dev`-restart-cycle) do not panic.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .try_init();
-
-    let state = ipc::AppState::build_default();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -43,8 +48,23 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(state)
         .setup(|app| {
+            // The platform app-data directory is only resolvable from a
+            // Tauri `App` handle, so state construction has to live in
+            // `setup` rather than at the top of `run`. Tauri's own async
+            // runtime drives the SQLite open + migrations.
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("resolve app-data dir: {e}"))?;
+            let db_path = app_data_dir.join(DB_FILENAME);
+
+            tracing::info!(path = %db_path.display(), "opening database");
+
+            let state = tauri::async_runtime::block_on(ipc::AppState::build_default(&db_path))
+                .map_err(|e| format!("build app state: {e:#}"))?;
+            app.manage(state);
+
             // Hotkey registration is best-effort: if the OS refuses the
             // shortcut (already in use, missing permission, Wayland
             // compositor without support) we log and continue so the rest
@@ -68,6 +88,10 @@ pub fn run() {
             ipc::commands::list_input_devices,
             ipc::commands::start_dictation,
             ipc::commands::stop_dictation,
+            ipc::commands::history_list,
+            ipc::commands::history_search,
+            ipc::commands::history_delete,
+            ipc::commands::history_count,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");
