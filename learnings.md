@@ -60,6 +60,23 @@ Worth knowing if anyone later splits commands across files: the macro is path-se
 
 ---
 
+## 2026-04-25 — Recording HUD: secondary Tauri window, show/hide tracks the audio stream
+
+PRD §9's "transparent floating HUD with level meter" is a second window — borderless, transparent, always-on-top — rather than reusing the main window in a "compact mode". The user dictates *into* another app, so Hush's main window is in the background; the HUD has to be visible while that other app is focused. Tauri's `windows[]` array in `tauri.conf.json` accepts the relevant flags (`decorations: false`, `transparent: true`, `alwaysOnTop: true`, `skipTaskbar: true`, `visible: false` to start hidden). The HUD loads `/hud` — a separate Svelte route that renders only the indicator, no dictation UI.
+
+**Show/hide cadence:** the HUD lifecycle tracks the *audio stream*, not the transcription. So:
+- `show()` runs as the **last** step of `start_dictation` (after `audio.start` succeeds) — a failed start never flashes the HUD on/off.
+- `hide()` runs **immediately** after `audio.stop` returns. The transcription that follows can take seconds; by then the user has stopped speaking and is waiting on the result, not on "is Hush still listening". The HUD answer to "is the mic hot?" should track the mic, not the model.
+- On error paths in `stop_dictation`, the HUD also hides — the user pressed Stop, they shouldn't see the HUD persist.
+
+**Why no level meter in this PR:** streaming an audio level from the cpal callback (which is on the realtime audio thread, can't directly emit Tauri events) requires either a `std::sync::mpsc` channel + a Tauri-aware dispatcher task, or a shared atomic the frontend polls. Both are non-trivial refactors of `audio::CpalAudioCapture`'s worker loop and worth their own scoped change — see refactor #38 (`stop_dictation` decomposition) which lands in the same neighbourhood.
+
+**HUD-as-second-window vs. HUD-as-mode-of-main:** folding the HUD into the main window would mean making it borderless / always-on-top during recording and restoring afterwards — twice the OS window state to juggle, and the settings panes (replacements, vocabulary, model picker) disappear during recording. Keeping a dedicated minimal `/hud` route means both surfaces are independent and stable.
+
+The `acceptFirstMouse: false` and `focus: false` config minimises the HUD's interaction-claim — it appears, the user keeps typing in their target app, the HUD doesn't steal keyboard focus. macOS `set_focus(false)` to keep the previous app focused is platform-quirky; Tauri 2 doesn't expose a clean "show without focus" call. The current behaviour is "shows briefly, target app reclaims focus on next input" — acceptable; bake-in time before deciding if a `set_focus(false)` shim is needed.
+
+---
+
 ## 2026-04-25 — macOS first-run: explain, don't probe; you can't read grant state
 
 The original instinct on #22 was to add "Test microphone" / "Test Input Monitoring" buttons that programmatically trigger the OS prompts. That's how iOS / Android apps usually do permission onboarding. macOS desktop doesn't work the same way:

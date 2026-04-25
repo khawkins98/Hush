@@ -139,10 +139,20 @@ pub fn list_input_devices(state: State<'_, AppState>) -> IpcResult<Vec<AudioDevi
 /// focus — by the time the stream is open they may have alt-tabbed back to
 /// Hush. We only commit the snapshot to [`AppState::pending_foreground`]
 /// after `audio.start` succeeds, so a failed start does not leave a stale
-/// snapshot in the slot.
+/// snapshot in the slot. Shows the recording HUD as the last step (after
+/// the audio stream is live) so a failed `start` doesn't flash the HUD on
+/// then off.
 #[tauri::command]
-pub fn start_dictation(state: State<'_, AppState>, device_id: Option<String>) -> IpcResult<()> {
-    start_dictation_inner(&state, device_id.as_deref())
+pub fn start_dictation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device_id: Option<String>,
+) -> IpcResult<()> {
+    start_dictation_inner(&state, device_id.as_deref())?;
+    if let Err(e) = crate::hud::show(&app) {
+        tracing::error!(error = ?e, "failed to show recording HUD");
+    }
+    Ok(())
 }
 
 /// Tauri-free orchestration for `start_dictation`. Split out so tests can
@@ -198,10 +208,25 @@ pub async fn stop_dictation(
         .ok_or(IpcError::TranscriptionUnavailable)?
         .clone();
 
-    let captured = state
-        .audio
-        .stop()
-        .map_err(|e| IpcError::Audio(e.to_string()))?;
+    let captured = match state.audio.stop() {
+        Ok(c) => c,
+        Err(e) => {
+            // Even on a failed stop the user pressed Stop — the HUD
+            // should hide regardless. Hide before propagating the
+            // error.
+            let _ = crate::hud::hide(&app);
+            return Err(IpcError::Audio(e.to_string()));
+        }
+    };
+
+    // Hide the HUD as soon as the audio stream is closed. The user's
+    // perception of "is Hush still listening?" should track the
+    // microphone state, not the (possibly multi-second) transcription
+    // that follows. Best-effort — failure to hide is logged but does
+    // not block the rest of the pipeline.
+    if let Err(e) = crate::hud::hide(&app) {
+        tracing::error!(error = ?e, "failed to hide recording HUD");
+    }
 
     // Build the vocabulary prompt before inference. A failure here
     // demotes to the no-prompt path — the dictation still works, the

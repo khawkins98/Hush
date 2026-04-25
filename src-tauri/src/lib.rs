@@ -5,6 +5,7 @@ pub mod db;
 pub mod dictionary;
 pub mod history;
 pub mod hotkey;
+pub mod hud;
 pub mod ipc;
 pub mod settings;
 pub mod transcription;
