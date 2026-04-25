@@ -17,6 +17,12 @@
     durationMs: number | null;
     createdAt: string;
   };
+  type ReplacementRule = {
+    id: number;
+    findText: string;
+    replaceText: string;
+    sortOrder: number;
+  };
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
   // 25 is plenty per page for a dictation history that grows linearly
@@ -38,6 +44,11 @@
   // to an external invalidation (e.g. a successful stop_dictation
   // inserted a new row).
   let historyVersion = $state(0);
+
+  let replacements = $state<ReplacementRule[]>([]);
+  let replacementsError = $state<string | null>(null);
+  let newFind = $state("");
+  let newReplace = $state("");
 
   // `recording` is "audio is being captured", `busy` covers both the
   // start handshake AND the post-stop transcription window. Splitting
@@ -68,6 +79,7 @@
     }
 
     await refreshHistory();
+    await refreshReplacements();
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
     // press the backend emits `hotkey:toggle`. We dispatch start vs stop
@@ -180,6 +192,46 @@
       void refreshHistory();
     } catch (e) {
       historyError = formatError(e);
+    }
+  }
+
+  async function refreshReplacements() {
+    replacementsError = null;
+    try {
+      replacements = await invoke<ReplacementRule[]>("replacements_list");
+    } catch (e) {
+      replacementsError = formatError(e);
+    }
+  }
+
+  async function addReplacement(e: Event) {
+    e.preventDefault();
+    if (newFind.trim().length === 0) return; // empty find is a no-op rule
+    try {
+      const created = await invoke<ReplacementRule>("replacement_create", {
+        findText: newFind,
+        replaceText: newReplace,
+        // Default sort_order=0 so the new rule sorts by id (insertion
+        // order). A reorder UI lands when users ask for it.
+        sortOrder: 0,
+      });
+      replacements = [...replacements, created];
+      newFind = "";
+      newReplace = "";
+    } catch (err) {
+      replacementsError = formatError(err);
+    }
+  }
+
+  async function deleteReplacement(rule: ReplacementRule) {
+    try {
+      await invoke("replacement_delete", { id: rule.id });
+      // Optimistic update; a background refresh would re-align if any
+      // drift, but the trait contract guarantees no-op on missing id so
+      // a re-fetch is unnecessary in the happy path.
+      replacements = replacements.filter((r) => r.id !== rule.id);
+    } catch (err) {
+      replacementsError = formatError(err);
     }
   }
 
@@ -354,6 +406,65 @@
                 Delete
               </button>
             </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+
+  <section class="replacements" aria-labelledby="replacements-heading">
+    <header class="history-header">
+      <h2 id="replacements-heading">Replacements</h2>
+    </header>
+    <p class="hint-prose">
+      Find/replace pairs applied to every transcription before it's
+      copied to the clipboard. Useful for stripping fillers
+      (<code>um </code> → <code>(empty)</code>) or fixing names the
+      model misrecognises. Literal substrings, case-sensitive.
+    </p>
+
+    {#if replacementsError}
+      <p class="error" role="alert">{replacementsError}</p>
+    {/if}
+
+    <form class="replacement-form" onsubmit={addReplacement}>
+      <input
+        type="text"
+        bind:value={newFind}
+        placeholder="Find…"
+        aria-label="Find text"
+      />
+      <span class="arrow" aria-hidden="true">→</span>
+      <input
+        type="text"
+        bind:value={newReplace}
+        placeholder="Replace with… (blank deletes)"
+        aria-label="Replace with"
+      />
+      <button type="submit" disabled={newFind.trim().length === 0}>Add</button>
+    </form>
+
+    {#if replacements.length === 0}
+      <p class="empty-history">
+        No replacement rules yet. Add one above to clean up future
+        transcriptions automatically.
+      </p>
+    {:else}
+      <ul class="replacement-list">
+        {#each replacements as rule (rule.id)}
+          <li class="replacement-row">
+            <code class="replacement-find">{rule.findText}</code>
+            <span class="arrow" aria-hidden="true">→</span>
+            <code class="replacement-replace">
+              {rule.replaceText.length === 0 ? "(empty)" : rule.replaceText}
+            </code>
+            <button
+              class="ghost danger"
+              onclick={() => deleteReplacement(rule)}
+              aria-label="Delete replacement {rule.findText} to {rule.replaceText}"
+            >
+              Delete
+            </button>
           </li>
         {/each}
       </ul>
@@ -661,6 +772,91 @@ button.ghost.danger:hover:not(:disabled) {
   text-align: center;
 }
 
+.replacements {
+  margin-top: 2.5rem;
+  text-align: left;
+}
+
+.hint-prose {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: #555;
+  line-height: 1.5;
+}
+
+.hint-prose code {
+  background-color: #eef2ff;
+  padding: 0.05em 0.4em;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.replacement-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.replacement-form input[type="text"] {
+  flex: 1;
+  min-width: 8rem;
+  padding: 0.5em 0.85em;
+  font-size: 0.9rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.replacement-form button {
+  padding: 0.5em 1.2em;
+  font-size: 0.9rem;
+}
+
+.arrow {
+  color: #888;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.replacement-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.replacement-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.55rem 0.8rem;
+  background-color: white;
+  border: 1px solid #e1e1e1;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.replacement-find,
+.replacement-replace {
+  background-color: #f4f4f4;
+  padding: 0.1em 0.5em;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.replacement-row .ghost {
+  margin-left: auto;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f0f0f0;
@@ -737,6 +933,25 @@ button.ghost.danger:hover:not(:disabled) {
     background-color: #1f1f1f;
     border-color: #3a3a3a;
     color: #999;
+  }
+  .hint-prose {
+    color: #aaa;
+  }
+  .hint-prose code {
+    background-color: #1e2a4a;
+    color: #c0d0ff;
+  }
+  .replacement-row {
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  .replacement-find,
+  .replacement-replace {
+    background-color: #1f1f1f;
+    color: #f0f0f0;
+  }
+  .arrow {
+    color: #888;
   }
 }
 </style>

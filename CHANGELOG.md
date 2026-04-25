@@ -75,6 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / delete, and newest-first ordering. The `Transcribe` trait gained a
   `model_label()` method so the row records which model produced each
   transcript (whisper-rs returns the GGUF file's basename).
+- Personal Dictionary — post-transcription find/replace half (`dictionary`
+  module): a pure-logic `apply_replacements()` function plus a SQLite-
+  backed `ReplacementRepository`. Rules are literal substrings applied
+  in `(sort_order, id)` order to every transcription before it lands on
+  the clipboard; an empty `replace_text` acts as a deletion. New IPC
+  commands (`replacements_list`, `replacement_create`, `_update`,
+  `_delete`) back a frontend "Replacements" panel with add and delete.
+  Vocabulary prompt-biasing is the remaining half of #6, lands in a
+  follow-up.
 
 ### Changed
 
