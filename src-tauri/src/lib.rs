@@ -1,6 +1,5 @@
 // Domain modules. Exposed at the crate root so integration tests and the
-// IPC layer (TODO(#9)) can address them by their public surface, and so
-// dead-code warnings do not fire on items that are wired up in a later PR.
+// IPC layer can address them by their public surface.
 pub mod audio;
 pub mod db;
 pub mod dictionary;
@@ -12,6 +11,19 @@ pub mod updater;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialise tracing here so service-construction errors (e.g. the
+    // whisper model failing to load on startup) reach `RUST_LOG` consumers
+    // before the Tauri event loop starts. `try_init` rather than `init` so
+    // re-runs in tests (`cargo tauri dev`-restart-cycle) do not panic.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    let state = ipc::AppState::build_default();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -24,7 +36,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![])
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![
+            ipc::commands::list_input_devices,
+            ipc::commands::start_dictation,
+            ipc::commands::stop_dictation,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");
 }
