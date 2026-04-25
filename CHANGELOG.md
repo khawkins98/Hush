@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start/stop buttons + result display, replacing the Tauri starter
   template's "greet" placeholder. Drives the M2 end-to-end loop from a
   button rather than a hotkey (hotkey lands in #5).
+- Toggle-record global hotkey (`hotkey` module): registers
+  `CmdOrCtrl+Shift+Space` (overridable via `HUSH_TOGGLE_HOTKEY`) on
+  startup and emits a `hotkey:toggle` event to the frontend on each
+  press. The frontend dispatches start vs. stop against its existing
+  `recording` flag, keeping a single source of truth for UI state and
+  one orchestration path for the pipeline. Push-to-talk via `rdev` is
+  the open second half of #5.
 
 ---
 

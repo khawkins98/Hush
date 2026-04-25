@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { onDestroy, onMount } from "svelte";
 
   // Mirror the camelCase serde renames on the Rust side.
   type AudioDevice = { id: string; name: string; isDefault: boolean };
@@ -15,6 +16,8 @@
   let result = $state<DictationResult | null>(null);
   let error = $state<string | null>(null);
 
+  let unlistenToggle: UnlistenFn | null = null;
+
   onMount(async () => {
     try {
       devices = await invoke<AudioDevice[]>("list_input_devices");
@@ -23,6 +26,20 @@
     } catch (e) {
       error = formatError(e);
     }
+
+    // Hotkey lives in the backend (`hotkey::register_default`); on every
+    // press the backend emits `hotkey:toggle`. We dispatch start vs stop
+    // here against the frontend's own recording flag so the toggle
+    // semantics live next to the UI state they affect.
+    unlistenToggle = await listen("hotkey:toggle", () => {
+      if (busy) return; // ignore presses while a transcription is in flight
+      if (recording) void stop();
+      else void start();
+    });
+  });
+
+  onDestroy(() => {
+    unlistenToggle?.();
   });
 
   async function start() {
