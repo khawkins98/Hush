@@ -47,6 +47,12 @@ whisper-rs = { version = "0.14", features = [], optional = true }
 # SQLite persistence
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 
+# Async-trait shim for `async fn` in object-safe traits. Native async-fn-
+# in-trait works since Rust 1.75 but is awkward to use behind `dyn` —
+# `async-trait` keeps the existing `Arc<dyn HistoryRepository>` test seam
+# pattern intact.
+async-trait = "0.1"
+
 # Foreground app detection
 active-win-pos-rs = "0.8"
 

@@ -8,6 +8,20 @@
   type ForegroundApp = { appName: string; windowTitle: string };
   type DictationResult = { text: string; foreground: ForegroundApp | null };
   type IpcError = { kind: string; message?: string };
+  type HistoryEntry = {
+    id: number;
+    transcript: string;
+    appName: string | null;
+    windowTitle: string | null;
+    model: string;
+    durationMs: number | null;
+    createdAt: string;
+  };
+
+  // Page size for the history view. Hard-cap on the Rust side is 500;
+  // 25 is plenty per page for a dictation history that grows linearly
+  // with the user's actual usage (handful per day).
+  const HISTORY_PAGE_SIZE = 25;
 
   let devices = $state<AudioDevice[]>([]);
   let devicesLoaded = $state(false);
@@ -16,6 +30,14 @@
   let busy = $state(false);
   let result = $state<DictationResult | null>(null);
   let error = $state<string | null>(null);
+
+  let historyEntries = $state<HistoryEntry[]>([]);
+  let historyQuery = $state("");
+  let historyError = $state<string | null>(null);
+  // Sentinel that any history-touching command bumps so we can react
+  // to an external invalidation (e.g. a successful stop_dictation
+  // inserted a new row).
+  let historyVersion = $state(0);
 
   // `recording` is "audio is being captured", `busy` covers both the
   // start handshake AND the post-stop transcription window. Splitting
@@ -44,6 +66,8 @@
     } finally {
       devicesLoaded = true;
     }
+
+    await refreshHistory();
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
     // press the backend emits `hotkey:toggle`. We dispatch start vs stop
@@ -96,6 +120,11 @@
     try {
       result = await invoke<DictationResult>("stop_dictation");
       recording = false;
+      // Backend persists the row on a fire-and-forget task; refresh
+      // shortly after so the new entry shows up. Small delay so the
+      // INSERT has a chance to commit; on a slow disk this could miss
+      // the new row, but the next interaction will catch it.
+      setTimeout(() => void refreshHistory(), 150);
     } catch (e) {
       error = formatError(e);
       // Even if transcription failed, the recording itself stopped on the
@@ -104,6 +133,62 @@
     } finally {
       busy = false;
     }
+  }
+
+  async function refreshHistory() {
+    historyError = null;
+    try {
+      historyEntries = await invoke<HistoryEntry[]>("history_search", {
+        query: historyQuery,
+        limit: HISTORY_PAGE_SIZE,
+        offset: 0,
+      });
+      historyVersion += 1;
+    } catch (e) {
+      historyError = formatError(e);
+    }
+  }
+
+  /// Debounce the search input so we don't fire a SQLite query on every
+  /// keystroke. 200ms is the empirical sweet spot — fast enough that the
+  /// user feels the list react, slow enough that holding a key doesn't
+  /// queue dozens of queries.
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  function onSearchInput(e: Event) {
+    historyQuery = (e.target as HTMLInputElement).value;
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      void refreshHistory();
+    }, 200);
+  }
+
+  async function copyHistoryEntry(entry: HistoryEntry) {
+    try {
+      await navigator.clipboard.writeText(entry.transcript);
+    } catch (e) {
+      historyError = `Copy failed: ${String(e)}`;
+    }
+  }
+
+  async function deleteHistoryEntry(entry: HistoryEntry) {
+    try {
+      await invoke("history_delete", { id: entry.id });
+      // Optimistic update so the row disappears immediately. A
+      // background refresh re-aligns with the db state in case the
+      // delete succeeded but our optimistic view drifted.
+      historyEntries = historyEntries.filter((e) => e.id !== entry.id);
+      void refreshHistory();
+    } catch (e) {
+      historyError = formatError(e);
+    }
+  }
+
+  function formatTimestamp(iso: string): string {
+    // The backend stores `YYYY-MM-DDTHH:MM:SSZ`. JS Date parses ISO-8601
+    // natively; locale formatting follows the user's system.
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return iso;
+    return date.toLocaleString();
   }
 
   /// Map a tagged IPC error to a user-facing string. Recovery hints are
@@ -226,6 +311,54 @@
       <p class="meta">Already on your clipboard. Paste with ⌘V / Ctrl+V.</p>
     </section>
   {/if}
+
+  <section class="history" aria-labelledby="history-heading">
+    <header class="history-header">
+      <h2 id="history-heading">History</h2>
+      <input
+        type="search"
+        placeholder="Search transcriptions…"
+        value={historyQuery}
+        oninput={onSearchInput}
+        aria-label="Search history"
+      />
+    </header>
+
+    {#if historyError}
+      <p class="error" role="alert">{historyError}</p>
+    {/if}
+
+    {#if historyEntries.length === 0}
+      <p class="empty-history">
+        {#if historyQuery.trim().length > 0}
+          No matches for "<em>{historyQuery}</em>".
+        {:else}
+          No transcriptions yet. Press the hotkey or click Start to record one.
+        {/if}
+      </p>
+    {:else}
+      <ul class="history-list" data-version={historyVersion}>
+        {#each historyEntries as entry (entry.id)}
+          <li class="history-row">
+            <p class="history-text">{entry.transcript}</p>
+            <p class="history-meta">
+              {formatTimestamp(entry.createdAt)}
+              {#if entry.appName}· {entry.appName}{/if}
+              {#if entry.model}· {entry.model}{/if}
+            </p>
+            <div class="history-actions">
+              <button class="ghost" onclick={() => copyHistoryEntry(entry)}>
+                Copy
+              </button>
+              <button class="ghost danger" onclick={() => deleteHistoryEntry(entry)}>
+                Delete
+              </button>
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
 </main>
 
 <style>
@@ -433,6 +566,101 @@ button.stop {
   color: #666;
 }
 
+.history {
+  margin-top: 2.5rem;
+  text-align: left;
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.history-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.history-header input[type="search"] {
+  flex: 1;
+  max-width: 18rem;
+  padding: 0.5em 0.85em;
+  font-size: 0.9rem;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.history-row {
+  padding: 0.75rem 1rem;
+  background-color: white;
+  border: 1px solid #e1e1e1;
+  border-radius: 8px;
+}
+
+.history-text {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.history-meta {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: #6b6b6b;
+}
+
+.history-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+button.ghost {
+  padding: 0.3em 0.75em;
+  font-size: 0.8rem;
+  font-weight: 500;
+  background-color: transparent;
+  border: 1px solid #d1d1d1;
+}
+
+button.ghost:hover:not(:disabled) {
+  background-color: #f0f0f0;
+}
+
+button.ghost.danger {
+  color: #b03030;
+  border-color: #e1b8b8;
+}
+
+button.ghost.danger:hover:not(:disabled) {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+}
+
+.empty-history {
+  margin: 0.5rem 0;
+  padding: 1rem;
+  background-color: #fafafa;
+  border: 1px dashed #d1d1d1;
+  border-radius: 8px;
+  color: #666;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f0f0f0;
@@ -479,6 +707,36 @@ button.stop {
     background-color: #4a1a1a;
     border-color: #d83a3a;
     color: #ffd0d0;
+  }
+  .history-header h2 {
+    color: #d8d8d8;
+  }
+  .history-row {
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  .history-meta {
+    color: #9a9a9a;
+  }
+  button.ghost {
+    border-color: #3a3a3a;
+    color: #f0f0f0;
+  }
+  button.ghost:hover:not(:disabled) {
+    background-color: #353535;
+  }
+  button.ghost.danger {
+    color: #ff9090;
+    border-color: #5a2020;
+  }
+  button.ghost.danger:hover:not(:disabled) {
+    background-color: #3a1818;
+    border-color: #d83a3a;
+  }
+  .empty-history {
+    background-color: #1f1f1f;
+    border-color: #3a3a3a;
+    color: #999;
   }
 }
 </style>

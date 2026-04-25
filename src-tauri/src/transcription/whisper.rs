@@ -206,6 +206,18 @@ impl Transcribe for WhisperTranscription {
 
         Ok(text.trim().to_owned())
     }
+
+    fn model_label(&self) -> String {
+        // Strip directory; the basename is what's recognisable to the
+        // user (`ggml-base.q5_0.bin` vs `/Users/.../models/...`). Falls
+        // back to the full path on the unlikely event that there is no
+        // file component (e.g. a directory was passed; Whisper would
+        // have already rejected it at construction time).
+        self.model_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.model_path.to_string_lossy().into_owned())
+    }
 }
 
 impl std::fmt::Debug for WhisperTranscription {

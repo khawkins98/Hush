@@ -80,6 +80,18 @@ pub trait Transcribe: Send + Sync {
     /// replacements (TODO(#6)) live in a separate post-processing stage so
     /// the raw model output stays available for debugging and history.
     fn transcribe(&self, audio: &CapturedAudio) -> Result<String>;
+
+    /// Short, human-readable identifier for the model running this
+    /// transcriber, persisted on each history row so the user can later
+    /// see which model produced a given transcript.
+    ///
+    /// Default returns `"unknown"`; the whisper-rs backend overrides
+    /// with the model file's basename (e.g. `ggml-base.q5_0.bin`).
+    /// When the model picker (M3) lands this becomes the user-facing
+    /// label from the picker rather than a path basename.
+    fn model_label(&self) -> String {
+        "unknown".to_owned()
+    }
 }
 
 #[cfg(test)]
