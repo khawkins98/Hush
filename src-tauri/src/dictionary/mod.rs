@@ -9,4 +9,4 @@
 //   - Expose CRUD commands to the frontend settings panel.
 //   - Apply replacements in order after transcription completes.
 
-// TODO(#4): implement dictionary CRUD and the post-transcription replacement pipeline
+// TODO(#6): implement dictionary CRUD and the post-transcription replacement pipeline

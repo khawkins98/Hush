@@ -9,4 +9,4 @@
 // All OS-touching behaviour is behind trait objects so unit tests can mock at this seam.
 // See §13.5 of the PRD.
 
-// TODO(#7): wire up Tauri commands for audio, transcription, history, dictionary, and settings
+// TODO(#9): wire up Tauri commands for audio, transcription, history, dictionary, and settings

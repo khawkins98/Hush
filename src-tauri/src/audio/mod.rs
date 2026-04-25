@@ -468,7 +468,7 @@ mod tests {
 
     /// Compile-time check that the trait is object-safe. If this ever fails
     /// to compile, a higher layer cannot store an `Arc<dyn AudioCapture>`,
-    /// which is how the IPC layer (TODO(#7)) plugs in either the cpal
+    /// which is how the IPC layer (TODO(#9)) plugs in either the cpal
     /// backend or a test mock.
     #[test]
     fn audio_capture_trait_is_object_safe() {
