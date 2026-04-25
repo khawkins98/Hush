@@ -180,6 +180,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   borderline by the UX review).
 - `prefers-reduced-motion` honoured by the new pulse / spin animations.
 
+### Tests
+
+- **Frontend e2e via Playwright + mocked Tauri IPC.** New
+  `tests/e2e/` suite drives the SvelteKit dev server in
+  `HUSH_E2E=1` mode — `vite.config.js` swaps
+  `@tauri-apps/api/{core,event}` for in-tree stubs in
+  `tests/e2e/setup/`, so the page renders in plain Chromium without
+  Tauri's runtime. Tests configure per-spec `invoke` handlers and
+  fire backend-emitted events via `installMocks(page, overrides)`
+  and `fireEvent(page, name, payload)`. New CI job runs the suite on
+  Linux. Three smoke tests cover: returning user does not see the
+  welcome modal, fresh install does and dismisses it on "Got it",
+  and `transcription-unavailable` errors surface the model-path
+  recovery hint. A fourth test (`fixme`-marked) documents the
+  welcome-modal-no-Escape regression flagged in #48 — it flips
+  green automatically when that fix lands. Full-stack flows (HUD
+  lifecycle, hotkey registration, real audio, real download) stay
+  open behind #57 (tauri-driver path).
+
 ### Security
 
 - **Download client redirect policy is host-restricted** (closes the
