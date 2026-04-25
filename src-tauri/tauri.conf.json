@@ -12,9 +12,26 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Hush",
         "width": 800,
         "height": 600
+      },
+      {
+        "label": "hud",
+        "title": "Hush HUD",
+        "url": "/hud",
+        "width": 220,
+        "height": 60,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "focus": false,
+        "acceptFirstMouse": false
       }
     ],
     "security": {

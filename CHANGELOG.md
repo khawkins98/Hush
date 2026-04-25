@@ -129,6 +129,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `generate_handler!` list. Frontend invokes would have failed at
   runtime. All three are now wired up.
 
+- Recording HUD overlay (scaffold). A second Tauri window
+  (label `hud`) shown while dictation is active: borderless,
+  transparent, always-on-top, no taskbar entry. Renders a pulsing
+  red dot + "Recording" label. Show/hide hooks into
+  `start_dictation` / `stop_dictation` so the HUD tracks the
+  audio stream's lifecycle, not the slower transcription that
+  follows. The level-meter half of #21 (cpal callbacks compute
+  RMS, audio thread → Tauri event → meter animation) lands as a
+  follow-up.
+
 ### Changed
 
 - **M2 polish.** Visible recording and transcribing states (pulsing red
