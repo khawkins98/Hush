@@ -10,15 +10,29 @@
   type IpcError = { kind: string; message?: string };
 
   let devices = $state<AudioDevice[]>([]);
+  let devicesLoaded = $state(false);
   let selected = $state<string | null>(null);
   let recording = $state(false);
   let busy = $state(false);
   let result = $state<DictationResult | null>(null);
   let error = $state<string | null>(null);
 
+  // `recording` is "audio is being captured", `busy` covers both the
+  // start handshake AND the post-stop transcription window. Splitting
+  // out `transcribing` lets the UI distinguish "starting up" (~ms) from
+  // "Whisper is working" (seconds), which deserves a visible spinner.
+  let transcribing = $derived(busy && !recording && !!result === false);
+
   let unlistenToggle: UnlistenFn | null = null;
   let unlistenPttPress: UnlistenFn | null = null;
   let unlistenPttRelease: UnlistenFn | null = null;
+
+  // Keep the document title in sync with recording state. Helps users who
+  // have the window in the background — at-a-glance signal that the mic
+  // is hot. Tauri exposes `window.document` like a regular browser.
+  $effect(() => {
+    document.title = recording ? "Hush ● Recording" : "Hush";
+  });
 
   onMount(async () => {
     try {
@@ -27,6 +41,8 @@
       if (def) selected = def.id;
     } catch (e) {
       error = formatError(e);
+    } finally {
+      devicesLoaded = true;
     }
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
@@ -40,12 +56,7 @@
     });
 
     // Push-to-talk: the rdev listener in `hotkey::ptt` emits these
-    // events on key-down and key-up of the configured PTT key. The
-    // frontend's `recording` and `busy` flags remain the source of
-    // truth — same pattern as the toggle hotkey above. Holding the key
-    // before recording is ready (e.g. `busy` from a prior transcription
-    // still finishing) is intentionally a no-op rather than queued: the
-    // user gets clearer feedback by re-pressing once the UI is idle.
+    // events on key-down and key-up of the configured PTT key.
     unlistenPttPress = await listen("hotkey:ptt-press", () => {
       if (busy || recording) return;
       void start();
@@ -95,10 +106,32 @@
     }
   }
 
+  /// Map a tagged IPC error to a user-facing string. Recovery hints are
+  /// embedded here rather than in the Rust enum's Display because the
+  /// hint copy is product-shaped (what the user *does next*), not
+  /// engineering-shaped (what went wrong technically).
   function formatError(e: unknown): string {
     if (typeof e === "object" && e !== null && "kind" in e) {
       const ipc = e as IpcError;
-      return ipc.message ? `${ipc.kind}: ${ipc.message}` : ipc.kind;
+      switch (ipc.kind) {
+        case "transcription-unavailable":
+          return (
+            "Transcription isn't set up yet. The model picker is coming in " +
+            "the next milestone — for now, set HUSH_MODEL_PATH to a Whisper " +
+            "GGUF file and run with `cargo tauri dev --features whisper`. " +
+            "(See README for setup help.)"
+          );
+        case "audio":
+          return `Microphone error: ${ipc.message ?? "unknown"}. Try selecting a different input device.`;
+        case "transcription":
+          return `Transcription failed: ${ipc.message ?? "unknown"}. The model may be incompatible — try a different one.`;
+        case "clipboard":
+          return `Couldn't write to the clipboard: ${ipc.message ?? "unknown"}.`;
+        case "internal":
+          return `Internal error: ${ipc.message ?? "unknown"}. Please restart Hush.`;
+        default:
+          return ipc.message ? `${ipc.kind}: ${ipc.message}` : ipc.kind;
+      }
     }
     return String(e);
   }
@@ -108,31 +141,76 @@
   <h1>Hush</h1>
   <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
 
+  <!--
+    Hotkey hint card. Defaults are baked here for M2; once the settings
+    panel lands (M3) this becomes a fetched value and the env-var
+    override notes go away.
+  -->
+  <aside class="hint" aria-label="Keyboard shortcuts">
+    <strong>Shortcuts:</strong>
+    <kbd>⌘/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> to toggle,
+    or hold <kbd>Right Ctrl</kbd> to push-to-talk.
+  </aside>
+
   <section class="controls">
     <label>
       Input device
-      <select bind:value={selected} disabled={recording || busy}>
-        {#each devices as device (device.id)}
-          <option value={device.id}>
-            {device.name}{device.isDefault ? " (default)" : ""}
-          </option>
-        {/each}
-      </select>
+      {#if !devicesLoaded}
+        <p class="empty-devices">Loading devices…</p>
+      {:else if devices.length === 0}
+        <p class="empty-devices">
+          No microphones detected. On macOS, grant microphone access in
+          System Settings → Privacy &amp; Security. On Linux, check that
+          PulseAudio / PipeWire is running.
+        </p>
+      {:else}
+        <select bind:value={selected} disabled={recording || busy}>
+          {#each devices as device (device.id)}
+            <option value={device.id}>
+              {device.name}{device.isDefault ? " (default)" : ""}
+            </option>
+          {/each}
+        </select>
+      {/if}
     </label>
 
     {#if !recording}
-      <button onclick={start} disabled={busy || devices.length === 0}>
-        ● Start recording
+      <button
+        onclick={start}
+        disabled={busy || devices.length === 0}
+        aria-label={busy ? "Working" : "Start recording"}
+      >
+        {#if transcribing}
+          <span class="spinner" aria-hidden="true"></span> Transcribing…
+        {:else}
+          ● Start recording
+        {/if}
       </button>
     {:else}
-      <button class="stop" onclick={stop} disabled={busy}>
+      <button class="stop" onclick={stop} disabled={busy} aria-label="Stop recording and transcribe">
         ■ Stop and transcribe
       </button>
     {/if}
+
+    <!--
+      aria-live so screen readers announce the recording state change
+      when the hotkey toggles it from elsewhere on the desktop. Visually
+      this is the same `🔴 Recording…` cue that gives sighted users
+      feedback that the mic is hot when the window is in the background.
+    -->
+    <p class="status" aria-live="polite">
+      {#if recording}
+        <span class="recording-dot" aria-hidden="true"></span> Recording…
+        release the hotkey or press Stop to transcribe.
+      {:else if transcribing}
+        Transcribing — this can take a few seconds for short clips,
+        longer for big models.
+      {/if}
+    </p>
   </section>
 
   {#if error}
-    <p class="error">{error}</p>
+    <p class="error" role="alert">{error}</p>
   {/if}
 
   {#if result}
@@ -178,7 +256,30 @@ h1 {
 
 .tagline {
   color: #555;
+  margin: 0 0 1.25rem;
+}
+
+.hint {
   margin: 0 0 2rem;
+  padding: 0.75rem 1rem;
+  background-color: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  color: #2c3e8f;
+  font-size: 0.9rem;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.hint kbd {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background-color: white;
+  border: 1px solid #c7d2fe;
+  border-radius: 4px;
+  margin: 0 0.1rem;
 }
 
 .controls {
@@ -197,6 +298,17 @@ label {
   color: #555;
 }
 
+.empty-devices {
+  margin: 0;
+  padding: 0.65rem 0.85rem;
+  background-color: #fff7e6;
+  border: 1px solid #f0c87b;
+  border-radius: 6px;
+  color: #6a4a00;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 select,
 button {
   border-radius: 8px;
@@ -212,6 +324,10 @@ button {
 button {
   cursor: pointer;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
 button:hover:not(:disabled) {
@@ -219,7 +335,7 @@ button:hover:not(:disabled) {
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
@@ -229,14 +345,62 @@ button.stop {
   border-color: #d83a3a;
 }
 
+.status {
+  margin: 0;
+  min-height: 1.4em;
+  font-size: 0.95rem;
+  color: #555;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+}
+
+.recording-dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background-color: #d83a3a;
+  display: inline-block;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording-dot,
+  .spinner {
+    animation: none;
+  }
+}
+
+.spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .error {
   margin-top: 1.5rem;
   padding: 0.75rem 1rem;
   background-color: #fee;
   border: 1px solid #d83a3a;
   border-radius: 8px;
-  color: #b03030;
+  color: #8a0000;
   text-align: left;
+  line-height: 1.5;
 }
 
 .result {
@@ -260,6 +424,7 @@ button.stop {
   font-size: 1.1rem;
   line-height: 1.5;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .result .meta {
@@ -275,9 +440,25 @@ button.stop {
   }
   .tagline,
   label,
+  .status,
   .result h2,
   .result .meta {
     color: #aaa;
+  }
+  .hint {
+    background-color: #1e2a4a;
+    border-color: #3a4a7a;
+    color: #c0d0ff;
+  }
+  .hint kbd {
+    background-color: #0f1a2e;
+    border-color: #3a4a7a;
+    color: #f0f0f0;
+  }
+  .empty-devices {
+    background-color: #3a2e10;
+    border-color: #7a5a20;
+    color: #f0d090;
   }
   select,
   button {
@@ -293,8 +474,11 @@ button.stop {
     border-color: #3a3a3a;
   }
   .error {
-    background-color: #3a1a1a;
-    color: #ffa0a0;
+    /* Increased contrast over the previous #ffa0a0 — flagged in the
+       UX review as likely below WCAG AA on dark mode. */
+    background-color: #4a1a1a;
+    border-color: #d83a3a;
+    color: #ffd0d0;
   }
 }
 </style>
