@@ -57,7 +57,9 @@
   let error = $state<string | null>(null);
 
   let historyEntries = $state<HistoryEntry[]>([]);
+  let historyLoaded = $state(false);
   let historyQuery = $state("");
+  let historySearching = $state(false);
   let historyError = $state<string | null>(null);
   // Sentinel that any history-touching command bumps so we can react
   // to an external invalidation (e.g. a successful stop_dictation
@@ -65,15 +67,20 @@
   let historyVersion = $state(0);
 
   let replacements = $state<ReplacementRule[]>([]);
+  let replacementsLoaded = $state(false);
   let replacementsError = $state<string | null>(null);
   let newFind = $state("");
   let newReplace = $state("");
+  let findInputEl = $state<HTMLInputElement | null>(null);
 
   let vocabulary = $state<VocabularyTerm[]>([]);
+  let vocabularyLoaded = $state(false);
   let vocabularyError = $state<string | null>(null);
   let newVocab = $state("");
+  let vocabInputEl = $state<HTMLInputElement | null>(null);
 
   let models = $state<ModelCard[]>([]);
+  let modelsLoaded = $state(false);
   let modelsError = $state<string | null>(null);
   let modelsRestartNotice = $state(false);
 
@@ -95,20 +102,18 @@
   });
 
   onMount(async () => {
-    try {
-      devices = await invoke<AudioDevice[]>("list_input_devices");
-      const def = devices.find((d) => d.isDefault) ?? devices[0];
-      if (def) selected = def.id;
-    } catch (e) {
-      error = formatError(e);
-    } finally {
-      devicesLoaded = true;
-    }
-
-    await refreshHistory();
-    await refreshReplacements();
-    await refreshVocabulary();
-    await refreshModels();
+    // Fire all five fetches concurrently rather than sequentially —
+    // the user-visible time-to-paint is bounded by the slowest single
+    // call instead of the sum. Each fetch handles its own loading
+    // and error state so a slow one (history, in particular) doesn't
+    // block the rest of the page.
+    await Promise.all([
+      loadDevices(),
+      refreshHistory(),
+      refreshReplacements(),
+      refreshVocabulary(),
+      refreshModels(),
+    ]);
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
     // press the backend emits `hotkey:toggle`. We dispatch start vs stop
@@ -176,8 +181,21 @@
     }
   }
 
+  async function loadDevices() {
+    try {
+      devices = await invoke<AudioDevice[]>("list_input_devices");
+      const def = devices.find((d) => d.isDefault) ?? devices[0];
+      if (def) selected = def.id;
+    } catch (e) {
+      error = formatError(e);
+    } finally {
+      devicesLoaded = true;
+    }
+  }
+
   async function refreshHistory() {
     historyError = null;
+    historySearching = true;
     try {
       historyEntries = await invoke<HistoryEntry[]>("history_search", {
         query: historyQuery,
@@ -187,6 +205,9 @@
       historyVersion += 1;
     } catch (e) {
       historyError = formatError(e);
+    } finally {
+      historyLoaded = true;
+      historySearching = false;
     }
   }
 
@@ -230,6 +251,8 @@
       replacements = await invoke<ReplacementRule[]>("replacements_list");
     } catch (e) {
       replacementsError = formatError(e);
+    } finally {
+      replacementsLoaded = true;
     }
   }
 
@@ -247,6 +270,10 @@
       replacements = [...replacements, created];
       newFind = "";
       newReplace = "";
+      // Return focus to the find input so a keyboard-only user can
+      // type the next rule without Tabbing back from the bottom of
+      // the list.
+      findInputEl?.focus();
     } catch (err) {
       replacementsError = formatError(err);
     }
@@ -270,6 +297,8 @@
       vocabulary = await invoke<VocabularyTerm[]>("vocabulary_list");
     } catch (e) {
       vocabularyError = formatError(e);
+    } finally {
+      vocabularyLoaded = true;
     }
   }
 
@@ -283,6 +312,7 @@
       });
       vocabulary = [...vocabulary, created];
       newVocab = "";
+      vocabInputEl?.focus(); // same focus pattern as the replacements form
     } catch (err) {
       // Surface unique-constraint violations as a friendlier message
       // than the raw "UNIQUE constraint failed: dictionary_terms.term"
@@ -309,6 +339,8 @@
       models = await invoke<ModelCard[]>("model_list");
     } catch (e) {
       modelsError = formatError(e);
+    } finally {
+      modelsLoaded = true;
     }
   }
 
@@ -373,7 +405,7 @@
     panel lands (M3) this becomes a fetched value and the env-var
     override notes go away.
   -->
-  <aside class="hint" aria-label="Keyboard shortcuts">
+  <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
     <strong>Shortcuts:</strong>
     <kbd>⌘/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> to toggle,
     or hold <kbd>Right Ctrl</kbd> to push-to-talk.
@@ -441,7 +473,7 @@
   {/if}
 
   {#if result}
-    <section class="result">
+    <section class="result" aria-live="polite">
       <h2>Transcription</h2>
       <p class="text">{result.text || "(empty)"}</p>
       {#if result.foreground}
@@ -454,28 +486,41 @@
     </section>
   {/if}
 
-  <section class="history" aria-labelledby="history-heading">
+  <section class="history panel-history" aria-labelledby="history-heading">
     <header class="history-header">
-      <h2 id="history-heading">History</h2>
-      <input
-        type="search"
-        placeholder="Search transcriptions…"
-        value={historyQuery}
-        oninput={onSearchInput}
-        aria-label="Search history"
-      />
+      <h2 id="history-heading">
+        <span class="panel-tag" aria-hidden="true">H</span>
+        History
+      </h2>
+      <div class="search-wrap">
+        <input
+          type="search"
+          placeholder="Search transcriptions…"
+          value={historyQuery}
+          oninput={onSearchInput}
+          aria-label="Search history"
+        />
+        {#if historySearching}
+          <span class="search-spinner" aria-label="Searching" role="status"></span>
+        {/if}
+      </div>
     </header>
 
     {#if historyError}
-      <p class="error" role="alert">{historyError}</p>
+      <p class="error scoped-error" role="alert">
+        <strong>History:</strong>
+        {historyError}
+      </p>
     {/if}
 
-    {#if historyEntries.length === 0}
+    {#if !historyLoaded}
+      <p class="loading-skeleton">Loading history…</p>
+    {:else if historyEntries.length === 0}
       <p class="empty-history">
         {#if historyQuery.trim().length > 0}
-          No matches for "<em>{historyQuery}</em>".
+          No matches for "<em>{historyQuery}</em>". Try a shorter query.
         {:else}
-          No transcriptions yet. Press the hotkey or click Start to record one.
+          No transcriptions yet — press the hotkey or click Start above.
         {/if}
       </p>
     {:else}
@@ -502,9 +547,13 @@
     {/if}
   </section>
 
-  <section class="replacements" aria-labelledby="replacements-heading">
+  <section class="replacements panel-replacements" aria-labelledby="replacements-heading">
     <header class="history-header">
-      <h2 id="replacements-heading">Replacements</h2>
+      <h2 id="replacements-heading">
+        <span class="panel-tag panel-tag-replacements" aria-hidden="true">R</span>
+        Replacements
+        <span class="panel-subtitle">rewrites the output</span>
+      </h2>
     </header>
     <p class="hint-prose">
       Find/replace pairs applied to every transcription before it's
@@ -514,12 +563,16 @@
     </p>
 
     {#if replacementsError}
-      <p class="error" role="alert">{replacementsError}</p>
+      <p class="error scoped-error" role="alert">
+        <strong>Replacements:</strong>
+        {replacementsError}
+      </p>
     {/if}
 
     <form class="replacement-form" onsubmit={addReplacement}>
       <input
         type="text"
+        bind:this={findInputEl}
         bind:value={newFind}
         placeholder="Find…"
         aria-label="Find text"
@@ -534,10 +587,12 @@
       <button type="submit" disabled={newFind.trim().length === 0}>Add</button>
     </form>
 
-    {#if replacements.length === 0}
+    {#if !replacementsLoaded}
+      <p class="loading-skeleton">Loading replacements…</p>
+    {:else if replacements.length === 0}
       <p class="empty-history">
-        No replacement rules yet. Add one above to clean up future
-        transcriptions automatically.
+        No replacement rules yet — add one above to clean up
+        future transcriptions automatically.
       </p>
     {:else}
       <ul class="replacement-list">
@@ -561,9 +616,12 @@
     {/if}
   </section>
 
-  <section class="models" aria-labelledby="models-heading">
+  <section class="models panel-models" aria-labelledby="models-heading">
     <header class="history-header">
-      <h2 id="models-heading">Model</h2>
+      <h2 id="models-heading">
+        <span class="panel-tag panel-tag-models" aria-hidden="true">M</span>
+        Model
+      </h2>
     </header>
     <p class="hint-prose">
       Pick a Whisper variant. Bigger models are slower but more
@@ -579,7 +637,10 @@
     </p>
 
     {#if modelsError}
-      <p class="error" role="alert">{modelsError}</p>
+      <p class="error scoped-error" role="alert">
+        <strong>Model:</strong>
+        {modelsError}
+      </p>
     {/if}
 
     {#if modelsRestartNotice}
@@ -587,6 +648,10 @@
         Saved. Restart Hush to use the new model. (Hot-swap is
         coming.)
       </p>
+    {/if}
+
+    {#if !modelsLoaded}
+      <p class="loading-skeleton">Loading models…</p>
     {/if}
 
     <ul class="model-grid">
@@ -649,25 +714,33 @@
     </ul>
   </section>
 
-  <section class="vocabulary" aria-labelledby="vocabulary-heading">
+  <section class="vocabulary panel-vocabulary" aria-labelledby="vocabulary-heading">
     <header class="history-header">
-      <h2 id="vocabulary-heading">Vocabulary</h2>
+      <h2 id="vocabulary-heading">
+        <span class="panel-tag panel-tag-vocabulary" aria-hidden="true">V</span>
+        Vocabulary
+        <span class="panel-subtitle">biases the recognition</span>
+      </h2>
     </header>
     <p class="hint-prose">
       Words Whisper should be primed to recognise — proper nouns,
       jargon, names it otherwise mishears. Joined into the model's
       initial prompt on every transcription. Different from
-      Replacements: vocabulary biases the <em>recognition</em>;
+      Replacements above: vocabulary biases the <em>recognition</em>;
       replacements rewrite the <em>output</em>.
     </p>
 
     {#if vocabularyError}
-      <p class="error" role="alert">{vocabularyError}</p>
+      <p class="error scoped-error" role="alert">
+        <strong>Vocabulary:</strong>
+        {vocabularyError}
+      </p>
     {/if}
 
     <form class="replacement-form" onsubmit={addVocabulary}>
       <input
         type="text"
+        bind:this={vocabInputEl}
         bind:value={newVocab}
         placeholder="Term (e.g. Tauri, ggml, Beingpax)…"
         aria-label="Vocabulary term"
@@ -675,10 +748,12 @@
       <button type="submit" disabled={newVocab.trim().length === 0}>Add</button>
     </form>
 
-    {#if vocabulary.length === 0}
+    {#if !vocabularyLoaded}
+      <p class="loading-skeleton">Loading vocabulary…</p>
+    {:else if vocabulary.length === 0}
       <p class="empty-history">
-        No vocabulary terms yet. Add a word here and Whisper will be
-        more likely to spell it correctly next time.
+        No vocabulary terms yet — add a word above and Whisper
+        will be more likely to spell it correctly next time.
       </p>
     {:else}
       <ul class="replacement-list">
@@ -740,6 +815,17 @@ h1 {
   font-size: 0.9rem;
   text-align: left;
   line-height: 1.5;
+}
+
+.hint-sticky {
+  /* Sticky so the hotkey hint stays visible as the page grows. The
+     UX review flagged that the original (non-sticky) card scrolls
+     off once the user has built up some history / replacements /
+     vocabulary. */
+  position: sticky;
+  top: 0.75rem;
+  z-index: 5;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .hint kbd {
@@ -1004,6 +1090,103 @@ button.ghost.danger:hover:not(:disabled) {
 .models {
   margin-top: 2.5rem;
   text-align: left;
+  /* Per-panel accent stripe + slightly inset padding so each section
+     reads visually distinct as the page grows. The vocabulary review
+     flagged that Replacements / Vocabulary look near-identical and
+     are easy to mis-target. Accent + section-tag pill differentiate
+     them without resorting to icons. */
+  border-left: 3px solid #e1e1e1;
+  padding-left: 1rem;
+  padding-bottom: 0.25rem;
+}
+
+.panel-replacements {
+  border-left-color: #6a8cf0;
+}
+.panel-vocabulary {
+  border-left-color: #d8a64a;
+}
+.panel-models {
+  border-left-color: #4a8a4a;
+}
+.panel-history {
+  margin-top: 2.5rem;
+  text-align: left;
+  border-left: 3px solid #c0c0c0;
+  padding-left: 1rem;
+  padding-bottom: 0.25rem;
+}
+
+.panel-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4em;
+  height: 1.4em;
+  border-radius: 5px;
+  font-size: 0.75em;
+  font-weight: 700;
+  background-color: #e8e8e8;
+  color: #444;
+  margin-right: 0.5rem;
+}
+.panel-tag-replacements {
+  background-color: #dde5ff;
+  color: #2c3e8f;
+}
+.panel-tag-vocabulary {
+  background-color: #fff0d4;
+  color: #6a4500;
+}
+.panel-tag-models {
+  background-color: #d6ecd6;
+  color: #1f5a1f;
+}
+
+.panel-subtitle {
+  margin-left: 0.6rem;
+  font-size: 0.7em;
+  font-weight: 400;
+  color: #888;
+  font-style: italic;
+}
+
+.scoped-error {
+  /* `.error` already provides the red box; `strong` inside scopes
+     the message to a section. The two together give the user a
+     visual cue (red) and a textual cue (section name). */
+  padding-left: 1rem;
+}
+.scoped-error strong {
+  margin-right: 0.4rem;
+}
+
+.loading-skeleton {
+  margin: 0.5rem 0;
+  padding: 1rem;
+  background-color: #fafafa;
+  border-radius: 6px;
+  color: #999;
+  font-size: 0.9rem;
+  text-align: center;
+  font-style: italic;
+}
+
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.search-spinner {
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid #b0b0b0;
+  border-right-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
 }
 
 .path-hint {
