@@ -141,6 +141,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`stop_dictation` decomposed (closes #38).** The Tauri command's body
+  shrank from ~95 lines across 8 inline steps to a flat sequence of
+  named helpers: `stop_audio_capture`, `load_vocabulary_prompt`,
+  `load_replacement_rules`, `take_foreground_snapshot`,
+  `write_to_clipboard`, `fire_ready_notification`,
+  `spawn_history_insert`. Behaviour-preserving: every helper keeps the
+  best-effort-vs-fatal distinction the inline code had (vocabulary,
+  replacements, notification, history are best-effort with `tracing`
+  logging; audio.stop, transcription, clipboard remain fatal). New
+  helpers are independently unit-tested, including the structural
+  audio-error → `IpcError::Audio` mapping that previously relied on
+  `stop_dictation`'s shape.
 - **M2 polish.** Visible recording and transcribing states (pulsing red
   dot + status text + window-title indicator), spinner during the
   Whisper inference window, and an in-app shortcuts hint card so the
