@@ -182,6 +182,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **HUD window has its own scoped capability** (closes #50). The
+  recording HUD's secondary Tauri window (label `hud`) was not in
+  any capability file — Tauri 2 defaults unlisted windows to deny,
+  meaning the HUD's `listen('audio:level')` call (and so the level
+  meter that just landed) silently never fires. Added
+  `src-tauri/capabilities/hud.json` granting `core:default` only —
+  the HUD doesn't need clipboard, notification, or shortcut
+  permissions, so leaving them off keeps the blast radius minimal
+  if a future page somehow runs untrusted content.
 - **Download client redirect policy is host-restricted** (closes the
   Critical half of #49). The shared reqwest client previously inherited
   reqwest's default `Policy::default()` (up to 10 redirects to *any*

@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hud",
+  "description": "Capability for the recording HUD overlay window. Strictly tighter than the main window's capability — the HUD only listens for the `audio:level` event to drive its level-meter bar; it does not invoke any IPC commands, write to the clipboard, fire notifications, or register shortcuts. Adding new permissions here should be deliberate: every grant widens the HUD's blast radius if a future page somehow runs untrusted content.",
+  "windows": ["hud"],
+  "permissions": [
+    "core:default"
+  ]
+}
