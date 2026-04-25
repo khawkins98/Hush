@@ -88,4 +88,12 @@ tempfile = "3"
 # SHA-mismatch, cancel) rather than ever round-tripping to Hugging Face
 # in CI.
 wiremock = "0.6"
+# WAV reader for the audio test fixture (#34). Only used in the
+# `tests/audio_fixture.rs` integration test that loads a contributor-
+# supplied WAV and runs it end-to-end through the transcription
+# pipeline. Hand-rolling a PCM-WAV parser would be 30 lines but
+# `hound` handles every variant whisper-rs's contributors might
+# throw at us (24-bit, IEEE-float, etc.) and is mature enough that
+# the dep cost is justified for a dev-only test.
+hound = "3.5"
 
