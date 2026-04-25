@@ -42,9 +42,15 @@ The following are recognised as valuable but explicitly out of scope for v1. Eac
 - AI assistant mode (VoiceInk's conversational ChatGPT-style flow).
 - LLM-driven post-processing modes (writing-style transforms).
 
-## 5. Architectural non-goal
+## 5. Engine roadmap
 
-**Parakeet / FluidAudio is not on the roadmap, now or later.** The Parakeet path in VoiceInk depends on CoreML and the Apple Neural Engine, which has no cross-platform equivalent. Reimplementing it would mean either an ONNX export running on a generic inference runtime (uncertain feasibility, separate model-licence review) or maintaining a macOS-only branch that breaks the cross-platform promise of this project. v1 and beyond commit to whisper.cpp as the single engine, and we will document this clearly so Mac users coming from VoiceInk understand the trade.
+**Whisper.cpp via `whisper-rs` is the v1 engine.** Five sizes (tiny / base / small / medium / large-v3) ship behind the `Transcribe` trait; whisper.cpp's CPU baseline must work everywhere before we add accelerated paths.
+
+**Parakeet via ONNX is on the v1.x roadmap.** Decision revised on 2026-04-25: the original §5 stance ruled Parakeet out entirely because the VoiceInk path is CoreML / Apple-Neural-Engine and would break the cross-platform promise. The ONNX export of Parakeet (NVIDIA publishes it for Triton / ONNX-Runtime use) is a viable cross-platform path — one inference runtime, one binary, all three OSes. We will add Parakeet as a second engine behind the existing `Transcribe` trait once the Whisper stack is shipping cleanly.
+
+What is **explicitly out**: any macOS-specific engine path (FluidAudio, native CoreML bindings) that would require substantial macOS-only Rust to maintain. The cross-platform promise is the constraint we will not relax — if a model can't run via ONNX (or another truly cross-platform runtime), it does not ship.
+
+When Parakeet lands, the model picker grows a second engine card alongside the Whisper variants, and the `Transcribe` trait grows a `transcribe_with_options()` method that engines can use for engine-specific tuning. The settings schema already accommodates this (the `selected_model_id` is engine-prefixed as `whisper-base` / `parakeet-v2-en`).
 
 ## 6. Architecture overview
 
