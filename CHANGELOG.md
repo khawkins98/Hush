@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repository meta-files: README, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, learnings.md.
 - CI workflow: cargo clippy, rustfmt check, cargo test on every push and PR.
 - GitHub PR template and bug/feature issue templates.
+- Audio capture (`audio` module): cross-platform input via `cpal` behind an
+  `AudioCapture` trait so OS-touching code can be mocked at the test seam.
+  Surfaces input-device enumeration, start/stop session, and a channel
+  downmix utility. Captures at the device's native format and surfaces the
+  format alongside the samples; downmix and resampling to whisper's 16 kHz
+  happen at the transcription stage.
 
 ---
 
