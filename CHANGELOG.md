@@ -169,6 +169,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   borderline by the UX review).
 - `prefers-reduced-motion` honoured by the new pulse / spin animations.
 
+### Security
+
+- **Download client redirect policy is host-restricted** (closes the
+  Critical half of #49). The shared reqwest client previously inherited
+  reqwest's default `Policy::default()` (up to 10 redirects to *any*
+  host); a BGP/DNS hijack of `huggingface.co` could redirect into an
+  attacker-controlled origin. SHA-256 verification still catches a
+  swapped file, but the bandwidth + latency leak to a non-HF host is
+  avoidable. New policy: hop-cap 4, every hop must be `huggingface.co`
+  or a subdomain. The host-allowlist predicate is unit-tested,
+  including the `evilhuggingface.co` / suffix-match-trap case.
+- **README + PRD privacy claims clarified** (Important half of #49).
+  Previously the README said "no internet required" — true for
+  transcription, false for the first-run model download. Both
+  documents now disclose: transcription is fully on-device, no audio
+  ever leaves the machine, and the only network traffic is the
+  one-time model download from Hugging Face.
+- **`tauri-plugin-shell` removed entirely.** Was registered in
+  `lib.rs` and present as `@tauri-apps/plugin-shell` in `package.json`
+  but never invoked — `open_macos_privacy_pane` uses
+  `std::process::Command::new("open")` directly with hard-coded
+  whitelisted URLs. Removing the unused plugin tightens the
+  capabilities surface (no `shell:allow-execute` exposure), shrinks
+  the dep tree, and removes a future-PR footgun (a contributor
+  reaching for the plugin would now have to add it back deliberately).
+  `@tauri-apps/plugin-opener` was already de-registered on the Rust
+  side in PR #31; cleaned up the npm-side leftover at the same time.
+
 ### Fixed
 
 - IPC `start_dictation` no longer overwrites the foreground-app slot

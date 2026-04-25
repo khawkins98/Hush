@@ -22,7 +22,7 @@ Upstream VoiceInk does not accept pull requests, so Hush is a parallel project, 
 ## 3. Goals (v1)
 
 - Cross-platform offline dictation on macOS, Windows, and Linux from one codebase.
-- Local-only transcription using whisper.cpp via Rust bindings. No cloud round-trip.
+- Local-only transcription using whisper.cpp via Rust bindings. No audio ever leaves the device, no cloud round-trip during transcription. (The Whisper model itself is fetched once from Hugging Face when the user picks one in the picker, then cached in `<app-data>/models/`. After download, transcription is fully offline.)
 - Global push-to-talk and toggle-record hotkeys.
 - Transcribed output written to the system clipboard, with a confirmation notification.
 - Foreground application name captured on each transcription, stored as metadata.
