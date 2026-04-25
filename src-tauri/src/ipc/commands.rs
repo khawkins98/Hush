@@ -29,7 +29,7 @@
 use std::sync::{Arc, PoisonError};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -41,6 +41,7 @@ use crate::dictionary::{
 use crate::history::{HistoryEntry, NewHistoryEntry};
 use crate::settings::keys as settings_keys;
 use crate::transcription::catalog::{self, ModelMetadata};
+use crate::transcription::download::{self, CancelHandle};
 
 use super::{AppState, ForegroundApp};
 
@@ -526,6 +527,201 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<(
         .set(settings_keys::SELECTED_MODEL_ID, &id)
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
+// -- Model auto-download -------------------------------------------------
+//
+// Three commands that wrap the pure-logic orchestrator in
+// `transcription::download`. The orchestrator runs on a tokio task
+// spawned from `model_download`; a [`CancelHandle`] is held in
+// [`AppState::downloads`] so `model_cancel_download` can flip the flag
+// from a separate command. Frontend listens for three Tauri events:
+// `model:download-progress`, `model:download-done`,
+// `model:download-failed`.
+
+/// Payload for the `model:download-progress` event the frontend
+/// listens for. Bandwidth-cheap; the frontend's progress bar is
+/// driven from these alone.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub id: String,
+    pub bytes_received: u64,
+    pub bytes_total: Option<u64>,
+}
+
+/// Payload for `model:download-done` and `:download-failed`. Done
+/// carries no extra fields; failed carries a user-facing message
+/// already mapped through [`IpcError`] formatting.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadStatus {
+    pub id: String,
+    pub message: Option<String>,
+}
+
+/// Begin downloading the model identified by `id`. Returns
+/// immediately; the actual download runs on a tokio task and
+/// reports progress via `model:download-progress` events.
+///
+/// The catalog must declare a non-empty `sha256` for the model —
+/// integrity is non-negotiable. A model with an empty hash surfaces
+/// as a clear error and the picker tells the user to download
+/// manually until a contributor fills in the catalog.
+#[tauri::command]
+pub async fn model_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> IpcResult<()> {
+    let model = catalog::find_by_id(&id).ok_or_else(|| {
+        IpcError::Settings(format!(
+            "unknown model id: {id} (not in the Whisper catalog)"
+        ))
+    })?;
+
+    if model.sha256.trim().is_empty() {
+        return Err(IpcError::Settings(format!(
+            "auto-download is not yet enabled for {} — its SHA-256 hasn't been verified. \
+             Download manually for now (place {} in the models directory).",
+            model.display_name, model.filename
+        )));
+    }
+
+    let dest = state.models_dir.join(&model.filename);
+    if dest.exists() {
+        return Err(IpcError::Settings(format!(
+            "{} is already downloaded",
+            model.display_name
+        )));
+    }
+
+    // Register a cancel handle and bail if a download is already in
+    // flight for this model. The HashMap is keyed by id; one
+    // concurrent download per model is the contract.
+    let cancel = CancelHandle::new();
+    {
+        let mut guard = state.downloads.lock().map_err(poisoned)?;
+        if guard.contains_key(&id) {
+            return Err(IpcError::Settings(format!(
+                "{} is already downloading",
+                model.display_name
+            )));
+        }
+        guard.insert(id.clone(), cancel.clone());
+    }
+
+    let app_for_task = app.clone();
+    let id_for_task = id.clone();
+    let url = model.download_url.clone();
+    let sha = model.sha256.clone();
+    let http = state.http.clone();
+    // The downloads HashMap is shared across the task and the IPC
+    // commands that touch it. We hold an `Arc<Mutex<…>>` view via the
+    // AppHandle's managed state at task-completion time.
+    let downloads_app = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        // Progress callback emits a Tauri event with the latest
+        // counts. Cheap; reqwest streams in ~16-128 KiB chunks for
+        // the typical Hugging Face CDN response.
+        let app_for_progress = app_for_task.clone();
+        let id_for_progress = id_for_task.clone();
+        let progress: Box<download::ProgressCallback> = Box::new(move |update| {
+            let _ = app_for_progress.emit(
+                "model:download-progress",
+                DownloadProgress {
+                    id: id_for_progress.clone(),
+                    bytes_received: update.bytes_received,
+                    bytes_total: update.bytes_total,
+                },
+            );
+        });
+
+        let result =
+            download::download_with_progress(&http, &url, &dest, &sha, &cancel, &progress).await;
+
+        // Drop the cancel handle from the registry on the way out,
+        // success or failure. Use the AppHandle's managed state so
+        // the task doesn't need to hold a long-lived reference to
+        // `state`.
+        if let Some(state) = downloads_app.try_state::<AppState>() {
+            if let Ok(mut guard) = state.downloads.lock() {
+                guard.remove(&id_for_task);
+            }
+        }
+
+        match result {
+            Ok(()) => {
+                let _ = app_for_task.emit(
+                    "model:download-done",
+                    DownloadStatus {
+                        id: id_for_task,
+                        message: None,
+                    },
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, model_id = %id_for_task, "model download failed");
+                let _ = app_for_task.emit(
+                    "model:download-failed",
+                    DownloadStatus {
+                        id: id_for_task,
+                        message: Some(format!("{e:#}")),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Cancel an in-flight download. Flips the cancel flag held in
+/// [`AppState::downloads`]; the spawned task notices on its next
+/// chunk boundary and exits cleanly, deleting the partial file.
+/// No-op if no download for `id` is in flight.
+#[tauri::command]
+pub fn model_cancel_download(state: State<'_, AppState>, id: String) -> IpcResult<()> {
+    let guard = state.downloads.lock().map_err(poisoned)?;
+    if let Some(cancel) = guard.get(&id) {
+        cancel.cancel();
+    }
+    Ok(())
+}
+
+/// Delete a model file from disk. Used both for "I changed my mind
+/// about this model" and as the recovery path after a failed
+/// download leaves a `.part` behind (though the orchestrator should
+/// always clean up its own `.part` files).
+#[tauri::command]
+pub async fn model_remove(state: State<'_, AppState>, id: String) -> IpcResult<()> {
+    let model = catalog::find_by_id(&id).ok_or_else(|| {
+        IpcError::Settings(format!(
+            "unknown model id: {id} (not in the Whisper catalog)"
+        ))
+    })?;
+
+    let path = state.models_dir.join(&model.filename);
+    if !path.exists() {
+        // Same no-op-on-missing pattern as the repository delete
+        // contracts — caller's intent is satisfied either way.
+        return Ok(());
+    }
+
+    tokio::fs::remove_file(&path)
+        .await
+        .map_err(|e| IpcError::Settings(format!("failed to remove {}: {e}", path.display())))?;
+
+    // Also remove any orphan `.part` from a prior interrupted
+    // download — best-effort, errors swallowed.
+    let part = path.with_extension(format!(
+        "{}.part",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("")
+    ));
+    let _ = tokio::fs::remove_file(part).await;
+
+    Ok(())
 }
 
 /// Snapshot the current foreground window via `active-win-pos-rs`.

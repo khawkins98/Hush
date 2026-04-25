@@ -60,6 +60,23 @@ Worth knowing if anyone later splits commands across files: the macro is path-se
 
 ---
 
+## 2026-04-25 — Model auto-download: SHA-required, .part + atomic rename, reqwest+rustls
+
+Three decisions worth pinning while the auto-download is the freshest network surface in the codebase:
+
+1. **No trust-on-first-use.** The download orchestrator refuses to start when the catalog's `sha256` is empty, surfacing a clear "auto-download is not yet enabled — download manually for now" error. The temptation was to compute-and-store the hash on first download, but that defeats the purpose of SHA verification (we'd be trusting the same response we want to verify). Hashes get filled in by contributors who verify against the upstream MANIFEST out-of-band; #41 tracks the verification work.
+
+2. **`.part` file + atomic rename.** Bytes stream into `<filename>.part`; a successful complete-and-verify flow renames it to `<filename>`. Failure / cancel deletes the `.part`. Crash-safety: a half-finished download never looks like a complete file to the picker. Drop the file handle before unlinking — Windows blocks unlink on an open handle.
+
+3. **`reqwest` + `rustls-tls`, not `ureq` and not OpenSSL.** Smaller-binary alternatives existed:
+   - `ureq` is sync; the streaming-progress flow needs an async story to share the tokio runtime with sqlx and tauri.
+   - reqwest with `default-features = false` + `rustls-tls` + `stream` skips the OpenSSL/native-tls baggage. Cross-platform binary, one set of TLS roots (`webpki-roots`).
+   - The transitive dep cost is real (~10 crates beyond what we already had) but the alternatives all involved per-platform build complexity we haven't paid yet.
+
+`wiremock` (dev-dep only) drives the test suite end-to-end against a local mock server — happy path, SHA mismatch, cancel, empty-SHA gating, progress callback monotonicity. No real Hugging Face round-trips in CI.
+
+---
+
 ## 2026-04-25 — CSP disabled for the dev minimum, document the trade
 
 Tauri's `csp: null` (in `src-tauri/tauri.conf.json`) opts the webview out of Content-Security-Policy enforcement. The round-1 security review flagged it as `[MED]` for an eventual public release — without CSP, an XSS via user-supplied content in the webview would have less defence. For where Hush is right now this is acceptable:

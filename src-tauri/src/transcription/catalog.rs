@@ -71,6 +71,36 @@ pub struct ModelMetadata {
     /// Marks the model Hush recommends if the user has not picked yet.
     /// At most one model in the catalog has this set to `true`.
     pub is_default: bool,
+
+    /// HTTP(S) URL to fetch the GGUF file from when the user clicks
+    /// **Download**. Hard-coded against the upstream `ggerganov/whisper.cpp`
+    /// Hugging Face mirror — no mirror configuration in v1; the URL is
+    /// the only outbound network request the app ever makes, and we
+    /// want it audit-able from one place.
+    pub download_url: String,
+
+    /// Expected SHA-256 of the downloaded file, hex-encoded.
+    ///
+    /// Used by the download orchestrator to verify integrity end-to-end.
+    /// **Empty string means "verification not yet configured"** — the
+    /// auto-download command refuses to start a download for such a
+    /// model and surfaces a clear error to the user, falling back to
+    /// "place file manually" until a contributor verifies the hash and
+    /// fills it in. This is a deliberate gate, not a bug; see
+    /// `learnings.md` for the trust-on-first-use trade we considered
+    /// and rejected.
+    pub sha256: String,
+}
+
+/// Base URL for the upstream Whisper GGUF mirror. Hard-coded; no
+/// mirror selection in v1. If we ever need it, it goes here.
+pub const WHISPER_DOWNLOAD_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+
+/// Compute the canonical download URL for a Whisper variant given its
+/// filename. Pulled out of the catalog body so it's testable on its
+/// own and so the base URL only appears in one place.
+fn download_url_for(filename: &str) -> String {
+    format!("{WHISPER_DOWNLOAD_BASE}/{filename}")
 }
 
 /// Returns the static catalog. Allocates owned strings on each call —
@@ -83,6 +113,11 @@ pub struct ModelMetadata {
 /// shared static `Vec` would be. The IPC command builds it once per
 /// `model_list` call; nothing on the hot path consults this.
 pub fn whisper_models() -> Vec<ModelMetadata> {
+    // SHA-256 hashes deliberately empty for the initial cut. The
+    // auto-download command checks for an empty string and refuses to
+    // start the download with a clear "download manually until the
+    // hash is verified" error. Fill in per-model as a contributor
+    // verifies the hash from upstream — see TODO(#41).
     vec![
         ModelMetadata {
             id: "whisper-tiny".into(),
@@ -94,6 +129,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             description: "Fastest variant. Good for quick notes; weak on accents and proper nouns."
                 .into(),
             is_default: false,
+            download_url: download_url_for("ggml-tiny.bin"),
+            sha256: String::new(),
         },
         ModelMetadata {
             id: "whisper-base".into(),
@@ -104,6 +141,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             accuracy_rating: 6,
             description: "Recommended default. Solid accuracy at near-real-time speed.".into(),
             is_default: true,
+            download_url: download_url_for("ggml-base.bin"),
+            sha256: String::new(),
         },
         ModelMetadata {
             id: "whisper-small".into(),
@@ -115,6 +154,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             description: "Better accuracy for technical jargon and accents. ~3× slower than base."
                 .into(),
             is_default: false,
+            download_url: download_url_for("ggml-small.bin"),
+            sha256: String::new(),
         },
         ModelMetadata {
             id: "whisper-medium".into(),
@@ -125,6 +166,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             accuracy_rating: 9,
             description: "High-accuracy. Recommended only on M-series Macs or recent x86.".into(),
             is_default: false,
+            download_url: download_url_for("ggml-medium.bin"),
+            sha256: String::new(),
         },
         ModelMetadata {
             id: "whisper-large-v3".into(),
@@ -136,6 +179,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             description: "Top-tier accuracy. Slow on consumer hardware — for offline batch use."
                 .into(),
             is_default: false,
+            download_url: download_url_for("ggml-large-v3.bin"),
+            sha256: String::new(),
         },
     ]
 }
