@@ -60,6 +60,18 @@ Worth knowing if anyone later splits commands across files: the macro is path-se
 
 ---
 
+## 2026-04-25 — Audio test fixture: env-var path + `hound` for WAV parsing, no committed bytes
+
+Two design choices on the file-based integration test in `tests/audio_fixture.rs`:
+
+1. **Fixture is contributor-supplied via env var, not committed.** A recognisable-transcript WAV is a few hundred KB to a few MB. Committing one bloats clone size for a test that's `#[ignore]`d and that most contributors will never run; LFS adds quota / setup friction. The test reads `HUSH_TEST_AUDIO` and skips with a clear message if the file doesn't exist. The fixtures directory ships only a README documenting recommended sources (JFK speech excerpt, LibriVox, Common Voice). Trade-off: non-trivial first-run setup, accepted because the test is dev-loop tooling rather than a CI gate.
+
+2. **`hound` over a hand-rolled WAV parser.** A minimal PCM-only parser is ~30 lines. `hound` is ~5 KB of crate source, dev-dep only, and handles every sample-format whisper-rs's contributors might throw at us (16-bit / 24-bit int, IEEE float). Test stability is more valuable than the dep saving here. `hound` is also stable; it hasn't shipped a breaking change in years.
+
+The test is structured so it's easy to extend with a `(b)` loopback-capture variant when system-audio capture (#33) lands. The same fixture file goes through the speakers, gets captured via the loopback source, and runs through the whole pipeline rather than just the inference half.
+
+---
+
 ## 2026-04-25 — Frontend per-card download state: two `Map<id, …>`s, swap-don't-mutate
 
 The auto-download UI has four states per card — idle, downloading-with-progress, failed (with retry), downloaded — and several events fire concurrently (multiple cards can be downloading at once if the user clicks Download on Tiny then Base). Two design choices worth pinning:
