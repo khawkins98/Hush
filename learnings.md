@@ -60,6 +60,24 @@ Worth knowing if anyone later splits commands across files: the macro is path-se
 
 ---
 
+## 2026-04-25 — CSP disabled for the dev minimum, document the trade
+
+Tauri's `csp: null` (in `src-tauri/tauri.conf.json`) opts the webview out of Content-Security-Policy enforcement. The round-1 security review flagged it as `[MED]` for an eventual public release — without CSP, an XSS via user-supplied content in the webview would have less defence. For where Hush is right now this is acceptable:
+
+- The frontend never injects user-supplied HTML (`innerHTML` is unused; everything binds via Svelte's escape-by-default pipeline).
+- All content rendered comes from local IPC, not the network.
+- The minimal frontend is ~700 lines of straightforward Svelte; the audit surface is small.
+
+The trade-off becomes meaningful when the frontend grows or when we ship to non-technical users. At that point we should:
+
+1. Define a strict default CSP (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` — Svelte's hashed inline styles need the latter without nonces).
+2. Test against any new IPC outputs that contain user-controlled text.
+3. Update `tauri.conf.json` to set the CSP string.
+
+Tracked separately in #23 alongside the `tauri-plugin-opener` removal that landed at the same time.
+
+---
+
 ## 2026-04-25 — Model picker: static catalog + settings-backed selection, no hot-swap in v1
 
 The picker is the M3 settings surface for choosing among Whisper sizes (tiny → large-v3 per PRD §6 / §9). Three decisions worth recording:
