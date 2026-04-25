@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recording` flag, keeping a single source of truth for UI state and
   one orchestration path for the pipeline. Push-to-talk via `rdev` is
   the open second half of #5.
+- SQLite persistence (`db` module): `SqliteDatabase` wrapper around
+  `sqlx::SqlitePool` that opens the database at a caller-provided
+  path, creates the parent directory if missing, sets WAL journal
+  mode + `synchronous=NORMAL` + foreign-key enforcement, and runs the
+  embedded migrations from `src-tauri/migrations/` via
+  `sqlx::migrate!`. Plus an `open_in_memory` helper for tests that
+  need a real SQLite without touching the filesystem. Not yet wired
+  into `AppState` — that lands with the first downstream consumer
+  (#7 history or #6 dictionary).
 
 ---
 
