@@ -138,6 +138,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follows. The level-meter half of #21 (cpal callbacks compute
   RMS, audio thread → Tauri event → meter animation) lands as a
   follow-up.
+- Recording HUD level meter (closes the level-meter half of #21).
+  Per-callback RMS is computed in the cpal sample-conversion
+  loop and published into a lock-free `Arc<AtomicU32>` (encoded
+  as `f32::to_bits()`); a 30 Hz tokio task reads the latest value
+  and emits an `audio:level` Tauri event. The HUD page
+  (`src/routes/hud/+page.svelte`) listens, smooths the value with
+  a fast-attack / slow-release envelope on `requestAnimationFrame`,
+  and renders a soft red bar to the right of the "Recording" label.
+  The `AudioCapture` trait gained a default-impl `current_level()`
+  so non-cpal backends and test mocks inherit a no-op zero — the
+  HUD bar simply idles for them.
 
 ### Changed
 

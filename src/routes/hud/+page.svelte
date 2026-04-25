@@ -5,12 +5,10 @@
   shown/hidden by the backend `hud::show` / `hud::hide` calls in
   the IPC commands' `start_dictation` / `stop_dictation` paths.
 
-  This page renders a single fixed widget: a pulsing red dot + the
-  word "Recording". No interactivity, no fetches, no state — the
-  presence of this page is the signal. (The level meter half of
-  #21 lands when the audio module exposes a per-chunk level
-  callback; this page will then animate a bar driven by `audio:level`
-  events.)
+  Renders a pulsing red dot + the word "Recording" + a level-meter
+  bar driven by `audio:level` events. The backend pump (in
+  `lib.rs::run`) emits an RMS sample at ~30 Hz; the bar's width is
+  a simple amplification of that value, capped at 100 %.
 
   Why a separate route rather than reusing the main page in a
   different mode: the HUD's window config differs significantly
@@ -20,9 +18,62 @@
   fetches. A dedicated minimal page is faster to load and easier
   to reason about.
 -->
+<script lang="ts">
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { onMount } from "svelte";
+
+  // Latest RMS from the backend pump, in roughly [0, 1]. We hold
+  // it as a runes-state float and let the meter's CSS width track
+  // it directly. No throttling on the receive side — the backend
+  // already throttles to ~30 Hz.
+  let rms = $state(0);
+
+  // Smoothed display value with a simple attack/release envelope so
+  // the bar doesn't jitter on every callback. Attack is fast (the
+  // user expects an instant reaction when they speak); release is
+  // slow (silence between words shouldn't drop the bar to 0).
+  let displayLevel = $state(0);
+
+  onMount(() => {
+    let unlisten: UnlistenFn | undefined;
+    let raf: number | undefined;
+
+    const ATTACK = 0.6;
+    const RELEASE = 0.12;
+
+    const tick = () => {
+      const target = rms;
+      const coeff = target > displayLevel ? ATTACK : RELEASE;
+      displayLevel += (target - displayLevel) * coeff;
+      raf = requestAnimationFrame(tick);
+    };
+
+    listen<number>("audio:level", (event) => {
+      rms = event.payload ?? 0;
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      unlisten?.();
+      if (raf !== undefined) cancelAnimationFrame(raf);
+    };
+  });
+
+  // Map RMS roughly into a visual bar fill. RMS for normal speech
+  // sits in 0.05–0.2; we boost ×4 so casual talking lights the bar
+  // about half-way and shouting saturates it. Capped at 100 %.
+  let barWidth = $derived(Math.min(100, Math.max(0, displayLevel * 400)));
+</script>
+
 <div class="hud-root" aria-hidden="true">
   <span class="hud-dot"></span>
   <span class="hud-label">Recording</span>
+  <div class="hud-meter" role="presentation">
+    <div class="hud-meter-fill" style="width: {barWidth}%"></div>
+  </div>
 </div>
 
 <style>
@@ -77,6 +128,38 @@
     font-size: 0.95rem;
     font-weight: 600;
     letter-spacing: 0.01em;
+  }
+
+  /* Level meter. A short bar to the right of the label. The pill is
+     small, so the meter is small too — its job is to convey "Hush
+     is hearing you", not give a precise readout. The track is faint
+     and the fill is a soft red gradient that matches the dot. */
+  .hud-meter {
+    width: 60px;
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .hud-meter-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff8080 0%, #ff4040 100%);
+    border-radius: 3px;
+    /* Width is set inline by the rAF envelope; no CSS transition
+       so the smoothing stays in the JS attack/release loop and
+       isn't double-smoothed by the renderer. */
+    will-change: width;
+  }
+
+  /* Reduced-motion users still see the meter, but at the unsmoothed
+     RMS — same behaviour as the dot's animation: convey the signal,
+     skip the motion. The width still updates per `audio:level`
+     event, just without the per-frame envelope. */
+  @media (prefers-reduced-motion: reduce) {
+    .hud-meter-fill {
+      transition: none;
+    }
   }
 
   @keyframes hud-pulse {

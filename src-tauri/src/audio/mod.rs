@@ -38,7 +38,7 @@ mod format;
 
 pub use format::downmix_to_mono;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -106,6 +106,17 @@ pub trait AudioCapture: Send + Sync {
 
     /// True if a recording is currently in progress.
     fn is_recording(&self) -> bool;
+
+    /// Latest RMS level computed by the most recent capture callback,
+    /// roughly in `[0.0, 1.0]`. Drives the HUD level meter (#21).
+    /// Default returns `0.0` — non-cpal backends and test mocks
+    /// inherit a no-op level so the HUD's bar simply stays at idle
+    /// for them. Implementations that *do* compute a level should
+    /// return `0.0` while not recording so the meter idles cleanly
+    /// across start/stop cycles.
+    fn current_level(&self) -> f32 {
+        0.0
+    }
 }
 
 // -- cpal backend ----------------------------------------------------------
@@ -124,6 +135,14 @@ pub struct CpalAudioCapture {
     /// Cheap, lock-free read of "is something recording right now?".
     /// Updated by the worker, read by the public API.
     is_recording: Arc<AtomicBool>,
+    /// Latest RMS level, encoded as `f32::to_bits()`. Written by the cpal
+    /// callback at audio-callback rate (~100 Hz at 48 kHz / 480-frame
+    /// callbacks), read by the HUD level pump at ~30 Hz. `Relaxed`
+    /// ordering is sound: each store is independent, the read does not
+    /// synchronise with anything else, and a stale read just means the
+    /// HUD shows the previous level for one extra frame. Cleared back
+    /// to `0.0` on stop so the meter idles cleanly.
+    level: Arc<AtomicU32>,
     /// Joined on drop. Wrapped in [`Option`] so [`Drop`] can take ownership.
     worker: Option<JoinHandle<()>>,
 }
@@ -148,16 +167,19 @@ impl CpalAudioCapture {
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let is_recording = Arc::new(AtomicBool::new(false));
+        let level = Arc::new(AtomicU32::new(0_f32.to_bits()));
         let worker_flag = Arc::clone(&is_recording);
+        let worker_level = Arc::clone(&level);
 
         let worker = thread::Builder::new()
             .name("hush-audio".into())
-            .spawn(move || worker_loop(cmd_rx, worker_flag))
+            .spawn(move || worker_loop(cmd_rx, worker_flag, worker_level))
             .expect("failed to spawn audio worker thread");
 
         Self {
             cmd_tx: Mutex::new(cmd_tx),
             is_recording,
+            level,
             worker: Some(worker),
         }
     }
@@ -217,6 +239,19 @@ impl AudioCapture for CpalAudioCapture {
         // store, ensuring the corresponding stream is actually live.
         self.is_recording.load(Ordering::Acquire)
     }
+
+    fn current_level(&self) -> f32 {
+        // Gate on `is_recording`: the level field is only cleared on stop,
+        // but `is_recording` flips at the same point. Reading the flag
+        // first lets a future change to the meter (e.g. fade-out instead
+        // of hard-zero) live entirely in the consumer without changing
+        // the storage discipline here.
+        if self.is_recording() {
+            f32::from_bits(self.level.load(Ordering::Relaxed))
+        } else {
+            0.0
+        }
+    }
 }
 
 /// State held by the worker thread for the duration of a single recording.
@@ -232,7 +267,7 @@ struct Session {
     buffer: Arc<Mutex<Vec<f32>>>,
 }
 
-fn worker_loop(cmd_rx: mpsc::Receiver<Cmd>, is_recording: Arc<AtomicBool>) {
+fn worker_loop(cmd_rx: mpsc::Receiver<Cmd>, is_recording: Arc<AtomicBool>, level: Arc<AtomicU32>) {
     // The cpal host is created on the worker thread to avoid any chance of
     // cross-thread state: some backends keep thread-locals pointing back at
     // the host that constructed them.
@@ -249,7 +284,7 @@ fn worker_loop(cmd_rx: mpsc::Receiver<Cmd>, is_recording: Arc<AtomicBool>) {
                     let _ = reply.send(Err(anyhow!("recording already in progress")));
                     continue;
                 }
-                match start_session(&host, device_id.as_deref()) {
+                match start_session(&host, device_id.as_deref(), Arc::clone(&level)) {
                     Ok(s) => {
                         // Release ordering pairs with Acquire in `is_recording()`.
                         is_recording.store(true, Ordering::Release);
@@ -269,6 +304,10 @@ fn worker_loop(cmd_rx: mpsc::Receiver<Cmd>, is_recording: Arc<AtomicBool>) {
                 // Always clear the flag, even on error: a failed stop should
                 // not leave us stuck pretending we're still recording.
                 is_recording.store(false, Ordering::Release);
+                // Reset the level so the HUD's meter idles cleanly between
+                // sessions instead of holding the last RMS reading until
+                // the next start.
+                level.store(0_f32.to_bits(), Ordering::Relaxed);
                 let _ = reply.send(result);
             }
             Cmd::Shutdown => break,
@@ -300,7 +339,11 @@ fn list_devices(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
     Ok(out)
 }
 
-fn start_session(host: &cpal::Host, device_id: Option<&str>) -> Result<Session> {
+fn start_session(
+    host: &cpal::Host,
+    device_id: Option<&str>,
+    level: Arc<AtomicU32>,
+) -> Result<Session> {
     let device = match device_id {
         Some(id) => host
             .input_devices()
@@ -326,7 +369,7 @@ fn start_session(host: &cpal::Host, device_id: Option<&str>) -> Result<Session> 
     };
 
     let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let stream = build_input_stream(&device, &supported, Arc::clone(&buffer))?;
+    let stream = build_input_stream(&device, &supported, Arc::clone(&buffer), level)?;
     stream.play().context("start input stream")?;
 
     Ok(Session {
@@ -363,6 +406,7 @@ fn build_input_stream(
     device: &cpal::Device,
     supported: &SupportedStreamConfig,
     buffer: Arc<Mutex<Vec<f32>>>,
+    level: Arc<AtomicU32>,
 ) -> Result<Stream> {
     let config: cpal::StreamConfig = supported.config();
 
@@ -374,27 +418,30 @@ fn build_input_stream(
     let stream = match supported.sample_format() {
         SampleFormat::F32 => {
             let buf = Arc::clone(&buffer);
+            let lvl = Arc::clone(&level);
             device.build_input_stream(
                 &config,
-                move |data: &[f32], _| append_samples(&buf, data, |s| *s),
+                move |data: &[f32], _| append_samples(&buf, data, |s| *s, &lvl),
                 log_stream_error,
                 None,
             )
         }
         SampleFormat::I16 => {
             let buf = Arc::clone(&buffer);
+            let lvl = Arc::clone(&level);
             device.build_input_stream(
                 &config,
-                move |data: &[i16], _| append_samples(&buf, data, i16_to_f32),
+                move |data: &[i16], _| append_samples(&buf, data, i16_to_f32, &lvl),
                 log_stream_error,
                 None,
             )
         }
         SampleFormat::U16 => {
             let buf = Arc::clone(&buffer);
+            let lvl = Arc::clone(&level);
             device.build_input_stream(
                 &config,
-                move |data: &[u16], _| append_samples(&buf, data, u16_to_f32),
+                move |data: &[u16], _| append_samples(&buf, data, u16_to_f32, &lvl),
                 log_stream_error,
                 None,
             )
@@ -406,14 +453,22 @@ fn build_input_stream(
     Ok(stream)
 }
 
-/// Append a callback's worth of samples to the shared buffer.
+/// Append a callback's worth of samples to the shared buffer and publish
+/// the per-callback RMS to the level meter.
 ///
 /// The audio callback runs on a real-time-ish thread; it must not block for
 /// long. Locking the mutex is acceptable because the only other lock holder
 /// is the worker thread, and only on stop, by which point callbacks have
-/// already been paused. If profiling later shows contention we can swap in
-/// an SPSC ring buffer (e.g. `rtrb`) without changing the public API.
-fn append_samples<T: Copy>(buffer: &Mutex<Vec<f32>>, data: &[T], convert: impl Fn(&T) -> f32) {
+/// already been paused. RMS is computed in the same single pass that
+/// converts and pushes samples — no extra allocation, no second iteration.
+/// If profiling later shows contention we can swap in an SPSC ring buffer
+/// (e.g. `rtrb`) without changing the public API.
+fn append_samples<T: Copy>(
+    buffer: &Mutex<Vec<f32>>,
+    data: &[T],
+    convert: impl Fn(&T) -> f32,
+    level: &AtomicU32,
+) {
     // A poisoned mutex here means another thread panicked while holding it.
     // Recovering the inner buffer is preferable to panicking the audio
     // thread, which on some backends would tear down the whole process.
@@ -422,8 +477,31 @@ fn append_samples<T: Copy>(buffer: &Mutex<Vec<f32>>, data: &[T], convert: impl F
         Err(poisoned) => poisoned.into_inner(),
     };
     buf.reserve(data.len());
+    let mut sum_sq = 0.0_f32;
     for sample in data {
-        buf.push(convert(sample));
+        let f = convert(sample);
+        sum_sq += f * f;
+        buf.push(f);
+    }
+    if !data.is_empty() {
+        let rms = rms_from_sum_sq(sum_sq, data.len());
+        // `Relaxed`: each callback writes the latest reading; the HUD
+        // pump reads independently and can tolerate a stale value for one
+        // 33 ms tick. There is no other field that needs to be observed
+        // alongside the level.
+        level.store(rms.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// RMS from a pre-computed sum-of-squares plus the sample count.
+/// Pulled out as a free function so the level-meter math can be
+/// unit-tested without spinning up a real cpal stream — the callback
+/// itself stays a one-line call into this helper.
+fn rms_from_sum_sq(sum_sq: f32, n: usize) -> f32 {
+    if n == 0 {
+        0.0
+    } else {
+        (sum_sq / n as f32).sqrt()
     }
 }
 
@@ -473,5 +551,61 @@ mod tests {
     #[test]
     fn audio_capture_trait_is_object_safe() {
         fn _assert_object_safe(_: &dyn AudioCapture) {}
+    }
+
+    #[test]
+    fn rms_of_silence_is_zero() {
+        // All-zero buffer must produce a zero level so the HUD's
+        // meter idles cleanly while the user is between words.
+        let n = 480; // typical 10 ms callback at 48 kHz mono
+        let sum_sq = 0.0;
+        assert!(rms_from_sum_sq(sum_sq, n).abs() < 1e-7);
+    }
+
+    #[test]
+    fn rms_of_full_scale_signal_is_one() {
+        // A buffer of all-±1 samples has sum-of-squares == n, so RMS
+        // is exactly 1.0. Pinned because the HUD's bar boost (×4) is
+        // calibrated against this scale — if the math drifts the
+        // meter would saturate at the wrong amplitude.
+        let n = 480;
+        let sum_sq = n as f32; // each sample squared is 1.0
+        assert!((rms_from_sum_sq(sum_sq, n) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rms_handles_empty_buffer_without_panicking() {
+        // An empty data slice on a callback (rare, but cpal does not
+        // forbid it) must not divide by zero.
+        assert_eq!(rms_from_sum_sq(0.0, 0), 0.0);
+    }
+
+    #[test]
+    fn default_current_level_is_zero_for_mocks() {
+        // Default trait method backs every non-cpal implementation
+        // (test mocks, future Parakeet adapter); the HUD treats 0.0
+        // as idle, so this is the value mocks are expected to surface.
+        struct Stub;
+        impl AudioCapture for Stub {
+            fn list_input_devices(&self) -> Result<Vec<AudioDevice>> {
+                Ok(vec![])
+            }
+            fn start(&self, _: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+            fn stop(&self) -> Result<CapturedAudio> {
+                Ok(CapturedAudio {
+                    samples: vec![],
+                    format: CaptureFormat {
+                        sample_rate: 16_000,
+                        channels: 1,
+                    },
+                })
+            }
+            fn is_recording(&self) -> bool {
+                false
+            }
+        }
+        assert_eq!(Stub.current_level(), 0.0);
     }
 }
