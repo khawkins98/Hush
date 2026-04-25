@@ -1,0 +1,4 @@
+# Fail CI on any TODO or FIXME without a GitHub issue reference.
+# Pattern: // TODO(#NNN): or // FIXME(#NNN):
+# Enforced via the custom lint in ci.yml; this file sets Clippy thresholds.
+msrv = "1.75"
