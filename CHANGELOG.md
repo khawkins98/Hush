@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resampler (`resample_to_mono`) so any captured sample rate is converted
   to whisper's 16 kHz before inference. Constructor takes a caller-provided
   GGUF model path; auto-download is deferred to M3.
+- IPC layer (`ipc` module): three Tauri commands —
+  `list_input_devices`, `start_dictation`, `stop_dictation` — wiring the
+  audio capture and Whisper transcription pipelines together. Captures the
+  foreground app at recording start via `active-win-pos-rs`, writes the
+  transcribed text to the system clipboard, and fires a "Ready to paste"
+  notification on stop. Production transcriber loaded from
+  `HUSH_MODEL_PATH` (M1/M2 spike; replaced by the model picker in M3).
+  Tagged-enum error type so the frontend can dispatch on `kind` instead of
+  parsing free-form strings.
+- Dictation UI (`src/routes/+page.svelte`): minimal device dropdown +
+  start/stop buttons + result display, replacing the Tauri starter
+  template's "greet" placeholder. Drives the M2 end-to-end loop from a
+  button rather than a hotkey (hotkey lands in #5).
 
 ---
 
