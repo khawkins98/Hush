@@ -92,6 +92,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   method so non-Whisper backends can ignore the prompt without
   forcing every callsite to branch. Frontend "Vocabulary" panel in
   the same shape as Replacements. Closes #6.
+- Settings persistence (`settings` module): generic key-value
+  `SettingsRepository` trait + SQLite impl backing the `settings`
+  table from migration 0001. First consumer: the model picker's
+  `selected_model_id`.
+- Whisper model picker (`transcription::catalog`): static catalog of
+  the five Whisper variants (tiny / base / small / medium / large-v3)
+  with size, speed/accuracy ratings, and descriptions. Frontend
+  card-grid section adopts the layout the user shared as the design
+  reference (per-card name + size + bar-rated speed/accuracy +
+  description + Default badge on the active card). Two new IPC
+  commands: `model_list` and `model_select`. The transcriber
+  resolution at startup now reads `selected_model_id` from settings
+  and looks for the file in `<app-data>/models/<filename>`; falls
+  back to the legacy `HUSH_MODEL_PATH` env var for the existing dev
+  workflow. Hot-swap is intentionally not in this PR — selecting a
+  new model writes the setting and prompts the user to restart.
+  Auto-download is a follow-up.
 
 ### Changed
 
