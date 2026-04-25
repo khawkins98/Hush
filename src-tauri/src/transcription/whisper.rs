@@ -147,8 +147,14 @@ impl LoadedContext {
     }
 }
 
-impl Transcribe for WhisperTranscription {
-    fn transcribe(&self, audio: &CapturedAudio) -> Result<String> {
+impl WhisperTranscription {
+    /// Inner inference path shared by [`Transcribe::transcribe`] and
+    /// [`Transcribe::transcribe_with_prompt`]. The two public methods
+    /// differ only in whether they hand `set_initial_prompt` an empty
+    /// string or a comma-separated vocabulary list; everything else
+    /// (greedy sampling, thread count, lossy segment concatenation) is
+    /// identical, so it lives here behind one parameter.
+    fn run_inference(&self, audio: &CapturedAudio, prompt: &str) -> Result<String> {
         let pcm = Self::prepare_audio(audio)?;
 
         // Configure inference. Greedy with best_of=1 is the cheapest mode
@@ -166,7 +172,17 @@ impl Transcribe for WhisperTranscription {
         // For M1 we always transcribe (never translate). Locale handling is
         // a settings concern that lands with the model picker.
         params.set_translate(false);
-        // No personal-dictionary prompt biasing yet — that is TODO(#6).
+
+        // Personal-dictionary vocabulary biasing. The empty-prompt path
+        // is what `transcribe()` takes; the populated-prompt path is the
+        // one called by `transcribe_with_prompt()`. whisper.cpp tokenises
+        // the prompt and biases the decoder's language model toward the
+        // tokens; ~224 tokens are honoured before silent truncation, so
+        // the formatter in `dictionary::format_vocabulary_prompt` caps
+        // the output length to keep us well under that.
+        if !prompt.is_empty() {
+            params.set_initial_prompt(prompt);
+        }
 
         // Acquire the context for the duration of inference. A poisoned
         // mutex here means a previous call panicked mid-inference; we
@@ -205,6 +221,16 @@ impl Transcribe for WhisperTranscription {
         }
 
         Ok(text.trim().to_owned())
+    }
+}
+
+impl Transcribe for WhisperTranscription {
+    fn transcribe(&self, audio: &CapturedAudio) -> Result<String> {
+        self.run_inference(audio, "")
+    }
+
+    fn transcribe_with_prompt(&self, audio: &CapturedAudio, prompt: &str) -> Result<String> {
+        self.run_inference(audio, prompt)
     }
 
     fn model_label(&self) -> String {

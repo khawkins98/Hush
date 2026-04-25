@@ -77,9 +77,26 @@ pub trait Transcribe: Send + Sync {
     ///
     /// The returned string has been trimmed of leading and trailing
     /// whitespace but is otherwise unmodified — Personal Dictionary
-    /// replacements (TODO(#6)) live in a separate post-processing stage so
+    /// replacements (handled by [`crate::dictionary::apply_replacements`]
+    /// at the IPC layer) live in a separate post-processing stage so
     /// the raw model output stays available for debugging and history.
     fn transcribe(&self, audio: &CapturedAudio) -> Result<String>;
+
+    /// Run inference with an additional initial prompt — the
+    /// vocabulary-biasing path. Backends that support prompt-biasing
+    /// (whisper.cpp does, via `set_initial_prompt`) override to feed
+    /// `prompt` to the decoder; backends that don't fall through to
+    /// the no-prompt [`Self::transcribe`] via the default impl, so the
+    /// IPC layer can call this method unconditionally without knowing
+    /// which backend is plugged in.
+    ///
+    /// `prompt` is expected to be a comma-separated list of vocabulary
+    /// terms in the form produced by
+    /// [`crate::dictionary::format_vocabulary_prompt`]. Empty strings
+    /// are treated as "no prompt" by every implementation.
+    fn transcribe_with_prompt(&self, audio: &CapturedAudio, _prompt: &str) -> Result<String> {
+        self.transcribe(audio)
+    }
 
     /// Short, human-readable identifier for the model running this
     /// transcriber, persisted on each history row so the user can later

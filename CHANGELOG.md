@@ -82,8 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the clipboard; an empty `replace_text` acts as a deletion. New IPC
   commands (`replacements_list`, `replacement_create`, `_update`,
   `_delete`) back a frontend "Replacements" panel with add and delete.
-  Vocabulary prompt-biasing is the remaining half of #6, lands in a
-  follow-up.
+- Personal Dictionary — vocabulary prompt-biasing half: pure-logic
+  `format_vocabulary_prompt()` joins user-managed terms into the
+  initial prompt that whisper.cpp's decoder sees, biasing recognition
+  toward proper nouns and jargon. Backed by `VocabularyRepository`
+  (SQLite, sharing the pool from #18) and four new IPC commands
+  (`vocabulary_list`, `_create`, `_update`, `_delete`). The
+  `Transcribe` trait gained a default-impl `transcribe_with_prompt`
+  method so non-Whisper backends can ignore the prompt without
+  forcing every callsite to branch. Frontend "Vocabulary" panel in
+  the same shape as Replacements. Closes #6.
 
 ### Changed
 

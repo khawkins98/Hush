@@ -17,7 +17,10 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::AudioDevice;
-use crate::dictionary::{apply_replacements, NewReplacementRule, ReplacementRule};
+use crate::dictionary::{
+    apply_replacements, format_vocabulary_prompt, NewReplacementRule, NewVocabularyTerm,
+    ReplacementRule, VocabularyTerm,
+};
 use crate::history::{HistoryEntry, NewHistoryEntry};
 
 use super::{AppState, ForegroundApp};
@@ -173,12 +176,26 @@ pub async fn stop_dictation(
         .stop()
         .map_err(|e| IpcError::Audio(e.to_string()))?;
 
+    // Build the vocabulary prompt before inference. A failure here
+    // demotes to the no-prompt path — the dictation still works, the
+    // user just doesn't get the bias for that one transcription.
+    let prompt = match state.vocabulary.list().await {
+        Ok(terms) => format_vocabulary_prompt(&terms),
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to load vocabulary; skipping prompt-biasing");
+            String::new()
+        }
+    };
+
+    // Call the prompt-biased path even when the prompt is empty: the
+    // default trait impl falls through to the no-prompt `transcribe()`
+    // and Whisper-rs's `set_initial_prompt` is a no-op for an empty
+    // string anyway, so callers don't have to branch on the prompt.
     let raw_text = transcriber
-        .transcribe(&captured)
+        .transcribe_with_prompt(&captured, &prompt)
         .map_err(|e| IpcError::Transcription(e.to_string()))?;
 
-    // Pull the replacement rules and apply them. A failure here demotes
-    // to the empty-rules identity rather than failing the dictation.
+    // Pull the replacement rules and apply them. Same non-fatal pattern.
     let rules = match state.replacements.list().await {
         Ok(rules) => rules,
         Err(e) => {
@@ -349,6 +366,57 @@ pub async fn replacement_delete(state: State<'_, AppState>, id: i64) -> IpcResul
         .map_err(|e| IpcError::Replacements(e.to_string()))
 }
 
+// -- Vocabulary CRUD -----------------------------------------------------
+//
+// Mirrors the replacements CRUD shape. Errors map to the same
+// `IpcError::Replacements` variant — both subsystems share user-facing
+// "your dictionary settings" affordances, so a single tagged kind keeps
+// the frontend's error switch from sprouting near-identical branches.
+
+/// All vocabulary terms in insertion order.
+#[tauri::command]
+pub async fn vocabulary_list(state: State<'_, AppState>) -> IpcResult<Vec<VocabularyTerm>> {
+    state
+        .vocabulary
+        .list()
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+/// Insert a new vocabulary term. The schema enforces `UNIQUE` on `term`,
+/// so duplicates surface as an error here for the frontend to render.
+#[tauri::command]
+pub async fn vocabulary_create(
+    state: State<'_, AppState>,
+    term: String,
+) -> IpcResult<VocabularyTerm> {
+    state
+        .vocabulary
+        .create(NewVocabularyTerm { term })
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+/// Update an existing vocabulary term. No-op if `id` does not exist.
+#[tauri::command]
+pub async fn vocabulary_update(state: State<'_, AppState>, term: VocabularyTerm) -> IpcResult<()> {
+    state
+        .vocabulary
+        .update(term)
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+/// Delete a vocabulary term. No-op if `id` does not exist.
+#[tauri::command]
+pub async fn vocabulary_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
+    state
+        .vocabulary
+        .delete(id)
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
 /// Snapshot the current foreground window via `active-win-pos-rs`.
 ///
 /// `active-win-pos-rs` exposes a Result with the unit type as its error,
@@ -465,6 +533,7 @@ mod tests {
             None,
             Arc::new(crate::ipc::tests::NoopHistory),
             Arc::new(crate::ipc::tests::NoopReplacements),
+            Arc::new(crate::ipc::tests::NoopVocabulary),
         );
 
         // Pre-populate the slot with a sentinel value so a regression in
@@ -503,6 +572,7 @@ mod tests {
             None,
             Arc::new(crate::ipc::tests::NoopHistory),
             Arc::new(crate::ipc::tests::NoopReplacements),
+            Arc::new(crate::ipc::tests::NoopVocabulary),
         );
 
         // We can't observe the OS foreground app reliably from a test
