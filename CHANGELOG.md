@@ -104,6 +104,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Backend tests run against a local `wiremock` server; no real
   Hugging Face round-trips in CI. Closes #30.
 
+- Audio test fixture (#34 part-a): an `#[ignore]`d integration test
+  in `src-tauri/tests/audio_fixture.rs` that loads a contributor-
+  supplied WAV (`HUSH_TEST_AUDIO` env var), runs it through the
+  full transcription stack, and asserts the output contains
+  configurable expected words. WAV parsing via `hound` (dev-dep
+  only). The fixture itself is not committed; `tests/fixtures/README.md`
+  points contributors at public-domain sources (JFK clip,
+  LibriVox, Common Voice). Validates the auto-download +
+  transcription path end-to-end once a contributor places a model.
+  System-audio loopback variant stays open behind #33.
+
 ### Changed
 
 - **M2 polish.** Visible recording and transcribing states (pulsing red
