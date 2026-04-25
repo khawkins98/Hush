@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downmix utility. Captures at the device's native format and surfaces the
   format alongside the samples; downmix and resampling to whisper's 16 kHz
   happen at the transcription stage.
+- Local Whisper transcription (`transcription` module): `Transcribe` trait
+  at the OS / heavy-dep boundary, plus a `whisper-rs` backed implementation
+  gated behind the `whisper` Cargo feature. Includes a pure-logic linear
+  resampler (`resample_to_mono`) so any captured sample rate is converted
+  to whisper's 16 kHz before inference. Constructor takes a caller-provided
+  GGUF model path; auto-download is deferred to M3.
 
 ---
 
