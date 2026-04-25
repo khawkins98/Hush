@@ -1,5 +1,5 @@
 // Domain modules. Exposed at the crate root so integration tests and the
-// IPC layer (TODO(#7)) can address them by their public surface, and so
+// IPC layer (TODO(#9)) can address them by their public surface, and so
 // dead-code warnings do not fire on items that are wired up in a later PR.
 pub mod audio;
 pub mod db;

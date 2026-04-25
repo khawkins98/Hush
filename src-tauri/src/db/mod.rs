@@ -7,4 +7,4 @@
 //
 // Schema lives in `src-tauri/migrations/`. Tables: history, dictionary_terms, replacements, settings.
 
-// TODO(#6): initialise sqlx pool, embed and run migrations
+// TODO(#8): initialise sqlx pool, embed and run migrations

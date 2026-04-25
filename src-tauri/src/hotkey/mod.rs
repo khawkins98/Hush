@@ -12,4 +12,4 @@
 // Note: global hotkeys under Wayland are compositor-dependent. GNOME is the primary
 // supported target for Linux v1; other compositors degrade gracefully. See §10 of the PRD.
 
-// TODO(#3): implement push-to-talk via rdev and toggle-record via tauri-plugin-global-shortcut
+// TODO(#5): implement push-to-talk via rdev and toggle-record via tauri-plugin-global-shortcut
