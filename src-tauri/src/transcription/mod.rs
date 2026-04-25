@@ -44,6 +44,7 @@
 //! GGUF model.
 
 pub mod catalog;
+pub mod download;
 pub mod resample;
 
 #[cfg(feature = "whisper")]
