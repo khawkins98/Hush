@@ -1,0 +1,65 @@
+[package]
+name = "hush"
+version = "0.1.0"
+description = "Hush — offline voice-to-text. Local Whisper transcription, no cloud round-trip."
+authors = []
+edition = "2021"
+
+[lib]
+# The `_lib` suffix avoids a name collision with the bin on Windows.
+# See https://github.com/rust-lang/cargo/issues/8519
+name = "hush_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri plugins
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Audio capture (cross-platform)
+cpal = "0.15"
+
+# Local Whisper transcription — requires cmake and a C++ toolchain.
+# Disabled by default so the project scaffolds without those system deps.
+# Enable with: cargo build --features whisper
+# In production builds the CI installs cmake explicitly.
+whisper-rs = { version = "0.14", features = [], optional = true }
+
+# SQLite persistence
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
+
+# Foreground app detection
+active-win-pos-rs = "0.8"
+
+# Push-to-talk key events (key-down / key-up)
+rdev = "0.5"
+
+# Archive/export support
+zip = "2"
+
+[features]
+# Enable the whisper transcription backend (requires cmake).
+whisper = ["dep:whisper-rs"]
+
+[dev-dependencies]
+tempfile = "3"
+
