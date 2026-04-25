@@ -57,6 +57,24 @@ use crate::transcription::Transcribe;
 // `commands::` path inside `generate_handler!` (Tauri's macro looks up a
 // hidden `__cmd__<name>` sibling, which a `pub use` does not carry).
 
+/// Hard cap on how many redirects the download client follows before
+/// erroring out. Hugging Face's `/resolve/main/` path is observed to
+/// redirect at most twice (huggingface.co → cdn-lfs.huggingface.co →
+/// a signed S3-style URL, still on the CDN); four leaves headroom.
+const MAX_DOWNLOAD_REDIRECTS: usize = 4;
+
+/// Predicate for the redirect-policy closure: returns `true` iff `host`
+/// is `huggingface.co` itself or a subdomain. Pulled out so the
+/// host-allowlist logic is unit-testable — `reqwest::redirect::Attempt`
+/// has no public constructor, so the closure as a whole is not, but
+/// this small predicate is the load-bearing security check.
+fn is_huggingface_host(host: Option<&str>) -> bool {
+    match host {
+        Some(h) => h == "huggingface.co" || h.ends_with(".huggingface.co"),
+        None => false,
+    }
+}
+
 /// Snapshot of which application was in the foreground when dictation
 /// started. Captured so the resulting history row records "you were
 /// dictating into Slack / Notion / Mail" rather than "you were dictating
@@ -136,6 +154,30 @@ impl AppState {
                 // that's out of scope for this PR.
                 .timeout(std::time::Duration::from_secs(600))
                 .user_agent(concat!("hush/", env!("CARGO_PKG_VERSION")))
+                // Redirect policy is host-restricted, not just hop-
+                // capped. The default `Policy::default()` follows up
+                // to 10 redirects to *any* host — a BGP/DNS hijack of
+                // huggingface.co could redirect to an arbitrary server
+                // and we'd transfer bytes there before the SHA-256
+                // verification rejects them. SHA still catches a
+                // swapped file, but the bandwidth + latency leak to
+                // the attacker's host is avoidable.
+                //
+                // We allow up to four hops (HF's `/resolve/main/`
+                // typically goes huggingface.co → cdn-lfs.huggingface.co
+                // → a signed URL on the same CDN; four leaves headroom
+                // for a future re-architecture). Every hop must land on
+                // a host inside the `huggingface.co` zone.
+                .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                    if attempt.previous().len() >= MAX_DOWNLOAD_REDIRECTS {
+                        return attempt.error("too many redirects");
+                    }
+                    if is_huggingface_host(attempt.url().host_str()) {
+                        attempt.follow()
+                    } else {
+                        attempt.error("redirect to host outside huggingface.co")
+                    }
+                }))
                 .build()
                 .expect("reqwest client should always build with default config"),
             downloads: Mutex::new(HashMap::new()),
@@ -537,5 +579,27 @@ mod tests {
         // is exercised by the `commands` module's runtime path.
         let state = mock_state();
         assert!(state.transcribe.is_none());
+    }
+
+    #[test]
+    fn huggingface_host_predicate_accepts_apex_and_subdomains() {
+        // Pin the load-bearing security check: the download redirect
+        // policy treats these as in-zone.
+        assert!(is_huggingface_host(Some("huggingface.co")));
+        assert!(is_huggingface_host(Some("cdn-lfs.huggingface.co")));
+        assert!(is_huggingface_host(Some("cdn-lfs-us-1.huggingface.co")));
+    }
+
+    #[test]
+    fn huggingface_host_predicate_rejects_typosquats_and_lookalikes() {
+        // Regression for "ends_with" naivety: `evilhuggingface.co`
+        // (no leading dot) is not in zone but a sloppy `ends_with`
+        // without the dot would accept it. The predicate must also
+        // reject obvious off-domain hosts.
+        assert!(!is_huggingface_host(Some("evilhuggingface.co")));
+        assert!(!is_huggingface_host(Some("huggingface.co.attacker.com")));
+        assert!(!is_huggingface_host(Some("attacker.com")));
+        assert!(!is_huggingface_host(Some("")));
+        assert!(!is_huggingface_host(None));
     }
 }

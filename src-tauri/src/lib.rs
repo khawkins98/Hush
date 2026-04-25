@@ -53,7 +53,6 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // The platform app-data directory is only resolvable from a
             // Tauri `App` handle, so state construction has to live in
