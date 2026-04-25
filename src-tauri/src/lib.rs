@@ -6,6 +6,7 @@ pub mod dictionary;
 pub mod history;
 pub mod hotkey;
 pub mod ipc;
+pub mod settings;
 pub mod transcription;
 pub mod updater;
 
@@ -15,6 +16,11 @@ use tauri::Manager;
 /// per-app data directory (e.g. `~/Library/Application Support/Hush/`
 /// on macOS).
 const DB_FILENAME: &str = "hush.db";
+
+/// Subdirectory under the platform app-data dir where the model
+/// picker scans for downloaded GGUF files. Auto-download (when it
+/// lands) will write here; for now users put files here manually.
+const MODELS_DIRNAME: &str = "models";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -58,11 +64,24 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|e| format!("resolve app-data dir: {e}"))?;
             let db_path = app_data_dir.join(DB_FILENAME);
+            let models_dir = app_data_dir.join(MODELS_DIRNAME);
 
-            tracing::info!(path = %db_path.display(), "opening database");
+            // Pre-create the models directory so the picker has a
+            // stable place to point users at, even before any model
+            // has been added.
+            if let Err(e) = std::fs::create_dir_all(&models_dir) {
+                tracing::error!(error = ?e, path = %models_dir.display(), "failed to create models dir");
+            }
 
-            let state = tauri::async_runtime::block_on(ipc::AppState::build_default(&db_path))
-                .map_err(|e| format!("build app state: {e:#}"))?;
+            tracing::info!(
+                db = %db_path.display(),
+                models_dir = %models_dir.display(),
+                "starting Hush"
+            );
+
+            let state =
+                tauri::async_runtime::block_on(ipc::AppState::build_default(&db_path, models_dir))
+                    .map_err(|e| format!("build app state: {e:#}"))?;
             app.manage(state);
 
             // Hotkey registration is best-effort: if the OS refuses the
@@ -100,6 +119,8 @@ pub fn run() {
             ipc::commands::vocabulary_create,
             ipc::commands::vocabulary_update,
             ipc::commands::vocabulary_delete,
+            ipc::commands::model_list,
+            ipc::commands::model_select,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");
