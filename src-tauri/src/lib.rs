@@ -26,7 +26,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Install the global-shortcut handler at plugin-build time. Specific
+        // shortcuts are registered later from `setup`, where we have access
+        // to the [`AppHandle`] needed to call the registration API.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(hotkey::handle_shortcut_event)
+                .build(),
+        )
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -37,6 +44,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(state)
+        .setup(|app| {
+            // Hotkey registration is best-effort: if the OS refuses the
+            // shortcut (already in use, missing permission, Wayland
+            // compositor without support) we log and continue so the rest
+            // of the app — device list, button-driven dictation — keeps
+            // working.
+            if let Err(e) = hotkey::register_default(app.handle()) {
+                tracing::error!(error = ?e, "failed to register default toggle hotkey");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ipc::commands::list_input_devices,
             ipc::commands::start_dictation,
