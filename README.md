@@ -35,7 +35,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 - Platform build deps: see [Tauri prerequisites](https://tauri.app/start/prerequisites/)
 
 ```bash
-git clone https://github.com/khawkins/Hush.git
+git clone https://github.com/khawkins98/Hush.git
 cd Hush
 npm install
 npm run tauri dev

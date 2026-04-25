@@ -6,10 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on the same branch to avoid burning CI minutes on
+# obsolete commits during a rapid push sequence.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
-    name: Rust checks
-    runs-on: ubuntu-latest
+    name: Rust checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -18,15 +28,22 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # Tauri + whisper-rs need a non-trivial pile of system libraries on
+      # Linux. We install them explicitly rather than relying on the runner
+      # image to ship every transitive dep. cmake is required by whisper-rs.
       - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvn2-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
             libxdo-dev libxi-dev libxtst-dev libx11-dev \
-            libasound2-dev pkg-config
+            libasound2-dev \
+            cmake pkg-config
 
-      - name: Cache Cargo registry
+      - name: Cache Cargo registry and build
         uses: actions/cache@v4
         with:
           path: |
@@ -40,20 +57,34 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --all -- --check
 
-      - name: clippy
+      # Clippy on the default feature set first — fast and covers the bulk of
+      # the code. The `whisper` feature is exercised separately so a missing
+      # cmake on a runner shows up as a clear, scoped failure.
+      - name: clippy (default features)
         working-directory: src-tauri
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
+      - name: clippy (whisper feature)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --features whisper -- -D warnings
+
+      # CI lint: every TODO/FIXME must reference an issue (// TODO(#NNN): ...).
+      # Untagged tags rot; tagged ones are findable from the issue tracker.
       - name: Check for untagged TODOs/FIXMEs
+        shell: bash
         run: |
-          if grep -rn --include="*.rs" -E "//\s*(TODO|FIXME)[^(]" src-tauri/src/; then
+          if grep -rn --include="*.rs" -E "//\s*(TODO|FIXME)[[:space:]:][^(]" src-tauri/src/; then
             echo "ERROR: Found TODO/FIXME without an issue reference. Use // TODO(#NNN): or // FIXME(#NNN):"
             exit 1
           fi
 
-      - name: cargo test
+      - name: cargo test (default features)
         working-directory: src-tauri
-        run: cargo test --all-features
+        run: cargo test
+
+      - name: cargo test (whisper feature)
+        working-directory: src-tauri
+        run: cargo test --features whisper
 
   frontend:
     name: Frontend checks

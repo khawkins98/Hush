@@ -27,7 +27,7 @@ rustup update stable
 nvm install 22
 
 # Clone and install
-git clone https://github.com/khawkins/Hush.git
+git clone https://github.com/khawkins98/Hush.git
 cd Hush
 npm install
 
