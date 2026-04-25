@@ -96,6 +96,10 @@ pub fn run() {
             ipc::commands::replacement_create,
             ipc::commands::replacement_update,
             ipc::commands::replacement_delete,
+            ipc::commands::vocabulary_list,
+            ipc::commands::vocabulary_create,
+            ipc::commands::vocabulary_update,
+            ipc::commands::vocabulary_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");
