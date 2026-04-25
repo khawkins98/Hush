@@ -1,3 +1,18 @@
+//! Global hotkeys: toggle-record (this module) and push-to-talk (`ptt`).
+//!
+//! Toggle-record uses `tauri-plugin-global-shortcut`; PTT uses `rdev`
+//! directly so it can observe key-down and key-up as separate events.
+//! The two coexist: the user may bind both simultaneously (they emit
+//! distinct Tauri events so the frontend disambiguates). If the user
+//! binds them to the same physical key, both will fire — that is the
+//! user's choice; we log and continue rather than try to be clever.
+//!
+//! Below: original module header for the toggle hotkey.
+//!
+//! ---
+//!
+//! ## Toggle-record hotkey
+//!
 //! Global toggle-record hotkey via `tauri-plugin-global-shortcut`.
 //!
 //! Concept inspired by VoiceInk's KeyboardShortcuts-based hotkey handling.
@@ -43,6 +58,10 @@
 //! - **Wayland**: global hotkeys are compositor-dependent. We document
 //!   GNOME as the primary target initially; other compositors may
 //!   silently no-op the registration. See PRD §10.
+
+pub mod ptt;
+
+pub use ptt::{register_ptt_listener, EVENT_PTT_PRESS, EVENT_PTT_RELEASE};
 
 use anyhow::{Context, Result};
 use tauri::{AppHandle, Emitter, Runtime};
