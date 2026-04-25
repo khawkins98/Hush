@@ -84,6 +84,20 @@
   let modelsError = $state<string | null>(null);
   let modelsRestartNotice = $state(false);
 
+  // Per-card transient state for the download flow. Two parallel
+  // `Map<id, …>`s keep the per-row status independent of the catalog
+  // array's order, so a `model:download-progress` event for one card
+  // doesn't have to walk the whole list to find its target. The Maps
+  // are intentionally swapped wholesale on each update (`new Map(prev)`)
+  // to trip Svelte's reactivity — Svelte 5 runes don't observe
+  // mutations on built-in Maps.
+  let downloading = $state<Map<string, { received: number; total: number | null }>>(new Map());
+  let downloadFailed = $state<Map<string, string>>(new Map());
+
+  let unlistenDownloadProgress: UnlistenFn | null = null;
+  let unlistenDownloadDone: UnlistenFn | null = null;
+  let unlistenDownloadFailed: UnlistenFn | null = null;
+
   // `recording` is "audio is being captured", `busy` covers both the
   // start handshake AND the post-stop transcription window. Splitting
   // out `transcribing` lets the UI distinguish "starting up" (~ms) from
@@ -125,6 +139,46 @@
       else void start();
     });
 
+    // Model-download events from the backend. The progress event
+    // fires per-chunk during the download; done / failed are
+    // terminal. The frontend's job is just to mirror these into the
+    // two Maps so the per-card UI can switch between idle / progress /
+    // failed / downloaded states. After `done` we re-fetch the
+    // catalog so the card transitions to "downloaded" without a page
+    // reload.
+    type DownloadProgressEvent = { id: string; bytesReceived: number; bytesTotal: number | null };
+    type DownloadStatusEvent = { id: string; message: string | null };
+
+    unlistenDownloadProgress = await listen<DownloadProgressEvent>(
+      "model:download-progress",
+      (e) => {
+        const next = new Map(downloading);
+        next.set(e.payload.id, {
+          received: e.payload.bytesReceived,
+          total: e.payload.bytesTotal,
+        });
+        downloading = next;
+      }
+    );
+    unlistenDownloadDone = await listen<DownloadStatusEvent>("model:download-done", (e) => {
+      const next = new Map(downloading);
+      next.delete(e.payload.id);
+      downloading = next;
+      // Refresh so the catalog's `isDownloaded` flips for this row.
+      void refreshModels();
+    });
+    unlistenDownloadFailed = await listen<DownloadStatusEvent>("model:download-failed", (e) => {
+      const nextDownloading = new Map(downloading);
+      nextDownloading.delete(e.payload.id);
+      downloading = nextDownloading;
+      const nextFailed = new Map(downloadFailed);
+      nextFailed.set(
+        e.payload.id,
+        e.payload.message ?? "Download failed for an unspecified reason."
+      );
+      downloadFailed = nextFailed;
+    });
+
     // Push-to-talk: the rdev listener in `hotkey::ptt` emits these
     // events on key-down and key-up of the configured PTT key.
     unlistenPttPress = await listen("hotkey:ptt-press", () => {
@@ -145,6 +199,9 @@
     unlistenToggle?.();
     unlistenPttPress?.();
     unlistenPttRelease?.();
+    unlistenDownloadProgress?.();
+    unlistenDownloadDone?.();
+    unlistenDownloadFailed?.();
   });
 
   async function start() {
@@ -355,6 +412,70 @@
     } catch (err) {
       modelsError = formatError(err);
     }
+  }
+
+  async function downloadModel(card: ModelCard) {
+    // Clear any previous failure for this card before retrying — keeps
+    // the per-card error chip from sticking around after the user
+    // clicks Try again.
+    if (downloadFailed.has(card.id)) {
+      const next = new Map(downloadFailed);
+      next.delete(card.id);
+      downloadFailed = next;
+    }
+    // Optimistic state: start the progress chip immediately. The
+    // backend's first `progress` event will replace these zeros.
+    const next = new Map(downloading);
+    next.set(card.id, { received: 0, total: card.sizeMb * 1024 * 1024 });
+    downloading = next;
+
+    try {
+      await invoke("model_download", { id: card.id });
+    } catch (err) {
+      // The IpcError::Settings("...SHA-256 not configured...") path
+      // surfaces here. Re-shape into a friendlier per-card message
+      // rather than the raw `settings: ...` from formatError.
+      const formatted = formatError(err);
+      const friendly = formatted.toLowerCase().includes("sha-256")
+        ? `Auto-download is not yet configured for ${card.displayName}. Place ${card.filename} in the models directory manually for now.`
+        : formatted;
+      const fail = new Map(downloadFailed);
+      fail.set(card.id, friendly);
+      downloadFailed = fail;
+      // Drop the optimistic in-flight chip — the backend never started.
+      const drop = new Map(downloading);
+      drop.delete(card.id);
+      downloading = drop;
+    }
+  }
+
+  async function cancelDownload(card: ModelCard) {
+    try {
+      await invoke("model_cancel_download", { id: card.id });
+      // The backend will fire `model:download-failed` with a
+      // "cancelled" message; the existing handler removes the
+      // download chip and shows the error. We do nothing optimistic
+      // here — letting the event flow drive the state keeps a single
+      // source of truth.
+    } catch (err) {
+      modelsError = formatError(err);
+    }
+  }
+
+  async function removeModel(card: ModelCard) {
+    try {
+      await invoke("model_remove", { id: card.id });
+      await refreshModels(); // card flips back to "not downloaded"
+    } catch (err) {
+      modelsError = formatError(err);
+    }
+  }
+
+  /// Format a byte count as "12.4 MB" — used for download progress.
+  /// We deliberately don't use units smaller than MB because the
+  /// smallest model is ~75 MB; KB resolution would just be noise.
+  function formatMb(bytes: number): string {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
   function formatTimestamp(iso: string): string {
@@ -656,59 +777,134 @@
 
     <ul class="model-grid">
       {#each models as card (card.id)}
+        {@const inFlight = downloading.get(card.id) ?? null}
+        {@const failure = downloadFailed.get(card.id) ?? null}
         <li
           class="model-card"
           class:selected={card.isSelected}
-          class:unavailable={!card.isDownloaded}
+          class:unavailable={!card.isDownloaded && !inFlight}
         >
-          <button
-            type="button"
-            class="model-card-button"
-            onclick={() => selectModel(card)}
-            disabled={!card.isDownloaded}
-            aria-label="Select {card.displayName}"
-            aria-pressed={card.isSelected}
-          >
-            <header class="model-card-head">
-              <h3 class="model-name">
-                {card.displayName}
+          <!--
+            The clickable area (the card body) is split from the
+            per-card action buttons because nesting buttons is invalid
+            HTML and the previous version did exactly that. Only
+            downloaded cards get a click-to-select button; everything
+            else falls back to a plain `<div>` for the metadata.
+          -->
+          {#if card.isDownloaded}
+            <button
+              type="button"
+              class="model-card-button"
+              onclick={() => selectModel(card)}
+              aria-label="Select {card.displayName}"
+              aria-pressed={card.isSelected}
+            >
+              <header class="model-card-head">
+                <h3 class="model-name">
+                  {card.displayName}
+                  {#if card.isSelected}
+                    <span class="badge default-badge">Default</span>
+                  {/if}
+                </h3>
                 {#if card.isSelected}
-                  <span class="badge default-badge">Default</span>
+                  <span class="model-card-current" aria-hidden="true">●</span>
                 {/if}
-              </h3>
-              {#if card.isSelected}
-                <span class="model-card-current" aria-hidden="true">●</span>
-              {/if}
-            </header>
-            <p class="model-stats">
-              <span>{card.sizeMb} MB</span>
-              <span class="stat">
-                Speed
-                <span class="bars" aria-label="{card.speedRating} of 10">
-                  {#each Array(10) as _, i}
-                    <span class:on={i < card.speedRating}></span>
-                  {/each}
+              </header>
+              <p class="model-stats">
+                <span>{card.sizeMb} MB</span>
+                <span class="stat">
+                  Speed
+                  <span class="bars" aria-label="{card.speedRating} of 10">
+                    {#each Array(10) as _, i}
+                      <span class:on={i < card.speedRating}></span>
+                    {/each}
+                  </span>
+                  {card.speedRating.toFixed(1)}
                 </span>
-                {card.speedRating.toFixed(1)}
-              </span>
-              <span class="stat">
-                Accuracy
-                <span class="bars" aria-label="{card.accuracyRating} of 10">
-                  {#each Array(10) as _, i}
-                    <span class:on={i < card.accuracyRating}></span>
-                  {/each}
+                <span class="stat">
+                  Accuracy
+                  <span class="bars" aria-label="{card.accuracyRating} of 10">
+                    {#each Array(10) as _, i}
+                      <span class:on={i < card.accuracyRating}></span>
+                    {/each}
+                  </span>
+                  {card.accuracyRating.toFixed(1)}
                 </span>
-                {card.accuracyRating.toFixed(1)}
-              </span>
-            </p>
-            <p class="model-desc">{card.description}</p>
-            {#if !card.isDownloaded}
-              <p class="model-status" role="note">
-                Not downloaded — place
-                <code>{card.filename}</code> in the models directory.
               </p>
+              <p class="model-desc">{card.description}</p>
+            </button>
+          {:else}
+            <div class="model-card-content">
+              <header class="model-card-head">
+                <h3 class="model-name">{card.displayName}</h3>
+              </header>
+              <p class="model-stats">
+                <span>{card.sizeMb} MB</span>
+                <span class="stat">
+                  Speed
+                  <span class="bars" aria-label="{card.speedRating} of 10">
+                    {#each Array(10) as _, i}
+                      <span class:on={i < card.speedRating}></span>
+                    {/each}
+                  </span>
+                  {card.speedRating.toFixed(1)}
+                </span>
+                <span class="stat">
+                  Accuracy
+                  <span class="bars" aria-label="{card.accuracyRating} of 10">
+                    {#each Array(10) as _, i}
+                      <span class:on={i < card.accuracyRating}></span>
+                    {/each}
+                  </span>
+                  {card.accuracyRating.toFixed(1)}
+                </span>
+              </p>
+              <p class="model-desc">{card.description}</p>
+            </div>
+          {/if}
+
+          <!-- Per-card action footer: Download / Cancel / Try again / Remove. -->
+          <footer class="model-card-actions">
+            {#if inFlight}
+              <!-- Active download: progress bar + Cancel. -->
+              <div class="download-progress" role="progressbar"
+                aria-valuemin="0"
+                aria-valuemax={inFlight.total ?? 100}
+                aria-valuenow={inFlight.received}
+                aria-label="Downloading {card.displayName}"
+              >
+                <div
+                  class="download-progress-bar"
+                  style:width={inFlight.total
+                    ? `${Math.min(100, (inFlight.received / inFlight.total) * 100)}%`
+                    : "100%"}
+                ></div>
+              </div>
+              <span class="download-progress-text">
+                {formatMb(inFlight.received)}{#if inFlight.total} / {formatMb(inFlight.total)}{/if}
+              </span>
+              <button class="ghost danger" onclick={() => cancelDownload(card)}>
+                Cancel
+              </button>
+            {:else if failure}
+              <!-- Failure: error chip + Try again. -->
+              <p class="model-failure" role="alert">{failure}</p>
+              <button class="ghost" onclick={() => downloadModel(card)}>
+                Try again
+              </button>
+            {:else if card.isDownloaded}
+              <!-- Downloaded: a small Remove button so the user can
+                   reclaim disk if they change their mind. -->
+              <button class="ghost danger" onclick={() => removeModel(card)}>
+                Remove
+              </button>
+            {:else}
+              <!-- Not downloaded, no in-flight or failure. -->
+              <button class="ghost primary" onclick={() => downloadModel(card)}>
+                Download
+              </button>
             {/if}
-          </button>
+          </footer>
         </li>
       {/each}
     </ul>
@@ -1319,17 +1515,59 @@ button.ghost.danger:hover:not(:disabled) {
   line-height: 1.45;
 }
 
-.model-status {
-  margin: 0.5rem 0 0;
-  font-size: 0.8rem;
-  color: #6a4a00;
+.model-card-content {
+  padding: 0.85rem 1.1rem;
 }
 
-.model-status code {
-  background-color: #fff7e6;
-  padding: 0.05em 0.35em;
+.model-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1.1rem 0.85rem;
+  flex-wrap: wrap;
+}
+
+button.ghost.primary {
+  border-color: #6a8cf0;
+  color: #2c3e8f;
+}
+
+button.ghost.primary:hover:not(:disabled) {
+  background-color: #eef2ff;
+  border-color: #4a6cd0;
+}
+
+.download-progress {
+  flex: 1;
+  min-width: 6rem;
+  height: 6px;
+  background-color: #e8e8e8;
   border-radius: 3px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+}
+
+.download-progress-bar {
+  height: 100%;
+  background-color: #6a8cf0;
+  transition: width 0.15s ease-out;
+}
+
+.download-progress-text {
+  font-size: 0.8rem;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-failure {
+  flex: 1;
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  background-color: #fee;
+  border: 1px solid #d83a3a;
+  border-radius: 4px;
+  color: #8a0000;
+  font-size: 0.85rem;
 }
 
 .hint-prose {
@@ -1522,12 +1760,26 @@ button.ghost.danger:hover:not(:disabled) {
     background-color: #1e2a4a;
     color: #c0d0ff;
   }
-  .model-status {
-    color: #f0d090;
+  .download-progress {
+    background-color: #3a3a3a;
   }
-  .model-status code {
-    background-color: #3a2e10;
-    color: #f0d090;
+  .download-progress-bar {
+    background-color: #8aa0ff;
+  }
+  .download-progress-text {
+    color: #aaa;
+  }
+  .model-failure {
+    background-color: #4a1a1a;
+    border-color: #d83a3a;
+    color: #ffd0d0;
+  }
+  button.ghost.primary {
+    border-color: #6a8cf0;
+    color: #c0d0ff;
+  }
+  button.ghost.primary:hover:not(:disabled) {
+    background-color: #1e2a4a;
   }
   .hint-prose {
     color: #aaa;

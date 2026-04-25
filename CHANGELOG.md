@@ -90,18 +90,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow. Hot-swap is intentionally not in this PR — selecting a
   new model writes the setting and prompts the user to restart.
   Auto-download is a follow-up.
-- Model auto-download backend: pure-logic streaming downloader with
-  SHA-256 verification (`transcription::download`). Bytes stream into
-  a `.part` sibling file, hash computed on the fly, atomic rename on
-  success, `.part` deleted on failure or cancel. Three new IPC
-  commands (`model_download`, `model_cancel_download`, `model_remove`)
-  emit `model:download-progress`, `model:download-done`,
-  `model:download-failed` Tauri events for the frontend integration
-  (lands in a follow-up PR per the PR-size budget). Catalog gains
-  `download_url` (Hugging Face mirror) and `sha256` (per-model hash,
-  currently empty pending contributor verification — auto-download
-  refuses to start when the hash is empty). Tests run against a local
-  `wiremock` server, not real Hugging Face.
+- Whisper model auto-download. Pure-logic streaming downloader
+  (`transcription::download`) with SHA-256 verification: bytes
+  stream into a `.part` sibling file, hash computed on the fly,
+  atomic rename on success, `.part` deleted on failure or cancel.
+  Frontend picker grows per-card actions — Download, Cancel,
+  Try-again-on-failure, Remove — with a CSS progress bar driven by
+  Tauri events (`model:download-progress`, `model:download-done`,
+  `model:download-failed`). Catalog gains `download_url` (Hugging
+  Face mirror) and `sha256` (per-model, empty until a contributor
+  verifies each hash — auto-download refuses to start with an empty
+  hash and surfaces a friendly "configure manually for now" hint).
+  Backend tests run against a local `wiremock` server; no real
+  Hugging Face round-trips in CI. Closes #30.
 
 ### Changed
 
