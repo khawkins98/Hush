@@ -60,6 +60,18 @@ Worth knowing if anyone later splits commands across files: the macro is path-se
 
 ---
 
+## 2026-04-25 — Frontend per-card download state: two `Map<id, …>`s, swap-don't-mutate
+
+The auto-download UI has four states per card — idle, downloading-with-progress, failed (with retry), downloaded — and several events fire concurrently (multiple cards can be downloading at once if the user clicks Download on Tiny then Base). Two design choices worth pinning:
+
+1. **Two parallel `Map<id, …>`s** rather than embedding the per-card status into the catalog array. `downloading: Map<id, {received, total}>` and `downloadFailed: Map<id, message>`. Lookup is O(1) per event; the catalog stays the source of truth for the static metadata; the catalog's order doesn't matter for routing an event to the right card. The alternative — folding `downloadStatus` into each `ModelCard` — would couple the static catalog to transient download state and force a `models = models.map(...)` allocation on every progress chunk (Svelte's reactivity doesn't notice mutations on individual array elements without that).
+
+2. **Swap, don't mutate.** Svelte 5 runes don't observe internal mutations on built-in `Map`s — `downloading.set(...)` doesn't trigger reactivity. Every update wraps in `new Map(prev)` and reassigns. Slightly wasteful at the per-chunk progress firehose (we do a full Map clone per progress event), but the Map only has one entry per concurrent download (rare to be > 2) and the chunks come at ~tens of times per second, so the realistic cost is negligible. The alternative would be a `$state.raw`-flavoured opt-out, but the explicit-swap pattern is more obvious to a future contributor reading the file.
+
+Cancel-flow goes through the backend rather than touching the frontend state directly: `cancelDownload` calls `model_cancel_download`; the backend fires a `model:download-failed` with a "cancelled" message; the existing failed-event handler updates the Maps. That keeps a single state machine driving the UI.
+
+---
+
 ## 2026-04-25 — Model auto-download: SHA-required, .part + atomic rename, reqwest+rustls
 
 Three decisions worth pinning while the auto-download is the freshest network surface in the codebase:
