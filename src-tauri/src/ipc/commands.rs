@@ -208,59 +208,106 @@ pub async fn stop_dictation(
         .ok_or(IpcError::TranscriptionUnavailable)?
         .clone();
 
-    let captured = match state.audio.stop() {
-        Ok(c) => c,
-        Err(e) => {
-            // Even on a failed stop the user pressed Stop — the HUD
-            // should hide regardless. Hide before propagating the
-            // error.
-            let _ = crate::hud::hide(&app);
-            return Err(IpcError::Audio(e.to_string()));
-        }
-    };
-
-    // Hide the HUD as soon as the audio stream is closed. The user's
-    // perception of "is Hush still listening?" should track the
-    // microphone state, not the (possibly multi-second) transcription
-    // that follows. Best-effort — failure to hide is logged but does
-    // not block the rest of the pipeline.
+    // The user pressed Stop; the HUD should hide whether or not the
+    // backend stop succeeds. Errors from the audio backend are
+    // surfaced to the caller, but only after the HUD is down.
+    let captured = stop_audio_capture(&state).map_err(|e| {
+        let _ = crate::hud::hide(&app);
+        e
+    })?;
     if let Err(e) = crate::hud::hide(&app) {
         tracing::error!(error = ?e, "failed to hide recording HUD");
     }
 
-    // Build the vocabulary prompt before inference. A failure here
-    // demotes to the no-prompt path — the dictation still works, the
-    // user just doesn't get the bias for that one transcription.
-    let prompt = match state.vocabulary.list().await {
+    // Vocabulary + replacements load are best-effort. Inference itself
+    // is fatal — without text there's nothing for the user to paste.
+    let prompt = load_vocabulary_prompt(&state).await;
+    let raw_text = transcriber
+        .transcribe_with_prompt(&captured, &prompt)
+        .map_err(|e| IpcError::Transcription(e.to_string()))?;
+    let rules = load_replacement_rules(&state).await;
+    let text = apply_replacements(raw_text.trim(), &rules);
+
+    write_to_clipboard(&app, &text)?;
+    fire_ready_notification(&app);
+
+    let foreground = take_foreground_snapshot(&state)?;
+    spawn_history_insert(
+        Arc::clone(&state.history),
+        NewHistoryEntry {
+            transcript: text.clone(),
+            app_name: foreground.as_ref().map(|f| f.app_name.clone()),
+            window_title: foreground.as_ref().map(|f| f.window_title.clone()),
+            model: transcriber.model_label(),
+            // Recording duration tracking lands with the HUD level-meter
+            // (#21); for now history rows have None here.
+            duration_ms: None,
+        },
+    );
+
+    Ok(DictationResult { text, foreground })
+}
+
+/// Stop the audio stream and return the captured samples, mapping the
+/// backend error to [`IpcError::Audio`]. Split out so `stop_dictation`
+/// can keep its HUD-hide-on-error step a single line.
+fn stop_audio_capture(state: &AppState) -> IpcResult<crate::audio::CapturedAudio> {
+    state
+        .audio
+        .stop()
+        .map_err(|e| IpcError::Audio(e.to_string()))
+}
+
+/// Load the user's vocabulary terms and format them as the initial
+/// Whisper prompt. Best-effort: a repository error logs and demotes
+/// to the no-prompt path. The decoder treats an empty prompt as a no-op
+/// (both via the trait's default `transcribe_with_prompt` and via
+/// `set_initial_prompt` itself), so the caller never has to branch.
+async fn load_vocabulary_prompt(state: &AppState) -> String {
+    match state.vocabulary.list().await {
         Ok(terms) => format_vocabulary_prompt(&terms),
         Err(e) => {
             tracing::error!(error = ?e, "failed to load vocabulary; skipping prompt-biasing");
             String::new()
         }
-    };
+    }
+}
 
-    // Call the prompt-biased path even when the prompt is empty: the
-    // default trait impl falls through to the no-prompt `transcribe()`
-    // and Whisper-rs's `set_initial_prompt` is a no-op for an empty
-    // string anyway, so callers don't have to branch on the prompt.
-    let raw_text = transcriber
-        .transcribe_with_prompt(&captured, &prompt)
-        .map_err(|e| IpcError::Transcription(e.to_string()))?;
-
-    // Pull the replacement rules and apply them. Same non-fatal pattern.
-    let rules = match state.replacements.list().await {
+/// Load post-transcription find/replace rules. Best-effort: a failure
+/// here demotes to "no rules applied" rather than failing the whole
+/// dictation. The user already has audio captured and a transcript
+/// pending; surfacing a rules-load error as fatal would block them on
+/// a strictly-secondary feature.
+async fn load_replacement_rules(state: &AppState) -> Vec<ReplacementRule> {
+    match state.replacements.list().await {
         Ok(rules) => rules,
         Err(e) => {
             tracing::error!(error = ?e, "failed to load replacement rules; skipping post-processing");
             Vec::new()
         }
-    };
-    let text = apply_replacements(raw_text.trim(), &rules);
+    }
+}
 
+/// Pop the foreground snapshot captured at `start_dictation`. Returns
+/// `None` if the slot is empty (which can happen if a hotkey-driven
+/// start raced the snapshot capture). The `Mutex` is fenced via
+/// [`poisoned`] so a panicked thread doesn't bring down a Tauri command.
+fn take_foreground_snapshot(state: &AppState) -> IpcResult<Option<ForegroundApp>> {
+    Ok(state.pending_foreground.lock().map_err(poisoned)?.take())
+}
+
+/// Write the final text to the system clipboard. Fatal on failure —
+/// the clipboard is the user's actual artefact for this dictation.
+fn write_to_clipboard(app: &AppHandle, text: &str) -> IpcResult<()> {
     app.clipboard()
-        .write_text(text.clone())
-        .map_err(|e| IpcError::Clipboard(e.to_string()))?;
+        .write_text(text.to_owned())
+        .map_err(|e| IpcError::Clipboard(e.to_string()))
+}
 
+/// Fire the "Ready to paste" courtesy notification. Best-effort: on
+/// platforms without a notification daemon (e.g. Linux without
+/// dbus/notify-send) we log and continue.
+fn fire_ready_notification(app: &AppHandle) {
     if let Err(e) = app
         .notification()
         .builder()
@@ -270,32 +317,22 @@ pub async fn stop_dictation(
     {
         tracing::warn!(error = ?e, "failed to fire 'ready to paste' notification");
     }
+}
 
-    let foreground = state.pending_foreground.lock().map_err(poisoned)?.take();
-
-    // Persist to history. Best-effort: a failed insert must not fail the
-    // dictation — the user already has the text on the clipboard, and
-    // surfacing "history insert failed" as a hard error would block them
-    // from getting on with their work. We log and continue. If history
-    // becomes load-bearing (e.g. a future pipeline that re-references
-    // recent rows) this should be revisited.
-    let history = Arc::clone(&state.history);
-    let new_entry = NewHistoryEntry {
-        transcript: text.clone(),
-        app_name: foreground.as_ref().map(|f| f.app_name.clone()),
-        window_title: foreground.as_ref().map(|f| f.window_title.clone()),
-        model: transcriber.model_label(),
-        // Recording duration tracking lands with the HUD overlay (#21);
-        // for now we accept that history rows have None here.
-        duration_ms: None,
-    };
+/// Persist `entry` to history on the Tauri async runtime. Fire-and-
+/// forget: a failed insert is logged and swallowed, never bubbled to
+/// the user — the clipboard write is what they care about. If history
+/// ever becomes load-bearing for a downstream pipeline, this needs
+/// revisiting.
+fn spawn_history_insert(
+    history: Arc<dyn crate::history::HistoryRepository>,
+    entry: NewHistoryEntry,
+) {
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = history.insert(new_entry).await {
+        if let Err(e) = history.insert(entry).await {
             tracing::error!(error = ?e, "failed to persist transcription to history");
         }
     });
-
-    Ok(DictationResult { text, foreground })
 }
 
 /// Paginated list of history rows, newest first.
@@ -1034,5 +1071,250 @@ mod tests {
     #[allow(dead_code)]
     fn _assert_state_mutex_holds_foreground(state: AppState) -> Mutex<Option<ForegroundApp>> {
         state.pending_foreground
+    }
+
+    // -- stop_dictation helper tests --------------------------------------
+    //
+    // The Tauri command itself needs an `AppHandle` (clipboard +
+    // notification + HUD), so it can't be unit-tested directly. The
+    // helpers extracted from it can — these tests pin their behaviour
+    // so the orchestration in `stop_dictation` stays trustworthy
+    // through future refactors.
+
+    use crate::dictionary::{
+        NewVocabularyTerm, ReplacementRepository, ReplacementRule, VocabularyRepository,
+        VocabularyTerm,
+    };
+
+    struct AudioThatStopsWith {
+        captured: CapturedAudio,
+    }
+
+    impl AudioCapture for AudioThatStopsWith {
+        fn list_input_devices(&self) -> anyhow::Result<Vec<AudioDevice>> {
+            Ok(vec![])
+        }
+        fn start(&self, _: Option<&str>) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn stop(&self) -> anyhow::Result<CapturedAudio> {
+            Ok(self.captured.clone())
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+    }
+
+    struct AudioThatFailsToStop;
+
+    impl AudioCapture for AudioThatFailsToStop {
+        fn list_input_devices(&self) -> anyhow::Result<Vec<AudioDevice>> {
+            Ok(vec![])
+        }
+        fn start(&self, _: Option<&str>) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn stop(&self) -> anyhow::Result<CapturedAudio> {
+            Err(anyhow!("device went away"))
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+    }
+
+    struct VocabWithTerms(Vec<VocabularyTerm>);
+
+    #[async_trait::async_trait]
+    impl VocabularyRepository for VocabWithTerms {
+        async fn list(&self) -> anyhow::Result<Vec<VocabularyTerm>> {
+            Ok(self.0.clone())
+        }
+        async fn create(&self, _: NewVocabularyTerm) -> anyhow::Result<VocabularyTerm> {
+            unreachable!()
+        }
+        async fn update(&self, _: VocabularyTerm) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingVocab;
+
+    #[async_trait::async_trait]
+    impl VocabularyRepository for FailingVocab {
+        async fn list(&self) -> anyhow::Result<Vec<VocabularyTerm>> {
+            Err(anyhow!("table missing"))
+        }
+        async fn create(&self, _: NewVocabularyTerm) -> anyhow::Result<VocabularyTerm> {
+            unreachable!()
+        }
+        async fn update(&self, _: VocabularyTerm) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingReplacements;
+
+    #[async_trait::async_trait]
+    impl ReplacementRepository for FailingReplacements {
+        async fn list(&self) -> anyhow::Result<Vec<ReplacementRule>> {
+            Err(anyhow!("table missing"))
+        }
+        async fn create(
+            &self,
+            _: crate::dictionary::NewReplacementRule,
+        ) -> anyhow::Result<ReplacementRule> {
+            unreachable!()
+        }
+        async fn update(&self, _: ReplacementRule) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn state_with(
+        audio: Arc<dyn AudioCapture>,
+        vocab: Arc<dyn VocabularyRepository>,
+        replacements: Arc<dyn ReplacementRepository>,
+    ) -> AppState {
+        AppState::new(
+            audio,
+            None,
+            Arc::new(crate::ipc::tests::NoopHistory),
+            replacements,
+            vocab,
+            Arc::new(crate::ipc::tests::MemSettings {
+                map: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }),
+            std::path::PathBuf::from("/tmp/hush-test-models"),
+        )
+    }
+
+    fn fixed_audio() -> CapturedAudio {
+        CapturedAudio {
+            samples: vec![0.5_f32; 8],
+            format: crate::audio::CaptureFormat {
+                sample_rate: 48_000,
+                channels: 1,
+            },
+        }
+    }
+
+    #[test]
+    fn stop_audio_capture_returns_captured_on_success() {
+        let state = state_with(
+            Arc::new(AudioThatStopsWith {
+                captured: fixed_audio(),
+            }),
+            Arc::new(crate::ipc::tests::NoopVocabulary),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
+
+        let captured = stop_audio_capture(&state).expect("audio.stop ok");
+        assert_eq!(captured.samples.len(), 8);
+        assert_eq!(captured.format.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn stop_audio_capture_maps_backend_error_to_ipc_error_audio() {
+        // Regression for the heuristic-classifier era: audio errors must
+        // surface as `IpcError::Audio` so the frontend's switch-on-kind
+        // dispatch picks the right recovery copy. This is *structural*
+        // classification — there is no string match anywhere.
+        let state = state_with(
+            Arc::new(AudioThatFailsToStop),
+            Arc::new(crate::ipc::tests::NoopVocabulary),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
+
+        let err = stop_audio_capture(&state).expect_err("stop fails");
+        assert!(matches!(err, IpcError::Audio(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn load_vocabulary_prompt_formats_terms_when_present() {
+        let terms = vec![
+            VocabularyTerm {
+                id: 1,
+                term: "Hush".into(),
+            },
+            VocabularyTerm {
+                id: 2,
+                term: "whisper.cpp".into(),
+            },
+        ];
+        let state = state_with(
+            Arc::new(AudioThatStopsWith {
+                captured: fixed_audio(),
+            }),
+            Arc::new(VocabWithTerms(terms.clone())),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
+
+        let prompt = load_vocabulary_prompt(&state).await;
+        // The exact format is owned by `format_vocabulary_prompt`; this
+        // test just pins that the helper actually invokes the formatter
+        // rather than returning empty.
+        assert!(prompt.contains("Hush"), "got: {prompt}");
+        assert!(prompt.contains("whisper.cpp"), "got: {prompt}");
+    }
+
+    #[tokio::test]
+    async fn load_vocabulary_prompt_swallows_repository_errors() {
+        // Repository failure must not block transcription — we demote
+        // to the no-prompt path.
+        let state = state_with(
+            Arc::new(AudioThatStopsWith {
+                captured: fixed_audio(),
+            }),
+            Arc::new(FailingVocab),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
+
+        let prompt = load_vocabulary_prompt(&state).await;
+        assert!(prompt.is_empty(), "got: {prompt}");
+    }
+
+    #[tokio::test]
+    async fn load_replacement_rules_returns_empty_on_error() {
+        let state = state_with(
+            Arc::new(AudioThatStopsWith {
+                captured: fixed_audio(),
+            }),
+            Arc::new(crate::ipc::tests::NoopVocabulary),
+            Arc::new(FailingReplacements),
+        );
+
+        let rules = load_replacement_rules(&state).await;
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn take_foreground_snapshot_pops_and_clears_the_slot() {
+        let state = state_with(
+            Arc::new(AudioThatStopsWith {
+                captured: fixed_audio(),
+            }),
+            Arc::new(crate::ipc::tests::NoopVocabulary),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
+        *state.pending_foreground.lock().unwrap() = Some(ForegroundApp {
+            app_name: "Slack".into(),
+            window_title: "#general".into(),
+        });
+
+        let popped = take_foreground_snapshot(&state).expect("not poisoned");
+        assert_eq!(popped.as_ref().map(|f| f.app_name.as_str()), Some("Slack"));
+
+        // Second take must be None: the slot is consumed, not cloned.
+        let again = take_foreground_snapshot(&state).expect("not poisoned");
+        assert!(again.is_none());
     }
 }
