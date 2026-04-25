@@ -34,8 +34,11 @@
 
 pub mod commands;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+use crate::transcription::download::CancelHandle;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -95,6 +98,16 @@ pub struct AppState {
     /// re-resolving it on every IPC call so the picker has a single
     /// source of truth and tests can override it.
     pub models_dir: PathBuf,
+    /// HTTP client shared across all model downloads. Cheap to clone;
+    /// holds connection-pool state internally. One per app keeps
+    /// keep-alive working across consecutive downloads (e.g. Tiny
+    /// then Base on first launch).
+    pub http: reqwest::Client,
+    /// Cancel handles for in-flight downloads, keyed by model id.
+    /// Inserted by `model_download` when it spawns a task; the cancel
+    /// command flips the handle's flag; the spawned task removes its
+    /// own entry on completion.
+    pub downloads: Mutex<HashMap<String, CancelHandle>>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
 }
 
@@ -116,6 +129,16 @@ impl AppState {
             vocabulary,
             settings,
             models_dir,
+            http: reqwest::Client::builder()
+                // Whisper-large-v3 is ~3 GB; ten-minute timeout is on
+                // the optimistic side of "any reasonable home
+                // connection". Real fix is resumable downloads, but
+                // that's out of scope for this PR.
+                .timeout(std::time::Duration::from_secs(600))
+                .user_agent(concat!("hush/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("reqwest client should always build with default config"),
+            downloads: Mutex::new(HashMap::new()),
             pending_foreground: Mutex::new(None),
         }
     }

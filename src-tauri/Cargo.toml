@@ -37,6 +37,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Audio capture (cross-platform)
 cpal = "0.15"
 
+# HTTP client for the model auto-download path. `rustls-tls` keeps the
+# build cross-platform without depending on system OpenSSL — the same
+# binary builds on macOS, Linux, and Windows. `stream` enables the
+# byte-stream API used for chunk-by-chunk progress events without
+# buffering the whole response.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+
+# SHA-256 verification for downloaded model files. Hand-rolled hashing
+# would be a security footgun; `sha2` is the well-vetted RustCrypto
+# implementation.
+sha2 = "0.10"
+
+# `Stream` trait + adaptors used to consume reqwest's response body.
+# Tiny, no transitive deps beyond `futures-core`.
+futures-util = "0.3"
+
 # Local Whisper transcription — requires cmake and a C++ toolchain.
 # Disabled by default so the project scaffolds without those system deps.
 # Enable with: cargo build --features whisper
@@ -67,4 +83,9 @@ whisper = ["dep:whisper-rs"]
 
 [dev-dependencies]
 tempfile = "3"
+# Local HTTP mock server for the auto-download test suite. The download
+# orchestrator is tested against deterministic fixtures (success,
+# SHA-mismatch, cancel) rather than ever round-tripping to Hugging Face
+# in CI.
+wiremock = "0.6"
 
