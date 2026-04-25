@@ -17,6 +17,8 @@
   let error = $state<string | null>(null);
 
   let unlistenToggle: UnlistenFn | null = null;
+  let unlistenPttPress: UnlistenFn | null = null;
+  let unlistenPttRelease: UnlistenFn | null = null;
 
   onMount(async () => {
     try {
@@ -36,10 +38,32 @@
       if (recording) void stop();
       else void start();
     });
+
+    // Push-to-talk: the rdev listener in `hotkey::ptt` emits these
+    // events on key-down and key-up of the configured PTT key. The
+    // frontend's `recording` and `busy` flags remain the source of
+    // truth — same pattern as the toggle hotkey above. Holding the key
+    // before recording is ready (e.g. `busy` from a prior transcription
+    // still finishing) is intentionally a no-op rather than queued: the
+    // user gets clearer feedback by re-pressing once the UI is idle.
+    unlistenPttPress = await listen("hotkey:ptt-press", () => {
+      if (busy || recording) return;
+      void start();
+    });
+    unlistenPttRelease = await listen("hotkey:ptt-release", () => {
+      // Only stop if we are actually recording. A spurious release (e.g.
+      // the user released the key after a press the UI ignored because
+      // it was busy) must not call `stop_dictation` against an empty
+      // session; the IPC layer would error and the UI would show that.
+      if (!recording || busy) return;
+      void stop();
+    });
   });
 
   onDestroy(() => {
     unlistenToggle?.();
+    unlistenPttPress?.();
+    unlistenPttRelease?.();
   });
 
   async function start() {
