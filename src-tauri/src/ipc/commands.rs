@@ -724,6 +724,109 @@ pub async fn model_remove(state: State<'_, AppState>, id: String) -> IpcResult<(
     Ok(())
 }
 
+// -- First-run / onboarding ----------------------------------------------
+//
+// Two thin commands wrapping the existing `SettingsRepository` for the
+// macOS first-run welcome modal. Only macOS frontends consult these —
+// the welcome flow is gated by `cfg!(target_os = "macos")` on the
+// frontend's onMount path. Backend-side the commands are
+// platform-independent because the settings table doesn't care which
+// OS is reading it.
+//
+// The macOS-specific framing for the modal is documented in
+// `learnings.md`: rdev's `listen` triggers the Input Monitoring
+// prompt at app startup with no programmatic detection of grant
+// state, and cpal triggers the Microphone prompt the first time
+// recording starts. The welcome flow educates the user on what just
+// happened (or what will happen on first record) and points them at
+// System Settings if they declined.
+
+/// Returns whether the macOS first-run welcome has been shown and
+/// dismissed for this install. The value is stored under
+/// [`crate::settings::keys::FIRST_RUN_COMPLETED`] as the literal
+/// string `"true"` once dismissed; any other state (including the
+/// settings row being absent) reads as `false`.
+#[tauri::command]
+pub async fn get_first_run_completed(state: State<'_, AppState>) -> IpcResult<bool> {
+    let value = state
+        .settings
+        .get(crate::settings::keys::FIRST_RUN_COMPLETED)
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+    Ok(value.as_deref() == Some("true"))
+}
+
+/// Persist that the user has dismissed the welcome modal. Idempotent;
+/// calling twice is the same as once.
+#[tauri::command]
+pub async fn mark_first_run_completed(state: State<'_, AppState>) -> IpcResult<()> {
+    state
+        .settings
+        .set(crate::settings::keys::FIRST_RUN_COMPLETED, "true")
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
+/// Open the macOS System Settings pane the user needs to grant
+/// the named permission. Tauri's shell plugin can launch arbitrary
+/// URLs but its capability config requires us to whitelist URL
+/// schemes — `x-apple.systempreferences:` isn't on the default
+/// list. Routing through this command instead lets us pre-vet the
+/// targets (a small enum of known panes) and keeps the capabilities
+/// surface minimal.
+///
+/// On non-macOS platforms this is a no-op that returns `Ok(())`,
+/// since the frontend's welcome modal is already gated on
+/// `target_os = "macos"`. The fallthrough avoids a `cfg`-based
+/// command-not-found error if the frontend ever calls this on the
+/// wrong platform.
+#[tauri::command]
+pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // Whitelisted targets — anything else gets rejected so a
+        // misbehaving frontend can't pivot this into an arbitrary
+        // command launcher.
+        let url = match target.as_str() {
+            "microphone" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
+            "input-monitoring" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+            }
+            "accessibility" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            other => {
+                return Err(IpcError::Settings(format!(
+                    "unknown privacy pane target: {other:?}"
+                )));
+            }
+        };
+
+        // `open` is the macOS canonical "launch by URL scheme"
+        // command; it Just Works for `x-apple.systempreferences:`.
+        // No shell injection risk because the URL is a hard-coded
+        // string keyed by a whitelisted enum.
+        std::process::Command::new("open")
+            .arg(url)
+            .status()
+            .map_err(|e| IpcError::Settings(format!("open System Settings: {e}")))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // No-op on Linux / Windows so the frontend doesn't have to
+        // branch by platform — the welcome modal that calls this is
+        // already macOS-only, and a stray invoke from the wrong
+        // platform should fail soft.
+        let _ = target;
+        Ok(())
+    }
+}
+
 /// Snapshot the current foreground window via `active-win-pos-rs`.
 ///
 /// `active-win-pos-rs` exposes a Result with the unit type as its error,

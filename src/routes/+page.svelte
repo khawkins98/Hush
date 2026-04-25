@@ -84,6 +84,16 @@
   let modelsError = $state<string | null>(null);
   let modelsRestartNotice = $state(false);
 
+  // First-run welcome flow. Renders on the first launch (regardless
+  // of platform — the welcome explains permissions that exist
+  // everywhere; the macOS-specific Input Monitoring section is the
+  // most useful but the rest is fine to show universally). The
+  // deep-link buttons on macOS open System Settings; on other
+  // platforms the backend's `open_macos_privacy_pane` is a no-op.
+  // Once dismissed, the flag persists in `settings` and the modal
+  // never shows again on this install.
+  let showFirstRun = $state(false);
+
   // Per-card transient state for the download flow. Two parallel
   // `Map<id, …>`s keep the per-row status independent of the catalog
   // array's order, so a `model:download-progress` event for one card
@@ -116,6 +126,15 @@
   });
 
   onMount(async () => {
+    // Check the first-run flag before anything else — if this is a
+    // fresh install, we want the welcome modal up before the user
+    // tries to use the app and runs into a permission prompt with
+    // no context. The fetch is independent of the others so it can
+    // race in parallel.
+    void invoke<boolean>("get_first_run_completed").then((done) => {
+      if (!done) showFirstRun = true;
+    });
+
     // Fire all five fetches concurrently rather than sequentially —
     // the user-visible time-to-paint is bounded by the slowest single
     // call instead of the sum. Each fetch handles its own loading
@@ -471,6 +490,27 @@
     }
   }
 
+  async function dismissFirstRun() {
+    showFirstRun = false;
+    try {
+      await invoke("mark_first_run_completed");
+    } catch (e) {
+      // Best-effort: if the persist fails, the user sees the
+      // welcome again on next launch, which is annoying but not
+      // broken. Logged for diagnostics.
+      console.error("mark_first_run_completed failed:", e);
+    }
+  }
+
+  async function openPrivacyPane(target: "microphone" | "input-monitoring") {
+    try {
+      await invoke("open_macos_privacy_pane", { target });
+    } catch (e) {
+      // No-op on non-macOS; user is unlikely to see this branch.
+      console.error("open_macos_privacy_pane failed:", e);
+    }
+  }
+
   /// Format a byte count as "12.4 MB" — used for download progress.
   /// We deliberately don't use units smaller than MB because the
   /// smallest model is ~75 MB; KB resolution would just be noise.
@@ -516,6 +556,65 @@
     return String(e);
   }
 </script>
+
+{#if showFirstRun}
+  <!--
+    First-run welcome modal. Static content; no fetches behind it.
+    Backdrop intercepts clicks so the user has to engage with the
+    Got It button rather than dismissing accidentally. The two
+    permission sections call `open_macos_privacy_pane(...)` which
+    is a no-op on Linux / Windows — those users can still click
+    "Got it" and proceed without harm.
+  -->
+  <div class="first-run-backdrop" role="dialog" aria-modal="true" aria-labelledby="first-run-heading">
+    <article class="first-run-card">
+      <header>
+        <h2 id="first-run-heading">Welcome to Hush</h2>
+        <p class="first-run-tagline">
+          Local, private voice-to-text. Two permissions worth knowing
+          about before you start.
+        </p>
+      </header>
+
+      <section class="first-run-section">
+        <h3>Microphone</h3>
+        <p>
+          Hush records audio only while you've explicitly started a
+          dictation session. The first time you record, your OS will
+          ask you to grant Hush microphone access. Without it, the
+          dictation pipeline can't capture what you say.
+        </p>
+        <button class="ghost" onclick={() => openPrivacyPane("microphone")}>
+          Open Microphone settings
+        </button>
+      </section>
+
+      <section class="first-run-section">
+        <h3>Input Monitoring (macOS)</h3>
+        <p>
+          Hush's push-to-talk hotkey uses a low-level keyboard hook so
+          it works while another app is focused. macOS calls this
+          "Input Monitoring" and asks once. If you missed the prompt
+          or declined, push-to-talk will silently do nothing until you
+          grant the permission in System Settings. The toggle hotkey
+          uses a different API and works without it.
+        </p>
+        <button class="ghost" onclick={() => openPrivacyPane("input-monitoring")}>
+          Open Input Monitoring settings
+        </button>
+      </section>
+
+      <footer class="first-run-footer">
+        <p class="first-run-meta">
+          Hush makes no other network requests except when you click
+          Download on a model card. No telemetry, no cloud transcription,
+          no analytics.
+        </p>
+        <button class="primary" onclick={dismissFirstRun}>Got it</button>
+      </footer>
+    </article>
+  </div>
+{/if}
 
 <main class="container">
   <h1>Hush</h1>
@@ -1281,6 +1380,93 @@ button.ghost.danger:hover:not(:disabled) {
   text-align: center;
 }
 
+.first-run-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(15, 15, 15, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1.5rem;
+}
+
+.first-run-card {
+  background-color: #ffffff;
+  border-radius: 12px;
+  padding: 1.5rem 1.75rem;
+  max-width: 30rem;
+  width: 100%;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  text-align: left;
+}
+
+.first-run-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+.first-run-tagline {
+  margin: 0 0 1.25rem;
+  color: #555;
+  font-size: 0.95rem;
+}
+
+.first-run-section {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid #eee;
+}
+
+.first-run-section:last-of-type {
+  border-bottom: none;
+}
+
+.first-run-section h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.first-run-section p {
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+  color: #444;
+  line-height: 1.5;
+}
+
+.first-run-footer {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.first-run-meta {
+  flex: 1;
+  margin: 0;
+  font-size: 0.8rem;
+  color: #6a6a6a;
+  line-height: 1.45;
+}
+
+button.primary {
+  background-color: #6a8cf0;
+  color: white;
+  border-color: #6a8cf0;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background-color: #4a6cd0;
+  border-color: #4a6cd0;
+}
+
 .replacements,
 .vocabulary,
 .models {
@@ -1780,6 +1966,22 @@ button.ghost.primary:hover:not(:disabled) {
   }
   button.ghost.primary:hover:not(:disabled) {
     background-color: #1e2a4a;
+  }
+  .first-run-backdrop {
+    background-color: rgba(0, 0, 0, 0.65);
+  }
+  .first-run-card {
+    background-color: #1f1f1f;
+    color: #f0f0f0;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+  .first-run-tagline,
+  .first-run-section p,
+  .first-run-meta {
+    color: #c0c0c0;
+  }
+  .first-run-section {
+    border-bottom-color: #2e2e2e;
   }
   .hint-prose {
     color: #aaa;
