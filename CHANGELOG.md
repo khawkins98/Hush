@@ -15,88 +15,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repository meta-files: README, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, learnings.md.
 - CI workflow: cargo clippy, rustfmt check, cargo test on every push and PR.
 - GitHub PR template and bug/feature issue templates.
-- Audio capture (`audio` module): cross-platform input via `cpal` behind an
-  `AudioCapture` trait so OS-touching code can be mocked at the test seam.
-  Surfaces input-device enumeration, start/stop session, and a channel
-  downmix utility. Captures at the device's native format and surfaces the
-  format alongside the samples; downmix and resampling to whisper's 16 kHz
-  happen at the transcription stage.
-- Local Whisper transcription (`transcription` module): `Transcribe` trait
-  at the OS / heavy-dep boundary, plus a `whisper-rs` backed implementation
-  gated behind the `whisper` Cargo feature. Includes a pure-logic linear
-  resampler (`resample_to_mono`) so any captured sample rate is converted
-  to whisper's 16 kHz before inference. Constructor takes a caller-provided
-  GGUF model path; auto-download is deferred to M3.
-- IPC layer (`ipc` module): three Tauri commands —
-  `list_input_devices`, `start_dictation`, `stop_dictation` — wiring the
-  audio capture and Whisper transcription pipelines together. Captures the
-  foreground app at recording start via `active-win-pos-rs`, writes the
-  transcribed text to the system clipboard, and fires a "Ready to paste"
-  notification on stop. Production transcriber loaded from
-  `HUSH_MODEL_PATH` (M1/M2 spike; replaced by the model picker in M3).
-  Tagged-enum error type so the frontend can dispatch on `kind` instead of
-  parsing free-form strings.
-- Dictation UI (`src/routes/+page.svelte`): minimal device dropdown +
-  start/stop buttons + result display, replacing the Tauri starter
-  template's "greet" placeholder. Drives the M2 end-to-end loop from a
-  button rather than a hotkey (hotkey lands in #5).
-- Toggle-record global hotkey (`hotkey` module): registers
-  `CmdOrCtrl+Shift+Space` (overridable via `HUSH_TOGGLE_HOTKEY`) on
-  startup and emits a `hotkey:toggle` event to the frontend on each
-  press. The frontend dispatches start vs. stop against its existing
-  `recording` flag, keeping a single source of truth for UI state and
-  one orchestration path for the pipeline. Push-to-talk via `rdev` is
-  the open second half of #5.
-- SQLite persistence (`db` module): `SqliteDatabase` wrapper around
-  `sqlx::SqlitePool` that opens the database at a caller-provided
-  path, creates the parent directory if missing, sets WAL journal
-  mode + `synchronous=NORMAL` + foreign-key enforcement, and runs the
-  embedded migrations from `src-tauri/migrations/` via
-  `sqlx::migrate!`. Plus an `open_in_memory` helper for tests that
-  need a real SQLite without touching the filesystem. Not yet wired
-  into `AppState` — that lands with the first downstream consumer
-  (#7 history or #6 dictionary).
-- Push-to-talk global hotkey (`hotkey::ptt`): an `rdev`-based listener
-  on a dedicated thread emits `hotkey:ptt-press` and `hotkey:ptt-release`
-  events to the frontend on key-down and key-up of the configured key.
-  Default is `RightControl` (overridable via `HUSH_PTT_HOTKEY`; accepts
-  modifier keys, F1–F12, and CapsLock with case-insensitive aliases).
-  Frontend starts dictation on press and stops on release, sharing the
-  existing `recording`/`busy` source of truth with the toggle hotkey.
-  Closes the PTT half of #5. Caveats: macOS first-run prompt for Input
-  Monitoring; Linux requires X11 (Wayland support is compositor-dependent
-  and out of scope for this release per PRD §10).
-
-- History persistence (`history` module): each successful transcription
-  is auto-inserted into a SQLite-backed history table via the
-  `HistoryRepository` trait (sqlx pool from #18). New Tauri commands
-  (`history_list`, `history_search`, `history_delete`, `history_count`)
-  back a frontend history view with debounced FTS5 search, per-row copy
-  / delete, and newest-first ordering. The `Transcribe` trait gained a
-  `model_label()` method so the row records which model produced each
-  transcript (whisper-rs returns the GGUF file's basename).
-- Personal Dictionary — post-transcription find/replace half (`dictionary`
-  module): a pure-logic `apply_replacements()` function plus a SQLite-
-  backed `ReplacementRepository`. Rules are literal substrings applied
-  in `(sort_order, id)` order to every transcription before it lands on
-  the clipboard; an empty `replace_text` acts as a deletion. New IPC
-  commands (`replacements_list`, `replacement_create`, `_update`,
-  `_delete`) back a frontend "Replacements" panel with add and delete.
-- Personal Dictionary — vocabulary prompt-biasing half: pure-logic
-  `format_vocabulary_prompt()` joins user-managed terms into the
-  initial prompt that whisper.cpp's decoder sees, biasing recognition
-  toward proper nouns and jargon. Backed by `VocabularyRepository`
-  (SQLite, sharing the pool from #18) and four new IPC commands
-  (`vocabulary_list`, `_create`, `_update`, `_delete`). The
-  `Transcribe` trait gained a default-impl `transcribe_with_prompt`
-  method so non-Whisper backends can ignore the prompt without
-  forcing every callsite to branch. Frontend "Vocabulary" panel in
-  the same shape as Replacements. Closes #6.
-- Settings persistence (`settings` module): generic key-value
-  `SettingsRepository` trait + SQLite impl backing the `settings`
-  table from migration 0001. First consumer: the model picker's
-  `selected_model_id`.
-- Whisper model picker (`transcription::catalog`): static catalog of
+- Cross-platform audio capture via `cpal`, behind an `AudioCapture`
+  trait so OS-touching code can be mocked at the test seam. Captures
+  at the device's native format and surfaces it alongside the
+  samples; downmix and 16 kHz resampling happen at the transcription
+  stage where format-mismatches are recoverable.
+- Local Whisper transcription via `whisper-rs`, behind a `Transcribe`
+  trait at the heavy-dep boundary. Gated behind the `whisper` Cargo
+  feature because whisper.cpp needs cmake. Pure-logic linear
+  resampler converts any captured sample rate to the 16 kHz mono
+  Whisper expects before inference. Constructor takes a caller-
+  provided GGUF model path; auto-download lands in #30.
+- Three Tauri commands wire the dictation pipeline end-to-end:
+  `list_input_devices`, `start_dictation`, `stop_dictation`. The stop
+  command captures the foreground app at recording start (via
+  `active-win-pos-rs`), writes the transcript to the system
+  clipboard, and fires a "Ready to paste" notification. Errors are a
+  tagged enum (`{ kind, message? }`) so the frontend dispatches
+  recovery copy on `kind` rather than parsing free-form strings.
+- Minimal Svelte dictation UI replaces the Tauri starter's "greet"
+  placeholder. M2 ships button-driven recording first; the hotkey
+  layer adds keyboard control on top.
+- Toggle-record global hotkey via `tauri-plugin-global-shortcut`,
+  default `CmdOrCtrl+Shift+Space` (overridable via
+  `HUSH_TOGGLE_HOTKEY`). The handler emits a `hotkey:toggle` event
+  and the frontend dispatches start vs. stop against its existing
+  `recording` flag, keeping one source of truth for UI state.
+- SQLite persistence via `sqlx`, wrapped in a `SqliteDatabase` that
+  opens the database at a caller-provided path with WAL journal
+  mode, `synchronous=NORMAL`, and per-connection foreign-key
+  enforcement, then runs the embedded migrations from
+  `src-tauri/migrations/`. An `open_in_memory` helper backs tests
+  that need a real SQLite without touching the filesystem.
+- Push-to-talk global hotkey via `rdev`, default `RightControl`
+  (overridable via `HUSH_PTT_HOTKEY`). A dedicated thread runs the
+  blocking `listen` loop and forwards key-down / key-up as
+  `hotkey:ptt-press` / `hotkey:ptt-release` events. Closes the PTT
+  half of #5. macOS prompts for Input Monitoring on first press;
+  Linux requires X11 (Wayland support is compositor-dependent per
+  PRD §10).
+- History persistence: every successful transcription auto-inserts
+  into a SQLite-backed history table via the `HistoryRepository`
+  trait (sharing the sqlx pool). Tauri commands (`history_list`,
+  `history_search`, `history_delete`, `history_count`) back a
+  frontend history view with debounced FTS5 search, newest-first
+  ordering, and per-row copy / delete. The `Transcribe` trait gained
+  a `model_label()` so each row records which model produced its
+  transcript.
+- Post-transcription find/replace pipeline: pure-logic
+  `apply_replacements()` plus a SQLite-backed `ReplacementRepository`.
+  Rules are literal substrings, applied in `(sort_order, id)` order
+  before the text reaches the clipboard. Tauri commands
+  (`replacements_list`, `_create`, `_update`, `_delete`) back a
+  frontend "Replacements" panel.
+- Vocabulary prompt-biasing: user-managed terms are joined into the
+  initial prompt Whisper's decoder sees, biasing recognition toward
+  proper nouns and jargon. Backed by `VocabularyRepository` and four
+  new IPC commands. The `Transcribe` trait gained a default-impl
+  `transcribe_with_prompt` so non-Whisper backends can ignore the
+  prompt without forcing every callsite to branch. Closes #6.
+- Generic key-value settings persistence: `SettingsRepository` trait +
+  SQLite impl backing the `settings` table. First consumer: the
+  model picker's `selected_model_id`.
+- Whisper model picker: static catalog of
   the five Whisper variants (tiny / base / small / medium / large-v3)
   with size, speed/accuracy ratings, and descriptions. Frontend
   card-grid section adopts the layout the user shared as the design

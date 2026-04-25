@@ -36,7 +36,6 @@ pub fn run() {
         .try_init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         // Install the global-shortcut handler at plugin-build time. Specific
         // shortcuts are registered later from `setup`, where we have access
         // to the [`AppHandle`] needed to call the registration API.

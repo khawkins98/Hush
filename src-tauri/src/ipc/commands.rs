@@ -8,6 +8,23 @@
 //! call the underlying trait methods inline so error classification
 //! is structural rather than heuristic — see the note on
 //! [`stop_dictation`] for the rationale.
+//!
+//! ## Command grouping
+//!
+//! As the surface has grown past a dozen commands, a quick map for
+//! contributors landing here cold:
+//!
+//! - **Core dictation pipeline.** [`list_input_devices`],
+//!   [`start_dictation`], [`stop_dictation`].
+//! - **History (read-only browse + delete).** [`history_list`],
+//!   [`history_search`], [`history_delete`], [`history_count`].
+//! - **Replacements (post-transcription find/replace CRUD).**
+//!   [`replacements_list`], [`replacement_create`],
+//!   [`replacement_update`], [`replacement_delete`].
+//! - **Vocabulary (Whisper prompt-bias CRUD).**
+//!   [`vocabulary_list`], [`vocabulary_create`],
+//!   [`vocabulary_update`], [`vocabulary_delete`].
+//! - **Model picker.** [`model_list`], [`model_select`].
 
 use std::sync::{Arc, PoisonError};
 
@@ -377,10 +394,11 @@ pub async fn replacement_delete(state: State<'_, AppState>, id: i64) -> IpcResul
 
 // -- Vocabulary CRUD -----------------------------------------------------
 //
-// Mirrors the replacements CRUD shape. Errors map to the same
-// `IpcError::Replacements` variant — both subsystems share user-facing
-// "your dictionary settings" affordances, so a single tagged kind keeps
-// the frontend's error switch from sprouting near-identical branches.
+// Errors here surface as `IpcError::Replacements` rather than a
+// dedicated `Vocabulary` variant because users see one combined
+// "Dictionary settings" surface in the UI for both subsystems —
+// keeping the error `kind` unified means the frontend's error switch
+// doesn't sprout two near-identical branches that drift over time.
 
 /// All vocabulary terms in insertion order.
 #[tauri::command]

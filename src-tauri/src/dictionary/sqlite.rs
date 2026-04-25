@@ -409,6 +409,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vocab_update_rejects_unique_collision() {
+        // Trait doc claims the update path errors on UNIQUE collision —
+        // the round-2 Rust review flagged that no test exercised this.
+        // Mirrors the pattern in `vocab_create_rejects_duplicate_term`.
+        let repo = fresh_vocab_repo().await;
+        let a = repo
+            .create(NewVocabularyTerm {
+                term: "Tauri".into(),
+            })
+            .await
+            .unwrap();
+        let b = repo
+            .create(NewVocabularyTerm {
+                term: "whisper".into(),
+            })
+            .await
+            .unwrap();
+
+        // Try to rename `b` to the value `a` already holds.
+        let err = repo
+            .update(VocabularyTerm {
+                id: b.id,
+                term: a.term.clone(),
+            })
+            .await
+            .expect_err("UNIQUE collision must error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.to_lowercase().contains("unique"),
+            "expected UNIQUE-constraint message, got {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn vocab_delete_removes_row() {
         let repo = fresh_vocab_repo().await;
         let t = repo
