@@ -170,6 +170,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Terminal"), and the `tccutil reset Microphone com.khawkins.hush` /
   `tccutil reset ListenEvent com.khawkins.hush` recipe to unstick
   them. Linked from `CONTRIBUTING.md` and the README docs table.
+- **`npm run dev-cleanup` convenience script.** Kills stale
+  processes left over from a hung `cargo tauri dev` run — the dev
+  binary itself, Tauri's runner, Vite's dev server (port 1420 freed
+  via `lsof -ti :1420`). Pass `--reset` to also `tccutil reset` the
+  three macOS TCC entries (`Microphone`, `ListenEvent`,
+  `Accessibility`) so the next launch re-prompts cleanly. Lives in
+  `scripts/dev-cleanup.sh`; the `--reset` flag is macOS-only and
+  no-ops elsewhere.
 - **HUD polish — top-right placement, light-desktop contrast,
   screen-reader title.** Three round-4 reviewer items the a11y batch
   in #48 deferred:
