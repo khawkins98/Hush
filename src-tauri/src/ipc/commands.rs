@@ -28,6 +28,16 @@
 //!   [`vocabulary_list`], [`vocabulary_create`],
 //!   [`vocabulary_update`], [`vocabulary_delete`].
 //! - **Model picker.** [`model_list`], [`model_select`].
+//! - **Meeting Mode (Phase C scaffold; refs #33 / #109).**
+//!   [`meeting_sessions_list`], [`meeting_session_get`],
+//!   [`meeting_session_delete`], [`meeting_session_set_notes`].
+//!   Backed by the `meeting` repository wired into [`AppState`];
+//!   the streaming pump that actually creates sessions lands in
+//!   [#110]. The list is empty until then; the panel renders a
+//!   "no sessions yet" placeholder with a link to the relevant
+//!   tickets.
+//!
+//! [#110]: https://github.com/khawkins98/Hush/issues/110
 
 use std::sync::{Arc, PoisonError};
 
@@ -934,6 +944,91 @@ pub async fn model_remove(state: State<'_, AppState>, id: String) -> IpcResult<(
     Ok(())
 }
 
+// -- Meeting Mode (Phase C scaffold; refs #33 / #109) -------------------
+//
+// These commands back the `MeetingSessionsPanel` UI. Today the
+// underlying repo is empty — the streaming pump that actually inserts
+// sessions lands in #110 — but the IPC surface is wired up now so the
+// panel can render its placeholder copy with real types and the
+// e2e suite can pin the wire shape.
+
+/// List all meeting sessions, newest-first. Empty list while #110
+/// hasn't shipped yet (no streaming pump → no sessions).
+#[tauri::command]
+pub async fn meeting_sessions_list(
+    state: State<'_, AppState>,
+) -> IpcResult<Vec<crate::meeting::MeetingSession>> {
+    state
+        .meetings
+        .list()
+        .await
+        .map_err(|e| IpcError::Settings(format!("meeting sessions list: {e}")))
+}
+
+/// Full detail for one session: the row plus all its persisted
+/// utterances ordered by `started_at_ms ASC`.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingSessionDetail {
+    pub session: crate::meeting::MeetingSession,
+    pub utterances: Vec<crate::meeting::PersistedUtterance>,
+}
+
+/// Detail view for one session — used by the panel's
+/// session-detail route.
+///
+/// Errors `Settings` if the session id doesn't exist; the panel
+/// surfaces a "this session was deleted" empty state.
+#[tauri::command]
+pub async fn meeting_session_get(
+    state: State<'_, AppState>,
+    id: i64,
+) -> IpcResult<MeetingSessionDetail> {
+    let sessions = state
+        .meetings
+        .list()
+        .await
+        .map_err(|e| IpcError::Settings(format!("meeting session get: {e}")))?;
+    let session = sessions
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| IpcError::Settings(format!("meeting session {id} not found")))?;
+    let utterances = state
+        .meetings
+        .list_utterances(id)
+        .await
+        .map_err(|e| IpcError::Settings(format!("meeting session utterances: {e}")))?;
+    Ok(MeetingSessionDetail {
+        session,
+        utterances,
+    })
+}
+
+/// Delete a session and its utterances (FK cascade).
+#[tauri::command]
+pub async fn meeting_session_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
+    state
+        .meetings
+        .delete(id)
+        .await
+        .map_err(|e| IpcError::Settings(format!("meeting session delete: {e}")))
+}
+
+/// Update a session's freeform notes. The panel calls this on blur
+/// of the notes textarea.
+#[tauri::command]
+pub async fn meeting_session_set_notes(
+    state: State<'_, AppState>,
+    id: i64,
+    notes: Option<String>,
+) -> IpcResult<()> {
+    state
+        .meetings
+        .set_notes(id, notes)
+        .await
+        .map_err(|e| IpcError::Settings(format!("meeting session set_notes: {e}")))
+}
+
 // -- First-run / onboarding ----------------------------------------------
 //
 // Two thin commands wrapping the existing `SettingsRepository` for the
@@ -1322,6 +1417,7 @@ mod tests {
             .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
+            .meetings(Arc::new(crate::ipc::tests::NoopMeetings))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("test state: builder fields complete");
@@ -1366,6 +1462,7 @@ mod tests {
             .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
+            .meetings(Arc::new(crate::ipc::tests::NoopMeetings))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("test state: builder fields complete");
@@ -1509,6 +1606,7 @@ mod tests {
             .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
+            .meetings(Arc::new(crate::ipc::tests::NoopMeetings))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("test state: builder fields complete")

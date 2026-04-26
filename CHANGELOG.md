@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Meeting Mode scaffold (Phase C foundation; refs #33 / #109).
+  Lands the data layer + UI shell for the meeting-transcript
+  surface that the design memo (`docs/system-audio-meeting-mode-proposal.md`)
+  describes. **What's wired today:**
+  - Migration 0002: `meeting_sessions` and `utterances` tables,
+    plus FTS5 index over utterance text. Additive only —
+    existing v0.1.0 databases migrate cleanly.
+  - `crate::meeting::{MeetingSession, NewMeetingSession,
+    PersistedUtterance, NewPersistedUtterance, MeetingAppKind}`
+    types + `MeetingSessionRepository` trait (sibling to the
+    other Repository-pattern repos post-#88) + SQLite impl.
+  - Four new IPC commands: `meeting_sessions_list`,
+    `meeting_session_get`, `meeting_session_delete`,
+    `meeting_session_set_notes`.
+  - `MeetingSessionsPanel.svelte` rendered at the bottom of the
+    main page. Today shows a scaffolded "no sessions yet"
+    placeholder that explicitly enumerates what's pending and
+    links to the relevant tracking issues (#105 macOS, #106
+    Linux, #107 Windows, #108 streaming, #110 session manager,
+    #111 diarization). Permanent privacy line surfaced at the
+    top of the panel.
+  - 9 new Rust tests pin the SQLite impl's behaviour: create,
+    list, idempotent close_session, atomic append_utterance with
+    count bump, ordered list_utterances, set_notes round-trip,
+    and FK cascade on delete.
 - `stop_dictation` now invokes inference through the streaming
   entry point (`Transcribe::transcribe_chunks`) rather than the
   one-shot `transcribe_with_prompt`. Default-impl behaviour is

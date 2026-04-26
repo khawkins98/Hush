@@ -9,6 +9,7 @@
   import VocabularyPanel from "$lib/VocabularyPanel.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
   import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
+  import MeetingSessionsPanel from "$lib/MeetingSessionsPanel.svelte";
   import type {
     AudioSource,
     AudioSourceListing,
@@ -22,6 +23,7 @@
     ModelSelectNotice,
     ReplacementRule,
     VocabularyTerm,
+    MeetingSession,
   } from "$lib/types";
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
@@ -156,6 +158,7 @@
       refreshVocabulary(),
       refreshModels(),
       loadMacosDiagnostic(),
+      refreshMeetingSessions(),
     ]);
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
@@ -615,6 +618,35 @@
   let macosResetMessage = $state<string | null>(null);
   let macosResetting = $state(false);
 
+  // Meeting Mode (Phase C scaffold; refs #33 / #109). The repo is
+  // empty until the streaming pump (#110) starts inserting sessions,
+  // but the panel reads through the same IPC surface real sessions
+  // will use, so the moment data starts flowing the panel populates
+  // with no further wiring.
+  let meetingSessions = $state<MeetingSession[]>([]);
+  let meetingSessionsLoaded = $state(false);
+  let meetingSessionsError = $state<string | null>(null);
+
+  async function refreshMeetingSessions() {
+    try {
+      meetingSessions = await invoke<MeetingSession[]>("meeting_sessions_list");
+      meetingSessionsError = null;
+    } catch (e) {
+      meetingSessionsError = e instanceof Error ? e.message : "Failed to load meeting sessions.";
+    } finally {
+      meetingSessionsLoaded = true;
+    }
+  }
+
+  async function deleteMeetingSession(session: MeetingSession) {
+    try {
+      await invoke("meeting_session_delete", { id: session.id });
+      meetingSessions = meetingSessions.filter((s) => s.id !== session.id);
+    } catch (e) {
+      meetingSessionsError = e instanceof Error ? e.message : "Failed to delete session.";
+    }
+  }
+
   async function loadMacosDiagnostic() {
     if (macosDiagnostic !== null) return; // cached after first load
     try {
@@ -854,6 +886,13 @@
       onReset={runMacosReset}
     />
   {/if}
+
+  <MeetingSessionsPanel
+    sessions={meetingSessions}
+    sessionsLoaded={meetingSessionsLoaded}
+    sessionsError={meetingSessionsError}
+    onDelete={deleteMeetingSession}
+  />
 </main>
 
 <style>

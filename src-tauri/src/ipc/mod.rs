@@ -141,6 +141,12 @@ pub struct AppState {
     pub replacements: Arc<dyn ReplacementRepository>,
     pub vocabulary: Arc<dyn VocabularyRepository>,
     pub settings: Arc<dyn SettingsRepository>,
+    /// Meeting Mode session storage (Phase C foundation, refs #33 / #109).
+    /// Today the repo is wired in but no caller writes to it — the
+    /// streaming pump that fills it lands in #110. The IPC commands
+    /// for browsing / deleting sessions read from it via the trait
+    /// object so a future test mock can plug in cleanly.
+    pub meetings: Arc<dyn crate::meeting::MeetingSessionRepository>,
     /// Directory the model picker scans for downloaded GGUF files
     /// (`<app_data>/models/`). Stored on AppState rather than
     /// re-resolving it on every IPC call so the picker has a single
@@ -181,6 +187,7 @@ pub struct AppStateBuilder {
     replacements: Option<Arc<dyn ReplacementRepository>>,
     vocabulary: Option<Arc<dyn VocabularyRepository>>,
     settings: Option<Arc<dyn SettingsRepository>>,
+    meetings: Option<Arc<dyn crate::meeting::MeetingSessionRepository>>,
     models_dir: Option<PathBuf>,
 }
 
@@ -222,6 +229,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn meetings(mut self, meetings: Arc<dyn crate::meeting::MeetingSessionRepository>) -> Self {
+        self.meetings = Some(meetings);
+        self
+    }
+
     pub fn models_dir(mut self, models_dir: PathBuf) -> Self {
         self.models_dir = Some(models_dir);
         self
@@ -247,6 +259,9 @@ impl AppStateBuilder {
             settings: self
                 .settings
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: settings not set"))?,
+            meetings: self
+                .meetings
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meetings not set"))?,
             models_dir: self
                 .models_dir
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: models_dir not set"))?,
@@ -320,7 +335,10 @@ impl AppState {
             Arc::new(SqliteReplacementRepository::new(Arc::clone(&db)));
         let vocabulary: Arc<dyn VocabularyRepository> =
             Arc::new(SqliteVocabularyRepository::new(Arc::clone(&db)));
-        let settings: Arc<dyn SettingsRepository> = Arc::new(SqliteSettingsRepository::new(db));
+        let settings: Arc<dyn SettingsRepository> =
+            Arc::new(SqliteSettingsRepository::new(Arc::clone(&db)));
+        let meetings: Arc<dyn crate::meeting::MeetingSessionRepository> =
+            Arc::new(crate::meeting::SqliteMeetingSessionRepository::new(db));
 
         // Resolve which transcriber to load at startup. Order:
         //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
@@ -337,6 +355,7 @@ impl AppState {
             .replacements(replacements)
             .vocabulary(vocabulary)
             .settings(settings)
+            .meetings(meetings)
             .models_dir(models_dir)
             .build()
     }
@@ -710,6 +729,59 @@ mod tests {
         }
     }
 
+    /// Noop meeting-session repository — returns empty lists, eats
+    /// inserts. Tests that exercise the IPC layer don't need real
+    /// persistence here today; the streaming pump that actually
+    /// writes to it lands in #110.
+    pub(crate) struct NoopMeetings;
+
+    #[async_trait::async_trait]
+    impl
+        crate::repository::Repository<
+            crate::meeting::MeetingSession,
+            crate::meeting::NewMeetingSession,
+            i64,
+        > for NoopMeetings
+    {
+        async fn list(&self) -> anyhow::Result<Vec<crate::meeting::MeetingSession>> {
+            Ok(vec![])
+        }
+        async fn create(
+            &self,
+            _: crate::meeting::NewMeetingSession,
+        ) -> anyhow::Result<crate::meeting::MeetingSession> {
+            unreachable!("mock does not exercise create")
+        }
+        async fn update(&self, _: crate::meeting::MeetingSession) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::meeting::MeetingSessionRepositoryExt for NoopMeetings {
+        async fn close_session(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn append_utterance(
+            &self,
+            _: crate::meeting::NewPersistedUtterance,
+        ) -> anyhow::Result<crate::meeting::PersistedUtterance> {
+            unreachable!("mock does not exercise append_utterance")
+        }
+        async fn list_utterances(
+            &self,
+            _: i64,
+        ) -> anyhow::Result<Vec<crate::meeting::PersistedUtterance>> {
+            Ok(vec![])
+        }
+        async fn set_notes(&self, _: i64, _: Option<String>) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     /// In-memory settings store backed by a HashMap. Lighter than
     /// spinning up a SQLite for tests that just need to round-trip a
     /// few keys.
@@ -744,6 +816,7 @@ mod tests {
             .settings(Arc::new(MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
+            .meetings(Arc::new(NoopMeetings))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("mock_state: builder fields complete")
