@@ -233,6 +233,15 @@ impl Transcribe for WhisperTranscription {
         self.run_inference(audio, prompt)
     }
 
+    /// whisper.cpp's `FullParams::set_initial_prompt` is a real signal
+    /// into the decoder — it biases token probabilities toward terms
+    /// that appear in the prompt. So vocabulary terms produced by
+    /// [`crate::dictionary::format_vocabulary_prompt`] actually take
+    /// effect on this backend.
+    fn supports_prompt_biasing(&self) -> bool {
+        true
+    }
+
     fn model_label(&self) -> String {
         // Strip directory; the basename is what's recognisable to the
         // user (`ggml-base.q5_0.bin` vs `/Users/.../models/...`). Falls
