@@ -54,9 +54,32 @@ export async function installMocks(
         summary: "Mocked reset (e2e — no real tccutil call).",
       }),
 
-      // ---- audio devices ----
+      // ---- audio sources ----
+      // `list_input_devices` is the legacy command; `audio_list_sources`
+      // is the picker-shaped one that includes the system-audio entry.
+      // Both stay mocked for one transitional release while the picker
+      // migration soaks.
       list_input_devices: () => [
         { id: "Built-in Microphone", name: "Built-in Microphone", isDefault: true },
+      ],
+      audio_list_sources: () => [
+        {
+          kind: "microphone",
+          id: "Built-in Microphone",
+          name: "Built-in Microphone",
+          isDefault: true,
+          isSupported: true,
+        },
+        {
+          kind: "system-audio",
+          id: "system",
+          name: "System audio",
+          isDefault: false,
+          // Defaults to false so e2e tests render the "coming soon"
+          // disabled state by default. Specs that exercise the
+          // shipped-on-this-platform path should override.
+          isSupported: false,
+        },
       ],
 
       // ---- dictation lifecycle ----

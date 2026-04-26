@@ -110,6 +110,54 @@ impl AudioSource {
     }
 }
 
+/// Frontend-facing listing of one audio source the user can pick from.
+///
+/// Flattens the `AudioDevice` + capability axes into a single list so
+/// the source picker can render mic devices and the system-audio entry
+/// uniformly. The `kind` tag mirrors [`AudioSource`]'s discriminator.
+///
+/// The `is_supported` flag distinguishes "can be picked right now" from
+/// "exists in the catalog but the backend hasn't shipped it yet". Mic
+/// devices always set `is_supported = true` (every cpal-supported
+/// platform has mic capture). The `SystemAudio` listing reports the
+/// backend's [`AudioCapture::supports_system_audio`] return value, so a
+/// platform that hasn't shipped ScreenCaptureKit / WASAPI loopback /
+/// PulseAudio monitor support yet shows the option as disabled with a
+/// "coming soon" affordance instead of letting the user pick it and
+/// hit a runtime error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioSourceListing {
+    /// Discriminated kind: `"microphone"` or `"system-audio"`.
+    /// `kebab-case` matches the `AudioSource` serde tag.
+    #[serde(rename = "kind")]
+    pub kind: AudioSourceKind,
+    /// Stable identifier. For mic devices: the device name (cpal does
+    /// not expose a backend-stable id). For system audio: the literal
+    /// string `"system"` — there's only ever one system-audio source
+    /// per host, so a fixed id is enough.
+    pub id: String,
+    /// Human-readable name shown in the picker.
+    pub name: String,
+    /// True if this is the host's default for its kind.
+    pub is_default: bool,
+    /// True if the backend can actually start a capture session
+    /// against this source. Mic devices are always supported; the
+    /// system-audio entry mirrors [`AudioCapture::supports_system_audio`].
+    pub is_supported: bool,
+}
+
+/// Discriminator for [`AudioSourceListing`]. Kept as a separate enum
+/// rather than reusing [`AudioSource`] because the listing carries a
+/// device id alongside the kind in distinct fields (rather than wrapped
+/// in the variant) — easier for the frontend to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioSourceKind {
+    Microphone,
+    SystemAudio,
+}
+
 /// Captured audio plus the format it was recorded in.
 #[derive(Debug, Clone)]
 pub struct CapturedAudio {
@@ -159,6 +207,48 @@ pub trait AudioCapture: Send + Sync {
                 "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
             )),
         }
+    }
+
+    /// Flat list of every source the user can choose from in the
+    /// frontend's picker — every mic device plus the system-audio
+    /// entry, with capability flags so the picker can disable
+    /// not-yet-supported options instead of letting the user pick
+    /// them and hit a start-time error.
+    ///
+    /// Default impl combines [`AudioCapture::list_input_devices`]
+    /// with the capability-check methods. Backends that need to
+    /// surface platform-specific richness (multiple system-audio
+    /// sources, per-app audio capture) override.
+    fn list_audio_sources(&self) -> Result<Vec<AudioSourceListing>> {
+        let mut listings: Vec<AudioSourceListing> = self
+            .list_input_devices()?
+            .into_iter()
+            .map(|d| AudioSourceListing {
+                kind: AudioSourceKind::Microphone,
+                id: d.id,
+                name: d.name,
+                is_default: d.is_default,
+                is_supported: true,
+            })
+            .collect();
+
+        // Always surface a single system-audio entry, even on
+        // platforms where the backend doesn't yet support it. The
+        // frontend renders it as disabled in that state with a
+        // "coming soon" affordance — the user knows the feature
+        // exists in concept and where to look for it once it ships
+        // (issue #33). Hiding it would be more confusing than
+        // showing-disabled because the design memo + roadmap
+        // already mention it as in-flight work.
+        listings.push(AudioSourceListing {
+            kind: AudioSourceKind::SystemAudio,
+            id: "system".to_owned(),
+            name: "System audio".to_owned(),
+            is_default: false,
+            is_supported: self.supports_system_audio(),
+        });
+
+        Ok(listings)
     }
 
     /// Whether this backend can capture from `source`.
@@ -825,6 +915,151 @@ mod tests {
         assert!(mic.supports_source(&AudioSource::Microphone(Some("any".to_owned()))));
         assert!(!mic.supports_source(&AudioSource::SystemAudio));
         assert!(!mic.supports_system_audio());
+    }
+
+    #[test]
+    fn list_audio_sources_includes_each_input_device_plus_system_audio_entry() {
+        struct ThreeMics;
+        impl AudioCapture for ThreeMics {
+            fn list_input_devices(&self) -> Result<Vec<AudioDevice>> {
+                Ok(vec![
+                    AudioDevice {
+                        id: "Built-in".into(),
+                        name: "Built-in".into(),
+                        is_default: true,
+                    },
+                    AudioDevice {
+                        id: "USB-C".into(),
+                        name: "USB-C".into(),
+                        is_default: false,
+                    },
+                    AudioDevice {
+                        id: "Bluetooth".into(),
+                        name: "Bluetooth".into(),
+                        is_default: false,
+                    },
+                ])
+            }
+            fn start(&self, _: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+            fn stop(&self) -> Result<CapturedAudio> {
+                Ok(CapturedAudio {
+                    samples: vec![],
+                    format: CaptureFormat {
+                        sample_rate: 16_000,
+                        channels: 1,
+                    },
+                })
+            }
+            fn is_recording(&self) -> bool {
+                false
+            }
+        }
+
+        let listings = ThreeMics.list_audio_sources().unwrap();
+        // Three mics + one system-audio entry = four listings.
+        assert_eq!(listings.len(), 4);
+
+        let mics: Vec<_> = listings
+            .iter()
+            .filter(|l| l.kind == AudioSourceKind::Microphone)
+            .collect();
+        assert_eq!(mics.len(), 3);
+        assert!(mics.iter().all(|l| l.is_supported));
+        // is_default copies through from AudioDevice.
+        assert_eq!(
+            mics.iter().filter(|l| l.is_default).count(),
+            1,
+            "exactly one mic should be the default"
+        );
+
+        let system: Vec<_> = listings
+            .iter()
+            .filter(|l| l.kind == AudioSourceKind::SystemAudio)
+            .collect();
+        assert_eq!(system.len(), 1, "exactly one system-audio entry");
+        // Default `supports_system_audio` returns false; the listing
+        // mirrors that so the frontend renders it disabled.
+        assert!(!system[0].is_supported);
+        assert_eq!(system[0].id, "system");
+        // System-audio listing is never marked is_default — there's
+        // exactly one, "default" doesn't apply, and the frontend
+        // shouldn't auto-pick it on first run.
+        assert!(!system[0].is_default);
+    }
+
+    #[test]
+    fn list_audio_sources_marks_system_audio_supported_when_backend_overrides() {
+        // Pin the override path: a backend that ships system-audio
+        // returns true from supports_system_audio() and therefore
+        // surfaces it as is_supported=true to the frontend, which
+        // would render it as a selectable option rather than disabled.
+        struct WithSystemAudio;
+        impl AudioCapture for WithSystemAudio {
+            fn list_input_devices(&self) -> Result<Vec<AudioDevice>> {
+                Ok(vec![])
+            }
+            fn start(&self, _: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+            fn stop(&self) -> Result<CapturedAudio> {
+                Ok(CapturedAudio {
+                    samples: vec![],
+                    format: CaptureFormat {
+                        sample_rate: 16_000,
+                        channels: 1,
+                    },
+                })
+            }
+            fn is_recording(&self) -> bool {
+                false
+            }
+            fn supports_source(&self, source: &AudioSource) -> bool {
+                matches!(
+                    source,
+                    AudioSource::Microphone(_) | AudioSource::SystemAudio
+                )
+            }
+        }
+        let listings = WithSystemAudio.list_audio_sources().unwrap();
+        let sys = listings
+            .iter()
+            .find(|l| l.kind == AudioSourceKind::SystemAudio)
+            .unwrap();
+        assert!(sys.is_supported);
+    }
+
+    #[test]
+    fn audio_source_listing_serde_uses_camel_case_for_frontend_consumption() {
+        // The frontend's TypeScript definition uses isDefault,
+        // isSupported, deviceId-style camelCase. Pin the wire shape so
+        // a future Rust-side rename fails loud rather than silently
+        // breaking the picker.
+        let listing = AudioSourceListing {
+            kind: AudioSourceKind::Microphone,
+            id: "Built-in".into(),
+            name: "Built-in".into(),
+            is_default: true,
+            is_supported: true,
+        };
+        let json = serde_json::to_string(&listing).unwrap();
+        assert!(json.contains(r#""isDefault":true"#), "got: {json}");
+        assert!(json.contains(r#""isSupported":true"#), "got: {json}");
+        assert!(json.contains(r#""kind":"microphone""#), "got: {json}");
+
+        let sys_listing = AudioSourceListing {
+            kind: AudioSourceKind::SystemAudio,
+            id: "system".into(),
+            name: "System audio".into(),
+            is_default: false,
+            is_supported: false,
+        };
+        let sys_json = serde_json::to_string(&sys_listing).unwrap();
+        assert!(
+            sys_json.contains(r#""kind":"system-audio""#),
+            "got: {sys_json}"
+        );
     }
 
     #[test]
