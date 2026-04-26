@@ -10,15 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - In-app macOS permission diagnostic and reset (#67). A collapsible
-  section on the main page shows the bundle id, microphone and Input
-  Monitoring hint copy, deep links to the relevant Privacy panes, and
-  a "Reset permissions" button that runs `tccutil reset` for the
-  Microphone, ListenEvent (Input Monitoring), and Accessibility
-  categories scoped to the Hush bundle id. Recovery path for the
-  stuck-permission state previously documented only in
-  `docs/macos-permissions.md`. Non-macOS builds skip the section
-  entirely; the IPC layer reports `canReset: false` on those
-  platforms.
+  section on the main page shows the bundle id, hint copy for
+  Microphone and Input Monitoring, direct links to the relevant
+  Privacy panes in System Settings, and a "Reset permissions" button
+  that runs `tccutil reset` for the Microphone, ListenEvent (Input
+  Monitoring), and Accessibility categories scoped to the Hush
+  bundle id. Recovery path for the stuck-permission state previously
+  documented only in `docs/macos-permissions.md`. The section is
+  hidden entirely on non-macOS builds.
 - Initial project scaffold: Tauri 2 + Svelte + TypeScript frontend, Rust backend.
 - Rust module stubs: audio, transcription, hotkey, dictionary, history, db, ipc, updater.
 - SQLite schema with FTS5 history index (migration 0001).
@@ -161,16 +160,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Split monolithic `+page.svelte` into per-section components (#40).**
-  The 2351-line page is now a 1080-line layout that imports seven
-  focused components from `src/lib/`: `ControlsSection`, `ResultBlock`,
+- **Refactor: split monolithic `+page.svelte` into per-section
+  components (#40).** No behavior change; e2e suite stayed green
+  through the move. The 2351-line page is now a 1080-line layout
+  that imports seven focused components from `src/lib/`:
+  `ControlsSection`, `ResultBlock`,
   `HistoryPanel`, `ReplacementsPanel`, `VocabularyPanel`,
   `ModelPickerPanel`, `MacosDiagnosticPanel`. Cross-cutting state
   (`recording`, `busy`, `Promise.all` mount, download-progress
   listeners) stays in the parent; each child takes data and callback
   props. Shared TypeScript types live in `src/lib/types.ts`. Per-panel
   styles moved into each component's own `<style>` block (Svelte
-  scopes by default). No behavior change; e2e suite green.
+  scopes by default).
 - **Hot-load on model select + honest "needs-download" notice.** The
   picker used to show "Saved. Restart Hush to use the new model"
   after every selection — including selections of undownloaded

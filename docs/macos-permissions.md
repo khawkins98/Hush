@@ -41,7 +41,7 @@ The signed-bundle path (`npm run tauri build`) is the most realistic test of "wh
 
 ## Symptom: PTT silently does nothing
 
-You hold `Right Control` (the default PTT key) but no recording starts. The toggle hotkey (`⌘+Shift+H`) works fine.
+You hold `Right Control` (the default PTT key on older macOS; disabled by default on macOS 26+, see above) but no recording starts. The toggle hotkey (`⌘+Shift+H`) works fine.
 
 **Cause:** Input Monitoring not granted, or granted to a stale binary.
 

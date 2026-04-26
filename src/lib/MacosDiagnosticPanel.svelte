@@ -69,7 +69,7 @@
           onclick={onReset}
           disabled={macosResetting}
         >
-          {macosResetting ? "Resetting…" : "Reset permissions and re-prompt"}
+          {macosResetting ? "Resetting…" : "Reset permissions"}
         </button>
       </div>
       {#if macosResetMessage}
@@ -91,6 +91,85 @@
 </section>
 
 <style>
+.macos-diagnostic {
+  margin: 1.5rem 0 0;
+  padding: 0;
+}
+
+.macos-diagnostic details {
+  border: 1px solid #d1d1d1;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.macos-diagnostic summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.25rem 0;
+  user-select: none;
+}
+
+.macos-diagnostic-body {
+  padding: 0.75rem 0 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.macos-diagnostic-body p {
+  margin: 0;
+  line-height: 1.5;
+  font-size: 0.95rem;
+}
+
+.macos-diag-bundle code {
+  background-color: rgba(0, 0, 0, 0.06);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.macos-diag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.macos-diag-reset-result {
+  padding: 0.5rem 0.75rem;
+  background-color: rgba(106, 140, 240, 0.1);
+  border-left: 3px solid #6a8cf0;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.macos-diag-doc-pointer {
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.macos-diag-doc-pointer code {
+  background-color: rgba(0, 0, 0, 0.06);
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .macos-diagnostic details {
+    border-color: #3a3a3a;
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+  .macos-diag-bundle code,
+  .macos-diag-doc-pointer code {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+  .macos-diag-doc-pointer {
+    color: #aaa;
+  }
+}
+
 button {
   border-radius: 8px;
   border: 1px solid #d1d1d1;
