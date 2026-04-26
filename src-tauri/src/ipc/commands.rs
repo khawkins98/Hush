@@ -983,6 +983,172 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
     }
 }
 
+/// Bundle identifier this binary registers with macOS TCC. Hard-coded
+/// because `tauri.conf.json`'s `identifier` is the source of truth and
+/// reading it back through `AppHandle::config().identifier()` would
+/// require platform conditional plumbing for what is effectively a
+/// constant string. If the bundle id ever changes, this constant and
+/// the `tauri.conf.json` field move together.
+#[cfg(target_os = "macos")]
+const MACOS_BUNDLE_ID: &str = "com.khawkins.hush";
+
+/// What [`diagnose_macos_permissions`] returns to the frontend.
+///
+/// Best-effort diagnostic snapshot. macOS deliberately does not expose
+/// programmatic read access to TCC grant state, so this struct cannot
+/// say "Microphone is granted" with certainty without actually opening
+/// a stream and observing whether samples flow — which would trigger
+/// the OS prompt as a side effect, defeating the diagnostic purpose.
+/// Instead the struct tells the user what bundle id is in play (so they
+/// can confirm the right entry in System Settings) and surfaces the
+/// reset path as an actionable next step.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacosPermissionDiagnostic {
+    /// The bundle id macOS uses to key TCC entries against this binary.
+    /// Stable for the signed-bundle path; on unsigned dev builds TCC
+    /// may instead key on the binary hash, which is why a `tccutil
+    /// reset … <bundle_id>` can return "no entry" — see
+    /// `docs/macos-permissions.md` for the full picture.
+    pub bundle_id: String,
+    /// Human-readable hint about how to verify Microphone access.
+    /// Not a probe — see the struct doc for why we don't probe.
+    pub microphone_hint: String,
+    /// Human-readable hint about Input Monitoring (PTT). On macOS 26+
+    /// PTT is disabled by default (#69) so this hint covers both the
+    /// "PTT off by default" and "verify in System Settings" paths.
+    pub input_monitoring_hint: String,
+    /// Whether the running platform supports the in-app reset action.
+    /// True only on macOS — `reset_macos_permissions` is a no-op
+    /// elsewhere. The frontend uses this to decide whether to show
+    /// the Reset button at all.
+    pub can_reset: bool,
+}
+
+/// Best-effort diagnostic snapshot for the macOS permission story.
+///
+/// Returns immediately on every platform. On non-macOS, returns hints
+/// that explain there's nothing to diagnose; on macOS, returns the
+/// bundle id and the recovery copy. Does not probe Microphone or
+/// Input Monitoring directly — both probes have the side effect of
+/// triggering OS prompts, which we don't want a passive diagnostic to
+/// do.
+///
+/// Pairs with [`reset_macos_permissions`]: the diagnostic is the
+/// "what do I see?" half; the reset is the "click here to fix it"
+/// half. See `docs/macos-permissions.md` for the manual recipe this
+/// in-app surface wraps.
+#[tauri::command]
+pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(MacosPermissionDiagnostic {
+            bundle_id: MACOS_BUNDLE_ID.to_owned(),
+            microphone_hint: "Click Start recording to verify. macOS prompts the first time; \
+                 if no prompt appears and the meter never moves, Microphone is denied. \
+                 Use Reset below to re-prompt cleanly."
+                .to_owned(),
+            input_monitoring_hint:
+                "Required for push-to-talk via the rdev hook. Disabled by default on \
+                 macOS 26+ to avoid a TSM crash (#69); set HUSH_PTT_ENABLE=1 to opt in \
+                 on older macOS. Use Reset to re-prompt if you previously denied."
+                    .to_owned(),
+            can_reset: true,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(MacosPermissionDiagnostic {
+            bundle_id: String::new(),
+            microphone_hint: "Microphone permission is handled by your platform's audio stack \
+                 (PulseAudio / PipeWire on Linux, Privacy on Windows). The in-app \
+                 diagnostic is macOS-only."
+                .to_owned(),
+            input_monitoring_hint: "Input Monitoring is a macOS concept; not applicable here."
+                .to_owned(),
+            can_reset: false,
+        })
+    }
+}
+
+/// What [`reset_macos_permissions`] returns. The string is a one-line
+/// summary suitable for showing in the UI as a confirmation banner.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacosPermissionResetResult {
+    /// True if at least one TCC entry was reset; false if every
+    /// `tccutil reset` returned "no entry" (the unsigned-dev-binary
+    /// case where TCC isn't keying on the bundle id at all).
+    pub any_reset: bool,
+    /// One-line user-facing message — populated either way.
+    pub summary: String,
+}
+
+/// Run the three `tccutil reset` commands documented in
+/// `docs/macos-permissions.md` for `com.khawkins.hush`. Microphone,
+/// Input Monitoring (`ListenEvent`), and Accessibility are all reset;
+/// each is independent and a missing-entry on any one is treated as
+/// a soft success (the entry never existed to reset).
+///
+/// On non-macOS this is a no-op that reports "not applicable".
+///
+/// The reset takes effect on the *next* launch — the running process
+/// continues to hold whatever permissions it already had. The frontend
+/// shows a "now restart Hush" confirmation after a successful call.
+#[tauri::command]
+pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> {
+    #[cfg(target_os = "macos")]
+    {
+        // Three independent invocations rather than one call with `all`
+        // because the latter would also reset every other app's TCC
+        // state for that category — far too broad. Per-bundle-id keeps
+        // the blast radius scoped to Hush.
+        let categories = ["Microphone", "ListenEvent", "Accessibility"];
+        let mut any_reset = false;
+        for category in categories {
+            // `tccutil reset <category> <bundle_id>` exits 0 on success
+            // and non-zero on "no entry to reset". The latter is fine —
+            // unsigned dev binaries often don't key on the bundle id at
+            // all, so there's nothing to reset. We track which ones
+            // actually did something so the summary message can be
+            // honest about whether the reset accomplished anything.
+            let status = std::process::Command::new("tccutil")
+                .arg("reset")
+                .arg(category)
+                .arg(MACOS_BUNDLE_ID)
+                .status()
+                .map_err(|e| IpcError::Settings(format!("invoke tccutil: {e}")))?;
+            if status.success() {
+                any_reset = true;
+                tracing::info!(category, "tccutil reset succeeded");
+            } else {
+                tracing::info!(category, "tccutil reset reported no entry (likely fine)");
+            }
+        }
+
+        let summary = if any_reset {
+            "TCC entries reset. Restart Hush — macOS will re-prompt for any permissions \
+             Hush actually needs on the next launch."
+                .to_owned()
+        } else {
+            "No TCC entries to reset (the bundle id may not be registered, common on \
+             unsigned dev builds). If permissions still feel stuck, build a signed \
+             bundle (`npm run tauri build`) and try its first launch."
+                .to_owned()
+        };
+        Ok(MacosPermissionResetResult { any_reset, summary })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(MacosPermissionResetResult {
+            any_reset: false,
+            summary: "Permission reset is macOS-only (TCC is an Apple framework).".to_owned(),
+        })
+    }
+}
+
 /// Snapshot the current foreground window via `active-win-pos-rs`.
 ///
 /// `active-win-pos-rs` exposes a Result with the unit type as its error,

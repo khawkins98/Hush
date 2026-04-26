@@ -182,6 +182,7 @@
       refreshReplacements(),
       refreshVocabulary(),
       refreshModels(),
+      loadMacosDiagnostic(),
     ]);
 
     // Hotkey lives in the backend (`hotkey::register_default`); on every
@@ -609,6 +610,58 @@
     } catch (e) {
       // No-op on non-macOS; user is unlikely to see this branch.
       console.error("open_macos_privacy_pane failed:", e);
+    }
+  }
+
+  // ---- macOS permission diagnostic surface ----
+  //
+  // Backend: `diagnose_macos_permissions` returns a snapshot (bundle
+  // id, hint copy, and whether reset is supported); `reset_macos_permissions`
+  // wraps the `tccutil reset` recipe documented in
+  // docs/macos-permissions.md. We only show the UI section when the
+  // diagnostic comes back with `canReset: true`, which is currently
+  // macOS-only — non-macOS platforms get the section hidden entirely
+  // rather than greyed-out, since there's nothing actionable.
+  type MacosPermissionDiagnostic = {
+    bundleId: string;
+    microphoneHint: string;
+    inputMonitoringHint: string;
+    canReset: boolean;
+  };
+  type MacosPermissionResetResult = {
+    anyReset: boolean;
+    summary: string;
+  };
+
+  let macosDiagnostic = $state<MacosPermissionDiagnostic | null>(null);
+  let macosDiagnosticOpen = $state(false);
+  let macosResetMessage = $state<string | null>(null);
+  let macosResetting = $state(false);
+
+  async function loadMacosDiagnostic() {
+    if (macosDiagnostic !== null) return; // cached after first load
+    try {
+      macosDiagnostic = await invoke<MacosPermissionDiagnostic>(
+        "diagnose_macos_permissions",
+      );
+    } catch (e) {
+      console.error("diagnose_macos_permissions failed:", e);
+    }
+  }
+
+  async function runMacosReset() {
+    macosResetting = true;
+    macosResetMessage = null;
+    try {
+      const result = await invoke<MacosPermissionResetResult>(
+        "reset_macos_permissions",
+      );
+      macosResetMessage = result.summary;
+    } catch (e) {
+      macosResetMessage =
+        e instanceof Error ? e.message : "Reset failed — see logs.";
+    } finally {
+      macosResetting = false;
     }
   }
 
@@ -1208,6 +1261,78 @@
       </ul>
     {/if}
   </section>
+
+  {#if macosDiagnostic?.canReset}
+    <!--
+      macOS permission diagnostic — only rendered when the backend
+      reports `canReset: true` (effectively `cfg!(target_os = "macos")`
+      on the Rust side). Linux/Windows users see this section hidden
+      entirely; there's no permission story to diagnose for them.
+      The disclosure starts collapsed because most users don't need
+      it; it's the recovery path for the stuck-permission state.
+    -->
+    <section class="macos-diagnostic" aria-labelledby="macos-diag-heading">
+      <details bind:open={macosDiagnosticOpen}>
+        <summary id="macos-diag-heading">
+          macOS permissions — diagnostic and reset
+        </summary>
+        <div class="macos-diagnostic-body">
+          <p class="macos-diag-bundle">
+            <strong>Bundle id:</strong>
+            <code>{macosDiagnostic.bundleId}</code>
+            — this is what System Settings → Privacy &amp; Security keys
+            against. If you don't see Hush listed under Microphone or
+            Input Monitoring, the binary may not be registering under
+            this bundle id (common on unsigned dev builds).
+          </p>
+          <p>
+            <strong>Microphone:</strong> {macosDiagnostic.microphoneHint}
+          </p>
+          <p>
+            <strong>Input Monitoring:</strong> {macosDiagnostic.inputMonitoringHint}
+          </p>
+          <div class="macos-diag-actions">
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => openPrivacyPane("microphone")}
+            >
+              Open Microphone settings
+            </button>
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => openPrivacyPane("input-monitoring")}
+            >
+              Open Input Monitoring settings
+            </button>
+            <button
+              type="button"
+              class="primary"
+              onclick={runMacosReset}
+              disabled={macosResetting}
+            >
+              {macosResetting ? "Resetting…" : "Reset permissions and re-prompt"}
+            </button>
+          </div>
+          {#if macosResetMessage}
+            <p class="macos-diag-reset-result" role="status">
+              {macosResetMessage}
+            </p>
+          {/if}
+          <p class="macos-diag-doc-pointer">
+            Full troubleshooting recipe (including the
+            <code>tccutil</code> commands this button wraps) is in
+            <a
+              href="https://github.com/khawkins98/Hush/blob/main/docs/macos-permissions.md"
+              target="_blank"
+              rel="noopener noreferrer"
+            >docs/macos-permissions.md</a>.
+          </p>
+        </div>
+      </details>
+    </section>
+  {/if}
 </main>
 
 <style>

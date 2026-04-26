@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- In-app macOS permission diagnostic and reset (#67). A collapsible
+  section on the main page shows the bundle id, microphone and Input
+  Monitoring hint copy, deep links to the relevant Privacy panes, and
+  a "Reset permissions" button that runs `tccutil reset` for the
+  Microphone, ListenEvent (Input Monitoring), and Accessibility
+  categories scoped to the Hush bundle id. Recovery path for the
+  stuck-permission state previously documented only in
+  `docs/macos-permissions.md`. Non-macOS builds skip the section
+  entirely; the IPC layer reports `canReset: false` on those
+  platforms.
 - Initial project scaffold: Tauri 2 + Svelte + TypeScript frontend, Rust backend.
 - Rust module stubs: audio, transcription, hotkey, dictionary, history, db, ipc, updater.
 - SQLite schema with FTS5 history index (migration 0001).
