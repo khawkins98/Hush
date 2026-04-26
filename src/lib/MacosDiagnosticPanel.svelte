@@ -38,10 +38,30 @@
         <strong>Bundle id:</strong>
         <code>{macosDiagnostic.bundleId}</code>
         — this is what System Settings → Privacy &amp; Security keys
-        against. If you don't see Hush listed under Microphone or
-        Input Monitoring, the binary may not be registering under
-        this bundle id (common on unsigned dev builds).
+        against. <strong>Two reasons Hush might not appear in the
+        permission lists:</strong>
       </p>
+      <ul class="macos-diag-bundle-list">
+        <li>
+          <strong>Hush hasn't asked for that permission yet.</strong>
+          macOS only adds an app to a permission list once the app
+          actively requests it. Hush requests Microphone the first
+          time you click Start recording — until then it won't show
+          under Microphone. Hush requests Input Monitoring only when
+          PTT is enabled (and PTT is off by default on macOS 26+, see
+          below) — until then it won't show under Input Monitoring at
+          all, even though that's expected.
+        </li>
+        <li>
+          <strong>Bundle-id mismatch on dev builds.</strong> When
+          running via <code>npm run tauri dev</code>, the binary at
+          <code>target/debug/hush</code> is unsigned, so macOS may key
+          the permission entry against the launching shell (iTerm /
+          Terminal) rather than under <code>com.khawkins.hush</code>.
+          Production-signed builds register under the bundle id
+          cleanly.
+        </li>
+      </ul>
       <p>
         <strong>Microphone:</strong> {macosDiagnostic.microphoneHint}
       </p>
@@ -130,6 +150,24 @@
   font-size: 0.9em;
 }
 
+.macos-diag-bundle-list {
+  margin: 0.25rem 0 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.macos-diag-bundle-list li {
+  margin-bottom: 0.4rem;
+}
+
+.macos-diag-bundle-list code {
+  background-color: rgba(0, 0, 0, 0.06);
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
 .macos-diag-actions {
   display: flex;
   flex-wrap: wrap;
@@ -162,6 +200,7 @@
     background-color: rgba(255, 255, 255, 0.03);
   }
   .macos-diag-bundle code,
+  .macos-diag-bundle-list code,
   .macos-diag-doc-pointer code {
     background-color: rgba(255, 255, 255, 0.08);
   }
