@@ -570,3 +570,20 @@ A pattern surfaced in #103 + #104 that's worth pinning. The PR descriptions clai
 **The accurate claim is "observably equivalent" or "semantically unchanged".** Round-7 also caught a real silent-failure-mode that "byte-identical" would have masked: the `is_final` filter at the call site would silently produce empty text if a future streaming backend emitted only partials. That's not byte-identical to anything — it's a new failure mode introduced by the refactor.
 
 **Lesson worth keeping.** Prefer "observably equivalent" or "no behaviour change for users on the default-impl path" when describing refactors that route the same data through a new code path. "Byte-identical" claims more than is actually true and the gap is where the silent-failure modes hide.
+
+## 2026-04-26 — ScreenCaptureKit as the only sanctioned macOS system-audio path
+
+Phase A2 of meeting-mode delivery needed actual system-audio capture on macOS. Three plausible routes were on the table:
+
+1. **CoreAudio HAL plug-in / Aggregate Device** — wire BlackHole-style virtual loopback into a multi-output device. Requires user installation of a third-party driver, and Apple has been deprecating HAL plug-ins since macOS 14.
+2. **`AudioHardwareCreateProcessTap` / `AudioHardwareCreateAggregateDevice`** with the `kAudioHardwareTapType` API new in macOS 14.4. These work *but* require entitlements that Apple only grants to MAS-distributed apps, putting them on the wrong side of the #114 (MAS-vs-`macOSPrivateApi`) decision the user explicitly deferred.
+3. **ScreenCaptureKit with `captures_audio = true`** — Apple's sanctioned, non-entitled path. Gated behind the Screen Recording TCC bucket but otherwise works for any signed/unsigned developer build.
+
+Picked (3). The `screencapturekit` crate (1.5.4) bridges Swift's `SCStream` through stable FFI, so we stay in pure Rust at the Hush boundary. Trade-offs that matter:
+
+- **The TCC bucket is "Screen Recording" even when you capture only audio.** Confusing for users — we capture zero pixels — but Apple bundles audio-from-display under the same prompt and there is no separate "system audio" TCC category. The first call to `SCShareableContent::get()` triggers the prompt; the existing `MacosDiagnosticPanel` already covers Screen Recording in its TCC sweep.
+- **Sample format is fixed-set f32 PCM** at one of `{8000, 16000, 24000, 48000}` Hz × `{mono, stereo}`. We picked 48 kHz / stereo to match what the OS mixer is already running internally — avoids a forced resample at capture time. Downstream `downmix_to_mono` + the resampler ahead of whisper handle the rate/channel reduction the same way they do for any cpal mic input.
+- **`AudioBufferList` layout is "1 buffer = interleaved, N buffers = planar".** The crate exposes both shapes; we fold the planar case into interleaved before pushing into the shared `Vec<f32>` so the rest of the pipeline doesn't branch on layout. Discovered by reading `cm/audio.rs` rather than from Apple's docs — the docs only describe the high-level format, not the buffer-count convention.
+- **The crate links libSwift_Concurrency at runtime.** On end-user macOS 12+ the Swift runtime ships in `dyld_shared_cache` so `/usr/lib/swift` resolves implicitly, but on the dev machine here the cache resolution doesn't apply to `cargo test` binaries — tests need `DYLD_FALLBACK_LIBRARY_PATH=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx` to load. Production app builds (`cargo tauri dev` / bundled `.app`) inherit the cache and don't need this.
+
+**Lesson worth keeping.** When Apple offers two paths to the same capability — one entitled (Tap APIs) and one TCC-prompted (ScreenCaptureKit) — prefer the TCC path for unsigned/sideloaded distribution. The entitlement-required path pays back only inside MAS, and the MAS decision is its own multi-quarter trade-off. ScreenCaptureKit's "Screen Recording prompt for audio-only capture" is awkward UX, but it works on every distribution channel (sideloaded, notarised, Homebrew cask) the entitled path doesn't.
