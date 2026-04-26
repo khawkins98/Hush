@@ -28,14 +28,18 @@
 //! and we don't want to starve the UI thread on small machines.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::audio::{downmix_to_mono, CapturedAudio};
+use crate::audio::{downmix_to_mono, CaptureFormat, CapturedAudio};
 use crate::transcription::resample::resample_to_mono;
-use crate::transcription::{Transcribe, WHISPER_SAMPLE_RATE};
+use crate::transcription::streaming::{
+    SlidingWindowConfig, SlidingWindowState, StreamSegment, StreamingTranscribeSession,
+    WhisperLikeInferer,
+};
+use crate::transcription::{Transcribe, Utterance, WHISPER_SAMPLE_RATE};
 
 /// Default thread count for whisper.cpp inference.
 ///
@@ -53,10 +57,25 @@ const DEFAULT_INFERENCE_THREADS: i32 = 4;
 /// Construct with [`WhisperTranscription::new`]; the constructor loads the
 /// model (a one-time multi-second cost on cold start) and the resulting
 /// handle can transcribe many recordings in succession.
+///
+/// The context is held behind an `Arc<Mutex<...>>` so the streaming
+/// session ([`WhisperStreamingSession`]) can hold its own clone of the
+/// handle and run inferences from a different thread (the meeting
+/// pump's blocking pool). The mutex serialises whisper.cpp calls; the
+/// `Arc` shares ownership across the legacy one-shot path and any
+/// number of concurrent streaming sessions (one per active meeting
+/// audio source).
 pub struct WhisperTranscription {
-    /// Loaded GGUF model. Held behind a mutex because `whisper.cpp` is not
-    /// safe to call concurrently on the same context (see module note).
-    ctx: Mutex<WhisperContext>,
+    /// Loaded GGUF model. Held behind an `Arc<Mutex>` because:
+    /// (a) `whisper.cpp` is not safe to call concurrently on the same
+    /// context (see module note) — the mutex enforces serialisation
+    /// across the dictation hot path and any in-flight streaming
+    /// sessions, and
+    /// (b) the streaming session needs to outlive the borrow that
+    /// produced it (the meeting pump moves it across `spawn_blocking`
+    /// boundaries) — the `Arc` handles that without `'static`-bound
+    /// trait method gymnastics.
+    ctx: Arc<Mutex<WhisperContext>>,
     /// Where the model was loaded from. Kept for diagnostics — useful in
     /// error messages and the eventual settings panel.
     model_path: PathBuf,
@@ -142,7 +161,7 @@ struct LoadedContext {
 impl LoadedContext {
     fn into_owned(self, model_path: PathBuf) -> Result<WhisperTranscription> {
         Ok(WhisperTranscription {
-            ctx: Mutex::new(self.ctx),
+            ctx: Arc::new(Mutex::new(self.ctx)),
             model_path,
         })
     }
@@ -189,6 +208,10 @@ impl WhisperTranscription {
         // mutex here means a previous call panicked mid-inference; we
         // surface that as a regular error rather than re-panicking, since a
         // failed transcription should not take the whole app down.
+        //
+        // The context is wrapped in `Arc<Mutex<...>>` since #108
+        // (streaming) — `lock()` is identical to the bare `Mutex`
+        // shape, so the rest of the run_inference body is unchanged.
         let ctx = self
             .ctx
             .lock()
@@ -253,6 +276,187 @@ impl Transcribe for WhisperTranscription {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.model_path.to_string_lossy().into_owned())
+    }
+
+    /// Whisper.cpp's streaming-friendly mode is what the meeting pump
+    /// (post-#108) uses to surface live partials. We override
+    /// [`Self::start_stream`] to construct a [`WhisperStreamingSession`]
+    /// that runs sliding-window inference; signalling this capability
+    /// here lets the IPC / pump layer fan partials out to the frontend
+    /// instead of waiting for one-shot terminal utterances.
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn start_stream(
+        &self,
+        format: CaptureFormat,
+        prompt: &str,
+    ) -> Result<Box<dyn StreamingTranscribeSession>> {
+        let session = WhisperStreamingSession::new(
+            Arc::clone(&self.ctx),
+            format,
+            prompt.to_owned(),
+            SlidingWindowConfig::meeting_defaults(),
+        );
+        Ok(Box::new(session))
+    }
+}
+
+/// Streaming session backed by `whisper-rs` sliding-window inference.
+///
+/// Holds:
+/// - A clone of the parent [`WhisperTranscription`]'s `Arc<Mutex<WhisperContext>>`
+///   so this session can run inferences from a different thread (the meeting
+///   pump's blocking pool) without coupling to the original `&self`'s
+///   lifetime.
+/// - A [`SlidingWindowState`] policy machine (the testable, whisper-agnostic
+///   part — see `transcription::streaming`).
+/// - The capture format the upstream pump is feeding samples in. Resampling
+///   to 16 kHz mono happens inside `feed`, not at the policy layer, so the
+///   policy state machine sees only the model's native rate.
+///
+/// `feed` is cheap (downmix + resample + push to the policy buffer);
+/// `drain` is the expensive bit (potentially runs whisper inference
+/// over the full ~30 s window). The pump runs `drain` on the
+/// blocking pool via `tokio::task::spawn_blocking`.
+pub struct WhisperStreamingSession {
+    ctx: Arc<Mutex<WhisperContext>>,
+    /// Capture format the pump is feeding samples in. `feed`
+    /// downmixes and resamples to 16 kHz mono before pushing into
+    /// the policy machine.
+    capture_format: CaptureFormat,
+    /// Initial prompt for vocabulary biasing. Empty string = no
+    /// prompt. Same semantics as `transcribe_with_prompt`.
+    prompt: String,
+    /// Policy state machine — owns the rolling window + commit logic.
+    /// See `transcription::streaming` for the design rationale.
+    state: SlidingWindowState,
+}
+
+impl WhisperStreamingSession {
+    fn new(
+        ctx: Arc<Mutex<WhisperContext>>,
+        capture_format: CaptureFormat,
+        prompt: String,
+        config: SlidingWindowConfig,
+    ) -> Self {
+        Self {
+            ctx,
+            capture_format,
+            prompt,
+            state: SlidingWindowState::new(WHISPER_SAMPLE_RATE, config),
+        }
+    }
+
+    /// Convert one chunk of capture-format samples to mono 16 kHz
+    /// before feeding into the policy buffer. The same downmix +
+    /// resample chain the one-shot path uses, applied per `feed` chunk.
+    fn convert_chunk(&self, samples: &[f32]) -> Vec<f32> {
+        if self.capture_format.sample_rate == 0 {
+            return Vec::new();
+        }
+        let mono = downmix_to_mono(samples, self.capture_format.channels);
+        resample_to_mono(&mono, self.capture_format.sample_rate, WHISPER_SAMPLE_RATE)
+    }
+}
+
+impl StreamingTranscribeSession for WhisperStreamingSession {
+    fn feed(&mut self, captured: &[f32]) -> Result<()> {
+        let mono_16k = self.convert_chunk(captured);
+        if !mono_16k.is_empty() {
+            self.state.feed_mono(&mono_16k);
+        }
+        Ok(())
+    }
+
+    fn drain(&mut self) -> Result<Vec<Utterance>> {
+        let mut inferer = WhisperInferer {
+            ctx: Arc::clone(&self.ctx),
+            prompt: &self.prompt,
+        };
+        self.state.tick(&mut inferer)
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<Vec<Utterance>> {
+        let mut inferer = WhisperInferer {
+            ctx: Arc::clone(&self.ctx),
+            prompt: &self.prompt,
+        };
+        self.state.finish(&mut inferer)
+    }
+}
+
+/// Adapter that plugs whisper.cpp inference into the
+/// [`WhisperLikeInferer`] trait the policy state machine calls. Lives
+/// here (not in `streaming.rs`) so the policy module can be tested
+/// without the `whisper` Cargo feature.
+struct WhisperInferer<'a> {
+    ctx: Arc<Mutex<WhisperContext>>,
+    prompt: &'a str,
+}
+
+impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
+    fn infer(&mut self, mono_16k_pcm: &[f32]) -> Result<Vec<StreamSegment>> {
+        // Same FullParams shape as the one-shot path — greedy decode,
+        // 4-thread budget, no chatter on stdout. The streaming-specific
+        // bit is `set_no_context(true)`: we feed whisper a fresh window
+        // each call rather than carrying KV-cache across calls.
+        // Carrying context would technically reduce per-call cost but
+        // also propagate any segment-level mistakes from one inference
+        // into the next — the no-context path produces independent
+        // re-tokenisations and lets the sliding-window policy converge
+        // on a stable transcript.
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_n_threads(DEFAULT_INFERENCE_THREADS);
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_translate(false);
+        params.set_no_context(true);
+        if !self.prompt.is_empty() {
+            params.set_initial_prompt(self.prompt);
+        }
+
+        let ctx = self
+            .ctx
+            .lock()
+            .map_err(|_| anyhow!("whisper context mutex poisoned"))?;
+        let mut state = ctx
+            .create_state()
+            .map_err(|e| anyhow!("failed to create whisper state: {e}"))?;
+        state
+            .full(params, mono_16k_pcm)
+            .map_err(|e| anyhow!("whisper streaming inference failed: {e}"))?;
+
+        let n_segments = state
+            .full_n_segments()
+            .map_err(|e| anyhow!("failed to read segment count: {e}"))?;
+
+        let mut out = Vec::with_capacity(n_segments as usize);
+        for i in 0..n_segments {
+            let text = state
+                .full_get_segment_text_lossy(i)
+                .map_err(|e| anyhow!("failed to read segment {i}: {e}"))?;
+            // whisper.cpp returns t0 / t1 in 10ms units (centiseconds).
+            // The policy machine expects ms — multiply by 10 here so
+            // the conversion stays in one place.
+            let t0 = state
+                .full_get_segment_t0(i)
+                .map_err(|e| anyhow!("failed to read segment {i} t0: {e}"))?;
+            let t1 = state
+                .full_get_segment_t1(i)
+                .map_err(|e| anyhow!("failed to read segment {i} t1: {e}"))?;
+            let start_ms = (t0.max(0) as u64).saturating_mul(10);
+            let end_ms = (t1.max(0) as u64).saturating_mul(10);
+            out.push(StreamSegment {
+                start_ms,
+                end_ms,
+                text,
+            });
+        }
+        Ok(out)
     }
 }
 
