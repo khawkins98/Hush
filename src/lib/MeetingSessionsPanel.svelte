@@ -30,7 +30,12 @@
   //     then `speakerLabel` is null and the panel renders all
   //     utterances as "Unknown speaker."
 
-  import type { AudioSourceListing, MeetingSession } from "./types";
+  import type {
+    AudioSourceListing,
+    MeetingSession,
+    MeetingSessionDetail,
+    PersistedUtterance,
+  } from "./types";
 
   type Props = {
     sessions: MeetingSession[];
@@ -41,6 +46,11 @@
     /// button. Non-null means a session is open; renders Stop button
     /// + a live status indicator.
     activeSessionId: number | null;
+    /// Active session's full detail — utterances + metadata —
+    /// polled by the parent every ~3 s while a session is in
+    /// flight (#122 PR4 live transcript). `null` while no session
+    /// is active OR before the first poll completes.
+    activeDetail: MeetingSessionDetail | null;
     busy: boolean;
     /// Audio source listings (mic devices + system-audio). Surfaced
     /// here so the meeting panel can run an independent multi-source
@@ -71,6 +81,7 @@
     sessionsLoaded,
     sessionsError,
     activeSessionId,
+    activeDetail,
     busy,
     sources,
     sourcesLoaded,
@@ -80,6 +91,39 @@
     onStart,
     onStop,
   }: Props = $props();
+
+  /**
+   * Display label for an utterance's speaker. Pre-real-diarization
+   * (#111) the pump tags utterances with `"mic"` / `"system"` based
+   * on the source the chunk came from — a coarse but useful split
+   * that maps to "you" vs "remote participants" on a typical Zoom
+   * call. Until #111 lands, that's the best signal we have.
+   */
+  function speakerLabel(u: PersistedUtterance): string {
+    switch (u.speakerLabel) {
+      case "mic":
+        return "You";
+      case "system":
+        return "Remote";
+      case null:
+      case undefined:
+        return "Speaker";
+      default:
+        return u.speakerLabel;
+    }
+  }
+
+  /**
+   * Format a chunk-relative timestamp (`started_at_ms` measured
+   * from session-open) as `mm:ss`. Read by the live-transcript
+   * timeline so the user can scrub through the conversation.
+   */
+  function formatOffset(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
 
   let mics = $derived(sources.filter((s) => s.kind === "microphone"));
   let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
@@ -281,6 +325,43 @@
       </span>
     {/if}
   </div>
+
+  {#if activeSessionId !== null}
+    <!--
+      Live transcript view (#122 PR4). The parent polls the
+      `meeting_session_get` IPC every ~3 s while a session is in
+      flight; new utterances render here as they finalise. Each
+      row carries a coarse "You" / "Remote" badge derived from
+      the source the chunk came from (mic / system) — primitive
+      diarization ahead of #111's per-speaker model.
+    -->
+    {#if activeDetail && activeDetail.utterances.length > 0}
+      <ol
+        class="live-transcript"
+        aria-live="polite"
+        aria-label="Live meeting transcript"
+      >
+        {#each activeDetail.utterances as utt (utt.id)}
+          <li class="utterance speaker-row-{utt.speakerLabel ?? 'unknown'}">
+            <div class="utterance-meta">
+              <span
+                class="speaker-badge speaker-{utt.speakerLabel ?? 'unknown'}"
+              >
+                {speakerLabel(utt)}
+              </span>
+              <span class="utterance-time">{formatOffset(utt.startedAtMs)}</span>
+            </div>
+            <p class="utterance-text">{utt.text}</p>
+          </li>
+        {/each}
+      </ol>
+    {:else}
+      <p class="live-transcript-empty">
+        Listening… utterances will appear here as the pump finalises
+        each chunk (every ~10 seconds).
+      </p>
+    {/if}
+  {/if}
 
   <details class="how-it-works">
     <summary>How it works</summary>
@@ -586,6 +667,107 @@
   color: #1a1a1a;
 }
 
+/*
+  Live transcript — appears under the active-session controls
+  while a meeting is in flight. Granola-style coloured bubbles for
+  the You / Remote split. Auto-scrolls naturally as new utterances
+  push older ones up; an explicit max-height lets long meetings
+  remain scannable without taking over the whole window.
+*/
+.live-transcript {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.01);
+  max-height: 22rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.live-transcript-empty {
+  margin: 0.5rem 0 1rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px dashed #c7c7c7;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.02);
+  color: #555;
+  font-size: 0.88rem;
+  font-style: italic;
+}
+
+.utterance {
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.utterance.speaker-row-mic {
+  background-color: rgba(106, 140, 240, 0.08);
+  border-left: 3px solid #6a8cf0;
+}
+
+.utterance.speaker-row-system {
+  background-color: rgba(216, 58, 58, 0.06);
+  border-left: 3px solid #d83a3a;
+}
+
+.utterance.speaker-row-unknown {
+  background-color: rgba(0, 0, 0, 0.03);
+  border-left: 3px solid #aaa;
+}
+
+.utterance-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+}
+
+.speaker-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.1em 0.5em;
+  border-radius: 3px;
+}
+
+.speaker-badge.speaker-mic {
+  background-color: rgba(106, 140, 240, 0.18);
+  color: #2a4cb0;
+}
+
+.speaker-badge.speaker-system {
+  background-color: rgba(216, 58, 58, 0.16);
+  color: #8a0000;
+}
+
+.speaker-badge.speaker-unknown {
+  background-color: rgba(0, 0, 0, 0.08);
+  color: #555;
+}
+
+.utterance-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #888;
+  font-size: 0.74rem;
+}
+
+.utterance-text {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: #1a1a1a;
+}
+
 .meeting-active-indicator {
   display: inline-flex;
   align-items: center;
@@ -850,6 +1032,42 @@ button:disabled {
   }
   .coming-soon-hint {
     color: #d4a040;
+  }
+  .live-transcript {
+    border-color: #3a3a3a;
+    background-color: rgba(255, 255, 255, 0.02);
+  }
+  .live-transcript-empty {
+    border-color: #444;
+    background-color: rgba(255, 255, 255, 0.03);
+    color: #aaa;
+  }
+  .utterance.speaker-row-mic {
+    background-color: rgba(106, 140, 240, 0.14);
+  }
+  .utterance.speaker-row-system {
+    background-color: rgba(216, 58, 58, 0.12);
+  }
+  .utterance.speaker-row-unknown {
+    background-color: rgba(255, 255, 255, 0.04);
+  }
+  .speaker-badge.speaker-mic {
+    background-color: rgba(106, 140, 240, 0.25);
+    color: #c8d4f8;
+  }
+  .speaker-badge.speaker-system {
+    background-color: rgba(216, 58, 58, 0.22);
+    color: #f8b8b8;
+  }
+  .speaker-badge.speaker-unknown {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #aaa;
+  }
+  .utterance-time {
+    color: #888;
+  }
+  .utterance-text {
+    color: #f0f0f0;
   }
   .empty-meetings {
     background-color: #3a2e10;

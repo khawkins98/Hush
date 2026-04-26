@@ -24,6 +24,7 @@
     ReplacementRule,
     VocabularyTerm,
     MeetingSession,
+    MeetingSessionDetail,
   } from "$lib/types";
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
@@ -676,6 +677,16 @@
   // session in flight; non-null means the panel renders the Stop
   // button + a live status line.
   let meetingActiveId = $state<number | null>(null);
+  // Live transcript for the active session — populated on a 3 s
+  // poll while a session is in flight, cleared on stop. The poll
+  // is cheap (one SELECT for the session row + one for its
+  // utterances), much simpler than wiring a Tauri event for
+  // pump-side appends. If polling becomes a bottleneck we can
+  // promote to events without changing the consumer; the panel
+  // just reads `meetingActiveDetail` regardless of how it gets
+  // populated.
+  let meetingActiveDetail = $state<MeetingSessionDetail | null>(null);
+  let meetingActivePollHandle: ReturnType<typeof setInterval> | null = null;
   // Disables the Start/Stop buttons during in-flight IPC calls so
   // a stale double-click can't race against itself. Same rationale
   // as the dictation flow's `busy` flag.
@@ -696,6 +707,55 @@
       meetingSessionsLoaded = true;
     }
   }
+
+  /**
+   * Pull the active session's full detail (utterances + metadata)
+   * for the live-transcript view. Errors are swallowed onto the
+   * meeting error region — a transient SQLite hiccup shouldn't tear
+   * down the panel; the next poll tick recovers.
+   */
+  async function refreshActiveDetail(id: number) {
+    try {
+      meetingActiveDetail = await invoke<MeetingSessionDetail>(
+        "meeting_session_get",
+        { id },
+      );
+    } catch (e) {
+      // Don't blow away the existing detail on a single failed poll;
+      // the panel keeps showing whatever we last successfully read.
+      meetingSessionsError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // Poll the active session's detail every 3s while a session is in
+  // flight. The pump (#126) lands utterances every ~10s, so a 3s
+  // poll surfaces them with at most ~3s of additional latency —
+  // fine for human reading.
+  //
+  // `$effect` re-runs whenever `meetingActiveId` changes. On
+  // session start: kick off an immediate fetch + start the
+  // interval. On session stop: clear the interval and the detail.
+  $effect(() => {
+    if (meetingActivePollHandle !== null) {
+      clearInterval(meetingActivePollHandle);
+      meetingActivePollHandle = null;
+    }
+    const id = meetingActiveId;
+    if (id === null) {
+      meetingActiveDetail = null;
+      return;
+    }
+    void refreshActiveDetail(id);
+    meetingActivePollHandle = setInterval(() => {
+      void refreshActiveDetail(id);
+    }, 3000);
+    return () => {
+      if (meetingActivePollHandle !== null) {
+        clearInterval(meetingActivePollHandle);
+        meetingActivePollHandle = null;
+      }
+    };
+  });
 
   async function deleteMeetingSession(session: MeetingSession) {
     try {
@@ -1007,6 +1067,7 @@
     sessionsLoaded={meetingSessionsLoaded}
     sessionsError={meetingSessionsError}
     activeSessionId={meetingActiveId}
+    activeDetail={meetingActiveDetail}
     busy={meetingBusy}
     {sources}
     {sourcesLoaded}
