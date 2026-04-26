@@ -12,6 +12,13 @@ import { installMocks } from "./_mock";
 // silently drops the system-audio entry, flips the disabled state,
 // or changes the wire shape of `start_dictation`'s argument fails
 // loud here rather than at hands-on smoke time.
+//
+// As of Phase 1 of the meeting-mode UX roadmap (#122), the meeting
+// panel renders a *second* copy of the source picker so the user
+// picks a meeting's source in the same place where they start the
+// session. These specs scope to the dictation controls section
+// (`section.controls`) so the assertions stay about the dictation
+// hot path's picker; the meeting panel picker has its own coverage.
 
 test.describe("audio source picker", () => {
   test("renders both microphone and system-audio optgroups", async ({
@@ -23,13 +30,17 @@ test.describe("audio source picker", () => {
     await installMocks(page);
     await page.goto("/");
 
+    // Scope to the dictation controls section so we don't pick up the
+    // meeting-panel picker added in #122 Phase 1.
+    const controls = page.locator("section.controls");
+
     // Wait for the picker to mount with a real `<select>` (the loading
     // placeholder is a `<p>`).
-    await expect(page.locator('select')).toBeVisible();
+    await expect(controls.locator("select")).toBeVisible();
 
     // The picker wraps options in <optgroup> by source kind.
-    const micGroup = page.locator('optgroup[label="Microphone"]');
-    const sysGroup = page.locator('optgroup[label="System audio"]');
+    const micGroup = controls.locator('optgroup[label="Microphone"]');
+    const sysGroup = controls.locator('optgroup[label="System audio"]');
     await expect(micGroup).toHaveCount(1);
     await expect(sysGroup).toHaveCount(1);
 
@@ -77,6 +88,7 @@ test.describe("audio source picker", () => {
     await page.goto("/");
 
     const sysOption = page
+      .locator("section.controls")
       .locator('optgroup[label="System audio"]')
       .locator("option")
       .first();
