@@ -291,9 +291,35 @@ pub async fn stop_dictation(
             "vocabulary terms configured but the active transcription backend does not support prompt biasing — terms will not affect this transcript"
         );
     }
-    let raw_text = transcriber
-        .transcribe_with_prompt(&captured, &prompt)
+    // Inference goes through the streaming entry point with a single
+    // chunk holding the whole captured buffer. For backends that
+    // don't override `transcribe_chunks`, the default impl is byte-
+    // identical to the prior `transcribe_with_prompt` call: same
+    // audio, same prompt, single final utterance.
+    //
+    // Calling through the streaming surface here lets a future
+    // Whisper-sliding-window or Parakeet backend emit multiple
+    // partial utterances mid-recording without changing this call
+    // site — the IPC layer just needs to flip from "concatenate
+    // utterances at the end" to "forward each utterance via Tauri
+    // event as it arrives." See the design memo at
+    // `docs/system-audio-meeting-mode-proposal.md` for the Phase C
+    // event-forwarding shape.
+    let format = captured.format;
+    let utterances = transcriber
+        .transcribe_chunks(&[captured.samples], format, &prompt)
         .map_err(|e| IpcError::Transcription(e.to_string()))?;
+    // Concatenate the final utterances. The default impl emits
+    // exactly one; a future streaming backend may emit several.
+    // Skip non-final utterances — those are partial revisions
+    // intended for live UI updates, not the dictation hot path's
+    // single clipboard write.
+    let raw_text = utterances
+        .iter()
+        .filter(|u| u.is_final)
+        .map(|u| u.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let rules = load_replacement_rules(&state).await;
     let text = apply_replacements(raw_text.trim(), &rules);
 

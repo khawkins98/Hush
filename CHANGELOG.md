@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `stop_dictation` now invokes inference through the streaming
+  entry point (`Transcribe::transcribe_chunks`) rather than the
+  one-shot `transcribe_with_prompt`. Default-impl behaviour is
+  byte-identical to before — the captured buffer is passed as a
+  single chunk, the default impl produces one final utterance, the
+  text reaches the clipboard exactly as it did pre-refactor — but
+  the call site is now ready for a future Whisper-sliding-window or
+  Parakeet backend that emits multiple partial utterances mid-
+  recording. Non-final utterances are filtered out at this layer
+  (they're for live UI updates in Phase C, not the dictation hot
+  path's single clipboard write); a future PR forwards them via
+  Tauri events when `supports_streaming()` is true. All 149 unit
+  tests pass unchanged, confirming the refactor is observably
+  identical.
 - Streaming-transcription foundation (Phase B of the meeting-mode
   pivot, refs #33; design memo at
   `docs/system-audio-meeting-mode-proposal.md`). Adds the
