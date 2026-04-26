@@ -14,6 +14,43 @@ a single flat list was hard to navigate.
 
 ### Added
 
+#### Phase A2: macOS system-audio capture via ScreenCaptureKit (#105)
+
+- The "System audio" entry in the source picker is no longer the
+  "coming soon" placeholder on macOS — it now drives a real
+  ScreenCaptureKit capture session. Selecting it before pressing
+  the dictation hotkey routes `start_dictation` through the new
+  `audio::screencapturekit::ScreenCaptureKitSession` instead of
+  the cpal mic path; samples land in the same `Vec<f32>` shape the
+  rest of the transcription pipeline already consumes, so whisper
+  / model-swap / replacements / history all work unchanged.
+- Compiled behind a `screencapturekit` feature flag and a
+  `cfg(target_os = "macos")` gate. Default builds remain cpal-only
+  to keep CI and Linux/Windows tests deterministic; release macOS
+  builds opt in via `cargo build --features screencapturekit`.
+- Capture format is 48 kHz stereo f32 PCM, matching what the OS
+  mixer already runs internally — avoids a forced resample at
+  capture time. Existing `downmix_to_mono` and the whisper-side
+  resampler reduce to 16 kHz mono ahead of transcription, same
+  path as cpal mic input.
+- TCC bucket is **Screen Recording** (Apple bundles audio-from-
+  display under that prompt even when you capture zero pixels).
+  First call triggers the prompt automatically; the existing
+  `MacosDiagnosticPanel` already covers Screen Recording in its
+  reset sweep.
+- `AudioCapture::supports_source(SystemAudio)` returns `true` on
+  macOS-with-feature, `false` everywhere else, so the source
+  picker continues to render the option as disabled with a
+  "coming soon" affordance on Linux / Windows / feature-off
+  builds. Linux PulseAudio monitor (#106) and Windows WASAPI
+  loopback (#107) are tracked as separate PRs.
+- Test compilation needs `DYLD_FALLBACK_LIBRARY_PATH` pointed at
+  the Xcode Swift toolchain (`/Applications/Xcode.app/Contents/
+  Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/
+  macosx`) when run with `--features screencapturekit`. Production
+  app bundles inherit the Swift runtime from the macOS dyld
+  shared cache and need no special handling.
+
 #### Phase C runtime: manual-start meeting sessions (#110)
 
 - Meeting Mode goes live in manual-start mode. The user clicks
