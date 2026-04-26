@@ -12,6 +12,44 @@ by PR so a reader can scan which features shipped in which change —
 the unreleased queue grew long enough during the pivot scaffold that
 a single flat list was hard to navigate.
 
+### Fixed
+
+#### Round-9 reviewer cycle — streaming polish (#108)
+
+- **`↓ N new` pill now counts in-flight partials, not just settled
+  finals.** A user who scrolled up during active speech was seeing
+  "↓ 0 new" while whisper was actively revising the in-flight tail —
+  the pill's "since I last looked" promise was finals-only. Both
+  `liveTranscriptFrozenAt` (snapshot at scroll-up) and
+  `liveTranscriptNewCount` (current-vs-snapshot) now include
+  `currentPartials.length` in their counts.
+- **Partial-row screen-reader handling.** Replaced the static
+  `aria-label="In-flight partial transcript, still being refined"`
+  on partial rows with an `aria-live="off"` directive plus an
+  `sr-only` "(in progress)" suffix on the speaker badge. The
+  previous shape had a static label on a row whose text content
+  changed every poll — assistive tech could re-announce the entire
+  text on each whisper revision. The new shape announces "(in
+  progress)" once when the row mounts and lets the partial text
+  revise silently.
+- **Stale `current_partial: Option<...>` reference in `learnings.md`
+  (2026-04-26 streaming entry) corrected to `current_partials:
+  Vec<Utterance>`.** PR3's design landed plural-per-source, not
+  singular-per-session. Future sessions reading the entry now see
+  the actually-shipped shape.
+- **"byte-identical" → "observably equivalent" in the Phase B
+  CHANGELOG section.** The earlier entry literally contradicted the
+  same-day `learnings.md` 2026-04-26 entry on the "byte-identical
+  trap" — the term is precise CPU-cache-line vocabulary, not a
+  description of transcription text equivalence.
+- **New stable-cutoff boundary unit test.** Pins the `<=` semantics
+  of the streaming policy: a segment ending exactly at the
+  `commit_tail_ms`-derived cutoff commits as a final (rather than
+  staying as a partial for one extra inference window). Prevents a
+  silent regression from a future tightening to `<`.
+- 205 lib tests + 10 e2e tests pass; clippy + fmt + svelte-check
+  clean.
+
 ### Added
 
 #### Live partial-utterance rendering in the meeting panel (#108 PR4)
@@ -288,9 +326,9 @@ What's deliberately **not** here yet (tracked in #110):
 - `stop_dictation` now invokes inference through the streaming
   entry point (`Transcribe::transcribe_chunks`) rather than the
   one-shot `transcribe_with_prompt`. Default-impl behaviour is
-  byte-identical to before — the captured buffer is passed as a
-  single chunk, the default impl produces one final utterance, the
-  text reaches the clipboard exactly as it did pre-refactor — but
+  observably equivalent to before — the captured buffer is passed
+  as a single chunk, the default impl produces one final utterance,
+  the text reaches the clipboard exactly as it did pre-refactor — but
   the call site is now ready for a future Whisper-sliding-window or
   Parakeet backend that emits multiple partial utterances mid-
   recording. Non-final utterances are filtered out at this layer
