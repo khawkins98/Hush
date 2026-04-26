@@ -173,7 +173,7 @@ pub async fn download_with_progress(
         .with_context(|| format!("flush {}", part_path.display()))?;
     drop(file);
 
-    let actual_sha = format!("{:x}", hasher.finalize());
+    let actual_sha = hex_encode(hasher.finalize());
     if !sha_eq(&actual_sha, expected_sha256_hex) {
         let _ = fs::remove_file(&part_path).await;
         return Err(anyhow!(
@@ -202,6 +202,23 @@ fn sha_eq(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
+/// Hex-encode a byte slice as lowercase ASCII. Used for SHA-256 digest
+/// formatting. Inline rather than pulling in `hex` / `base16ct`: the
+/// hot path is a 32-byte digest at most, called twice (real download +
+/// test helper), and the inline cost is one `String` allocation. Sha2
+/// 0.11 dropped the `LowerHex` impl on `finalize()`'s return type so
+/// the prior `format!("{:x}", hasher.finalize())` no longer compiles —
+/// hence this helper rather than touching every call site.
+fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
+    let bytes = bytes.as_ref();
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,7 +242,7 @@ mod tests {
     fn sha256_hex(bytes: &[u8]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
-        format!("{:x}", hasher.finalize())
+        hex_encode(hasher.finalize())
     }
 
     fn no_progress() -> Box<ProgressCallback> {
