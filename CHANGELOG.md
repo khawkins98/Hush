@@ -181,6 +181,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Updater plugin no longer panics on app launch.**
+  `tauri-plugin-updater::Builder::new().build()` was registered in
+  `lib.rs` without a corresponding `plugins.updater` block in
+  `tauri.conf.json` (the plugin requires `pubkey` + `endpoints` to
+  deserialise). On startup the plugin's deserialiser hit a `null`
+  config and the whole app crashed before the main window appeared
+  with `PluginInitialization("updater", "...invalid type: null,
+  expected struct Config")`. The plugin registration is commented
+  out until #10 wires the signing key and endpoints; the Cargo and
+  npm deps stay in place so #10 lands as a single focused PR.
 - **Welcome modal a11y batch (closes #48).** Round-4 reviewer
   flagged four issues on the recent welcome / model-picker work:
   - Modal had no Escape-key dismissal — keyboard-only users were
