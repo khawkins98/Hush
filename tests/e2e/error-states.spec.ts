@@ -8,7 +8,12 @@ import { installMocks } from "./_mock";
 // for the variants the user is most likely to hit.
 
 test.describe("IPC error copy", () => {
-  test("transcription-unavailable surfaces the model-path hint", async ({ page }) => {
+  test("transcription-unavailable points at the model picker", async ({ page }) => {
+    // The default mock `model_list` has Whisper Base as `isDownloaded: true`
+    // — that suppresses the no-model banner so we exercise the
+    // post-click-error path, not the never-let-the-user-click-Start path.
+    // (The banner-instead-of-error path is covered in
+    // first-run.spec.ts's no-model test.)
     await installMocks(page, {
       stop_dictation: () => {
         // Tauri's invoke rejects with the serialised IpcError shape.
@@ -18,17 +23,69 @@ test.describe("IPC error copy", () => {
     });
     await page.goto("/");
 
-    // Click Start, then Stop — the start succeeds (default mock),
-    // the stop throws.
     await page.getByRole("button", { name: "Start recording" }).click();
     await page.getByRole("button", { name: "Stop recording and transcribe" }).click();
 
-    // The recovery copy mentions HUSH_MODEL_PATH or "model" so a
-    // user knows what to fix. We assert on a substring rather than
-    // pinning the whole string — wording can drift, the *signal*
-    // is what matters.
-    const errorRegion = page.getByRole("alert");
+    // The new copy points at the in-app Models section and mentions
+    // Download — replaces the stale HUSH_MODEL_PATH instruction. Match
+    // on substring so the wording can drift without breaking the test.
+    const errorRegion = page.getByRole("alert").first();
     await expect(errorRegion).toBeVisible();
-    await expect(errorRegion).toContainText(/model|whisper|HUSH_MODEL_PATH/i);
+    await expect(errorRegion).toContainText(/model/i);
+    await expect(errorRegion).toContainText(/download/i);
+    // Regression: the old copy mentioned HUSH_MODEL_PATH and a
+    // milestone-deferred picker. New copy must not.
+    await expect(errorRegion).not.toContainText(/HUSH_MODEL_PATH/);
+    await expect(errorRegion).not.toContainText(/coming in/i);
+  });
+});
+
+test.describe("first-time setup banner", () => {
+  test("shows when no model is downloaded and disables Start", async ({ page }) => {
+    await installMocks(page, {
+      // Override the default catalog mock to simulate fresh install:
+      // no card has `isDownloaded: true`.
+      model_list: () => [
+        {
+          id: "whisper-base",
+          displayName: "Whisper Base",
+          filename: "ggml-base.bin",
+          sizeBytes: 147951465,
+          sizeLabel: "142 MB",
+          speed: 4,
+          accuracy: 2,
+          description: "Default. Fast, decent for dictation.",
+          downloadUrl: "https://example.test/ggml-base.bin",
+          sha256: "abc",
+          isDownloaded: false,
+          isSelected: false,
+          expectedPath: "/tmp/models/ggml-base.bin",
+        },
+      ],
+    });
+    await page.goto("/");
+
+    // Banner is visible with the action button. Match exact text to
+    // disambiguate from the disabled Start button's aria-label
+    // "Choose a model first" — both contain the substring "Choose a model".
+    await expect(page.getByText("Set up your first model")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Choose a model", exact: true }),
+    ).toBeVisible();
+
+    // Start is disabled — clicking through to a "no model" error is
+    // worse UX than not letting them click at all.
+    await expect(
+      page.getByRole("button", { name: "Choose a model first", exact: true }),
+    ).toBeDisabled();
+  });
+
+  test("disappears when at least one model is downloaded", async ({ page }) => {
+    // Default mocks have isDownloaded: true on Whisper Base.
+    await installMocks(page);
+    await page.goto("/");
+
+    await expect(page.getByText("Set up your first model")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Start recording" })).toBeEnabled();
   });
 });
