@@ -68,7 +68,7 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migr
 async-trait = "0.1"
 
 # Foreground app detection
-active-win-pos-rs = "0.8"
+active-win-pos-rs = "0.10"
 
 # Push-to-talk key events (key-down / key-up)
 rdev = "0.5"
