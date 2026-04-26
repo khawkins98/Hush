@@ -168,6 +168,8 @@ pub fn run() {
             ipc::commands::get_first_run_completed,
             ipc::commands::mark_first_run_completed,
             ipc::commands::open_macos_privacy_pane,
+            ipc::commands::diagnose_macos_permissions,
+            ipc::commands::reset_macos_permissions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");
