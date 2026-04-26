@@ -280,6 +280,24 @@ pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
             return Ok(());
         }
         PttEnablement::DisabledMacosDefault => {
+            // Default-disable on macOS, opt-in via env var. The
+            // alternative paths considered (and rejected, for the
+            // record so a future contributor doesn't re-explore them):
+            //
+            //   - Patch rdev upstream: no public patch exists, the
+            //     fix would have to land + release + we'd track it.
+            //   - Wrap the TSM call in dispatch_async to the main
+            //     queue: requires forking rdev anyway, since the call
+            //     site is inside its CGEventTap callback.
+            //   - Switch to a different event-tap library: nothing
+            //     mature enough to replace rdev today; that's #70.
+            //   - Catch the abort: dispatch_assert_queue_fail is a
+            //     hard __builtin_trap, not a Rust panic. catch_unwind
+            //     can't save us.
+            //
+            // So: env-var disable is zero-cost, ships today, keeps
+            // toggle hotkey + button dictation working, and gates a
+            // hard crash. Worth the loss of PTT-by-default on macOS.
             tracing::warn!(
                 "PTT listener skipped on macOS by default: rdev calls TSMGetInputSourceProperty \
                  from a non-main thread, which dispatch_assert_queue_fail's on macOS 26+ and \

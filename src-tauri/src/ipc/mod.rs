@@ -7,17 +7,19 @@
 //! ## Responsibilities
 //!
 //! - Hold the application's long-lived service handles (audio capture,
-//!   transcription) inside [`AppState`], constructed once at startup and
-//!   shared across Tauri command handlers via `tauri::State<AppState>`.
-//! - Expose a small, M2-scoped command surface (`list_input_devices`,
-//!   `start_dictation`, `stop_dictation`) — enough to drive the
-//!   "press button → record → transcribe → paste" loop end-to-end. Per the
-//!   PRD §11 milestone plan, the hotkey, history, dictionary, and settings
-//!   commands land in later milestones (M2 hotkey, M3 storage / picker, M4
-//!   dictionary).
+//!   transcription, history, replacements, vocabulary, settings, HTTP)
+//!   inside [`AppState`], constructed once at startup and shared across
+//!   Tauri command handlers via `tauri::State<AppState>`.
+//! - Expose Tauri command handlers as thin wrappers that pull state and
+//!   call into the underlying repository / capture / transcription
+//!   modules. Orchestration of the dictation hot path lives in
+//!   `commands::stop_dictation`, which delegates per-step to the
+//!   helper functions in the same file (`load_vocabulary_prompt`,
+//!   `load_replacement_rules`, `take_foreground_snapshot`,
+//!   `spawn_history_insert`, etc.).
 //! - Capture the foreground app at the moment recording starts so the
-//!   focused-app metadata is preserved even if Hush's own window grabs focus
-//!   during the recording.
+//!   focused-app metadata is preserved even if Hush's own window grabs
+//!   focus during the recording.
 //!
 //! ## Test seam (PRD §13.5)
 //!
