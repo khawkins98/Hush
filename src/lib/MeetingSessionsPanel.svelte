@@ -74,6 +74,12 @@
     onDelete: (session: MeetingSession) => void | Promise<void>;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
+    /// Lazy-load the detail for a historical session row. Returns
+    /// the detail (utterances + metadata) so the panel can render
+    /// the transcript inline. The parent caches results in a
+    /// `Map<id, MeetingSessionDetail>` so re-expanding a row
+    /// doesn't re-hit the IPC.
+    onLoadDetail: (id: number) => Promise<MeetingSessionDetail>;
   };
 
   let {
@@ -90,7 +96,57 @@
     onDelete,
     onStart,
     onStop,
+    onLoadDetail,
   }: Props = $props();
+
+  /**
+   * Per-row expand-state for historical sessions (#122 PR5). Keyed
+   * by session id; presence of an entry means the row is currently
+   * showing its transcript. The cached detail is stored alongside
+   * so a toggle-close-then-toggle-open round-trip doesn't re-issue
+   * the IPC. `null` value means "expand requested, fetch in flight"
+   * (renders a Loading line until the promise resolves).
+   */
+  let expandedDetails = $state<Map<number, MeetingSessionDetail | null>>(
+    new Map(),
+  );
+
+  /**
+   * Toggle a historical session row's transcript view. First open
+   * lazy-fetches via the `onLoadDetail` callback the parent owns;
+   * subsequent toggles just flip the entry in/out of the map.
+   */
+  async function toggleSessionDetail(id: number) {
+    if (expandedDetails.has(id)) {
+      const next = new Map(expandedDetails);
+      next.delete(id);
+      expandedDetails = next;
+      return;
+    }
+    // Optimistically mark as "loading" so the row immediately
+    // shows feedback. Map swap-in for Svelte reactivity.
+    const loading = new Map(expandedDetails);
+    loading.set(id, null);
+    expandedDetails = loading;
+    try {
+      const detail = await onLoadDetail(id);
+      const done = new Map(expandedDetails);
+      // Guard against the user collapsing the row mid-fetch — only
+      // commit if they're still expecting it.
+      if (done.has(id)) {
+        done.set(id, detail);
+        expandedDetails = done;
+      }
+    } catch (e) {
+      // Drop the loading marker on error so the row falls back to
+      // collapsed; the parent's error region is the right place to
+      // surface the failure (already wired via `sessionsError`).
+      const after = new Map(expandedDetails);
+      after.delete(id);
+      expandedDetails = after;
+      console.error("toggleSessionDetail:", e);
+    }
+  }
 
   /**
    * Display label for an utterance's speaker. Pre-real-diarization
@@ -485,7 +541,56 @@
           {#if session.notes}
             <p class="session-notes">{session.notes}</p>
           {/if}
+          {#if expandedDetails.has(session.id)}
+            {@const detail = expandedDetails.get(session.id)}
+            {#if detail === null}
+              <p class="session-detail-loading">Loading transcript…</p>
+            {:else if detail && detail.utterances.length === 0}
+              <p class="session-detail-empty">
+                This session has no utterances yet — likely a
+                start-and-stop with no audio captured.
+              </p>
+            {:else if detail}
+              <ol
+                class="live-transcript session-detail-transcript"
+                aria-label={`Transcript for ${session.appName} session`}
+              >
+                {#each detail.utterances as utt (utt.id)}
+                  <li
+                    class="utterance speaker-row-{utt.speakerLabel ?? 'unknown'}"
+                  >
+                    <div class="utterance-meta">
+                      <span
+                        class="speaker-badge speaker-{utt.speakerLabel ?? 'unknown'}"
+                      >
+                        {speakerLabel(utt)}
+                      </span>
+                      <span class="utterance-time">
+                        {formatOffset(utt.startedAtMs)}
+                      </span>
+                    </div>
+                    <p class="utterance-text">{utt.text}</p>
+                  </li>
+                {/each}
+              </ol>
+            {/if}
+          {/if}
           <div class="session-actions">
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => void toggleSessionDetail(session.id)}
+              aria-expanded={expandedDetails.has(session.id)}
+              aria-label={`${expandedDetails.has(session.id) ? "Hide" : "Show"} transcript for ${session.appName} session`}
+            >
+              {#if expandedDetails.has(session.id)}
+                Hide transcript
+              {:else if session.utteranceCount > 0}
+                Show transcript ({session.utteranceCount})
+              {:else}
+                Show transcript
+              {/if}
+            </button>
             <button
               type="button"
               class="ghost"
@@ -945,6 +1050,27 @@
   margin-top: 0.5rem;
   display: flex;
   justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.session-detail-transcript {
+  /* Inherits the live-transcript shell. Override max-height since
+     a closed session doesn't grow during display — show as much
+     as fits naturally before clamping. */
+  margin: 0.6rem 0 0.4rem;
+  max-height: 28rem;
+}
+
+.session-detail-loading,
+.session-detail-empty {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed #c7c7c7;
+  border-radius: 6px;
+  background-color: rgba(0, 0, 0, 0.02);
+  color: #555;
+  font-size: 0.85rem;
+  font-style: italic;
 }
 
 button {

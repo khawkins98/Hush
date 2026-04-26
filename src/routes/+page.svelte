@@ -766,6 +766,29 @@
     }
   }
 
+  /**
+   * Lazy-loader for a historical session's full detail. Used by
+   * the panel's expand-on-click affordance (#122 PR5). Errors are
+   * surfaced through the meeting error region — same channel the
+   * sessions list uses for its own load failures.
+   */
+  async function loadMeetingSessionDetail(
+    id: number,
+  ): Promise<MeetingSessionDetail> {
+    try {
+      const detail = await invoke<MeetingSessionDetail>(
+        "meeting_session_get",
+        { id },
+      );
+      meetingSessionsError = null;
+      return detail;
+    } catch (e) {
+      meetingSessionsError =
+        e instanceof Error ? e.message : "Failed to load session transcript.";
+      throw e;
+    }
+  }
+
   async function startMeetingSession() {
     meetingBusy = true;
     try {
@@ -1076,6 +1099,7 @@
     onDelete={deleteMeetingSession}
     onStart={startMeetingSession}
     onStop={stopMeetingSession}
+    onLoadDetail={loadMeetingSessionDetail}
   />
 </main>
 
