@@ -12,6 +12,7 @@
 - [ ] `cargo test --lib --features whisper` if this touches the transcription path
 - [ ] `npm run check` (frontend type check)
 - [ ] `npm run test:e2e` if this touches `src/routes/`
+- [ ] `npm run tauri dev` boots cleanly (no startup panic) — required if this PR touches `src-tauri/src/lib.rs`, `tauri.conf.json`, `Cargo.toml` deps, plugin registrations, or `capabilities/`. CI doesn't run a real Tauri runtime, so a startup-time panic (plugin init, capability misconfig, AppState build) is invisible until a contributor launches the dev app.
 - [ ] Manual smoke per `STATUS.md` §c if this touches the dictation path
 
 ## Checklist

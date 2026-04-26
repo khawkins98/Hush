@@ -100,6 +100,18 @@ What it does **not** catch: real IPC, HUD lifecycle, hotkey registration, real a
 
 Before merging anything that touches the dictation hot path, run through the manual checklist in [`STATUS.md`](./STATUS.md) §c. The path involves a real microphone and (optionally) a real Whisper model — neither of which CI has access to.
 
+### Dev-launch smoke (`npm run tauri dev`)
+
+A separate, much lighter check: **run `npm run tauri dev` once before opening a PR that touches startup**. CI does not run a real Tauri runtime — every test target is `cargo test --lib`, `cargo clippy`, or Playwright in plain Chromium with mocked IPC. That means a panic at app boot (plugin initialization, capability misconfig, `AppState::build_default` failure, missing `tauri.conf.json` block) is **invisible to CI** and only surfaces when a contributor pulls the branch. The fix is cheap: launch the dev app, wait for the "starting Hush" tracing log, confirm no panic, kill it. ~30 seconds.
+
+Required when your PR touches:
+
+- `src-tauri/src/lib.rs` (especially the `tauri::Builder` chain or the `setup` hook)
+- `src-tauri/tauri.conf.json` (window config, plugin config blocks)
+- `src-tauri/Cargo.toml` (adding/removing a Tauri plugin dep)
+- `src-tauri/capabilities/*.json`
+- Anything that adds or removes a `.plugin(...)` call
+
 ### Type check (`npm run check`)
 
 Runs `svelte-check` against the entire frontend including `vite.config.js`. Required to be clean for every PR; the CI job runs the same command.
@@ -125,6 +137,7 @@ Each PR template renders the checklist below. The short version:
 - [ ] `learnings.md` entry if a non-obvious decision was made
 - [ ] TODOs reference a GitHub issue number
 - [ ] If this touches the dictation path, manual smoke per `STATUS.md` §c was run
+- [ ] If this touches `lib.rs`, `tauri.conf.json`, plugin registrations, `Cargo.toml` deps, or `capabilities/`, dev-launch smoke run (`npm run tauri dev` boots without panic)
 - [ ] You confirm you have **not** read VoiceInk's Swift source
 
 ---
