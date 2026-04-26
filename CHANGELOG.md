@@ -249,6 +249,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trap is still defended (typo-squats like `myhf.co` and
   `hf.co.attacker.com` are unit-tested as rejected). Hop cap of 4
   unchanged.
+- **Whisper transcription is now compiled in by default** (closes
+  the silent-no-model bug surfaced in hands-on testing). Pre-fix:
+  `npm run tauri dev` built without `--features whisper`, so the
+  binary contained no Whisper loader code. Users could download a
+  model successfully — the file landed on disk at the right path
+  with the right SHA — but on the next launch the app reported
+  "no transcription model is loaded" because `build_transcriber`
+  was a `cfg`-gated stub returning `None`. The diagnostic looked
+  identical to "user forgot to download" but had nothing to do with
+  the user's actions. `whisper` is now a `default` Cargo feature.
+  cmake is therefore mandatory at build time; the README's
+  Prerequisites block is updated to call this out in bold. UI-only
+  contributors who don't want cmake can opt out via the new
+  `npm run tauri:ui-only` script (`--no-default-features`).
 - **First-time-user flow: "Set up your first model" banner.** Two
   problems hit the user on the first launch with no model: (a) the
   prominent action surface was Start recording, which on click
