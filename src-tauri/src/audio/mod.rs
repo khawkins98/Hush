@@ -111,6 +111,21 @@ impl AudioSource {
     pub fn default_microphone() -> Self {
         AudioSource::Microphone(None)
     }
+
+    /// Coarse kind label, suitable for logs and user-facing error
+    /// messages without leaking the inner device id.
+    ///
+    /// `Debug`-printing the full enum (`AudioSource::Microphone(Some("Khawkins' AirPods"))`)
+    /// surfaces user PII — bluetooth pairing names often include
+    /// real names. The `kind_label` flattens to `"microphone"` /
+    /// `"system-audio"` so structured-logging fields and IPC error
+    /// strings stay generic.
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            AudioSource::Microphone(_) => "microphone",
+            AudioSource::SystemAudio => "system-audio",
+        }
+    }
 }
 
 /// Frontend-facing listing of one audio source the user can pick from.
@@ -630,19 +645,25 @@ impl AudioCapture for CpalAudioCapture {
                 // capture per process at a time is what cpal
                 // supports, and the meeting pump's two-source
                 // config is mic + SCK, not mic + mic.
-                let device_id_owned = device_id.clone();
-                self.dispatch::<()>(|reply| Cmd::Start {
-                    device_id: device_id_owned,
-                    reply,
-                })?;
+                // Snapshot the sender BEFORE dispatching Start so a
+                // post-Start failure (cmd_tx mutex poisoning) doesn't
+                // leave us with an incremented refcount and no way
+                // to send the matching Cmd::Stop. With the clone in
+                // hand we can issue a rollback Stop on any
+                // construction failure path.
                 let cmd_tx = self
                     .cmd_tx
                     .lock()
                     .map_err(|_| anyhow!("audio command channel lock poisoned"))?
                     .clone();
+                let device_id_owned = device_id.clone();
+                self.dispatch::<()>(|reply| Cmd::Start {
+                    device_id: device_id_owned,
+                    reply,
+                })?;
                 Ok(Box::new(CpalMicSessionHandle {
                     source: AudioSource::Microphone(device_id),
-                    cmd_tx,
+                    cmd_tx: Some(cmd_tx),
                     level: Arc::clone(&self.level),
                 }))
             }
@@ -679,12 +700,17 @@ impl AudioCapture for CpalAudioCapture {
 /// microphone source. Owns the right to send a `Cmd::Stop` to the
 /// cpal worker on drop / explicit stop.
 ///
-/// The worker thread keeps the actual `Session` (the cpal stream + buffer);
-/// this handle is just a typed permission slip that can issue the
-/// stop command and receive the drained samples back.
+/// The worker thread keeps the actual `Session` (the cpal stream +
+/// buffer); this handle is just a typed permission slip that issues
+/// the stop command and receives the drained samples back.
+///
+/// `cmd_tx` is `Option` so the explicit `stop()` path can `take()`
+/// it and the `Drop` impl can detect "already stopped" — a single
+/// stop guarantee is what makes the resource accounting on
+/// `active_sessions` symmetric.
 struct CpalMicSessionHandle {
     source: AudioSource,
-    cmd_tx: mpsc::Sender<Cmd>,
+    cmd_tx: Option<mpsc::Sender<Cmd>>,
     level: Arc<AtomicU32>,
 }
 
@@ -700,13 +726,43 @@ impl AudioSession for CpalMicSessionHandle {
         // which is fine for the HUD's single-bar meter.
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
-    fn stop(self: Box<Self>) -> Result<CapturedAudio> {
+    fn stop(mut self: Box<Self>) -> Result<CapturedAudio> {
+        let cmd_tx = self
+            .cmd_tx
+            .take()
+            .ok_or_else(|| anyhow!("mic session already stopped"))?;
         let (tx, rx) = mpsc::channel::<Result<CapturedAudio>>();
-        self.cmd_tx
+        cmd_tx
             .send(Cmd::Stop(tx))
             .map_err(|_| anyhow!("audio worker thread has exited"))?;
         rx.recv()
             .map_err(|_| anyhow!("audio worker dropped reply channel"))?
+    }
+}
+
+impl Drop for CpalMicSessionHandle {
+    fn drop(&mut self) {
+        // Implicit-drop path: the handle is dropped without an
+        // explicit `stop()` (panic in the pump task, runtime
+        // shutdown, manager Drop, …). Best-effort stop so the cpal
+        // worker's singleton mic Session slot is released; without
+        // this the mic stream stays live until the worker thread
+        // exits, and a subsequent capture session sees
+        // "recording already in progress" forever.
+        //
+        // Drop must be fast — we don't wait for the reply. The
+        // worker's Cmd::Stop handler decrements active_sessions
+        // even when the reply channel is dropped on the receiver
+        // side, so the refcount stays consistent.
+        if let Some(cmd_tx) = self.cmd_tx.take() {
+            let (tx, _rx) = mpsc::channel::<Result<CapturedAudio>>();
+            if let Err(e) = cmd_tx.send(Cmd::Stop(tx)) {
+                tracing::warn!(
+                    error = ?e,
+                    "cpal mic session Cmd::Stop failed during Drop (worker likely exited)"
+                );
+            }
+        }
     }
 }
 
