@@ -64,13 +64,6 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --all -- --check
 
-      # Clippy on the default feature set first — fast and covers the bulk of
-      # the code. The `whisper` feature is exercised separately so a missing
-      # cmake on a runner shows up as a clear, scoped failure.
-      - name: clippy (default features)
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
       # The `whisper-rs-sys` build calls into whisper.cpp's GGML, which uses
       # `vmmlaq_s32` (an i8mm intrinsic) unconditionally on aarch64. Apple
       # Silicon supports i8mm, but the default macOS clang invocation does
@@ -79,12 +72,27 @@ jobs:
       # target armv8.6-a (which includes i8mm in its baseline) on the macOS
       # runner is the smallest fix that keeps the production target intact.
       # Linux/Windows runners are x86_64 and unaffected.
+      #
+      # Set BEFORE the first clippy invocation: `whisper` is a default Cargo
+      # feature now, so even `cargo clippy --all-targets` (without
+      # `--features whisper`) pulls whisper-rs-sys into the build. Setting
+      # the CFLAGS later — as a previous version of this workflow did, when
+      # `whisper` was opt-in — leaves the default-features clippy step
+      # without the flag and reproduces the i8mm error on a cold cache.
       - name: Set whisper.cpp arch flags (macOS arm64)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           echo "CFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
+
+      # Clippy on the default feature set first — fast and covers the bulk of
+      # the code. The `whisper` feature is exercised separately below; both
+      # invocations run with the macOS arch flags set above so whisper.cpp's
+      # ARM SIMD intrinsics compile cleanly.
+      - name: clippy (default features)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: clippy (whisper feature)
         working-directory: src-tauri
