@@ -73,9 +73,6 @@ active-win-pos-rs = "0.8"
 # Push-to-talk key events (key-down / key-up)
 rdev = "0.5"
 
-# Archive/export support
-zip = "2"
-
 [features]
 # `whisper` is a default feature so a vanilla `cargo run` / `npm run
 # tauri dev` builds the actual transcription path. UI-only
