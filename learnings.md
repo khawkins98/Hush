@@ -486,3 +486,16 @@ That means the entire class of "app fails to start" bugs is invisible to automat
 **Where this lives now.** Required smoke step for any PR that touches `lib.rs`, `tauri.conf.json`, `Cargo.toml` plugin deps, capability files, or `.plugin(...)` registrations. Documented in `CONTRIBUTING.md` (Testing → Dev-launch smoke), the PR template, and the PR checklist. The smoke is a checklist item, not a CI gate, because requiring it gates the workflow on the contributor's own honesty — but the alternative (a CI job that costs minutes per PR for a check the contributor can do in 30 seconds) is worse.
 
 **Concrete heuristic for this repo.** When an edit touches any of those files, run `npm run tauri dev` before opening the PR. Same shape as running `cargo test` after a Rust change or `npm run check` after a Svelte change — it's a fixed habit, not a judgement call.
+
+## 2026-04-26 — macOS window transparency needs both Tauri Cargo feature and config flag
+
+The HUD window has `"transparent": true` in `tauri.conf.json`. The design depends on it — the dark translucent pill the HUD CSS draws is meant to sit on top of whatever's behind it, not inside a solid window. On macOS this only works if Tauri uses Apple's private window-shape APIs, and Tauri gates that behind two switches that **both** have to be flipped:
+
+1. **Cargo feature** — `tauri = { version = "2", features = ["macos-private-api"] }`. Compiles the implementation in.
+2. **App config** — `app.macOSPrivateApi: true` in `tauri.conf.json`. Activates it at runtime.
+
+If only the config flag is set without the Cargo feature, Tauri's build script fails with "The `tauri` dependency features on the `Cargo.toml` file does not match the allowlist defined under `tauri.conf.json`". If neither is set but the window is configured `transparent: true`, the dev startup logs a warning and the window renders with a solid background — silent product breakage, since the HUD looks "fine" but the design intent (translucent pill, see-through to the desktop) is lost.
+
+**App Store implication.** Tauri's docs flag that `macos-private-api` uses Apple private APIs that may complicate App Store review. Hush's v1 distribution plan (PRD §11) is direct distribution, not App Store, so this is irrelevant today. If the project ever pursues App Store distribution, the HUD's transparency design needs to be revisited — either accept solid-background HUD rendering on the App Store target (lossless via `cfg!(target_os = "macos")` config gating) or use only public APIs.
+
+**Smoke confirms the fix.** Pre-fix: dev log emits `The window is set to be transparent but the macos-private-api is not enabled`. Post-fix: warning is absent. The dev-launch smoke (which just landed in #61) is exactly the workflow that caught this — a contributor running `npm run tauri dev` sees the warning and the visibly-solid HUD background, and knows to fix it. Without the smoke, the warning would have only been noticed by a user complaining the HUD looks wrong.
