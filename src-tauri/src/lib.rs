@@ -7,6 +7,7 @@ pub mod history;
 pub mod hotkey;
 pub mod hud;
 pub mod ipc;
+pub mod repository;
 pub mod settings;
 pub mod transcription;
 pub mod updater;
