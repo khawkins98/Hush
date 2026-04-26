@@ -18,7 +18,8 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 ### Shipped
 
-- 🎙️ Push-to-talk (`RightControl` by default) and toggle-record (`Ctrl+⌥/Alt+H`) global hotkeys
+- 🎙️ Toggle-record global hotkey (`Ctrl+⌥/Alt+H` by default; works on every platform)
+- 🎙️ Push-to-talk (`RightControl` by default) — Linux + Windows only for now. Disabled by default on macOS because rdev 0.5 hard-aborts on macOS 26+ ([#69](https://github.com/khawkins98/Hush/issues/69)); a native CGEventTap reimplementation is tracked under [#70](https://github.com/khawkins98/Hush/issues/70) but parked until production demand justifies it. Toggle covers most dictation use cases — see issue #70 for the tradeoff.
 - 🤫 100 % local transcription — whisper.cpp on your machine; no audio ever leaves the device
 - 📋 Transcription written to clipboard with a "Ready to paste" notification
 - 🔴 Recording HUD overlay — borderless transparent always-on-top window with a pulsing dot and a live RMS-driven level meter
@@ -32,6 +33,22 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 - 🔄 Auto-update channel via the Tauri updater plugin (#10)
 - 🎯 Parakeet via ONNX as a second engine (#32)
 - 🔊 System-audio loopback capture (#33)
+
+---
+
+## Platform support — honest version
+
+| Platform | Status | Tested by maintainer |
+|---|---|---|
+| **macOS** (13+) | Primary target. Daily-driven. | ✅ Yes |
+| **macOS 26+** | Same as above, but PTT disabled by default ([#69](https://github.com/khawkins98/Hush/issues/69) / [#70](https://github.com/khawkins98/Hush/issues/70)) | ✅ Yes |
+| **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested by the maintainer |
+| **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ❌ Not hands-on tested |
+| **Windows** | Theoretically supported. Was in the original CI matrix but dropped to keep CI fast (PRD §11 — Windows distribution lands at M6). | ❌ Not hands-on tested |
+
+**Linux and Windows hands-on contributions are welcome.** If you run Hush on either and something is broken, file an issue with steps to reproduce + your distribution / version. Build prerequisites are in [`CONTRIBUTING.md`](./CONTRIBUTING.md). PRs that fix platform-specific gaps are exactly the right contribution shape — small, scoped, and address a real reported bug.
+
+The maintainer's focus is the macOS path; Linux + Windows are validated only at the "compiles cleanly, unit tests pass, frontend type-checks" CI level. That's a meaningful gap from "this app actually works on your machine."
 
 ---
 
