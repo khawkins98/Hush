@@ -75,6 +75,41 @@ pub struct AudioDevice {
     pub is_default: bool,
 }
 
+/// What the user wants to capture from.
+///
+/// The dictation hot path always picks `Microphone`. Meeting Mode (#33) and
+/// system-audio capture pick `SystemAudio` to record what's playing on the
+/// speakers — Zoom calls, podcasts, anything routed through the OS mixer
+/// rather than into a microphone.
+///
+/// Returning a discriminated source rather than overloading "device id"
+/// means the audio backend can resolve each variant to a different
+/// platform primitive (cpal input device for `Microphone`; ScreenCaptureKit
+/// / WASAPI loopback / PulseAudio monitor for `SystemAudio`) without the
+/// caller having to know which path each platform takes.
+///
+/// `serde` derives are present so this can flow over the IPC boundary —
+/// the frontend's source picker dispatches on the `kind` tag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "deviceId", rename_all = "kebab-case")]
+pub enum AudioSource {
+    /// Capture from a named microphone, or the system default if `None`.
+    Microphone(Option<String>),
+    /// Capture what's playing on the system's default audio output.
+    /// Per-platform implementation lives behind the [`AudioCapture`] trait;
+    /// not all platforms have shipped support yet — see
+    /// [`AudioCapture::supports_system_audio`] for the capability check.
+    SystemAudio,
+}
+
+impl AudioSource {
+    /// Convenience constructor for the system default mic — the most
+    /// common case at call sites.
+    pub fn default_microphone() -> Self {
+        AudioSource::Microphone(None)
+    }
+}
+
 /// Captured audio plus the format it was recorded in.
 #[derive(Debug, Clone)]
 pub struct CapturedAudio {
@@ -97,7 +132,56 @@ pub trait AudioCapture: Send + Sync {
     /// [`AudioCapture::stop`] is called. Returns an error if a recording is
     /// already in progress, the named device cannot be found, or the host
     /// refuses to open an input stream on it.
+    ///
+    /// Equivalent to [`AudioCapture::start_with_source`] with
+    /// `AudioSource::Microphone(device_id.map(str::to_owned))`. Kept as a
+    /// distinct method so existing call sites and tests continue to work
+    /// without churn while the system-audio variant is rolled out
+    /// incrementally per platform.
     fn start(&self, device_id: Option<&str>) -> Result<()>;
+
+    /// Begin capturing from `source` — microphone or system audio.
+    ///
+    /// Default impl dispatches `Microphone` to [`AudioCapture::start`] and
+    /// errors on `SystemAudio` with a message that names the platform.
+    /// Backends that support system-audio capture override this method
+    /// AND override [`AudioCapture::supports_system_audio`] to return
+    /// `true` for the appropriate sources.
+    ///
+    /// Why a default impl: most existing impls (the cpal backend, all
+    /// test mocks) have no system-audio support today. The default
+    /// keeps them compiling without making every implementor reach for
+    /// boilerplate `Err(...)` arms.
+    fn start_with_source(&self, source: AudioSource) -> Result<()> {
+        match source {
+            AudioSource::Microphone(device_id) => self.start(device_id.as_deref()),
+            AudioSource::SystemAudio => Err(anyhow!(
+                "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
+            )),
+        }
+    }
+
+    /// Whether this backend can capture from `source`.
+    ///
+    /// Used by the IPC layer to populate the frontend's source picker
+    /// (the user sees "System audio" disabled with a "coming soon"
+    /// affordance on platforms whose backend still returns `false`)
+    /// rather than letting the user pick an option that errors at start
+    /// time.
+    ///
+    /// Default returns `true` for `Microphone` (every backend has at
+    /// least mic capture, even mocks) and `false` for `SystemAudio`.
+    /// Backends override when they implement a new source.
+    fn supports_source(&self, source: &AudioSource) -> bool {
+        matches!(source, AudioSource::Microphone(_))
+    }
+
+    /// Convenience check used by frontend to decide whether to show the
+    /// system-audio option at all. Equivalent to
+    /// `self.supports_source(&AudioSource::SystemAudio)`.
+    fn supports_system_audio(&self) -> bool {
+        self.supports_source(&AudioSource::SystemAudio)
+    }
 
     /// Stop capturing and return the accumulated samples.
     ///
@@ -645,6 +729,140 @@ mod tests {
             }
         }
         assert_eq!(Stub.current_level(), 0.0);
+    }
+
+    // -- AudioSource + start_with_source default impl -------------------
+    //
+    // The default `start_with_source` impl dispatches `Microphone` to
+    // `start` and errors on `SystemAudio`. These tests pin both arms so
+    // a future trait change that "tightens" the default doesn't silently
+    // break a backend that's relying on it.
+
+    /// Mock that records the device id passed to `start` so we can
+    /// assert the default `start_with_source` actually forwards it.
+    struct RecordingMic {
+        last_device_id: std::sync::Mutex<Option<Option<String>>>,
+    }
+    impl RecordingMic {
+        fn new() -> Self {
+            Self {
+                last_device_id: std::sync::Mutex::new(None),
+            }
+        }
+    }
+    impl AudioCapture for RecordingMic {
+        fn list_input_devices(&self) -> Result<Vec<AudioDevice>> {
+            Ok(vec![])
+        }
+        fn start(&self, device_id: Option<&str>) -> Result<()> {
+            *self.last_device_id.lock().unwrap() = Some(device_id.map(str::to_owned));
+            Ok(())
+        }
+        fn stop(&self) -> Result<CapturedAudio> {
+            Ok(CapturedAudio {
+                samples: vec![],
+                format: CaptureFormat {
+                    sample_rate: 16_000,
+                    channels: 1,
+                },
+            })
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn start_with_source_microphone_default_forwards_to_start_with_none() {
+        let mic = RecordingMic::new();
+        mic.start_with_source(AudioSource::default_microphone())
+            .unwrap();
+        assert_eq!(*mic.last_device_id.lock().unwrap(), Some(None));
+    }
+
+    #[test]
+    fn start_with_source_microphone_with_id_forwards_the_id() {
+        // Pins the unwrap path: the wrapped `Option<String>` is unpacked
+        // back to `Option<&str>` for the legacy `start` signature.
+        // A future change that drops the inner unwrap would silently
+        // pass `Some("None")` or similar.
+        let mic = RecordingMic::new();
+        mic.start_with_source(AudioSource::Microphone(Some("usb-mic".to_owned())))
+            .unwrap();
+        assert_eq!(
+            *mic.last_device_id.lock().unwrap(),
+            Some(Some("usb-mic".to_owned()))
+        );
+    }
+
+    #[test]
+    fn start_with_source_system_audio_default_returns_error_naming_the_gap() {
+        // The default impl must surface a clear error rather than
+        // silently falling back to mic — that would let a frontend
+        // pick "System audio" and unknowingly record the wrong source.
+        let mic = RecordingMic::new();
+        let err = mic
+            .start_with_source(AudioSource::SystemAudio)
+            .expect_err("default impl errors for SystemAudio");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.to_lowercase().contains("system audio"),
+            "error should name what's missing; got: {msg}"
+        );
+        // And critically: the legacy `start` was NOT called.
+        assert_eq!(*mic.last_device_id.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn supports_source_default_is_microphone_only() {
+        // Default impl says yes to every Microphone source, no to
+        // SystemAudio. Pinned so a future trait change that flips a
+        // default to "everything supported" can't accidentally make
+        // the frontend's source picker offer SystemAudio on a backend
+        // that hasn't actually shipped it.
+        let mic = RecordingMic::new();
+        assert!(mic.supports_source(&AudioSource::default_microphone()));
+        assert!(mic.supports_source(&AudioSource::Microphone(Some("any".to_owned()))));
+        assert!(!mic.supports_source(&AudioSource::SystemAudio));
+        assert!(!mic.supports_system_audio());
+    }
+
+    #[test]
+    fn audio_source_serde_round_trips() {
+        // The IPC boundary serialises this enum; round-tripping pins
+        // the wire shape (`{ kind: "microphone" | "system-audio",
+        // deviceId: ... }`) so the frontend's TypeScript discriminated
+        // union stays in lock-step.
+        let mic = AudioSource::Microphone(Some("usb-mic".to_owned()));
+        let mic_default = AudioSource::default_microphone();
+        let sys = AudioSource::SystemAudio;
+
+        let mic_json = serde_json::to_string(&mic).unwrap();
+        let mic_default_json = serde_json::to_string(&mic_default).unwrap();
+        let sys_json = serde_json::to_string(&sys).unwrap();
+
+        assert!(
+            mic_json.contains(r#""kind":"microphone""#),
+            "got: {mic_json}"
+        );
+        assert!(
+            mic_json.contains(r#""deviceId":"usb-mic""#),
+            "got: {mic_json}"
+        );
+        assert!(
+            mic_default_json.contains(r#""kind":"microphone""#),
+            "got: {mic_default_json}"
+        );
+        assert!(
+            sys_json.contains(r#""kind":"system-audio""#),
+            "got: {sys_json}"
+        );
+
+        assert_eq!(serde_json::from_str::<AudioSource>(&mic_json).unwrap(), mic);
+        assert_eq!(
+            serde_json::from_str::<AudioSource>(&sys_json).unwrap(),
+            AudioSource::SystemAudio
+        );
     }
 
     // -- drain_buffer regression tests -----------------------------------
