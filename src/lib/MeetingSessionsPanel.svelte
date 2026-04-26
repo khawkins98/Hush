@@ -140,7 +140,13 @@
    * that maps to "you" vs "remote participants" on a typical Zoom
    * call. Until #111 lands, that's the best signal we have.
    */
-  function speakerLabel(u: PersistedUtterance): string {
+  /**
+   * Both `PersistedUtterance` and `StreamingUtterance` carry a
+   * `speakerLabel`; the helper accepts either via a structural
+   * type so the partials list (#108 PR4) and the finals list can
+   * use the same display logic.
+   */
+  function speakerLabel(u: { speakerLabel: string | null }): string {
     switch (u.speakerLabel) {
       case "mic":
         return "You";
@@ -279,19 +285,28 @@
     liveTranscriptFollowing = true;
   }
 
-  // Auto-scroll on each utterance-count increment, but only while
-  // the user is following the tail. Reads the count via $derived so
-  // this re-runs exactly when new utterances land.
+  // Auto-scroll on each utterance-count or partial-text-change
+  // increment, but only while the user is following the tail. Reads
+  // both via $derived so this re-runs exactly when new utterances
+  // land OR when an in-flight partial revises (text content changed
+  // — the partial array's reference might be the same instance, but
+  // the inner string changes drive the effect through a join).
   let liveUtteranceCount = $derived(activeDetail?.utterances.length ?? 0);
+  let livePartialFingerprint = $derived(
+    (activeDetail?.currentPartials ?? [])
+      .map((p) => `${p.speakerLabel ?? ""}:${p.text}`)
+      .join("|"),
+  );
   $effect(() => {
-    // Touch the count so $effect tracks it as a dep.
+    // Touch both deps so $effect tracks them.
     void liveUtteranceCount;
+    void livePartialFingerprint;
     if (!liveTranscriptFollowing) return;
     const el = liveTranscriptEl;
     if (!el) return;
     // requestAnimationFrame so the new <li> is in the DOM before
     // we measure scrollHeight. Without it, the scroll lands at
-    // the OLD bottom on the first new utterance.
+    // the OLD bottom on the first new utterance / partial revision.
     requestAnimationFrame(() => {
       if (liveTranscriptEl) {
         liveTranscriptEl.scrollTop = liveTranscriptEl.scrollHeight;
@@ -409,7 +424,8 @@
         {/if}
         <p class="meeting-dictate-prompt">
           <strong>Recording</strong> from {activeSourceSummary}. New
-          text appears below about every 10 seconds.
+          text streams in as you speak — italicised lines are still
+          firming up.
         </p>
       </div>
       <button type="button" class="primary" onclick={onStop} disabled={busy}>
@@ -477,8 +493,9 @@
         Start a session
       </button>
       <span class="meeting-controls-hint">
-        Click Start to begin recording. New transcript text appears
-        below about every 10 seconds. Click Stop when you're done.
+        Click Start to begin recording. New transcript text streams
+        in as you speak — italicised lines are still firming up,
+        solid lines are settled. Click Stop when you're done.
       </span>
     {/if}
   </div>
@@ -492,7 +509,7 @@
       the source the chunk came from (mic / system) — primitive
       diarization ahead of #111's per-speaker model.
     -->
-    {#if activeDetail && activeDetail.utterances.length > 0}
+    {#if activeDetail && (activeDetail.utterances.length > 0 || (activeDetail.currentPartials?.length ?? 0) > 0)}
       <!--
         No `aria-live` on the transcript list itself: a meeting can
         produce dozens of utterances, and a "polite" live region
@@ -506,6 +523,12 @@
         the auto-scroll effect; `onscroll` watches for user-driven
         scroll-up to freeze the tail. The "↓ N new" pill below
         (rendered only while frozen) lets them jump back.
+
+        Partials (#108 PR4) render after finals with an italic +
+        reduced-opacity treatment so the user can see the "still
+        revising" tail in real time. They share a key with their
+        speaker label so a revision swaps the text in place rather
+        than re-mounting the row.
       -->
       <ol
         bind:this={liveTranscriptEl}
@@ -526,6 +549,25 @@
             <p class="utterance-text">{utt.text}</p>
           </li>
         {/each}
+        {#each activeDetail.currentPartials ?? [] as partial (partial.speakerLabel ?? 'unknown')}
+          <li
+            class="utterance utterance-partial speaker-row-{partial.speakerLabel ?? 'unknown'}"
+            aria-label="In-flight partial transcript, still being refined"
+          >
+            <div class="utterance-meta">
+              <span
+                class="speaker-badge speaker-{partial.speakerLabel ?? 'unknown'}"
+              >
+                {speakerLabel(partial)}
+              </span>
+              <span class="utterance-time"
+                >{formatOffset(partial.startedAtMs)}</span
+              >
+              <span class="partial-indicator" aria-hidden="true">…</span>
+            </div>
+            <p class="utterance-text">{partial.text}</p>
+          </li>
+        {/each}
       </ol>
       {#if !liveTranscriptFollowing && liveTranscriptNewCount > 0}
         <button
@@ -539,7 +581,7 @@
       {/if}
     {:else}
       <p class="live-transcript-empty">
-        Listening… new text will appear here every 10 seconds or so.
+        Listening… new text will appear here within a few seconds.
       </p>
     {/if}
   {/if}
@@ -950,6 +992,49 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #888;
   font-size: 0.74rem;
+}
+
+/*
+  In-flight partial utterance treatment (#108 PR4). Italic + reduced
+  opacity to distinguish "still being refined by whisper" from
+  "settled and persisted". The dotted border replaces the solid
+  speaker-row stripe so a quick glance separates partials from
+  finals without re-reading the text. The "…" indicator next to the
+  timestamp is a redundant visual cue for users who don't immediately
+  parse the styling difference.
+*/
+.utterance-partial {
+  opacity: 0.78;
+  border-left-style: dashed !important;
+}
+
+.utterance-partial .utterance-text {
+  font-style: italic;
+}
+
+.partial-indicator {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #888;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  /*
+    The ellipsis sits next to the timestamp; subtle pulse so it reads
+    as "active" without being distracting. Static fallback when
+    `prefers-reduced-motion` is set.
+  */
+  animation: partial-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes partial-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .partial-indicator {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 .utterance-clock {

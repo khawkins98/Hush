@@ -14,6 +14,41 @@ a single flat list was hard to navigate.
 
 ### Added
 
+#### Live partial-utterance rendering in the meeting panel (#108 PR4)
+
+- The meeting transcript renders `currentPartials` (PR3) below the
+  settled finals with an italic + reduced-opacity treatment plus a
+  dashed border-left and an animated "…" indicator next to the
+  timestamp. Partials revise in place as whisper firms up the
+  trailing tail; once aged past the commit threshold the pump emits
+  them as finals and the styling solidifies. `prefers-reduced-motion`
+  kills the indicator pulse.
+- `MeetingSessionsPanel.svelte` keys partials by `speakerLabel` (one
+  per source) so a revision swaps text in place rather than
+  re-mounting the row. The autoscroll effect tracks both the finals
+  count AND a partial-content fingerprint (`label:text` joined),
+  so the live tail keeps following whether the user spoke a new
+  word or whisper revised the in-flight tail.
+- The empty-state copy ("every 10 seconds") and the active-session
+  line ("about every 10 seconds") are updated to match the
+  streaming cadence ("within a few seconds"; "italicised lines are
+  still firming up").
+- The `speakerLabel` helper is now structural-typed
+  (`{ speakerLabel: string | null }`) so it accepts both
+  `PersistedUtterance` (finals) and `StreamingUtterance` (partials)
+  without duplication.
+- 1 new e2e test pins the partial-rendering shape: 1 final + 2
+  partials → 3 rows, 2 with `utterance-partial` class, italic
+  computed-style, "…" indicator visible. 10/10 meeting-panel e2e
+  tests pass.
+
+What this completes for #108: the user now sees text appear within
+~3 s of speech (vs ~10 s pre-#108), revising in place as whisper
+firms up the segments. The four-PR sequence (PR1 streaming trait /
+PR2 drain_into / PR3 pump rewrite / PR4 partial UI) closes the
+streaming-meeting-mode UX promise. Real-meeting smoke validation
+of CPU + revision behaviour is the remaining open item.
+
 #### Streaming meeting pump — partials in IPC (#108 PR3)
 
 - The meeting pump no longer chunks-and-restarts. It opens one
