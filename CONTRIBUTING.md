@@ -118,6 +118,96 @@ Runs `svelte-check` against the entire frontend including `vite.config.js`. Requ
 
 ---
 
+## Adding a new IPC command
+
+A `#[tauri::command]` is touched in **four** places that all have to stay in sync. Skipping a step doesn't always fail CI — sometimes the symptom is a runtime `undefined` field in the frontend or a missing-handler runtime error — so this list is the canonical recipe.
+
+### 1. Define the Rust types
+
+In `src-tauri/src/ipc/commands.rs` (or another file under `src-tauri/src/ipc/`), add the request/response struct. Apply `#[serde(rename_all = "camelCase")]` so the wire shape matches JS conventions:
+
+```rust
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyCommandResult {
+    pub example_field: String,
+    pub another_field: u32,  // serialises as `anotherField`
+}
+```
+
+Define the command itself with `#[tauri::command]`:
+
+```rust
+#[tauri::command]
+pub async fn my_command(state: State<'_, AppState>, arg: String) -> IpcResult<MyCommandResult> {
+    // ...
+}
+```
+
+Errors should map to a variant of `IpcError` so the frontend's `formatError` `switch(ipc.kind)` dispatches the right recovery copy. Adding a new error variant means updating that switch — see step 4 below.
+
+### 2. Register the command in the Tauri builder
+
+In `src-tauri/src/lib.rs`, add the command to the `tauri::generate_handler![...]` macro:
+
+```rust
+.invoke_handler(tauri::generate_handler![
+    // ... existing commands ...
+    ipc::commands::my_command,
+])
+```
+
+The macro looks for `__cmd__<name>` siblings in the same module as the function. Use the **full module path** (`ipc::commands::my_command`), not a re-export — `pub use` does not carry the macro's hidden symbol. (See `learnings.md` for the trap that cost us once.)
+
+### 3. Add the TypeScript type and call site
+
+In `src/routes/+page.svelte` (or wherever the frontend invokes the command), declare a TypeScript type that matches the Rust struct's serialised shape. The conventional location is the `<script>` block at the top of the page:
+
+```typescript
+type MyCommandResult = {
+    exampleField: string;
+    anotherField: number;
+};
+```
+
+Then `invoke<MyCommandResult>("my_command", { arg: "..." })`.
+
+**The shape must match exactly.** A typo here (`example_field` instead of `exampleField`, `string` instead of `number`) compiles fine and produces silent `undefined`s at runtime. The Playwright e2e suite catches this *only* if a spec asserts on the field — it's not automatic.
+
+### 4. Update the Playwright mock
+
+In `tests/e2e/_mock.ts`, add a default handler so e2e tests have a stub for the new command:
+
+```typescript
+my_command: (args: unknown) => {
+    const a = args as { arg: string };
+    return { exampleField: a.arg, anotherField: 42 };
+},
+```
+
+The mock's field shape must mirror the Rust struct — same camelCase names, same types. A round-5 review caught a regression where the model-card mock had `sizeBytes` / `speed` fields while the Rust side serialised `sizeMb` / `speedRating`; tests passed by luck.
+
+If the new command needs error simulation in a test, override at the spec level (`installMocks(page, { my_command: () => { throw { kind: "settings", message: "..." } } })`).
+
+If the command introduces a new `IpcError` variant, also update the frontend's `formatError` switch in `+page.svelte` so the user gets tailored copy instead of the generic default.
+
+### Verifying
+
+After all four steps:
+
+```bash
+cd src-tauri && cargo build --lib   # Rust struct + command compile
+cargo test --lib                    # IPC tests still pass
+cd ..
+npm run check                       # TypeScript types compile
+npm run test:e2e                    # Mocks work end-to-end
+npm run tauri dev                   # Real backend roundtrip (if it touches startup)
+```
+
+If any of these surface a mismatch, fix at the appropriate layer above. The four places are coupled; CI catches Rust-only and TS-only breaks but cannot catch type-shape mismatches between them — that's a hands-on smoke responsibility.
+
+---
+
 ## Code comments
 
 - Public Rust APIs carry `///` doc comments with a one-line summary.
