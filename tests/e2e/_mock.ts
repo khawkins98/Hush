@@ -144,6 +144,17 @@ export async function installMocks(
       model_download: () => undefined,
       model_cancel_download: () => undefined,
       model_remove: () => undefined,
+
+      // ---- meeting mode (Phase C scaffold; refs #33 / #109) ----
+      // Empty list by default so the panel renders the "no sessions
+      // yet" placeholder. Specs that exercise populated states
+      // override `meeting_sessions_list` per-test.
+      meeting_sessions_list: () => [],
+      meeting_session_get: () => {
+        throw { kind: "settings", message: "meeting session not found (default mock)" };
+      },
+      meeting_session_delete: () => undefined,
+      meeting_session_set_notes: () => undefined,
     };
 
     // Rebuild override functions from their stringified source. The

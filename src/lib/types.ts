@@ -69,6 +69,40 @@ export type VocabularyTerm = {
   term: string;
 };
 
+// Meeting Mode (Phase C scaffold; refs #33 / #109). Wire shapes
+// mirror the Rust types in `src-tauri/src/meeting/mod.rs`. Today
+// the panel reads these via `meeting_sessions_list` /
+// `meeting_session_get` but the underlying repo is empty until
+// the streaming pump (#110) starts inserting sessions.
+
+export type MeetingAppKind = "meeting" | "media" | "other";
+
+export type MeetingSession = {
+  id: number;
+  appName: string;
+  appKind: MeetingAppKind;
+  startedAt: string;
+  endedAt: string | null;
+  speakerCount: number | null;
+  utteranceCount: number;
+  notes: string | null;
+};
+
+export type PersistedUtterance = {
+  id: number;
+  sessionId: number;
+  startedAtMs: number;
+  endedAtMs: number;
+  speakerLabel: string | null;
+  text: string;
+  isFinal: boolean;
+};
+
+export type MeetingSessionDetail = {
+  session: MeetingSession;
+  utterances: PersistedUtterance[];
+};
+
 // Mirrors `ModelCard` on the Rust side. `metadata` is flattened by
 // serde so all the catalog fields land at the top level.
 export type ModelCard = {
