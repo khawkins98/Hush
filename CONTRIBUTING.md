@@ -161,10 +161,13 @@ The macro looks for `__cmd__<name>` siblings in the same module as the function.
 
 ### 3. Add the TypeScript type and call site
 
-In `src/routes/+page.svelte` (or wherever the frontend invokes the command), declare a TypeScript type that matches the Rust struct's serialised shape. The conventional location is the `<script>` block at the top of the page:
+Declare a TypeScript type that matches the Rust struct's serialised shape. Two conventional locations:
+
+- **Shared across the page and panel components.** Add it to `src/lib/types.ts` (the post-#84 split moved cross-cutting types here) and `import type { MyCommandResult } from "$lib/types";` from both the parent page and any child panel that needs it.
+- **Used only by `+page.svelte`.** Declare it inline in the `<script>` block at the top of the page.
 
 ```typescript
-type MyCommandResult = {
+export type MyCommandResult = {
     exampleField: string;
     anotherField: number;
 };
