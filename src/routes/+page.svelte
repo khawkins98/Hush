@@ -94,6 +94,14 @@
   // never shows again on this install.
   let showFirstRun = $state(false);
 
+  // Modal element ref + the focused-element-before-modal stash. The
+  // ref backs the focus trap (so Tab cycles within the modal instead
+  // of escaping to the rest of the page); the stash lets us restore
+  // focus to whatever the user was on before the welcome appeared
+  // when they dismiss it.
+  let firstRunCardEl: HTMLElement | undefined = $state();
+  let firstRunPreviousFocus: HTMLElement | null = null;
+
   // Per-card transient state for the download flow. Two parallel
   // `Map<id, …>`s keep the per-row status independent of the catalog
   // array's order, so a `model:download-progress` event for one card
@@ -442,14 +450,18 @@
       next.delete(card.id);
       downloadFailed = next;
     }
-    // Optimistic state: start the progress chip immediately. The
-    // backend's first `progress` event will replace these zeros.
-    const next = new Map(downloading);
-    next.set(card.id, { received: 0, total: card.sizeMb * 1024 * 1024 });
-    downloading = next;
 
     try {
       await invoke("model_download", { id: card.id });
+      // Only show the optimistic progress chip *after* the backend has
+      // accepted the request (closes the retry-race half of #48).
+      // Pre-invoke optimistic state caused a flash of progress on
+      // synchronous IPC failure (e.g. SHA-256 not configured) — the
+      // chip would appear and disappear in the same tick. Setting it
+      // here means the failure path simply never shows the chip.
+      const next = new Map(downloading);
+      next.set(card.id, { received: 0, total: card.sizeMb * 1024 * 1024 });
+      downloading = next;
     } catch (err) {
       // The IpcError::Settings("...SHA-256 not configured...") path
       // surfaces here. Re-shape into a friendlier per-card message
@@ -461,10 +473,6 @@
       const fail = new Map(downloadFailed);
       fail.set(card.id, friendly);
       downloadFailed = fail;
-      // Drop the optimistic in-flight chip — the backend never started.
-      const drop = new Map(downloading);
-      drop.delete(card.id);
-      downloading = drop;
     }
   }
 
@@ -492,6 +500,12 @@
 
   async function dismissFirstRun() {
     showFirstRun = false;
+    // Restore focus to whatever the user was on before the modal
+    // opened. Defensive: the previously-focused element may have
+    // been removed from the DOM, in which case `.focus()` is a no-op
+    // and the browser falls back to body, which is fine.
+    firstRunPreviousFocus?.focus();
+    firstRunPreviousFocus = null;
     try {
       await invoke("mark_first_run_completed");
     } catch (e) {
@@ -501,6 +515,56 @@
       console.error("mark_first_run_completed failed:", e);
     }
   }
+
+  /// Selector for the focusable elements we cycle between in the
+  /// welcome modal. Excludes elements with `tabindex="-1"` so the
+  /// dialog wrapper itself (which is not focusable by users) does
+  /// not enter the rotation.
+  const FOCUSABLE_SELECTOR =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  /// Trap Tab cycling inside the welcome modal (closes #48 focus
+  /// trap). Tab from the last focusable wraps to the first;
+  /// Shift+Tab from the first wraps to the last. Escape dismisses
+  /// (per WAI-ARIA guidance for `role="dialog"` `aria-modal="true"`).
+  function handleFirstRunKeydown(event: KeyboardEvent) {
+    if (!showFirstRun) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      void dismissFirstRun();
+      return;
+    }
+    if (event.key !== "Tab" || !firstRunCardEl) return;
+    const focusable = firstRunCardEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  // Auto-focus the first focusable element when the modal opens, and
+  // remember what was focused before so we can restore it on
+  // dismiss. The effect intentionally runs whenever `showFirstRun`
+  // flips — including back to false — but only acts on the
+  // open transition.
+  $effect(() => {
+    if (showFirstRun && firstRunCardEl) {
+      firstRunPreviousFocus =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      // Focus the first action button so a keyboard-only user lands
+      // on something useful (the "Open Microphone settings" button)
+      // rather than the dialog wrapper.
+      const first = firstRunCardEl.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
+      first?.focus();
+    }
+  });
 
   async function openPrivacyPane(target: "microphone" | "input-monitoring") {
     try {
@@ -557,6 +621,14 @@
   }
 </script>
 
+<!--
+  Window-level keydown listener for the welcome modal. Lives outside
+  the `{#if showFirstRun}` block because `<svelte:window>` cannot be
+  placed inside ordinary blocks. The handler itself is gated on
+  `showFirstRun`, so it is a no-op when the modal isn't visible.
+-->
+<svelte:window onkeydown={handleFirstRunKeydown} />
+
 {#if showFirstRun}
   <!--
     First-run welcome modal. Static content; no fetches behind it.
@@ -565,9 +637,18 @@
     permission sections call `open_macos_privacy_pane(...)` which
     is a no-op on Linux / Windows — those users can still click
     "Got it" and proceed without harm.
+
+    A11y plumbing (closes #48):
+    - Escape dismisses (the keydown listener is at window level
+      above; gated on `showFirstRun`).
+    - Tab cycles within the modal via `handleFirstRunKeydown`, so a
+      keyboard user cannot accidentally focus elements behind the
+      backdrop.
+    - Auto-focus lands on the first action button on open; on
+      dismiss, focus restores to whatever was focused before.
   -->
   <div class="first-run-backdrop" role="dialog" aria-modal="true" aria-labelledby="first-run-heading">
-    <article class="first-run-card">
+    <article class="first-run-card" bind:this={firstRunCardEl} tabindex="-1">
       <header>
         <h2 id="first-run-heading">Welcome to Hush</h2>
         <p class="first-run-tagline">
@@ -965,11 +1046,26 @@
           <!-- Per-card action footer: Download / Cancel / Try again / Remove. -->
           <footer class="model-card-actions">
             {#if inFlight}
-              <!-- Active download: progress bar + Cancel. -->
+              <!--
+                Active download: progress bar + Cancel.
+
+                When `total` is null the download size is unknown, so
+                the bar enters indeterminate state — `aria-valuenow`
+                / `aria-valuemax` are omitted (per WAI-ARIA, a
+                progressbar without a numeric `valuenow` is treated
+                as indeterminate). The `aria-valuetext` provides the
+                screen-reader-friendly version of what's drawn, so
+                the announcement matches the visible state instead
+                of stating a fake "0 of 100" reading. Closes the
+                progress-bar a11y half of #48.
+              -->
               <div class="download-progress" role="progressbar"
                 aria-valuemin="0"
-                aria-valuemax={inFlight.total ?? 100}
-                aria-valuenow={inFlight.received}
+                aria-valuemax={inFlight.total ?? undefined}
+                aria-valuenow={inFlight.total ? inFlight.received : undefined}
+                aria-valuetext={inFlight.total
+                  ? `${Math.round((inFlight.received / inFlight.total) * 100)}% — ${formatMb(inFlight.received)} of ${formatMb(inFlight.total)}`
+                  : `Downloading ${formatMb(inFlight.received)} (size unknown)`}
                 aria-label="Downloading {card.displayName}"
               >
                 <div

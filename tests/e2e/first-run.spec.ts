@@ -42,17 +42,50 @@ test.describe("first-run welcome modal", () => {
     expect(markCalled).toBe(true);
   });
 
-  // a11y regression. Round-4 reviewer flagged that the modal has no
-  // Escape-key dismissal (issue #48). When that ships we expect this
-  // test to pass; today it documents the gap. Marked `fixme` so the
-  // suite stays green and the failure is visible only when fixed.
-  test.fixme("Escape key dismisses the modal (closes part of #48)", async ({ page }) => {
-    await installMocks(page, { get_first_run_completed: () => false });
+  test("Escape key dismisses the modal (closes part of #48)", async ({ page }) => {
+    let markCalled = false;
+    await installMocks(page, {
+      get_first_run_completed: () => false,
+      mark_first_run_completed: () => {
+        (globalThis as unknown as { __markCalled: boolean }).__markCalled = true;
+      },
+    });
     await page.goto("/");
 
     const heading = page.getByRole("heading", { name: "Welcome to Hush" });
     await expect(heading).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(heading).toHaveCount(0);
+
+    // Escape should also persist dismissal — the user expects
+    // "I dismissed this" to mean "and don't show it again",
+    // regardless of which control they used to dismiss.
+    markCalled = await page.evaluate(
+      () => (globalThis as unknown as { __markCalled?: boolean }).__markCalled === true,
+    );
+    expect(markCalled).toBe(true);
+  });
+
+  test("Tab cycles within the modal instead of escaping (closes focus-trap part of #48)", async ({ page }) => {
+    await installMocks(page, { get_first_run_completed: () => false });
+    await page.goto("/");
+
+    await expect(page.getByRole("heading", { name: "Welcome to Hush" })).toBeVisible();
+
+    // The modal has three focusable buttons in DOM order:
+    //   1) Open Microphone settings
+    //   2) Open Input Monitoring settings
+    //   3) Got it
+    // Auto-focus lands on #1; one Shift+Tab from there must wrap
+    // to #3, not escape to whatever was on the page behind the
+    // backdrop.
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByRole("button", { name: "Got it" })).toBeFocused();
+
+    // Tab from "Got it" must wrap forward to the first button.
+    await page.keyboard.press("Tab");
+    await expect(
+      page.getByRole("button", { name: "Open Microphone settings" }),
+    ).toBeFocused();
   });
 });
