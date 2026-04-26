@@ -55,14 +55,14 @@ that fills the panel is the open work.
 | Platform | Status | Tested by maintainer |
 |---|---|---|
 | **macOS 26** | Primary target. Daily-driven. PTT disabled by default ([#69](https://github.com/khawkins98/Hush/issues/69) / [#70](https://github.com/khawkins98/Hush/issues/70)). | ✅ Yes |
-| **macOS 13–15** | Should work in principle (Tauri + cpal + whisper.cpp all support it), but the maintainer doesn't run anything older than 26. | ❌ Not hands-on tested |
+| **macOS ≤ 15** | Not directly supported. Code may compile and run, but the maintainer does not test against older macOS, will not gate features on older-macOS APIs, and bug reports against older versions are best-effort. | ❌ Not supported |
 | **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested |
 | **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ❌ Not hands-on tested |
 | **Windows** | Theoretically supported. Was in the original CI matrix but dropped to keep CI fast (PRD §11 — Windows distribution lands at M6). | ❌ Not hands-on tested |
 
-**Older-macOS, Linux, and Windows hands-on contributions are welcome.** If you run Hush on any of those and something is broken, file an issue with steps to reproduce + your platform version. Build prerequisites are in [`CONTRIBUTING.md`](./CONTRIBUTING.md). PRs that fix platform-specific gaps are exactly the right contribution shape — small, scoped, and address a real reported bug.
+**Linux and Windows hands-on contributions are welcome.** If you run Hush on either and something is broken, file an issue with steps to reproduce + your platform version. Build prerequisites are in [`CONTRIBUTING.md`](./CONTRIBUTING.md). PRs that fix platform-specific gaps are exactly the right contribution shape — small, scoped, and address a real reported bug.
 
-The maintainer's focus is macOS 26; everything else is validated only at the "compiles cleanly, unit tests pass, frontend type-checks" CI level. That's a meaningful gap from "this app actually works on your machine."
+The maintainer's focus is macOS 26; older macOS is explicitly out of scope, and everything else is validated only at the "compiles cleanly, unit tests pass, frontend type-checks" CI level. That's a meaningful gap from "this app actually works on your machine."
 
 ---
 
