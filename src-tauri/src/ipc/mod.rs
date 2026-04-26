@@ -834,6 +834,99 @@ mod tests {
     }
 
     #[test]
+    fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
+        // Round-7 architecture reviewer flagged that `swap_transcriber`
+        // (called from `model_select` when the user picks a new model
+        // with a downloaded file) had no test coverage. Pin the
+        // observable contract: the new value lands inside the Mutex,
+        // and the previous value is returned so the caller can drop
+        // it explicitly if it cares to. A future change that
+        // accidentally swaps in an async lock or a different replacement
+        // strategy would fail this.
+
+        struct StubTranscriber {
+            label: &'static str,
+        }
+        impl crate::transcription::Transcribe for StubTranscriber {
+            fn transcribe(&self, _: &crate::audio::CapturedAudio) -> anyhow::Result<String> {
+                Ok(String::new())
+            }
+            fn model_label(&self) -> String {
+                self.label.to_owned()
+            }
+        }
+
+        let state = mock_state();
+        // mock_state() leaves transcribe = None (no model loaded).
+        assert!(state.transcribe.lock().unwrap().is_none());
+
+        let first: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "first" });
+        let prev = state
+            .swap_transcriber(Some(first))
+            .expect("first swap succeeds");
+        assert!(prev.is_none(), "previous was None (mock_state baseline)");
+
+        // Now confirm the swap actually landed.
+        {
+            let guard = state.transcribe.lock().unwrap();
+            assert_eq!(
+                guard.as_ref().map(|t| t.model_label()),
+                Some("first".to_owned()),
+                "new transcriber readable from inside the Mutex"
+            );
+        }
+
+        // Second swap returns the first one as the "previous" value.
+        let second: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "second" });
+        let prev = state
+            .swap_transcriber(Some(second))
+            .expect("second swap succeeds");
+        assert_eq!(
+            prev.map(|t| t.model_label()),
+            Some("first".to_owned()),
+            "previous value returned to caller"
+        );
+        assert_eq!(
+            state
+                .transcribe
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|t| t.model_label()),
+            Some("second".to_owned()),
+            "second transcriber landed"
+        );
+
+        // Swap to None to confirm the unload path works.
+        let prev = state.swap_transcriber(None).expect("clear swap succeeds");
+        assert_eq!(prev.map(|t| t.model_label()), Some("second".to_owned()));
+        assert!(state.transcribe.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn appstate_builder_errors_descriptively_on_missing_required_field() {
+        // Round-7 architecture reviewer flagged that the builder's
+        // self-documenting error messages had no test coverage. A future
+        // refactor that "fixed" the error message wording (or stopped
+        // ok_or_else'ing entirely) would silently regress the developer
+        // experience of "I forgot a field — the error tells me which one."
+        // Spot-check one required field. The message format ("audio not
+        // set") is part of the developer-facing contract — pin it.
+        let result = AppStateBuilder::new().build();
+        // AppState doesn't implement Debug, so we can't use
+        // `expect_err`; match on the Result instead.
+        let err = match result {
+            Ok(_) => panic!("empty builder must error, got Ok"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("audio not set"),
+            "error must name the first missing required field; got: {msg}"
+        );
+    }
+
+    #[test]
     fn huggingface_host_predicate_accepts_apex_and_subdomains() {
         // Pin the load-bearing security check: the download redirect
         // policy treats these as in-zone. Both `huggingface.co` and

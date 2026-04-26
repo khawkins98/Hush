@@ -196,14 +196,26 @@ fn app_kind_to_str(kind: MeetingAppKind) -> &'static str {
     }
 }
 
-fn app_kind_from_str(s: &str) -> MeetingAppKind {
-    // Default to `Other` on unrecognised values rather than failing
-    // the SELECT — a future variant added to the enum mid-flight
-    // shouldn't break the panel's session-list query.
+fn app_kind_from_str(s: &str) -> std::result::Result<MeetingAppKind, sqlx::Error> {
+    // Fail loud on unrecognised values rather than silently defaulting
+    // to `Other`. The earlier silent-default approach masked data
+    // corruption (a rogue write of `"video-call"` would render in the
+    // panel as a nondescript "Other" session, with no signal that
+    // anything was wrong). Round-7 technical-quality reviewer caught
+    // it. A future variant added to the enum is a deliberate code
+    // change that updates this match arm; the database is never
+    // expected to hold values this match doesn't cover.
     match s {
-        "meeting" => MeetingAppKind::Meeting,
-        "media" => MeetingAppKind::Media,
-        _ => MeetingAppKind::Other,
+        "meeting" => Ok(MeetingAppKind::Meeting),
+        "media" => Ok(MeetingAppKind::Media),
+        "other" => Ok(MeetingAppKind::Other),
+        unknown => Err(sqlx::Error::Decode(
+            format!(
+                "unknown meeting_sessions.app_kind value: {unknown:?} \
+                 (expected one of: meeting, media, other)"
+            )
+            .into(),
+        )),
     }
 }
 
@@ -218,7 +230,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for MeetingSession {
         Ok(MeetingSession {
             id: row.try_get("id")?,
             app_name: row.try_get("app_name")?,
-            app_kind: app_kind_from_str(&kind_str),
+            app_kind: app_kind_from_str(&kind_str)?,
             started_at: row.try_get("started_at")?,
             ended_at: row.try_get("ended_at")?,
             speaker_count: row.try_get("speaker_count")?,
