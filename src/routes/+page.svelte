@@ -122,6 +122,23 @@
   // "Whisper is working" (seconds), which deserves a visible spinner.
   let transcribing = $derived(busy && !recording && !!result === false);
 
+  // True when the catalog has loaded *and* no model file is on disk
+  // yet. Drives the prominent "Set up your first model" banner and
+  // the disabled state on the Start button. Gated on `modelsLoaded`
+  // so we don't flash the banner before the catalog fetch resolves
+  // (false-positive "no model" while the page is still booting).
+  let noModelInstalled = $derived(
+    modelsLoaded && models.length > 0 && !models.some((m) => m.isDownloaded),
+  );
+
+  // Scroll the model picker section into view. Used by the "Set up
+  // your first model" banner and the click-through on the
+  // transcription-unavailable error chip.
+  function scrollToModelPicker() {
+    const heading = document.getElementById("models-heading");
+    if (heading) heading.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   let unlistenToggle: UnlistenFn | null = null;
   let unlistenPttPress: UnlistenFn | null = null;
   let unlistenPttRelease: UnlistenFn | null = null;
@@ -600,10 +617,9 @@
       switch (ipc.kind) {
         case "transcription-unavailable":
           return (
-            "Transcription isn't set up yet. The model picker is coming in " +
-            "the next milestone — for now, set HUSH_MODEL_PATH to a Whisper " +
-            "GGUF file and run with `cargo tauri dev --features whisper`. " +
-            "(See README for setup help.)"
+            "No transcription model is loaded yet. Pick one from the " +
+            "Models section below and click Download — Hush will fetch " +
+            "and verify it, then prompt you to restart."
           );
         case "audio":
           return `Microphone error: ${ipc.message ?? "unknown"}. Try selecting a different input device.`;
@@ -712,6 +728,27 @@
     or hold <kbd>Right Ctrl</kbd> to push-to-talk.
   </aside>
 
+  {#if noModelInstalled}
+    <!--
+      No model is on disk yet. Banner replaces the bottom-of-page
+      hunt and the "transcription not set up" error-after-click flow.
+      Click → scroll to the picker; from there the user clicks
+      Download on a card and the auto-download path takes over.
+    -->
+    <aside class="setup-banner" role="status" aria-label="First-time setup">
+      <div class="setup-banner-text">
+        <strong>Set up your first model</strong>
+        <span>
+          Hush needs a Whisper model to transcribe. Pick one from the
+          Models section below — Whisper Base is a solid default.
+        </span>
+      </div>
+      <button class="primary" onclick={scrollToModelPicker}>
+        Choose a model
+      </button>
+    </aside>
+  {/if}
+
   <section class="controls">
     <label>
       Input device
@@ -737,8 +774,13 @@
     {#if !recording}
       <button
         onclick={start}
-        disabled={busy || devices.length === 0}
-        aria-label={busy ? "Working" : "Start recording"}
+        disabled={busy || devices.length === 0 || noModelInstalled}
+        aria-label={busy
+          ? "Working"
+          : noModelInstalled
+            ? "Choose a model first"
+            : "Start recording"}
+        title={noModelInstalled ? "Choose a model first" : undefined}
       >
         {#if transcribing}
           <span class="spinner" aria-hidden="true"></span> Transcribing…
@@ -1228,6 +1270,60 @@ h1 {
   border: 1px solid #c7d2fe;
   border-radius: 4px;
   margin: 0 0.1rem;
+}
+
+/*
+  First-time-setup banner. Renders only when the catalog has loaded
+  and no model is on disk. Sits above the controls row so it's the
+  first action-shaped surface a fresh-install user reads — replaces
+  the previous "click Start, get a confusing error" flow.
+*/
+.setup-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  margin: 0 0 1rem;
+  background-color: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+}
+
+.setup-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.setup-banner-text strong {
+  font-size: 0.95rem;
+  color: #1e1b4b;
+}
+
+.setup-banner-text span {
+  font-size: 0.85rem;
+  color: #3730a3;
+}
+
+.setup-banner button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .setup-banner {
+    background-color: #1e1b4b;
+    border-color: #4338ca;
+  }
+  .setup-banner-text strong {
+    color: #e0e7ff;
+  }
+  .setup-banner-text span {
+    color: #c7d2fe;
+  }
 }
 
 .controls {
