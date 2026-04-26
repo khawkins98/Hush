@@ -1121,11 +1121,71 @@ pub async fn meeting_start_manual(
     sources: Vec<AudioSource>,
     app_name: Option<String>,
 ) -> IpcResult<crate::meeting::MeetingSession> {
+    let sources = sanitise_meeting_sources(sources)
+        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))?;
     state
         .meeting_manager
         .start_manual(sources, app_name)
         .await
         .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))
+}
+
+/// Maximum number of capture sources a single meeting may declare.
+/// Today the canonical config is 1 mic + 1 system-audio = 2; the
+/// cap is set with headroom for a future per-app SystemAudio (#33)
+/// without inviting unbounded per-call resource expansion. Each
+/// source spawns an OS-level capture handle; the cost grows
+/// linearly.
+const MAX_MEETING_SOURCES: usize = 4;
+
+/// Validate + dedup the `sources` list `meeting_start_manual`
+/// receives from the frontend. The IPC trusts the caller for
+/// well-formed JSON (serde rejects bad shapes already), but
+/// nothing today bounds the list's size or rejects duplicates —
+/// a buggy frontend could send `[SystemAudio, SystemAudio, …]`
+/// and have each entry open an independent SCStream / cpal
+/// stream, doubling memory + CPU per duplicate. Cap + dedup at
+/// the IPC boundary so the manager never has to consider that
+/// case.
+///
+/// Microphone duplicates dedup by device id — `[Mic("a"), Mic("a"),
+/// Mic("b")]` collapses to `[Mic("a"), Mic("b")]`. SystemAudio is
+/// keyed by its variant alone (there's only one system-audio
+/// stream per host).
+fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource>, String> {
+    if sources.is_empty() {
+        return Err("at least one audio source is required".to_owned());
+    }
+    if sources.len() > MAX_MEETING_SOURCES {
+        return Err(format!(
+            "too many audio sources ({}): max is {}",
+            sources.len(),
+            MAX_MEETING_SOURCES
+        ));
+    }
+    let mut seen_system = false;
+    let mut seen_mics: Vec<&str> = Vec::new();
+    let mut deduped: Vec<AudioSource> = Vec::with_capacity(sources.len());
+    for source in &sources {
+        match source {
+            AudioSource::Microphone(device_id) => {
+                let key = device_id.as_deref().unwrap_or("__default_mic__");
+                if seen_mics.contains(&key) {
+                    continue;
+                }
+                seen_mics.push(key);
+                deduped.push(source.clone());
+            }
+            AudioSource::SystemAudio => {
+                if seen_system {
+                    continue;
+                }
+                seen_system = true;
+                deduped.push(source.clone());
+            }
+        }
+    }
+    Ok(deduped)
 }
 
 /// Close the active meeting session.
@@ -1450,6 +1510,85 @@ mod tests {
         let json = serde_json::to_string(&IpcError::Audio("device gone".into())).unwrap();
         assert!(json.contains("\"kind\":\"audio\""), "got: {json}");
         assert!(json.contains("\"message\":\"device gone\""), "got: {json}");
+    }
+
+    // -- sanitise_meeting_sources -----------------------------------
+    //
+    // The IPC boundary trusts the frontend for well-formed JSON
+    // (serde catches bad shapes) but nothing else bounds the list
+    // size or rejects duplicates. These tests pin the validation
+    // behaviour so a buggy frontend can't open N independent
+    // SCStream instances by sending the same source N times.
+
+    #[test]
+    fn sanitise_rejects_empty_source_list() {
+        let err = sanitise_meeting_sources(Vec::new()).expect_err("empty list must error");
+        assert!(
+            err.contains("at least one"),
+            "error must explain the precondition; got: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitise_rejects_oversize_source_list() {
+        // MAX_MEETING_SOURCES + 1 entries — should error.
+        let too_many: Vec<AudioSource> = (0..=MAX_MEETING_SOURCES)
+            .map(|i| AudioSource::Microphone(Some(format!("mic-{i}"))))
+            .collect();
+        let err = sanitise_meeting_sources(too_many).expect_err("oversize list must error");
+        assert!(
+            err.contains("too many audio sources"),
+            "error must name the precondition; got: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitise_dedups_microphone_by_device_id() {
+        let dupes = vec![
+            AudioSource::Microphone(Some("Built-in".into())),
+            AudioSource::Microphone(Some("Built-in".into())),
+            AudioSource::Microphone(Some("USB-C".into())),
+        ];
+        let cleaned = sanitise_meeting_sources(dupes).unwrap();
+        assert_eq!(cleaned.len(), 2);
+        assert!(matches!(
+            &cleaned[0],
+            AudioSource::Microphone(Some(s)) if s == "Built-in"
+        ));
+        assert!(matches!(
+            &cleaned[1],
+            AudioSource::Microphone(Some(s)) if s == "USB-C"
+        ));
+    }
+
+    #[test]
+    fn sanitise_dedups_default_mic_against_itself() {
+        // `Microphone(None)` means "host default mic" — two of them
+        // are the same source.
+        let dupes = vec![AudioSource::Microphone(None), AudioSource::Microphone(None)];
+        let cleaned = sanitise_meeting_sources(dupes).unwrap();
+        assert_eq!(cleaned.len(), 1);
+    }
+
+    #[test]
+    fn sanitise_dedups_system_audio_against_itself() {
+        let dupes = vec![AudioSource::SystemAudio, AudioSource::SystemAudio];
+        let cleaned = sanitise_meeting_sources(dupes).unwrap();
+        assert_eq!(cleaned.len(), 1);
+        assert!(matches!(cleaned[0], AudioSource::SystemAudio));
+    }
+
+    #[test]
+    fn sanitise_keeps_distinct_kinds_in_input_order() {
+        // Mic + system audio is the canonical meeting config — the
+        // dedup must preserve both, in the order the frontend sent
+        // them, so the pump's source-tagging is deterministic.
+        let mixed = vec![
+            AudioSource::Microphone(Some("Built-in".into())),
+            AudioSource::SystemAudio,
+        ];
+        let cleaned = sanitise_meeting_sources(mixed.clone()).unwrap();
+        assert_eq!(cleaned, mixed);
     }
 
     #[test]

@@ -41,6 +41,24 @@ mod screencapturekit;
 
 pub use format::downmix_to_mono;
 
+/// Defensive ceiling on the number of `f32` samples a single capture
+/// buffer may hold. Beyond this, the callback drops the oldest
+/// samples so an unbounded growth path (pump task wedged, audio
+/// callback still firing) can't OOM the process.
+///
+/// Sized for ~2 minutes of 48 kHz stereo audio = `48_000 * 2 * 120`
+/// = 11.5M samples ≈ 46 MB. The meeting pump's normal-case window is
+/// 10 s (drained then), so this cap is purely defensive — under the
+/// typical drain-then-transcribe cycle it's never hit. A long-form
+/// dictation session up to 2 minutes is also fine; anything past that
+/// is exotic enough that dropping the head of the buffer (rather than
+/// failing the whole capture) is the right trade-off.
+///
+/// The cap is the same for both the cpal mic path and the SCK system-
+/// audio path, both of which back into a `Mutex<Vec<f32>>` callbacks
+/// extend.
+pub(super) const MAX_BUFFER_FRAMES: usize = 48_000 * 2 * 120;
+
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -1061,6 +1079,26 @@ fn append_samples<T: Copy>(
         let f = convert(sample);
         sum_sq += f * f;
         buf.push(f);
+    }
+    // Defensive ceiling. Under the meeting pump's normal drain-
+    // every-10-s cycle this branch is unreachable; it only fires if
+    // the buffer's draining consumer has wedged (panicked pump task
+    // not yet caught by the manager's Drop, runtime mid-shutdown).
+    // Drop the oldest samples so the live capture keeps producing
+    // — losing the head of a stalled-out meeting is better than
+    // OOMing the process.
+    if buf.len() > MAX_BUFFER_FRAMES {
+        let drop_count = buf.len() - MAX_BUFFER_FRAMES;
+        buf.drain(..drop_count);
+        // Once-per-overflow log line; the audio callback runs at
+        // ~100 Hz so a sustained overflow would fire this every
+        // tick, but at warn level that's the right signal — the
+        // user should know the system is dropping audio.
+        tracing::warn!(
+            dropped_samples = drop_count,
+            buffer_cap_frames = MAX_BUFFER_FRAMES,
+            "audio buffer exceeded cap; dropping oldest samples"
+        );
     }
     if !data.is_empty() {
         let rms = rms_from_sum_sq(sum_sq, data.len());
