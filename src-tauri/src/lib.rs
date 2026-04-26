@@ -7,6 +7,7 @@ pub mod history;
 pub mod hotkey;
 pub mod hud;
 pub mod ipc;
+pub mod meeting;
 pub mod repository;
 pub mod settings;
 pub mod transcription;
@@ -172,6 +173,10 @@ pub fn run() {
             ipc::commands::open_macos_privacy_pane,
             ipc::commands::diagnose_macos_permissions,
             ipc::commands::reset_macos_permissions,
+            ipc::commands::meeting_sessions_list,
+            ipc::commands::meeting_session_get,
+            ipc::commands::meeting_session_delete,
+            ipc::commands::meeting_session_set_notes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");
