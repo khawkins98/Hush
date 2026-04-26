@@ -17,10 +17,17 @@ What you expected to happen.
 What actually happened.
 
 **Environment**
-- OS:
-- Hush version:
-- Model:
+- OS + version (e.g. macOS 14.5, Ubuntu 24.04 + GNOME on X11):
+- Hush version or commit SHA:
+- Whisper model in use (e.g. ggml-base.bin):
 - Audio device:
 
+**macOS only — permission state**
+<!-- For PTT issues: System Settings → Privacy & Security → Input Monitoring should list Hush. -->
+<!-- For mic issues: same path → Microphone. -->
+- Microphone permission granted: yes / no / not sure
+- Input Monitoring permission granted (PTT users): yes / no / not sure
+
 **Logs**
-<!-- Paste any relevant output from the Hush log or the system console. -->
+<!-- Paste relevant output from the Hush log or the system console.
+     For tracing output run with `RUST_LOG=info npm run tauri dev`. -->

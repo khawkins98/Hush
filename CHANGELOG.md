@@ -115,29 +115,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcription path end-to-end once a contributor places a model.
   System-audio loopback variant stays open behind #33.
 
-- First-run welcome modal explains the permissions Hush needs
-  (Microphone for cpal, Input Monitoring for the rdev PTT
-  listener) and links to System Settings → Privacy & Security via
-  a new `open_macos_privacy_pane` command on macOS. Persists
+- First-run welcome modal (closes #22). Explains the permissions
+  Hush needs — Microphone for cpal, Input Monitoring for the rdev
+  PTT listener — and links to System Settings → Privacy & Security
+  via a new `open_macos_privacy_pane` command on macOS. Persists
   dismissal in the settings table so the modal only shows on a
   fresh install. The OS prompts themselves still fire at app
-  startup — the welcome's job is to explain what just happened,
-  not to trigger anything new. Closes #22.
+  startup; the welcome's job is to explain what just happened,
+  not to trigger anything new.
 - **Bug fix surfaced during #22:** PR #42 added the
   `model_download` / `model_cancel_download` / `model_remove`
   Tauri commands but never registered them in `lib.rs`'s
   `generate_handler!` list. Frontend invokes would have failed at
   runtime. All three are now wired up.
 
-- Recording HUD overlay (scaffold). A second Tauri window
-  (label `hud`) shown while dictation is active: borderless,
-  transparent, always-on-top, no taskbar entry. Renders a pulsing
-  red dot + "Recording" label. Show/hide hooks into
-  `start_dictation` / `stop_dictation` so the HUD tracks the
+- Recording HUD overlay scaffold (scaffold half of #21). A second
+  Tauri window (label `hud`) shown while dictation is active:
+  borderless, transparent, always-on-top, no taskbar entry.
+  Renders a pulsing red dot + "Recording" label. Show/hide hooks
+  into `start_dictation` / `stop_dictation` so the HUD tracks the
   audio stream's lifecycle, not the slower transcription that
-  follows. The level-meter half of #21 (cpal callbacks compute
-  RMS, audio thread → Tauri event → meter animation) lands as a
-  follow-up.
+  follows. The level-meter half (cpal callbacks compute RMS, audio
+  thread → Tauri event → meter animation) lands as a follow-up.
 - Recording HUD level meter (closes the level-meter half of #21).
   Per-callback RMS is computed in the cpal sample-conversion
   loop and published into a lock-free `Arc<AtomicU32>` (encoded
