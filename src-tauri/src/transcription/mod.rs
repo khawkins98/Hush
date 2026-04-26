@@ -7,7 +7,7 @@
 //! ## Responsibilities
 //!
 //! - Define the [`Transcribe`] trait at the OS / heavy-dep boundary so the
-//!   IPC layer (TODO(#9)) can hold an `Arc<dyn Transcribe>` without knowing
+//!   IPC layer can hold an `Arc<dyn Transcribe>` without knowing
 //!   whether the concrete backend is real, mocked, or absent at compile
 //!   time.
 //! - Provide a `whisper-rs` backed implementation behind the `whisper` Cargo
@@ -64,7 +64,7 @@ pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
 /// Trait at the OS / heavy-dep boundary.
 ///
-/// Always compiled (no feature gate) so the IPC layer (TODO(#9)) can hold an
+/// Always compiled (no feature gate) so the IPC layer can hold an
 /// `Arc<dyn Transcribe>` regardless of whether the `whisper` feature is on.
 /// When the feature is off, the IPC layer is expected to plug in either a
 /// hard-coded "transcription unavailable" backend or a test mock; in either
@@ -105,9 +105,11 @@ pub trait Transcribe: Send + Sync {
     /// see which model produced a given transcript.
     ///
     /// Default returns `"unknown"`; the whisper-rs backend overrides
-    /// with the model file's basename (e.g. `ggml-base.q5_0.bin`).
-    /// When the model picker (M3) lands this becomes the user-facing
-    /// label from the picker rather than a path basename.
+    /// with the model file's basename (e.g. `ggml-base.bin`). The
+    /// catalog id (e.g. `whisper-base`) would be more user-friendly,
+    /// but we don't currently thread it through the trait — a future
+    /// refactor that gives the loader the catalog id at construction
+    /// time can return that here.
     fn model_label(&self) -> String {
         "unknown".to_owned()
     }
@@ -119,7 +121,7 @@ mod tests {
 
     /// Compile-time check that the trait is object-safe. If this ever fails
     /// to compile, a higher layer cannot store an `Arc<dyn Transcribe>`,
-    /// which is how the IPC layer (TODO(#9)) plugs in either the whisper
+    /// which is how the IPC layer plugs in either the whisper
     /// backend or a test mock.
     #[test]
     fn transcribe_trait_is_object_safe() {

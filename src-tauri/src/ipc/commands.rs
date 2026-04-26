@@ -47,10 +47,14 @@ use super::{AppState, ForegroundApp};
 
 /// What the frontend gets back from `stop_dictation`.
 ///
-/// The text is what was written to the clipboard. The foreground snapshot
-/// is whatever was focused at `start_dictation`; once history persistence
-/// lands (TODO(#7)) the frontend will send this through the history insert
-/// command rather than displaying it directly.
+/// `text` is what was written to the clipboard (after vocabulary-prompt
+/// biasing during inference and post-transcription replacement rules).
+/// `foreground` is the app + window title captured *at start* of the
+/// recording — not at stop, because by stop time the user has alt-tabbed
+/// back to Hush and "current foreground" would always be us. The backend
+/// already inserts a history row with this metadata via the
+/// fire-and-forget `spawn_history_insert` helper in `stop_dictation`, so
+/// the frontend doesn't need to round-trip it back through `history_*`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictationResult {
@@ -72,11 +76,16 @@ pub enum IpcError {
     #[error("transcription: {0}")]
     Transcription(String),
 
-    /// Surfaced when no transcription backend is configured. The recovery
-    /// path is "set `HUSH_MODEL_PATH` and rebuild with `--features whisper`"
-    /// during the M1/M2 spike; once the model picker (M3) lands this
-    /// becomes "open settings and pick a model."
-    #[error("transcription not available — set HUSH_MODEL_PATH and build with --features whisper")]
+    /// Surfaced when no transcription backend is configured at the time
+    /// of `stop_dictation`. Either the user hasn't picked a downloaded
+    /// model yet (the model picker is shipped — first-run users see a
+    /// banner pointing them at it; the `Start recording` button is
+    /// disabled in that state) or the binary was built without the
+    /// `whisper` Cargo feature (UI-only contributors using
+    /// `npm run tauri:ui-only`). The frontend's recovery copy points at
+    /// the in-app picker and the legacy `HUSH_MODEL_PATH` env-var path
+    /// is no longer surfaced to end users.
+    #[error("no transcription model loaded (pick one in the model picker, or rebuild with the whisper feature)")]
     TranscriptionUnavailable,
 
     #[error("clipboard: {0}")]
@@ -176,21 +185,37 @@ fn start_dictation_inner(state: &AppState, device_id: Option<&str>) -> IpcResult
 /// write to clipboard, fire a notification, and return the text to the
 /// frontend.
 ///
-/// The audio-stop and transcription calls are made inline rather than
-/// being collapsed through a single helper, because we want each layer's
-/// error to map to the right [`IpcError`] variant *structurally* (the
-/// frontend dispatches recovery copy on `kind`). A previous attempt at
-/// substring-classifying a merged error string was fragile: a whisper
-/// error mentioning "device" was being routed to `Audio`. Splitting the
-/// calls makes the boundary obvious and removes the heuristic.
+/// ## Fatal-vs-best-effort policy
 ///
-/// **Replacement-rule load failure is non-fatal**: if the rules table
-/// can't be read for some reason we log and continue with no
-/// replacements rather than failing the whole dictation. The user
-/// already has the text; surfacing "we couldn't load your rules" as a
-/// hard error would block them on a strictly-secondary feature. The
-/// settings surface (M3) can offer a "rules failed to load — see logs"
-/// banner if this turns out to matter in practice.
+/// The function deliberately treats some failures as fatal and others
+/// as best-effort. The split is by *whether the user's deliverable is
+/// affected*:
+///
+/// - **Fatal** (returns `Err` and dictation fails):
+///   - Audio backend stop (no audio → no transcript)
+///   - Transcription itself (no transcript → no clipboard write)
+///   - Clipboard write (the user's actual artefact — without this,
+///     they can't paste, which is the whole point)
+/// - **Best-effort** (logged and skipped):
+///   - Vocabulary prompt load (without it, transcription works but
+///     loses prompt-bias for proper nouns/jargon)
+///   - Replacement-rule load (without them, the raw transcript still
+///     reaches the clipboard — replacements are polish)
+///   - "Ready to paste" notification (Linux-without-daemon edge
+///     case; user has the text on the clipboard regardless)
+///   - History insert (fire-and-forget; logged at error level if it
+///     fails. The user has their text; losing one history row is a
+///     missed analytics moment, not a blocked workflow)
+///
+/// ## Why the audio/transcription split is structural, not heuristic
+///
+/// The audio-stop and transcription calls are made inline rather than
+/// collapsed through a single helper, because each layer's error must
+/// map to the right [`IpcError`] variant *structurally* — the frontend
+/// dispatches recovery copy on `kind`. A previous attempt at substring-
+/// classifying a merged error string was fragile: a whisper error
+/// mentioning "device" was being routed to `Audio`. Splitting the
+/// calls makes the boundary obvious and removes the heuristic.
 ///
 /// Clipboard write is the user's actual artefact; if it fails we surface
 /// the error to the frontend so the user knows the text wasn't pasteable.

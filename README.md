@@ -25,7 +25,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 - 🔴 Recording HUD overlay — borderless transparent always-on-top window with a pulsing dot and a live RMS-driven level meter
 - 📝 SQLite-backed history with FTS5 full-text search, copy, delete
 - 📖 Personal Dictionary: vocabulary terms (Whisper prompt-bias) + literal find/replace rules
-- ⚙️ Model picker: Whisper tiny → large-v3, with one-click auto-download and SHA-256 verification
+- ⚙️ Model picker — Whisper tiny → large-v3, with one-click auto-download (SHA-256 verified, host-restricted to Hugging Face) and hot-load on select (no restart needed when picking a downloaded model)
 - 👋 macOS first-run welcome that explains Microphone + Input Monitoring permissions
 
 ### Planned (v1)

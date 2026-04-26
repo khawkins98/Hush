@@ -219,8 +219,9 @@ mod tests {
         // wire up at runtime against the bundled SQLite, and (2) a
         // row inserted into `history` is searchable through the
         // `history_fts` virtual table without extra setup. If either
-        // regresses, history search (TODO(#7)) will silently return
-        // zero rows.
+        // regresses, history search will silently return zero rows
+        // even though `history_list` works fine, which is the kind of
+        // bug a unit test should catch before a contributor does.
         let db = SqliteDatabase::open_in_memory().await.unwrap();
 
         sqlx::query("INSERT INTO history (transcript, app_name, model) VALUES (?, ?, ?)")
