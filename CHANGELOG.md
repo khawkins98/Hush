@@ -226,6 +226,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PTT no longer crashes the app on macOS 26+** (closes the crash
+  half of the rdev issue; native CGEventTap replacement tracked
+  separately). rdev 0.5's CGEventTap callback unconditionally calls
+  `TSMGetInputSourceProperty` from its listener thread to compute a
+  Unicode key-name string we never read. macOS 26's TSM tightened
+  its dispatch-queue assertions and now `dispatch_assert_queue_fail`s
+  on the first modifier-key event — a hard `__builtin_trap` (SIGTRAP),
+  not a Rust panic, so `catch_unwind` can't save it. Mitigation: PTT
+  listener is now skipped on macOS by default, with `HUSH_PTT_ENABLE=1`
+  to opt in for users on older macOS where rdev still works, and
+  `HUSH_PTT_DISABLE=1` as the kill switch on every platform. Toggle
+  hotkey (Tauri's plugin) and button-driven dictation are unaffected.
+  Documented in `docs/macos-permissions.md`. The proper fix — a
+  native CGEventTap that bypasses TSM — is a follow-up tracking
+  issue.
 - **HUD window is actually transparent on macOS (closes #62).** The
   HUD's `transparent: true` window flag was a no-op on macOS without
   Tauri's `macos-private-api` Cargo feature + the matching

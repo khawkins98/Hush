@@ -499,3 +499,35 @@ If only the config flag is set without the Cargo feature, Tauri's build script f
 **App Store implication.** Tauri's docs flag that `macos-private-api` uses Apple private APIs that may complicate App Store review. Hush's v1 distribution plan (PRD §11) is direct distribution, not App Store, so this is irrelevant today. If the project ever pursues App Store distribution, the HUD's transparency design needs to be revisited — either accept solid-background HUD rendering on the App Store target (lossless via `cfg!(target_os = "macos")` config gating) or use only public APIs.
 
 **Smoke confirms the fix.** Pre-fix: dev log emits `The window is set to be transparent but the macos-private-api is not enabled`. Post-fix: warning is absent. The dev-launch smoke (which just landed in #61) is exactly the workflow that caught this — a contributor running `npm run tauri dev` sees the warning and the visibly-solid HUD background, and knows to fix it. Without the smoke, the warning would have only been noticed by a user complaining the HUD looks wrong.
+
+## 2026-04-26 — rdev 0.5 crashes on macOS 26+ via TSM dispatch-queue assertion
+
+The user's first hands-on round on macOS 26.4.1 surfaced an immediate hard crash: the app started, registered the toggle hotkey + PTT listener, and then aborted with `EXC_BREAKPOINT (SIGTRAP)` on the first modifier-key press. The crashing thread was `hush-ptt`, and the stack walked from rdev's CGEventTap callback into HIToolbox's TSM:
+
+```
+rdev::macos::listen::raw_callback
+  → rdev::macos::common::convert
+  → rdev::macos::keyboard::Keyboard::create_string_for_key
+  → rdev::macos::keyboard::Keyboard::string_from_code
+  → TSMGetInputSourceProperty
+  → islGetInputSourceListWithAdditions
+  → dispatch_assert_queue_fail
+  → __builtin_trap
+```
+
+**The mechanism.** rdev unconditionally computes a Unicode "name string" for every key event via `TSMGetInputSourceProperty`. On macOS 26 Apple tightened the dispatch-queue assertions on the TSM functions: they now `dispatch_assert_queue_fail` if called from any thread other than the main dispatch queue. rdev calls them from its own listener thread (which runs the CGEventTap callback). Crash.
+
+**What makes this nasty.**
+
+- It's not a Rust panic. `dispatch_assert_queue_fail` is a hard `__builtin_trap`, so `std::panic::catch_unwind` doesn't catch it. The whole process aborts.
+- It only fires on certain key codes (the ones rdev hasn't cached a string for yet), so the app appears to start cleanly and crashes only on the first uncached modifier press. Looks intermittent unless you trace the actual cause.
+- It's not specific to our code. *Any* app using rdev 0.5 on macOS 26+ will hit this on the first modifier press.
+- The string rdev computes is data we never read. Hush only matches on `Key` (the keycode enum); the `Event::name` field could be `None` for our purposes and PTT would still work.
+
+**The defence we shipped (#69 PR).** PTT listener is skipped by default on macOS. Two env vars: `HUSH_PTT_ENABLE=1` to opt in (for users on macOS 13/14/15 where rdev still works) and `HUSH_PTT_DISABLE=1` as the cross-platform kill switch. The toggle hotkey (`tauri-plugin-global-shortcut`, doesn't go through rdev) and button-driven dictation are unaffected. The enablement decision is unit-tested in `hotkey::ptt::tests` so a future regression won't accidentally re-enable PTT on macOS without the user's opt-in.
+
+**The proper fix is a native CGEventTap.** Replace rdev on macOS with a thin `core-graphics`/`objc2` event-tap wrapper that registers for `kCGEventKeyDown` + `kCGEventKeyUp` + `kCGEventFlagsChanged` and reads keycodes directly without going through TSM. ~half-day of work — tracked as a follow-up issue. Linux + Windows continue to use rdev (those don't have this issue).
+
+**Lesson worth keeping.** When a third-party crate calls into platform UI APIs from non-main threads, look for `dispatch_assert_queue` in the stack on the next macOS major. Apple's been progressively tightening these checks for a decade, and the result is always "code that worked on N now hard-aborts on N+1". The defence is either: (a) a thin platform-specific wrapper you control, or (b) the affordance to disable the third-party code that broke. Hush has both available now — env-var disable today, native wrapper later.
+
+**Why I didn't notice this in CI.** CI doesn't run a real Tauri runtime — same blind spot called out in the dev-launch-smoke entry above. Even the dev-launch smoke I run as part of the new convention only boots the app and waits ~20s; it doesn't simulate key events, so it would miss this. The user hit it in actual hands-on testing, which is exactly what hands-on testing is *for*. Worth remembering: there are bug classes that no automation reaches; for those, the human at the keyboard is the test.
