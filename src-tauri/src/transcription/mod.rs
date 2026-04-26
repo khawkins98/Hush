@@ -46,12 +46,18 @@
 pub mod catalog;
 pub mod download;
 pub mod resample;
+pub mod streaming;
 
 #[cfg(feature = "whisper")]
 pub mod whisper;
 
 #[cfg(feature = "whisper")]
 pub use whisper::WhisperTranscription;
+
+pub use streaming::{
+    SlidingWindowConfig, SlidingWindowState, StreamSegment, StreamingTranscribeSession,
+    WhisperLikeInferer,
+};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -277,6 +283,57 @@ pub trait Transcribe: Send + Sync {
     /// terminal one (the existing dictation flow).
     fn supports_streaming(&self) -> bool {
         false
+    }
+
+    /// Open a streaming inference session for one continuous capture.
+    ///
+    /// Returns a handle the caller (the meeting pump) feeds samples
+    /// into via [`StreamingTranscribeSession::feed`] on the audio
+    /// drain cadence (~500 ms). Inference runs internally on a
+    /// configurable cadence; partial + final [`Utterance`]s are
+    /// surfaced via [`StreamingTranscribeSession::drain`] when ready.
+    /// On session close the caller invokes
+    /// [`StreamingTranscribeSession::finish`] to flush the in-flight
+    /// tail as finals.
+    ///
+    /// **Default impl** wraps [`Self::transcribe_with_prompt`] in a
+    /// [`streaming::OneShotStreamAdapter`]: every fed sample is
+    /// buffered, mid-stream `drain` calls return nothing, and `finish`
+    /// runs one inference over the whole buffer + emits a single
+    /// final. Same observable shape as the pre-#108 chunk pump (one
+    /// utterance per chunk-equivalent), so non-streaming backends keep
+    /// working without changing the pump's call site.
+    ///
+    /// Backends that override this method MUST also override
+    /// [`Self::supports_streaming`] to return `true` — the IPC layer
+    /// reads the capability flag to decide whether to surface mid-
+    /// session partials to the frontend.
+    ///
+    /// `format` is the capture format the caller will feed in (samples
+    /// in `feed` calls match this rate + channel count); the
+    /// implementation is responsible for any downmix / resample to its
+    /// model's preferred input format. `prompt` is the
+    /// vocabulary-bias initial prompt — same semantics as
+    /// [`Self::transcribe_with_prompt`].
+    fn start_stream(
+        &self,
+        format: CaptureFormat,
+        prompt: &str,
+    ) -> Result<Box<dyn StreamingTranscribeSession>> {
+        // Default returns an error rather than silently degrading to a
+        // one-shot adapter: a "streaming" call against a non-streaming
+        // backend should be observable, not invisible. The pump checks
+        // [`Self::supports_streaming`] before calling this method;
+        // backends that opt in (the whisper-rs path; future Parakeet
+        // ONNX) override here AND override `supports_streaming` to
+        // return `true`. Test mocks that don't care about streaming
+        // get the default-error and the pump never invokes them.
+        let _ = (format, prompt);
+        Err(anyhow::anyhow!(
+            "start_stream is not implemented for this Transcribe backend; \
+             override the method to opt into streaming (used by the meeting pump \
+             for continuous capture)"
+        ))
     }
 }
 
