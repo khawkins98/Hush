@@ -46,7 +46,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # SHA-256 verification for downloaded model files. Hand-rolled hashing
 # would be a security footgun; `sha2` is the well-vetted RustCrypto
 # implementation.
-sha2 = "0.10"
+sha2 = "0.11"
 
 # `Stream` trait + adaptors used to consume reqwest's response body.
 # Tiny, no transitive deps beyond `futures-core`.
