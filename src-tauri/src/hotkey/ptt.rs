@@ -88,6 +88,17 @@ pub const DEFAULT_PTT_KEY: PttKey = PttKey::RightControl;
 /// becomes a development override rather than the primary mechanism.
 pub const ENV_PTT_HOTKEY: &str = "HUSH_PTT_HOTKEY";
 
+/// Force-disable the rdev PTT listener even on platforms where it would
+/// otherwise auto-enable. Set `HUSH_PTT_DISABLE=1`.
+pub const ENV_PTT_DISABLE: &str = "HUSH_PTT_DISABLE";
+
+/// Force-enable the rdev PTT listener on platforms where it would
+/// otherwise auto-disable. Set `HUSH_PTT_ENABLE=1`. Currently only
+/// meaningful on macOS, where #69 disables PTT by default to avoid a
+/// hard abort in rdev's TSM call on macOS 26+. Users on older macOS
+/// (13/14/15) where rdev still works can opt-in this way.
+pub const ENV_PTT_ENABLE: &str = "HUSH_PTT_ENABLE";
+
 /// Event emitted to the frontend on PTT key-down.
 pub const EVENT_PTT_PRESS: &str = "hotkey:ptt-press";
 
@@ -258,6 +269,28 @@ pub fn resolve_ptt_key(env_value: Option<&str>) -> Result<PttKey> {
 /// thread, not bubbled here, because by the time `rdev::listen` blocks we
 /// have no caller to return to.
 pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
+    let _ = app; // touched only on the platform branches below
+    match ptt_enablement() {
+        PttEnablement::Enabled => { /* fall through to register */ }
+        PttEnablement::DisabledByEnv => {
+            tracing::info!(
+                "PTT listener skipped: {ENV_PTT_DISABLE}=1 set. Toggle hotkey and \
+                 button-driven dictation continue to work."
+            );
+            return Ok(());
+        }
+        PttEnablement::DisabledMacosDefault => {
+            tracing::warn!(
+                "PTT listener skipped on macOS by default: rdev calls TSMGetInputSourceProperty \
+                 from a non-main thread, which dispatch_assert_queue_fail's on macOS 26+ and \
+                 crashes the process on the first modifier press (see #69). Override with \
+                 {ENV_PTT_ENABLE}=1 if you are on older macOS where rdev still works. Toggle \
+                 hotkey and button-driven dictation are unaffected."
+            );
+            return Ok(());
+        }
+    }
+
     let env_value = std::env::var(ENV_PTT_HOTKEY).ok();
     let key = resolve_ptt_key(env_value.as_deref())?;
 
@@ -297,6 +330,58 @@ pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         .context("failed to spawn PTT listener thread")?;
 
     Ok(())
+}
+
+/// Resolved enablement state for the rdev PTT listener.
+///
+/// Three possibilities, computed once at startup:
+/// - `Enabled` — register the listener.
+/// - `DisabledByEnv` — `HUSH_PTT_DISABLE=1` set; user opted out.
+/// - `DisabledMacosDefault` — macOS-only; opt out by default until #69
+///   ships a TSM-free event-tap implementation. User can override via
+///   `HUSH_PTT_ENABLE=1` if on older macOS where rdev's TSM call works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PttEnablement {
+    Enabled,
+    DisabledByEnv,
+    DisabledMacosDefault,
+}
+
+/// Resolve PTT enablement from the environment + platform default.
+///
+/// Pure function: pulled out of `register_ptt_listener` so unit tests can
+/// drive the decision without spawning a Tauri runtime or touching the
+/// real environment.
+fn resolve_enablement(
+    disable: Option<&str>,
+    enable: Option<&str>,
+    is_macos: bool,
+) -> PttEnablement {
+    let truthy = |v: Option<&str>| {
+        matches!(
+            v.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+            Some("1") | Some("true") | Some("yes") | Some("on")
+        )
+    };
+    if truthy(disable) {
+        return PttEnablement::DisabledByEnv;
+    }
+    if is_macos && !truthy(enable) {
+        return PttEnablement::DisabledMacosDefault;
+    }
+    PttEnablement::Enabled
+}
+
+/// Production wrapper around [`resolve_enablement`] that reads the real
+/// environment + the build-time `cfg(target_os)`.
+fn ptt_enablement() -> PttEnablement {
+    let disable = std::env::var(ENV_PTT_DISABLE).ok();
+    let enable = std::env::var(ENV_PTT_ENABLE).ok();
+    resolve_enablement(
+        disable.as_deref(),
+        enable.as_deref(),
+        cfg!(target_os = "macos"),
+    )
 }
 
 /// Forward a single `rdev` event to the frontend if it matches the
@@ -405,5 +490,86 @@ mod tests {
         assert!(!PttKey::F12.matches(Key::F11));
         assert!(!PttKey::F12.matches(Key::Space));
         assert!(!PttKey::CapsLock.matches(Key::ShiftLeft));
+    }
+
+    // -- Enablement resolution -------------------------------------------
+    //
+    // Pinning the disable/enable matrix because regressing this is how
+    // users get a hard crash on macOS 26+ — the assertions trap at the
+    // OS level (dispatch_assert_queue_fail), not as a Rust panic, so
+    // catch_unwind can't save us. The defence is to never spawn the
+    // rdev listener on macOS by default. See #69 for the underlying bug.
+
+    #[test]
+    fn enablement_macos_disabled_by_default() {
+        assert_eq!(
+            resolve_enablement(None, None, true),
+            PttEnablement::DisabledMacosDefault
+        );
+    }
+
+    #[test]
+    fn enablement_macos_opt_in_via_env() {
+        assert_eq!(
+            resolve_enablement(None, Some("1"), true),
+            PttEnablement::Enabled
+        );
+        assert_eq!(
+            resolve_enablement(None, Some("true"), true),
+            PttEnablement::Enabled
+        );
+    }
+
+    #[test]
+    fn enablement_disable_wins_over_enable() {
+        // If the user sets both, disable takes priority — least surprise
+        // when the user is trying to stop a crash.
+        assert_eq!(
+            resolve_enablement(Some("1"), Some("1"), true),
+            PttEnablement::DisabledByEnv
+        );
+        assert_eq!(
+            resolve_enablement(Some("1"), Some("1"), false),
+            PttEnablement::DisabledByEnv
+        );
+    }
+
+    #[test]
+    fn enablement_non_macos_enabled_by_default() {
+        assert_eq!(
+            resolve_enablement(None, None, false),
+            PttEnablement::Enabled
+        );
+    }
+
+    #[test]
+    fn enablement_non_macos_disable_via_env() {
+        assert_eq!(
+            resolve_enablement(Some("1"), None, false),
+            PttEnablement::DisabledByEnv
+        );
+    }
+
+    #[test]
+    fn enablement_truthy_values_are_normalised() {
+        // Be forgiving about HUSH_PTT_ENABLE=YES vs =yes vs ="1 " etc.
+        assert_eq!(
+            resolve_enablement(None, Some("YES"), true),
+            PttEnablement::Enabled
+        );
+        assert_eq!(
+            resolve_enablement(None, Some(" on "), true),
+            PttEnablement::Enabled
+        );
+        // Anything else stays disabled — we don't accept "0" or "false"
+        // as enable signals.
+        assert_eq!(
+            resolve_enablement(None, Some("0"), true),
+            PttEnablement::DisabledMacosDefault
+        );
+        assert_eq!(
+            resolve_enablement(None, Some(""), true),
+            PttEnablement::DisabledMacosDefault
+        );
     }
 }

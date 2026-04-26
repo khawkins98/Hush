@@ -9,6 +9,24 @@ This doc covers what to do when either gets into a stuck state. If you're author
 
 ---
 
+## Heads-up: PTT is disabled by default on macOS
+
+Push-to-talk (the hold-to-record key, `Right Control` by default) is **disabled by default on macOS** as of #69. Reason: rdev 0.5 calls `TSMGetInputSourceProperty` from its CGEventTap callback thread, which `dispatch_assert_queue_fail`'s and aborts the entire process on macOS 26+ as soon as it sees a modifier-key event. The crash is at the OS level — no Rust panic, no recoverable signal — so the only safe fix is not to spawn the listener.
+
+The toggle hotkey (`⌃⌥H` by default) and the in-window Start/Stop buttons still work. They go through Tauri's global-shortcut plugin, not rdev, and aren't affected.
+
+If you're on **older macOS (13/14/15)** where rdev still works, opt back in with:
+
+```sh
+HUSH_PTT_ENABLE=1 npm run tauri dev
+```
+
+If you've opted in and you're seeing the crash, set `HUSH_PTT_DISABLE=1` to opt out again.
+
+A native CGEventTap implementation that doesn't call TSM is tracked in the project's PTT issue — that's the long-term fix that brings PTT back as a default.
+
+---
+
 ## Why dev builds are flaky for permissions
 
 macOS's TCC (Transparency, Consent, and Control) database keys permissions to a specific code-signing identity + bundle ID. A signed `Hush.app` (from `npm run tauri build`) registers under `com.khawkins.hush` and the grant survives rebuilds. The `cargo tauri dev` flow runs `target/debug/hush` — an unsigned binary — and TCC behaviour gets unpredictable:
