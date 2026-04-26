@@ -192,6 +192,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flag a possible App Store implication; not relevant to Hush's v1
   distribution plan, captured in `learnings.md` for future
   reference.
+- **Welcome modal tagline copy.** Said "Two permissions worth knowing
+  about before you start" but the modal renders three sections —
+  Microphone, Input Monitoring, and a privacy footer that isn't a
+  permission per se. Re-worded to "Here's what to know about
+  permissions and privacy before you start." Polish-graded leftover
+  from the round-4 reviewer pass on #48.
 - **Updater plugin no longer panics on app launch.**
   `tauri-plugin-updater::Builder::new().build()` was registered in
   `lib.rs` without a corresponding `plugins.updater` block in
