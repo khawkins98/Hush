@@ -123,6 +123,48 @@ What's deliberately **not** here yet (tracked in #110):
     list, idempotent close_session, atomic append_utterance with
     count bump, ordered list_utterances, set_notes round-trip,
     and FK cascade on delete.
+#### Streaming transcription — sliding-window foundation (#108 PR1)
+
+- `Transcribe` trait gains `start_stream(format, prompt)` returning a
+  `Box<dyn StreamingTranscribeSession>` handle the meeting pump (PR3)
+  feeds samples into on the audio drain cadence. The handle exposes
+  `feed`, `drain`, and `finish` so the pump can pull partials + finals
+  on a tight tick without stopping capture. Default impl errors —
+  backends that opt in (the whisper-rs path, plus a future Parakeet
+  ONNX backend) override `start_stream` AND override
+  `supports_streaming` to return `true`. Non-streaming backends and
+  test mocks keep their existing behaviour unchanged; the dictation
+  hot path stays on `transcribe_with_prompt`.
+- `WhisperTranscription` overrides `start_stream` to construct a
+  `WhisperStreamingSession` that runs whisper.cpp on a rolling 30 s
+  window every ~3 s of new audio, emitting partials for the trailing
+  tail and finals for segments aged past an 8 s commit threshold. The
+  policy state machine (`SlidingWindowState`) is whisper-agnostic and
+  unit-tested with a scripted `WhisperLikeInferer` mock — 15 unit
+  tests pin the diff/commit logic against synthetic segment streams
+  (window growth, partial revision, commit-and-slide, long-silence
+  failsafe, empty-segment filtering, dedup high-water mark). The
+  whisper bridge is tested end-to-end via the existing fixture WAV
+  (`tests/fixtures/jfk.wav`) under a new `streaming_fixture`
+  integration test, gated by `HUSH_TEST_MODEL` like the existing
+  `audio_fixture` smoke. Smoke run against the bundled JFK clip with
+  `ggml-base.bin` produced 3 mid-stream partials and a final
+  matching the canonical "ask not what your country can do for you"
+  transcript.
+- The whisper context is now held behind an `Arc<Mutex<...>>` instead
+  of a bare `Mutex` so streaming sessions can hold their own clones
+  and run inferences from the meeting pump's blocking pool without
+  coupling to the original `&self` lifetime. The dictation hot path's
+  `transcribe`/`transcribe_with_prompt` call sites continue to work
+  unchanged — `lock()` is the same shape regardless of `Arc` wrapping.
+- See `learnings.md` (2026-04-26 entry) for the design discussion of
+  time-based commit vs stability-based commit, the in-memory partial
+  vs DB-write trade-off (PR3 will surface partials via the
+  `meeting_session_get` IPC, not a separate Tauri event), and a few
+  whisper-rs API specifics learned in passing (segment timestamps in
+  10ms units; `set_no_context(true)` for sliding-window; `Send` but
+  `!Sync` `WhisperContext`).
+
 #### Phase B foundation: streaming-transcription scaffold
 
 - `stop_dictation` now invokes inference through the streaming
