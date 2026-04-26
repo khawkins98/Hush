@@ -274,6 +274,95 @@ test.describe("meeting panel — multi-source picker", () => {
     await expect(sysRow).toContainText("0:10");
   });
 
+  test("historical session row expands inline to show its transcript", async ({
+    page,
+  }) => {
+    // PR5 (historical expand) lazy-loads `meeting_session_get` on
+    // first click of the per-row "Show transcript" button. Pin the
+    // lazy-load + render-inline shape so a regression that always
+    // pre-fetches every detail or fails to surface the transcript
+    // stays caught.
+    //
+    // The default mock's `meeting_session_get` throws — we override
+    // to a working impl below. Mock functions are serialised via
+    // `toString()` and rebuilt in the page context, so they can't
+    // close over variables declared on the test side; any counters
+    // / capture buffers must go through `page.exposeFunction`.
+    let detailFetches = 0;
+    await page.exposeFunction("__hush_record_detail_fetch", () => {
+      detailFetches += 1;
+    });
+    await installMocks(page, {
+      // No active session so the panel renders the historical list.
+      meeting_active_session: () => ({ active: null }),
+      meeting_sessions_list: () => [
+        {
+          id: 17,
+          appName: "Zoom",
+          appKind: "meeting",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: "2026-04-26T15:30:00Z",
+          speakerCount: null,
+          utteranceCount: 1,
+          notes: null,
+        },
+      ],
+      meeting_session_get: () => {
+        (
+          window as unknown as {
+            __hush_record_detail_fetch: () => void;
+          }
+        ).__hush_record_detail_fetch();
+        return {
+          session: {
+            id: 17,
+            appName: "Zoom",
+            appKind: "meeting",
+            startedAt: "2026-04-26T15:00:00Z",
+            endedAt: "2026-04-26T15:30:00Z",
+            speakerCount: null,
+            utteranceCount: 1,
+            notes: null,
+          },
+          utterances: [
+            {
+              id: 100,
+              sessionId: 17,
+              startedAtMs: 0,
+              endedAtMs: 5_000,
+              speakerLabel: "mic",
+              text: "This was the past meeting talking.",
+              isFinal: true,
+            },
+          ],
+        };
+      },
+    });
+    await page.goto("/");
+
+    const panel = page.locator("section.panel-meetings");
+    const row = panel.locator("li.session-row").first();
+    await expect(row).toBeVisible();
+
+    // No transcript yet — the lazy load only fires on click.
+    await expect(row.locator("ol.live-transcript")).toHaveCount(0);
+    expect(detailFetches).toBe(0);
+
+    // First click triggers the fetch and renders the transcript.
+    await row.getByRole("button", { name: /Show transcript/i }).click();
+    await expect(row.locator("ol.live-transcript")).toBeVisible();
+    await expect(row).toContainText("This was the past meeting talking.");
+    await expect(row).toContainText("You");
+    expect(detailFetches).toBeGreaterThanOrEqual(1);
+
+    // Toggle closes the inline view. Re-open re-fetches today
+    // (collapse drops the cached detail) — pinning that shape so
+    // a future change that adds a cache layer is an explicit
+    // decision, not a silent semantic shift.
+    await row.getByRole("button", { name: /Hide transcript/i }).click();
+    await expect(row.locator("ol.live-transcript")).toHaveCount(0);
+  });
+
   test("active session shows listening placeholder when no utterances yet", async ({
     page,
   }) => {
