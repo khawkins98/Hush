@@ -91,11 +91,7 @@ struct AudioHandler {
 }
 
 impl SCStreamOutputTrait for AudioHandler {
-    fn did_output_sample_buffer(
-        &self,
-        sample: CMSampleBuffer,
-        of_type: SCStreamOutputType,
-    ) {
+    fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
         // The same handler is registered only for the Audio output type,
         // but the framework can in principle deliver other types; guard
         // anyway to keep the cast below sound.
