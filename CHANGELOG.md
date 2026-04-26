@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Streaming-transcription foundation (Phase B of the meeting-mode
+  pivot, refs #33; design memo at
+  `docs/system-audio-meeting-mode-proposal.md`). Adds the
+  `Utterance` struct (`text`, `startedAtMs`, `endedAtMs`, `isFinal`,
+  optional `speakerLabel`) — the unit a streaming backend emits and
+  the row shape Phase C will persist into the meeting-sessions
+  table. Extends the `Transcribe` trait with two new methods:
+  `transcribe_chunks(chunks, format, prompt)` returning
+  `Vec<Utterance>` (default impl is the one-shot fallback —
+  concatenates chunks, calls `transcribe_with_prompt`, returns one
+  `is_final = true` utterance spanning the recording), and
+  `supports_streaming() -> bool` (default false). No behaviour
+  change today — the dictation hot path still calls the one-shot
+  `transcribe`. Future PRs landing Whisper sliding-window or
+  Parakeet streaming override `transcribe_chunks` and flip the
+  capability flag; the IPC layer will forward partial utterances
+  to the meeting-mode UI when `supports_streaming` returns true.
+  Six new unit tests pin the default behaviour (single final
+  utterance, prompt forwarding, stereo duration arithmetic, empty-
+  chunks safety, capability default, serde wire shape).
 - Audio source picker — first user-visible step of the system-audio +
   meeting-mode pivot (Phase A1, refs #33; design memo at
   `docs/system-audio-meeting-mode-proposal.md`). The mic dropdown is
