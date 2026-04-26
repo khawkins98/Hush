@@ -16,7 +16,7 @@ use crate::db::SqliteDatabase;
 use crate::repository::Repository;
 
 use super::{
-    MeetingAppKind, MeetingSession, MeetingSessionRepositoryExt, NewMeetingSession,
+    MeetingAppKind, MeetingSession, MeetingSessionRepository, NewMeetingSession,
     NewPersistedUtterance, PersistedUtterance,
 };
 
@@ -104,7 +104,7 @@ impl Repository<MeetingSession, NewMeetingSession, i64> for SqliteMeetingSession
 }
 
 #[async_trait]
-impl MeetingSessionRepositoryExt for SqliteMeetingSessionRepository {
+impl MeetingSessionRepository for SqliteMeetingSessionRepository {
     async fn close_session(&self, id: i64) -> Result<()> {
         // Sets `ended_at = now`. No-op if the row is already closed
         // (the CASE guards against double-write so a second close

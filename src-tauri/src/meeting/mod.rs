@@ -142,11 +142,30 @@ pub struct NewPersistedUtterance {
 
 /// Storage-boundary trait for meeting sessions.
 ///
-/// Aliases [`Repository<MeetingSession, NewMeetingSession, i64>`]
-/// under a domain-meaningful name (mirrors the
-/// [`crate::dictionary::ReplacementRepository`] pattern). Plus
-/// session-specific extensions (`close_session`, utterance CRUD)
-/// that don't fit the generic CRUD shape.
+/// Extends the generic [`Repository<MeetingSession, NewMeetingSession, i64>`]
+/// with the session-specific methods that don't fit the generic CRUD
+/// shape — closing a session, appending an utterance to it,
+/// listing the utterances, editing the notes.
+///
+/// **Why a single trait, not the marker + extension pattern this code
+/// previously used.** Round-7 architecture review (closes #115) flagged
+/// the two-trait setup as the wrong shape:
+///
+/// - The dictionary repos ([`crate::dictionary::ReplacementRepository`]
+///   / [`crate::dictionary::VocabularyRepository`]) are *pure* markers
+///   plus a blanket impl over `Repository<T, NewT, Id>` because they
+///   have no domain-specific methods. The marker pattern earns its
+///   keep there.
+/// - Meeting was the first repo with session-specific logic. The
+///   earlier code chose a new pattern (marker + extension trait +
+///   blanket impl forwarding through the extension) rather than just
+///   declaring the methods on the supertrait directly.
+/// - The forwarding boilerplate, the doubled mock surface (every test
+///   mock had to impl two traits), and the cognitive load at every
+///   call site outweighed the marker-pattern benefit. Concrete
+///   impls now implement `Repository<...>` AND
+///   `MeetingSessionRepository` — same shape every other domain repo
+///   with extra methods would naturally take.
 ///
 /// `Send + Sync` so the IPC layer can hold an
 /// `Arc<dyn MeetingSessionRepository>` across async Tauri commands.
@@ -154,9 +173,8 @@ pub struct NewPersistedUtterance {
 pub trait MeetingSessionRepository:
     Repository<MeetingSession, NewMeetingSession, i64> + Send + Sync
 {
-    /// Mark a session closed: writes `ended_at = now` and recomputes
-    /// the denormalised counts. No-op if the session is already
-    /// closed.
+    /// Mark a session closed: writes `ended_at = now`. No-op if the
+    /// session is already closed.
     async fn close_session(&self, id: i64) -> Result<()>;
 
     /// Persist a final utterance against an open session. Bumps the
@@ -170,61 +188,6 @@ pub trait MeetingSessionRepository:
 
     /// Update a session's freeform notes. The panel calls this on
     /// blur of the notes textarea.
-    async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()>;
-}
-
-/// Blanket impl: anything that satisfies the generic [`Repository`]
-/// contract for meeting-session rows AND implements the
-/// session-specific extension methods is automatically a
-/// [`MeetingSessionRepository`]. Mirrors the
-/// [`crate::dictionary::ReplacementRepository`] / [`VocabularyRepository`]
-/// pattern.
-///
-/// We don't blanket on just `Repository<...>` like those traits do
-/// because the extension methods (`close_session`, `append_utterance`,
-/// etc.) are real per-impl logic — there's no useful default.
-/// Concrete impls explicitly implement both bounds; this impl
-/// forwards the trait-object's session-specific methods to the
-/// implementor's `MeetingSessionRepositoryExt` impl.
-#[async_trait]
-impl<T> MeetingSessionRepository for T
-where
-    T: Repository<MeetingSession, NewMeetingSession, i64>
-        + Send
-        + Sync
-        + MeetingSessionRepositoryExt
-        + ?Sized,
-{
-    async fn close_session(&self, id: i64) -> Result<()> {
-        MeetingSessionRepositoryExt::close_session(self, id).await
-    }
-    async fn append_utterance(&self, new: NewPersistedUtterance) -> Result<PersistedUtterance> {
-        MeetingSessionRepositoryExt::append_utterance(self, new).await
-    }
-    async fn list_utterances(&self, session_id: i64) -> Result<Vec<PersistedUtterance>> {
-        MeetingSessionRepositoryExt::list_utterances(self, session_id).await
-    }
-    async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()> {
-        MeetingSessionRepositoryExt::set_notes(self, id, notes).await
-    }
-}
-
-/// Marker for the session-specific extension methods. Concrete
-/// impls implement both this and `Repository<...>`; the blanket impl
-/// of [`MeetingSessionRepository`] above wires them together.
-///
-/// Why a separate trait rather than putting the extensions directly
-/// on `MeetingSessionRepository`: the public name
-/// `MeetingSessionRepository` should be a marker (so a blanket impl
-/// can give consumers a clean `Arc<dyn MeetingSessionRepository>`
-/// shape that's coercible from any Repository-impl + extension-impl).
-/// Extracting the extensions into a sibling trait keeps the
-/// blanket impl object-safe and the names readable.
-#[async_trait]
-pub trait MeetingSessionRepositoryExt: Send + Sync {
-    async fn close_session(&self, id: i64) -> Result<()>;
-    async fn append_utterance(&self, new: NewPersistedUtterance) -> Result<PersistedUtterance>;
-    async fn list_utterances(&self, session_id: i64) -> Result<Vec<PersistedUtterance>>;
     async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()>;
 }
 
