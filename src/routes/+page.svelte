@@ -10,7 +10,8 @@
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
   import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
   import type {
-    AudioDevice,
+    AudioSource,
+    AudioSourceListing,
     DictationResult,
     DownloadProgress,
     HistoryEntry,
@@ -28,8 +29,11 @@
   // with the user's actual usage (handful per day).
   const HISTORY_PAGE_SIZE = 25;
 
-  let devices = $state<AudioDevice[]>([]);
-  let devicesLoaded = $state(false);
+  let sources = $state<AudioSourceListing[]>([]);
+  let sourcesLoaded = $state(false);
+  // Selected source id. Mic devices use their device name; the
+  // system-audio entry uses the literal string `"system"`. Mapped to
+  // an `AudioSource` for `start_dictation` in `start()`.
   let selected = $state<string | null>(null);
   let recording = $state(false);
   let busy = $state(false);
@@ -146,7 +150,7 @@
     // and error state so a slow one (history, in particular) doesn't
     // block the rest of the page.
     await Promise.all([
-      loadDevices(),
+      loadSources(),
       refreshHistory(),
       refreshReplacements(),
       refreshVocabulary(),
@@ -234,13 +238,24 @@
     result = null;
     busy = true;
     try {
-      await invoke("start_dictation", { deviceId: selected });
+      await invoke("start_dictation", { source: selectedAsAudioSource() });
       recording = true;
     } catch (e) {
       error = formatError(e);
     } finally {
       busy = false;
     }
+  }
+
+  // Resolve the picker's `selected` string id to the discriminated
+  // `AudioSource` shape the backend expects. The literal `"system"`
+  // id is the system-audio sentinel; everything else is a microphone
+  // device id (cpal identifies devices by name today). Returns `null`
+  // for the no-selection case so the backend uses its own default.
+  function selectedAsAudioSource(): AudioSource | null {
+    if (selected === null) return null;
+    if (selected === "system") return { kind: "system-audio" };
+    return { kind: "microphone", deviceId: selected };
   }
 
   async function stop() {
@@ -263,15 +278,19 @@
     }
   }
 
-  async function loadDevices() {
+  async function loadSources() {
     try {
-      devices = await invoke<AudioDevice[]>("list_input_devices");
-      const def = devices.find((d) => d.isDefault) ?? devices[0];
+      sources = await invoke<AudioSourceListing[]>("audio_list_sources");
+      // Default to the host's default microphone, falling back to the
+      // first mic in the list. We don't auto-pick the system-audio
+      // entry — that's an explicit user choice the picker exposes.
+      const mics = sources.filter((s) => s.kind === "microphone");
+      const def = mics.find((s) => s.isDefault) ?? mics[0];
       if (def) selected = def.id;
     } catch (e) {
       error = formatError(e);
     } finally {
-      devicesLoaded = true;
+      sourcesLoaded = true;
     }
   }
 
@@ -760,8 +779,8 @@
   </aside>
 
   <ControlsSection
-    {devices}
-    {devicesLoaded}
+    {sources}
+    {sourcesLoaded}
     bind:selected
     {recording}
     {busy}

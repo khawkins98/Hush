@@ -33,7 +33,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
-use crate::audio::AudioDevice;
+use crate::audio::{AudioDevice, AudioSource, AudioSourceListing};
 use crate::dictionary::{
     apply_replacements, format_vocabulary_prompt, NewReplacementRule, NewVocabularyTerm,
     ReplacementRule, VocabularyTerm,
@@ -132,6 +132,12 @@ fn poisoned<T>(_: PoisonError<T>) -> IpcError {
 
 /// Enumerate the host's input devices.
 ///
+/// **Superseded** by [`audio_list_sources`], which returns mic devices
+/// AND the system-audio entry with capability flags. Kept as a Tauri
+/// command for one transitional release so any frontend still binding
+/// to the old name keeps working — slated for removal once the picker
+/// migration is verified across all hands-on smoke surfaces.
+///
 /// Tauri marshals errors via the `Serialize` impl on [`IpcError`].
 #[tauri::command]
 pub fn list_input_devices(state: State<'_, AppState>) -> IpcResult<Vec<AudioDevice>> {
@@ -141,7 +147,22 @@ pub fn list_input_devices(state: State<'_, AppState>) -> IpcResult<Vec<AudioDevi
         .map_err(|e| IpcError::Audio(e.to_string()))
 }
 
-/// Begin capturing from `device_id` (or the system default if `None`).
+/// Enumerate every audio source the user can pick from in the source
+/// picker — every input device plus the system-audio entry, with
+/// `is_supported` flags per source so the frontend can render
+/// not-yet-shipped options as disabled.
+///
+/// Replaces [`list_input_devices`] for the source-picker UI; see
+/// [`crate::audio::AudioSourceListing`] for the wire shape.
+#[tauri::command]
+pub fn audio_list_sources(state: State<'_, AppState>) -> IpcResult<Vec<AudioSourceListing>> {
+    state
+        .audio
+        .list_audio_sources()
+        .map_err(|e| IpcError::Audio(e.to_string()))
+}
+
+/// Begin capturing from `source` (microphone or system audio).
 ///
 /// Captures the foreground app *before* opening the input stream so the
 /// snapshot is taken while the user's intended target window still has
@@ -151,13 +172,17 @@ pub fn list_input_devices(state: State<'_, AppState>) -> IpcResult<Vec<AudioDevi
 /// snapshot in the slot. Shows the recording HUD as the last step (after
 /// the audio stream is live) so a failed `start` doesn't flash the HUD on
 /// then off.
+///
+/// If `source` is omitted the default mic is used — keeps the dictation
+/// hot path one-click-from-the-hotkey for the no-options-touched case.
 #[tauri::command]
 pub fn start_dictation(
     app: AppHandle,
     state: State<'_, AppState>,
-    device_id: Option<String>,
+    source: Option<AudioSource>,
 ) -> IpcResult<()> {
-    start_dictation_inner(&state, device_id.as_deref())?;
+    let source = source.unwrap_or_else(AudioSource::default_microphone);
+    start_dictation_inner(&state, source)?;
     if let Err(e) = crate::hud::show(&app) {
         tracing::error!(error = ?e, "failed to show recording HUD");
     }
@@ -168,12 +193,12 @@ pub fn start_dictation(
 /// drive it against a mock [`AudioCapture`] without spinning up a Tauri
 /// runtime — the public command is a one-line wrapper that lifts the
 /// `State<'_, AppState>` newtype off and forwards.
-fn start_dictation_inner(state: &AppState, device_id: Option<&str>) -> IpcResult<()> {
+fn start_dictation_inner(state: &AppState, source: AudioSource) -> IpcResult<()> {
     let foreground = capture_foreground();
 
     state
         .audio
-        .start(device_id)
+        .start_with_source(source)
         .map_err(|e| IpcError::Audio(e.to_string()))?;
 
     *state.pending_foreground.lock().map_err(poisoned)? = foreground;
@@ -1280,7 +1305,8 @@ mod tests {
             window_title: "sentinel".into(),
         });
 
-        let err = start_dictation_inner(&state, None).expect_err("audio.start fails");
+        let err = start_dictation_inner(&state, AudioSource::default_microphone())
+            .expect_err("audio.start fails");
         assert!(
             matches!(err, IpcError::Audio(_)),
             "expected IpcError::Audio, got {err:?}"
@@ -1319,7 +1345,7 @@ mod tests {
         // process, so we just assert the call returned Ok and the slot is
         // *some* value (None or Some, both are acceptable — the OS may
         // genuinely have no active window in CI).
-        start_dictation_inner(&state, None).expect("should succeed");
+        start_dictation_inner(&state, AudioSource::default_microphone()).expect("should succeed");
 
         // Just prove the lock didn't poison and the slot is reachable.
         let _: Option<ForegroundApp> = state.pending_foreground.lock().unwrap().clone();

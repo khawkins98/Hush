@@ -6,6 +6,35 @@
 // duplicate declarations drifting.
 
 export type AudioDevice = { id: string; name: string; isDefault: boolean };
+
+// Discriminator for `AudioSource` and `AudioSourceListing`. Mirrors
+// the kebab-case serde tag on the Rust enum so the wire shape matches
+// without bespoke conversion at the boundary.
+export type AudioSourceKind = "microphone" | "system-audio";
+
+// Wire shape of one audio source the user can pick from. Mic devices
+// always have `isSupported: true`; the system-audio entry mirrors the
+// backend's `supports_system_audio()` capability check, so a platform
+// that hasn't shipped ScreenCaptureKit / WASAPI loopback / PulseAudio
+// monitor support yet renders the option as disabled with a "coming
+// soon" affordance instead of letting the user pick it and hit a
+// runtime error.
+export type AudioSourceListing = {
+  kind: AudioSourceKind;
+  id: string;
+  name: string;
+  isDefault: boolean;
+  isSupported: boolean;
+};
+
+// Argument shape for `start_dictation`. Wraps the `AudioSource` Rust
+// enum's serde representation: `{ kind: "microphone", deviceId: ... }`
+// or `{ kind: "system-audio" }`. The default-mic case can pass `null`
+// instead of a wrapped object — the backend falls back to the system
+// default microphone.
+export type AudioSource =
+  | { kind: "microphone"; deviceId: string | null }
+  | { kind: "system-audio" };
 export type ForegroundApp = { appName: string; windowTitle: string };
 export type DictationResult = { text: string; foreground: ForegroundApp | null };
 export type IpcError = { kind: string; message?: string };
