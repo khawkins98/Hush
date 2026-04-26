@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bundled audio test fixture (#34, follow-up to part-a). The
+  ~344 KB public-domain JFK "ask not what your country can do for
+  you" clip (16 kHz mono PCM, lifted from whisper.cpp's
+  `samples/jfk.wav`) now ships in `src-tauri/tests/fixtures/jfk.wav`
+  and backs the default audio path of the integration test. A
+  contributor with a model on disk can now run
+  `HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features
+  whisper --test audio_fixture -- --ignored` without staging an
+  audio file separately. `HUSH_TEST_AUDIO` still overrides for
+  contributors who want to point at a different clip. Whisper
+  models stay out-of-repo (75 MB+ each); the model env var remains
+  required.
 - In-app macOS permission diagnostic and reset (#67). A collapsible
   section on the main page shows the bundle id, hint copy for
   Microphone and Input Monitoring, direct links to the relevant
