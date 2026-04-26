@@ -954,6 +954,9 @@
     sessionsError={meetingSessionsError}
     activeSessionId={meetingActiveId}
     busy={meetingBusy}
+    {sources}
+    {sourcesLoaded}
+    bind:selected
     onDelete={deleteMeetingSession}
     onStart={startMeetingSession}
     onStop={stopMeetingSession}
