@@ -59,18 +59,36 @@ use crate::transcription::Transcribe;
 
 /// Hard cap on how many redirects the download client follows before
 /// erroring out. Hugging Face's `/resolve/main/` path is observed to
-/// redirect at most twice (huggingface.co → cdn-lfs.huggingface.co →
-/// a signed S3-style URL, still on the CDN); four leaves headroom.
+/// redirect at most twice (`huggingface.co` →
+/// `cas-bridge.xethub.hf.co` → a signed URL still on the same Xet
+/// CDN); four leaves headroom for a future re-architecture.
 const MAX_DOWNLOAD_REDIRECTS: usize = 4;
 
-/// Predicate for the redirect-policy closure: returns `true` iff `host`
-/// is `huggingface.co` itself or a subdomain. Pulled out so the
-/// host-allowlist logic is unit-testable — `reqwest::redirect::Attempt`
-/// has no public constructor, so the closure as a whole is not, but
-/// this small predicate is the load-bearing security check.
+/// Predicate for the redirect-policy closure: returns `true` iff
+/// `host` is in one of Hugging Face's owned DNS zones. Both
+/// `huggingface.co` and `hf.co` are HF-owned; the Xet content-
+/// addressed storage that HF migrated large-file serving to in 2025
+/// lives on `cas-bridge.xethub.hf.co`, which is a subdomain of
+/// `hf.co` not `huggingface.co`. We need to allow the `hf.co` zone
+/// or the model-download redirect chain dies — see PR #74 for the
+/// regression that surfaced this.
+///
+/// Pulled out so the host-allowlist logic is unit-testable —
+/// `reqwest::redirect::Attempt` has no public constructor, so the
+/// closure as a whole is not, but this small predicate is the
+/// load-bearing security check.
+///
+/// Care taken on the suffix match: `.huggingface.co` and `.hf.co`
+/// (with leading dot) so a typo-squat like `evilhuggingface.co` or
+/// `myhf.co` does not match.
 fn is_huggingface_host(host: Option<&str>) -> bool {
     match host {
-        Some(h) => h == "huggingface.co" || h.ends_with(".huggingface.co"),
+        Some(h) => {
+            h == "huggingface.co"
+                || h.ends_with(".huggingface.co")
+                || h == "hf.co"
+                || h.ends_with(".hf.co")
+        }
         None => false,
     }
 }
@@ -584,10 +602,16 @@ mod tests {
     #[test]
     fn huggingface_host_predicate_accepts_apex_and_subdomains() {
         // Pin the load-bearing security check: the download redirect
-        // policy treats these as in-zone.
+        // policy treats these as in-zone. Both `huggingface.co` and
+        // `hf.co` are HF-owned; the Xet CDN that HF migrated large-
+        // file serving to in 2025 lives on the `hf.co` zone (e.g.
+        // `cas-bridge.xethub.hf.co`), not `huggingface.co`.
         assert!(is_huggingface_host(Some("huggingface.co")));
         assert!(is_huggingface_host(Some("cdn-lfs.huggingface.co")));
         assert!(is_huggingface_host(Some("cdn-lfs-us-1.huggingface.co")));
+        assert!(is_huggingface_host(Some("hf.co")));
+        assert!(is_huggingface_host(Some("xethub.hf.co")));
+        assert!(is_huggingface_host(Some("cas-bridge.xethub.hf.co")));
     }
 
     #[test]
@@ -599,6 +623,9 @@ mod tests {
         assert!(!is_huggingface_host(Some("evilhuggingface.co")));
         assert!(!is_huggingface_host(Some("huggingface.co.attacker.com")));
         assert!(!is_huggingface_host(Some("attacker.com")));
+        // hf.co-zone equivalents of the same trap.
+        assert!(!is_huggingface_host(Some("myhf.co")));
+        assert!(!is_huggingface_host(Some("hf.co.attacker.com")));
         assert!(!is_huggingface_host(Some("")));
         assert!(!is_huggingface_host(None));
     }

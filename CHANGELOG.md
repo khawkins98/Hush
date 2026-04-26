@@ -237,6 +237,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Model download wasn't actually reaching the file** (regression
+  surfaced by user during hands-on testing of #41/#72). Hugging
+  Face migrated large-file serving to their Xet content-addressed
+  storage CDN, hosted on `cas-bridge.xethub.hf.co` — a subdomain of
+  `hf.co`, not `huggingface.co`. The redirect-allowlist predicate
+  added in #53 only allowed `huggingface.co` and its subdomains, so
+  every model download died at the very first redirect with
+  "redirect to host outside huggingface.co". Predicate now allows
+  both HF-owned zones (`huggingface.co` and `hf.co`). Suffix-match
+  trap is still defended (typo-squats like `myhf.co` and
+  `hf.co.attacker.com` are unit-tested as rejected). Hop cap of 4
+  unchanged.
 - **First-time-user flow: "Set up your first model" banner.** Two
   problems hit the user on the first launch with no model: (a) the
   prominent action surface was Start recording, which on click
