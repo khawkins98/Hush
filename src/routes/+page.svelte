@@ -37,6 +37,24 @@
   // system-audio entry uses the literal string `"system"`. Mapped to
   // an `AudioSource` for `start_dictation` in `start()`.
   let selected = $state<string | null>(null);
+
+  // Independent state for the meeting panel's source picker
+  // (#122 Phase 3). Lives on the page rather than inside the
+  // panel so the parent can read it when constructing the
+  // `meeting_start_manual` source list, and so the picker state
+  // survives panel-level re-renders.
+  //
+  // - `meetingMicId`: which microphone the meeting captures from.
+  //   Initialised to the host default mic in `loadSources` and
+  //   bound through the panel's dropdown.
+  // - `meetingIncludeSystemAudio`: whether the meeting also
+  //   captures system audio in parallel. Default `true` when the
+  //   backend reports `is_supported`, `false` otherwise. A
+  //   meeting's typical canonical config is mic + system audio
+  //   (you on mic, remote participants via SCK loopback) so the
+  //   default is "all-on" — power users can deselect.
+  let meetingMicId = $state<string | null>(null);
+  let meetingIncludeSystemAudio = $state<boolean>(false);
   let recording = $state(false);
   let busy = $state(false);
   let result = $state<DictationResult | null>(null);
@@ -305,11 +323,19 @@
     try {
       sources = await invoke<AudioSourceListing[]>("audio_list_sources");
       // Default to the host's default microphone, falling back to the
-      // first mic in the list. We don't auto-pick the system-audio
-      // entry — that's an explicit user choice the picker exposes.
+      // first mic in the list. The dictation hot path uses this; the
+      // meeting panel has its own `meetingMicId` defaulted similarly.
       const mics = sources.filter((s) => s.kind === "microphone");
       const def = mics.find((s) => s.isDefault) ?? mics[0];
-      if (def) selected = def.id;
+      if (def) {
+        selected = def.id;
+        meetingMicId = def.id;
+      }
+      // Meeting's "also record system audio" defaults to ON when the
+      // backend reports support — meetings really do want both sides
+      // of a call by default. Power users can uncheck.
+      const sys = sources.find((s) => s.kind === "system-audio");
+      meetingIncludeSystemAudio = sys?.isSupported ?? false;
     } catch (e) {
       error = formatError(e);
     } finally {
@@ -683,14 +709,25 @@
   async function startMeetingSession() {
     meetingBusy = true;
     try {
-      // The pump (#122 PR2) captures continuously from the chosen
-      // source(s) until stop_manual fires. v1 sends one source —
-      // whatever the meeting panel's picker resolved to — so the
-      // user gets auto-recording without a second hotkey press.
-      // Phase 3 of #122 promotes mic + system-audio in parallel as
-      // the meeting default.
-      const source = selectedAsAudioSource();
-      const sources: AudioSource[] = source !== null ? [source] : [];
+      // Phase 3 of #122: meetings default to capturing mic +
+      // system audio in parallel, the canonical "you on mic,
+      // remote participants via SCK loopback" config. Each axis
+      // is independently togglable in the panel's picker; here we
+      // resolve the picker state into the wire shape the backend's
+      // pump expects (Vec<AudioSource>).
+      const sources: AudioSource[] = [];
+      if (meetingMicId !== null) {
+        sources.push({ kind: "microphone", deviceId: meetingMicId });
+      }
+      const sys = sources_findSystemAudio();
+      if (meetingIncludeSystemAudio && sys?.isSupported) {
+        sources.push({ kind: "system-audio" });
+      }
+      if (sources.length === 0) {
+        meetingSessionsError =
+          "Pick at least one audio source before starting a session.";
+        return;
+      }
       // Without a per-platform foreground-app fetch wired up yet,
       // passing `null` falls through to the manager's "manual"
       // label. A future iteration captures the active foreground
@@ -702,6 +739,15 @@
     } finally {
       meetingBusy = false;
     }
+  }
+
+  // Lookup helper for the system-audio listing. Inlining this at
+  // each call site would either duplicate the filter or force an
+  // ordering dependency on `sources` updates; the helper keeps the
+  // intent — "is the system-audio entry supported on this host?" —
+  // readable without recomputing.
+  function sources_findSystemAudio(): AudioSourceListing | undefined {
+    return sources.find((s) => s.kind === "system-audio");
   }
 
   async function stopMeetingSession() {
@@ -964,7 +1010,8 @@
     busy={meetingBusy}
     {sources}
     {sourcesLoaded}
-    bind:selected
+    bind:meetingMicId
+    bind:meetingIncludeSystemAudio
     onDelete={deleteMeetingSession}
     onStart={startMeetingSession}
     onStop={stopMeetingSession}

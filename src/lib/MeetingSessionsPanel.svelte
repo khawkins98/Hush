@@ -42,20 +42,25 @@
     /// + a live status indicator.
     activeSessionId: number | null;
     busy: boolean;
-    /// Audio source listings (mic devices + system-audio). Same prop
-    /// the dictation `ControlsSection` reads, surfaced here so the
-    /// user picks the meeting's audio source in the same place where
-    /// they start the session — Phase 1 of the meeting-mode UX
-    /// roadmap (#122). Once #108 streaming lands, this picker drives
-    /// auto-capture; today it's still the dictation hotkey that
-    /// produces utterances, but the source state lives here so the
-    /// switch doesn't move on the user when streaming arrives.
+    /// Audio source listings (mic devices + system-audio). Surfaced
+    /// here so the meeting panel can run an independent multi-source
+    /// picker — Phase 3 of #122 promotes mic + system-audio in
+    /// parallel as the meeting default. The dictation hot path's
+    /// own (single-source) picker lives in `ControlsSection` and
+    /// reads its own state, so changes in either don't move the
+    /// other.
     sources: AudioSourceListing[];
     sourcesLoaded: boolean;
-    /// Selected source id, two-way bound to the page's `selected` so
-    /// changing it here also changes the dictation hot path's source.
-    /// Mic devices use their device name; system-audio uses `"system"`.
-    selected: string | null;
+    /// Mic device id chosen for the next meeting session. Single-
+    /// select — meetings record at most one mic at a time, the
+    /// "multi-source" axis is mic-vs-system-audio rather than
+    /// mic-vs-mic. Two-way bound so the parent owns the state.
+    meetingMicId: string | null;
+    /// Whether the next meeting session also captures system audio
+    /// alongside the mic. Defaults to `true` when the backend
+    /// reports `is_supported`, `false` otherwise. Surfaced as a
+    /// checkbox.
+    meetingIncludeSystemAudio: boolean;
     onDelete: (session: MeetingSession) => void | Promise<void>;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
@@ -69,40 +74,54 @@
     busy,
     sources,
     sourcesLoaded,
-    selected = $bindable(),
+    meetingMicId = $bindable(),
+    meetingIncludeSystemAudio = $bindable(),
     onDelete,
     onStart,
     onStop,
   }: Props = $props();
 
-  // Same split the dictation `ControlsSection` does. Repeated rather
-  // than factored into a shared util because the two pickers may
-  // diverge (Phase 3 multi-source — #122 — wants a checkbox group
-  // here, dictation stays single-select).
   let mics = $derived(sources.filter((s) => s.kind === "microphone"));
   let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
   let pickableCount = $derived(mics.length + (systemAudio ? 1 : 0));
 
+  // Effective source-list summary for the active-session line.
+  // Phase 3 makes this multi-source: typically "Microphone +
+  // System audio" by default. Computed off the panel's own state
+  // so the line accurately reflects what the pump is currently
+  // recording (the active session locked in these settings at
+  // start time; mid-session toggles don't take effect until next
+  // start, by design).
+  let activeSourceSummary = $derived.by(() => {
+    const labels: string[] = [];
+    if (meetingMicId !== null) {
+      const mic = mics.find((m) => m.id === meetingMicId);
+      labels.push(mic?.name ?? meetingMicId);
+    }
+    if (meetingIncludeSystemAudio && systemAudio?.isSupported) {
+      labels.push(systemAudio.name);
+    }
+    return labels.length === 0 ? "no source picked" : labels.join(" + ");
+  });
+
   // Active session row for live-status reads (utterance counter,
   // source label). The page re-fetches `sessions` after each
-  // `stop_dictation` while a session is active, so this row's
-  // `utteranceCount` is the live count without any extra wiring.
+  // utterance lands, so this row's `utteranceCount` is the live
+  // count without any extra wiring.
   let activeSession = $derived(
     activeSessionId === null
       ? null
       : sessions.find((s) => s.id === activeSessionId) ?? null,
   );
 
-  // Human-readable label for the currently-picked source. Used in
-  // the active-session line so the user can see at a glance which
-  // audio path the next dictation will capture from. Falls back to
-  // the raw id for sources we don't recognise (defensive — the
-  // listing should always cover what `selected` could be).
-  let selectedSourceName = $derived.by(() => {
-    if (selected === null) return "no source picked";
-    const match = sources.find((s) => s.id === selected);
-    return match?.name ?? selected;
-  });
+  // Validation for the Start button: at least one source must
+  // resolve to something the backend can capture. Mic-with-no-mic
+  // (a host with zero mic devices) AND no system audio = nothing
+  // to record, so disable Start with a clear hint.
+  let canStart = $derived(
+    (meetingMicId !== null && mics.length > 0) ||
+      (meetingIncludeSystemAudio && (systemAudio?.isSupported ?? false)),
+  );
 
   function formatDuration(start: string, end: string | null): string {
     if (!end) return "in progress";
@@ -196,51 +215,69 @@
           {/if}
         </span>
         <p class="meeting-dictate-prompt">
-          <strong>Press your dictation hotkey</strong> (or use the
-          recording controls above) to add an utterance. Source:
-          <code>{selectedSourceName}</code>.
+          <strong>Auto-recording</strong> from <code>{activeSourceSummary}</code>.
+          Each chunk transcribes and lands as an utterance every ~10
+          seconds.
         </p>
       </div>
       <button type="button" class="primary" onclick={onStop} disabled={busy}>
         Stop session
       </button>
     {:else}
-      <label class="meeting-source-label">
-        Audio source
-        {#if !sourcesLoaded}
-          <span class="meeting-source-loading">Loading sources…</span>
-        {:else if pickableCount === 0}
-          <span class="meeting-source-empty">No audio sources detected.</span>
-        {:else}
-          <select bind:value={selected} disabled={busy}>
-            <optgroup label="Microphone">
+      <div class="meeting-source-stack">
+        <label class="meeting-source-label">
+          Microphone
+          {#if !sourcesLoaded}
+            <span class="meeting-source-loading">Loading sources…</span>
+          {:else if mics.length === 0}
+            <span class="meeting-source-empty">
+              No microphones detected.
+            </span>
+          {:else}
+            <select bind:value={meetingMicId} disabled={busy}>
               {#each mics as mic (mic.id)}
                 <option value={mic.id}>
                   {mic.name}{mic.isDefault ? " (default)" : ""}
                 </option>
               {/each}
-            </optgroup>
-            {#if systemAudio}
-              <optgroup label="System audio">
-                <option
-                  value={systemAudio.id}
-                  disabled={!systemAudio.isSupported}
-                >
-                  {systemAudio.name}{systemAudio.isSupported
-                    ? ""
-                    : " (coming soon — #33)"}
-                </option>
-              </optgroup>
-            {/if}
-          </select>
+            </select>
+          {/if}
+        </label>
+        {#if systemAudio}
+          <label class="meeting-system-audio-toggle">
+            <input
+              type="checkbox"
+              bind:checked={meetingIncludeSystemAudio}
+              disabled={busy || !systemAudio.isSupported}
+            />
+            <span>
+              Also record system audio
+              {#if !systemAudio.isSupported}
+                <span class="coming-soon-hint">
+                  (coming soon on this platform — #33)
+                </span>
+              {:else}
+                <span class="meeting-source-meta">
+                  — captures the other side of Zoom / Meet / Teams calls
+                </span>
+              {/if}
+            </span>
+          </label>
         {/if}
-      </label>
-      <button type="button" class="primary" onclick={onStart} disabled={busy}>
+      </div>
+      <button
+        type="button"
+        class="primary"
+        onclick={onStart}
+        disabled={busy || !canStart}
+        title={canStart ? undefined : "Pick at least one audio source"}
+      >
         Start a session
       </button>
       <span class="meeting-controls-hint">
-        Pick the source, click Start, then dictate with your hotkey to
-        add utterances. Click Stop when done.
+        Click Start to begin auto-recording. Each chunk transcribes
+        every ~10 seconds and lands as an utterance below. Click Stop
+        when done.
       </span>
     {/if}
   </div>
@@ -461,6 +498,13 @@
   flex-basis: 100%;
 }
 
+.meeting-source-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1 1 18rem;
+}
+
 .meeting-source-label {
   display: flex;
   flex-direction: column;
@@ -468,6 +512,38 @@
   font-size: 0.85rem;
   color: #555;
   min-width: 14rem;
+}
+
+.meeting-system-audio-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: #333;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.meeting-system-audio-toggle input[type="checkbox"] {
+  margin: 0.2rem 0 0 0;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.meeting-system-audio-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.meeting-source-meta {
+  color: #777;
+  font-size: 0.8rem;
+}
+
+.coming-soon-hint {
+  color: #aa6600;
+  font-size: 0.8rem;
+  font-style: italic;
 }
 
 .meeting-source-label select {
@@ -765,6 +841,15 @@ button:disabled {
   .meeting-dictate-prompt code {
     background-color: rgba(255, 255, 255, 0.08);
     color: #f0f0f0;
+  }
+  .meeting-system-audio-toggle {
+    color: #ddd;
+  }
+  .meeting-source-meta {
+    color: #aaa;
+  }
+  .coming-soon-hint {
+    color: #d4a040;
   }
   .empty-meetings {
     background-color: #3a2e10;
