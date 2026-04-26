@@ -36,6 +36,9 @@
 
 mod format;
 
+#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+mod screencapturekit;
+
 pub use format::downmix_to_mono;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -340,6 +343,13 @@ pub struct CpalAudioCapture {
     level: Arc<AtomicU32>,
     /// Joined on drop. Wrapped in [`Option`] so [`Drop`] can take ownership.
     worker: Option<JoinHandle<()>>,
+    /// Active ScreenCaptureKit session for system-audio capture (#105).
+    /// Lives outside the cpal worker because SCK delivers samples on
+    /// its own libdispatch queue — there is no Stream object to babysit
+    /// from a !Send-bound thread. Mutex<Option<...>> mirrors the
+    /// "either nothing, or one in-flight" shape of the cpal session.
+    #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+    sck_session: Mutex<Option<screencapturekit::ScreenCaptureKitSession>>,
 }
 
 /// Commands sent from the public API into the audio worker thread.
@@ -376,6 +386,8 @@ impl CpalAudioCapture {
             is_recording,
             level,
             worker: Some(worker),
+            #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+            sck_session: Mutex::new(None),
         }
     }
 
@@ -421,11 +433,87 @@ impl AudioCapture for CpalAudioCapture {
     }
 
     fn start(&self, device_id: Option<&str>) -> Result<()> {
+        // Refuse to start a mic capture while an SCK system-audio
+        // session is in flight. Only one capture path at a time —
+        // is_recording is the cross-path source of truth, but checking
+        // the SCK slot directly gives a clearer error message.
+        #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+        {
+            let guard = self
+                .sck_session
+                .lock()
+                .map_err(|_| anyhow!("sck session lock poisoned"))?;
+            if guard.is_some() {
+                return Err(anyhow!(
+                    "system-audio capture already in progress; stop it first"
+                ));
+            }
+        }
         let device_id = device_id.map(str::to_owned);
         self.dispatch(|reply| Cmd::Start { device_id, reply })
     }
 
+    fn start_with_source(&self, source: AudioSource) -> Result<()> {
+        match source {
+            AudioSource::Microphone(device_id) => self.start(device_id.as_deref()),
+            #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+            AudioSource::SystemAudio => {
+                if self.is_recording() {
+                    return Err(anyhow!("recording already in progress"));
+                }
+                let mut guard = self
+                    .sck_session
+                    .lock()
+                    .map_err(|_| anyhow!("sck session lock poisoned"))?;
+                if guard.is_some() {
+                    return Err(anyhow!(
+                        "system-audio capture already in progress"
+                    ));
+                }
+                let session = screencapturekit::ScreenCaptureKitSession::start(
+                    Arc::clone(&self.level),
+                )?;
+                *guard = Some(session);
+                self.is_recording.store(true, Ordering::Release);
+                Ok(())
+            }
+            #[cfg(not(all(target_os = "macos", feature = "screencapturekit")))]
+            AudioSource::SystemAudio => Err(anyhow!(
+                "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
+            )),
+        }
+    }
+
+    fn supports_source(&self, source: &AudioSource) -> bool {
+        match source {
+            AudioSource::Microphone(_) => true,
+            AudioSource::SystemAudio => {
+                cfg!(all(target_os = "macos", feature = "screencapturekit"))
+            }
+        }
+    }
+
     fn stop(&self) -> Result<CapturedAudio> {
+        // SCK path first: if a system-audio session is active, drain
+        // it and skip the cpal worker round-trip entirely. Order
+        // matters — we must clear the SCK slot before dropping the
+        // is_recording flag, so a concurrent start() call can't see
+        // a "not recording" state while the SCK session is still
+        // mid-stop.
+        #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+        {
+            let mut guard = self
+                .sck_session
+                .lock()
+                .map_err(|_| anyhow!("sck session lock poisoned"))?;
+            if let Some(session) = guard.take() {
+                let format = session.format();
+                let samples = session.stop()?;
+                self.is_recording.store(false, Ordering::Release);
+                self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+                return Ok(CapturedAudio { samples, format });
+            }
+        }
         self.dispatch(Cmd::Stop)
     }
 
