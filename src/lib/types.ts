@@ -5,7 +5,15 @@
 // the panel children can hand the same shape back and forth without
 // duplicate declarations drifting.
 
-export type AudioDevice = { id: string; name: string; isDefault: boolean };
+// `AudioDevice` (the bare device shape that backs the legacy
+// `list_input_devices` IPC command) is intentionally NOT exported
+// here. The frontend only needs `AudioSourceListing`, which carries
+// the kind + capability flags the picker dispatches on; a parallel
+// `AudioDevice` import would mean two mic shapes that could drift.
+// The Rust-side `AudioDevice` struct still exists as the transport
+// for the transitional `list_input_devices` command — its sole
+// frontend-side consumer (the e2e mock's default) types its return
+// value inline.
 
 // Discriminator for `AudioSource` and `AudioSourceListing`. Mirrors
 // the kebab-case serde tag on the Rust enum so the wire shape matches
