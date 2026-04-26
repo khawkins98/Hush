@@ -1102,6 +1102,11 @@ pub fn meeting_active_session(state: State<'_, AppState>) -> ActiveMeetingSessio
 
 /// Open a meeting session manually (button-driven).
 ///
+/// `sources` is the list of audio sources the meeting pump will
+/// capture from in parallel. Required (a meeting needs at least one
+/// source); the frontend's panel picker normally sends a single mic
+/// source, evolving to mic + system-audio under Phase 3 of #122.
+///
 /// `app_name` is the bundle id / process name the session should be
 /// attributed to. Frontend captures this from the foreground app
 /// via `active-win-pos-rs` at the moment of click; if the user
@@ -1113,11 +1118,12 @@ pub fn meeting_active_session(state: State<'_, AppState>) -> ActiveMeetingSessio
 #[tauri::command]
 pub async fn meeting_start_manual(
     state: State<'_, AppState>,
+    sources: Vec<AudioSource>,
     app_name: Option<String>,
 ) -> IpcResult<crate::meeting::MeetingSession> {
     state
         .meeting_manager
-        .start_manual(app_name)
+        .start_manual(sources, app_name)
         .await
         .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))
 }
@@ -1539,7 +1545,7 @@ mod tests {
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
             })
-            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
@@ -1593,7 +1599,7 @@ mod tests {
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
             })
-            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
@@ -1746,7 +1752,7 @@ mod tests {
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
             })
-            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
