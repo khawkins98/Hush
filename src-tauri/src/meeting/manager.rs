@@ -6,12 +6,16 @@
 //!
 //! Manual-start: the user clicks "Start a session" in the panel.
 //! The manager opens audio capture handles for each chosen source
-//! (mic + optional system audio), creates the session row, and
-//! spawns a pump task. The pump drains every handle on a
-//! `CHUNK_DURATION` cadence, transcribes each chunk via whisper,
-//! and appends utterances tagged with the originating source.
-//! When the user clicks Stop, `stop_manual` cancels the pump,
-//! awaits its final-chunk drain, and writes `ended_at` on the
+//! (mic + optional system audio), opens one streaming inference
+//! session per source via [`crate::transcription::Transcribe::start_stream`],
+//! creates the session row, and spawns a pump task. The pump
+//! drains every audio handle on a `PUMP_TICK` cadence (without
+//! stopping the handles), feeds the drained samples into the
+//! corresponding streaming inference session, and dispatches
+//! returned utterances: finals to the database, partials to the
+//! in-memory partials store. When the user clicks Stop,
+//! `stop_manual` cancels the pump, awaits its `finish()`-driven
+//! tail-flush, clears partials, and writes `ended_at` on the
 //! session row.
 //!
 //! Auto-detect from foreground app is the next phase ([#112]) —
@@ -27,13 +31,33 @@
 //! ships, the pump will pass through the model's speaker id
 //! instead of the source-derived hint.
 //!
-//! ## Streaming
+//! ## Streaming (post-#108)
 //!
-//! The pump uses one-shot whisper inference per chunk. Streaming
-//! whisper ([#108]) replaces the chunk-and-restart cycle with a
-//! continuous capture whose utterances arrive as they finalise;
-//! the panel just polls the same `meeting_session_get` IPC and
-//! sees them sooner.
+//! The pump opens one [`StreamingTranscribeSession`] per audio
+//! source at session start and feeds samples into it on a tight
+//! 500 ms tick (via [`AudioSession::drain_into`]). The streaming
+//! session runs whisper.cpp on a rolling 30 s window every ~3 s of
+//! new audio (see `transcription::streaming` for the policy
+//! state-machine) and emits **partials** for the trailing tail and
+//! **finals** for segments aged past the commit threshold. The pump
+//! routes finals to the database (via the existing
+//! [`MeetingSessionRepository::append_utterance`] path) and stores
+//! partials in an in-memory `partials` map keyed by session id +
+//! speaker label. The panel polls [`meeting_session_get`] which
+//! merges the in-memory partials into the response — partials
+//! never touch the database, so a session's persisted history
+//! stays clean.
+//!
+//! The pre-#108 chunk-and-restart cycle (10 s chunks, stop-drain-
+//! transcribe-restart) is gone. The new shape needs the audio
+//! backend to support [`AudioSession::drain_into`] (PR2) and the
+//! transcribe backend to support
+//! [`crate::transcription::Transcribe::start_stream`] (PR1). When
+//! either is absent (test mocks, or the rare backend that opted
+//! out), the pump degrades to a no-op cycle that keeps the session
+//! row open but emits no utterances — same end-state as
+//! "transcriber not loaded" pre-#108, just via a different code
+//! path.
 //!
 //! [#108]: https://github.com/khawkins98/Hush/issues/108
 //! [#111]: https://github.com/khawkins98/Hush/issues/111
@@ -47,36 +71,40 @@
 //! and dropped when it returns; the persistence layer only sees
 //! text + timestamps.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 
-use crate::audio::{AudioCapture, AudioSession, AudioSource, CapturedAudio};
+#[cfg(test)]
+use crate::audio::CapturedAudio;
+use crate::audio::{AudioCapture, AudioSession, AudioSource};
 #[cfg(test)]
 use crate::transcription::Transcribe;
+use crate::transcription::{StreamingTranscribeSession, Utterance};
 
 use super::{
     MeetingAppKind, MeetingSession, MeetingSessionRepository, NewMeetingSession,
     NewPersistedUtterance,
 };
 
-/// Pump cadence: each chunk of captured audio runs ~this long before
-/// the pump stops + restarts the underlying [`AudioSession`]s and
-/// hands the drained samples to whisper.
+/// Pump tick interval — how often the streaming pump pulls samples
+/// from each audio handle and feeds them into the per-source
+/// streaming inference session. Inference itself happens internally
+/// to the streaming session at its own cadence (the `infer_interval_ms`
+/// config in `transcription::streaming`); this is just the rate at
+/// which fresh audio reaches the streaming session's buffer.
 ///
-/// 10 seconds is a deliberate trade-off pre-#108 (one-shot whisper
-/// inference). Whisper's transcription cost is roughly real-time on
-/// Apple Silicon with the `base` model, so a 10 s chunk takes ~10 s
-/// to transcribe. Smaller chunks raise overhead (whisper has a
-/// fixed ~1 s setup cost per call) and clip more words at chunk
-/// boundaries; larger chunks delay the moment utterances appear in
-/// the panel. The streaming-Whisper backend (#108) replaces the
-/// chunk-and-restart cycle with a single long-running session whose
-/// utterances arrive continuously, so this constant is only
-/// load-bearing pre-#108.
-const CHUNK_DURATION: Duration = Duration::from_secs(10);
+/// 500 ms is a balance: short enough to keep the streaming session's
+/// rolling window fresh (~6 ticks per inference at the default 3 s
+/// inference interval), long enough to amortize the per-tick
+/// `drain_into` round-trip + lock overhead. Tighter ticks would
+/// raise CPU baseline noticeably; looser ticks would make the
+/// streaming session's "I have new samples to consider" gate land
+/// late and add jitter to the partial-update cadence.
+const PUMP_TICK: Duration = Duration::from_millis(500);
 
 /// Test-only no-op audio backend used by `SessionManager::new_for_test`.
 /// Returns empty capture sessions instantly so the pump's spawn path
@@ -163,6 +191,23 @@ pub struct SessionManager {
     /// rejects, instead of slipping past the precondition check
     /// and creating an orphan session.
     state: Mutex<SessionState>,
+    /// In-memory in-flight partial utterances, keyed by
+    /// `session_id` then by `speaker_label` ("mic" / "system"). The
+    /// streaming pump (#108 PR3) updates these on each inference
+    /// tick; the meeting-mode IPC merges them into `meeting_session_get`'s
+    /// response so the panel renders revising partials without a
+    /// new event channel. Cleared per-source when the pump
+    /// commits a final, and entirely on session stop.
+    ///
+    /// `RwLock` because the IPC poll path (~1/s) reads these and
+    /// the pump tick (~2/s) writes them — readers shouldn't block
+    /// each other, and the pump's brief exclusive write fits
+    /// inside one tick.
+    ///
+    /// Inner key is `String` (the speaker label) rather than
+    /// `&'static str` so a future per-speaker diarization (#111)
+    /// can drop in without changing this map's shape.
+    partials: Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
 }
 
 /// Lifecycle state for the manager's session slot. Three-valued
@@ -210,7 +255,37 @@ impl SessionManager {
             audio,
             transcribe,
             state: Mutex::new(SessionState::Idle),
+            partials: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Snapshot of the currently in-flight partial utterances for a
+    /// session, one entry per source ("mic" + "system" with the
+    /// canonical labels the pump uses today). Returns an empty Vec
+    /// if the session has no in-flight partials yet.
+    ///
+    /// The IPC layer's `meeting_session_get` calls this and merges
+    /// the result into the response so the panel's poll sees
+    /// partials alongside the persisted finals. The list ordering
+    /// is alphabetical-by-label so the rendering order is stable
+    /// across polls (frontend rendering reads this verbatim,
+    /// not a sorted clone).
+    pub fn current_partials_for(&self, session_id: i64) -> Vec<Utterance> {
+        let guard = match self.partials.read() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(per_session) = guard.get(&session_id) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Utterance> = per_session.values().cloned().collect();
+        out.sort_by(|a, b| {
+            a.speaker_label
+                .as_deref()
+                .unwrap_or("")
+                .cmp(b.speaker_label.as_deref().unwrap_or(""))
+        });
+        out
     }
 
     /// Test-only constructor that wires the manager up against a
@@ -341,19 +416,93 @@ impl SessionManager {
             }
         };
 
-        // Spawn the pump on the current tokio runtime. Captures
-        // are already in flight via `handles`; the pump's first
-        // chunk drains them after `CHUNK_DURATION`.
+        // Open one streaming inference session per audio source.
+        // The transcribe slot may be empty (no model loaded yet) or
+        // may carry a backend that doesn't override `start_stream`
+        // — in either case the pump degrades gracefully (sources
+        // that fail to open a streaming session are dropped from the
+        // pump's per-tick loop and the session row stays open with
+        // no utterances, mirroring the pre-#108 "no transcriber"
+        // path).
+        //
+        // We snapshot the transcriber Arc once at start time. If the
+        // user hot-swaps models mid-session via the picker, the new
+        // model affects the *next* session, not this one — the
+        // sliding-window state machine carries inference history
+        // that wouldn't transfer cleanly across a model change. A
+        // future tightening could re-open streaming sessions on
+        // hot-swap; not the day-one shape.
+        let transcriber_snapshot = self.transcribe.lock().ok().and_then(|g| g.clone());
+        let mut streaming_sessions: Vec<Option<Box<dyn StreamingTranscribeSession>>> =
+            Vec::with_capacity(sources.len());
+        if let Some(transcriber) = &transcriber_snapshot {
+            // Source ordering matches `handles` and `sources`. The
+            // pump's per-tick loop iterates by index into all three.
+            for (i, source) in sources.iter().enumerate() {
+                // Per-handle format read: each AudioSession knows
+                // its capture format, but the trait surface today
+                // exposes it only through `stop()` / `drain_into()`
+                // returns. We pre-warm by issuing a no-op drain
+                // into a scratch buffer to learn the format. The
+                // drain itself is cheap (lock + mem::take of an
+                // empty Vec) and the streaming session needs the
+                // format to set up its internal resampler at
+                // construction.
+                //
+                // If the pre-warm fails (ScreenCaptureKit denied
+                // mid-start, mic device vanished), we skip opening
+                // a streaming session for that source — the audio
+                // handle is still valid for the legacy `stop()`
+                // path, but the streaming pump won't process its
+                // samples. Logged loudly so the user sees the
+                // diagnostic in the panel.
+                let mut scratch = Vec::new();
+                let format = match handles[i].drain_into(&mut scratch) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = ?e,
+                            source_kind = source.kind_label(),
+                            "meeting pump: drain_into pre-warm failed; streaming disabled for this source"
+                        );
+                        streaming_sessions.push(None);
+                        continue;
+                    }
+                };
+                match transcriber.start_stream(format, "") {
+                    Ok(sess) => streaming_sessions.push(Some(sess)),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = ?e,
+                            source_kind = source.kind_label(),
+                            "meeting pump: start_stream failed; streaming disabled for this source"
+                        );
+                        streaming_sessions.push(None);
+                    }
+                }
+            }
+        } else {
+            // No transcriber loaded — streaming sessions stay None
+            // for every source. The pump still runs (so cancellation
+            // works) but emits no utterances. Same end-state as
+            // pre-#108 with no model loaded.
+            tracing::warn!(
+                session_id = session.id,
+                "meeting pump: no transcriber loaded; pump will run idle until model is picked"
+            );
+            streaming_sessions.resize_with(sources.len(), || None);
+        }
+
         let cancel = Arc::new(AtomicBool::new(false));
         let started_at = Instant::now();
         let pump_handle = tokio::spawn(run_pump(PumpContext {
             session_id: session.id,
             session_started_at: started_at,
-            audio: Arc::clone(&self.audio),
-            transcribe: Arc::clone(&self.transcribe),
             repo: Arc::clone(&self.repo),
             sources: sources.clone(),
             handles,
+            streaming_sessions,
+            partials: Arc::clone(&self.partials),
             cancel: Arc::clone(&cancel),
         }));
 
@@ -425,6 +574,15 @@ impl SessionManager {
             if let Err(e) = handle.await {
                 tracing::error!(error = ?e, "meeting pump task panicked or was cancelled");
             }
+        }
+
+        // The pump's finish() path already flushed any tail finals
+        // to the database and cleared the per-source partials. Belt-
+        // and-braces: clear our partials map for this session id so
+        // a stale partial can't leak into a subsequent IPC poll
+        // between this point and the pump's last write.
+        if let Ok(mut guard) = self.partials.write() {
+            guard.remove(&active.id);
         }
 
         match self.repo.close_session(active.id).await {
@@ -549,249 +707,314 @@ impl Drop for SessionManager {
                     handle.abort();
                 }
             }
+            // Clear partials — Drop on app shutdown shouldn't leave
+            // a stale entry that a fresh session with the same id
+            // (vanishingly rare but possible across restarts that
+            // re-use rowids) could merge into its first poll.
+            if let Ok(mut guard) = self.partials.write() {
+                guard.remove(&active.id);
+            }
         }
     }
 }
 
 /// Owned context handed to the pump task at spawn time. Bundles the
 /// per-session state plus shared handles so the task signature stays
-/// readable.
+/// readable. Indices into `sources`, `handles`, and
+/// `streaming_sessions` correspond to the same source.
 struct PumpContext {
     session_id: i64,
+    /// Wall-clock start of the session. Not currently read by the
+    /// streaming pump — utterance offsets come from the streaming
+    /// session's internal clock — but kept for parity with the
+    /// pre-#108 path and for any future "session age" diagnostics.
+    #[allow(dead_code)]
     session_started_at: Instant,
-    audio: Arc<dyn AudioCapture>,
-    transcribe: crate::ipc::TranscribeSlot,
     repo: Arc<dyn MeetingSessionRepository>,
     sources: Vec<AudioSource>,
     handles: Vec<Box<dyn AudioSession>>,
+    /// One streaming inference session per source, parallel to
+    /// `sources` and `handles`. `None` means streaming was not
+    /// available for that source at start time (no transcriber, or
+    /// the backend's `start_stream` errored). The pump treats those
+    /// sources as audio-only — drains them so the buffer doesn't
+    /// grow unbounded, but feeds nothing to inference.
+    streaming_sessions: Vec<Option<Box<dyn StreamingTranscribeSession>>>,
+    /// Shared in-memory partials store (the manager's field). The
+    /// pump's per-tick dispatch updates entries keyed by speaker
+    /// label as inference returns partials, and removes them when
+    /// inference returns the matching final.
+    partials: Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
     cancel: Arc<AtomicBool>,
 }
 
-/// Pump task body. Loops: sleep `CHUNK_DURATION`, drain each handle,
-/// transcribe + append, restart capture; until the cancel flag flips.
-/// On cancel, drains one final chunk, appends, exits.
+/// Pump task body. Loops on a `PUMP_TICK` cadence: drain each audio
+/// handle into its per-source buffer, feed the buffer into the
+/// streaming inference session, dispatch returned utterances
+/// (partials → in-memory map, finals → DB). On cancel, calls
+/// `finish()` on each streaming session to flush the tail and
+/// persists those finals.
 ///
 /// All errors are logged and swallowed — the pump is fire-and-forget
-/// from the spawn point's perspective, and a transient transcription
-/// or append failure shouldn't tear down the user's session. The
-/// audio capture is restarted across the failure so subsequent
-/// chunks recover automatically.
+/// from the spawn point's perspective, and a transient drain or
+/// inference failure shouldn't tear down the user's session.
 async fn run_pump(mut ctx: PumpContext) {
+    // Per-source scratch buffer reused across ticks. Sized at first
+    // drain; subsequent drains amortize the capacity. Indexed
+    // parallel to `handles` / `sources`.
+    let mut drain_buffers: Vec<Vec<f32>> = (0..ctx.handles.len()).map(|_| Vec::new()).collect();
+
     loop {
-        // Sleep with periodic cancel polls. tokio::select! over the
-        // full sleep + a cancellation channel would be tighter, but
-        // a periodic poll keeps the cancel signalling synchronous
-        // (AtomicBool, no Tokio channel) which makes the test mocks
-        // simpler.
-        let poll_interval = Duration::from_millis(100);
-        let mut elapsed = Duration::ZERO;
-        while elapsed < CHUNK_DURATION {
-            if ctx.cancel.load(Ordering::Acquire) {
-                break;
-            }
-            tokio::time::sleep(poll_interval).await;
-            elapsed += poll_interval;
+        // Sleep with periodic cancel polls. The pump tick is shorter
+        // than the previous chunk-and-restart cycle (500 ms vs 10 s),
+        // so the per-poll cancel-flag check happens on every tick
+        // boundary directly.
+        if ctx.cancel.load(Ordering::Acquire) {
+            break;
+        }
+        tokio::time::sleep(PUMP_TICK).await;
+        if ctx.cancel.load(Ordering::Acquire) {
+            break;
         }
 
-        let cancelled = ctx.cancel.load(Ordering::Acquire);
+        // Drain audio for every source first (cheap, no inference),
+        // then run inference per source. The drain step takes
+        // microseconds; the inference step takes milliseconds-to-
+        // seconds inside the streaming session's `drain` if a new
+        // inference window has matured. Splitting the loop bounds
+        // each source's audio buffer to the tick window plus the
+        // few-ms drain.
+        for (i, handle) in ctx.handles.iter().enumerate() {
+            let buf = &mut drain_buffers[i];
+            buf.clear();
+            if let Err(e) = handle.drain_into(buf) {
+                tracing::warn!(
+                    error = ?e,
+                    source_kind = ctx.sources[i].kind_label(),
+                    session_id = ctx.session_id,
+                    "meeting pump: drain_into failed for tick"
+                );
+            }
+        }
 
-        // Drain ALL handles BEFORE any transcription. Doing them
-        // serially-with-transcription-in-between (the previous
-        // shape) meant source B kept accumulating audio for the
-        // duration of source A's transcription — a 30 s whisper
-        // call against source A would have B holding 40 s of
-        // samples by the time we reached its stop. Stopping every
-        // handle first bounds each chunk's buffer to the original
-        // wall-clock window plus the few-ms drain delay.
-        let drained: Vec<Box<dyn AudioSession>> = ctx.handles.drain(..).collect();
-        let chunk_end_offset_ms = ctx.session_started_at.elapsed().as_millis() as i64;
-        let chunk_start_offset_ms = chunk_end_offset_ms.saturating_sub(elapsed.as_millis() as i64);
+        // For each source with a streaming session, feed the drained
+        // samples and run an inference tick. Move the session into
+        // `spawn_blocking` so whisper inference doesn't block the
+        // tokio worker; the helper returns the session along with
+        // its drained utterances so we can put it back.
+        //
+        // Index loop rather than `iter().enumerate()` because we
+        // mutate three parallel `Vec`s — `streaming_sessions`,
+        // `drain_buffers`, and `sources` — and need split-borrow
+        // semantics on each. Restructuring to a single iterator
+        // would either require interior mutability on each slot
+        // or unsafe pointer arithmetic; the indexed loop is the
+        // clearest shape for this pattern.
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..ctx.sources.len() {
+            // Skip sources without a streaming session — drained
+            // samples are discarded. Logging only on the first
+            // skipped tick per source to avoid flooding the
+            // tracing layer (every 500 ms for the whole session).
+            if ctx.streaming_sessions[i].is_none() {
+                continue;
+            }
+            // Take the session out so we can move it into
+            // spawn_blocking. The `Option` slot stays None until we
+            // put it back at the bottom of this iteration.
+            let session = ctx.streaming_sessions[i].take().unwrap();
+            let samples = std::mem::take(&mut drain_buffers[i]);
+            let source_label = match &ctx.sources[i] {
+                AudioSource::Microphone(_) => "mic".to_owned(),
+                AudioSource::SystemAudio => "system".to_owned(),
+            };
+            let session_id = ctx.session_id;
 
-        let captured: Vec<(AudioSource, Result<CapturedAudio>)> = drained
-            .into_iter()
-            .map(|handle| {
-                let source = handle.source().clone();
-                let result = handle.stop();
-                (source, result)
-            })
-            .collect();
+            // Spawn-blocking: returns (session, samples_buf,
+            // Result<Vec<Utterance>>). The buffer round-trips so we
+            // can put it back into `drain_buffers[i]` to keep its
+            // capacity warm for the next tick.
+            let join =
+                tokio::task::spawn_blocking(
+                    move || -> (
+                        Box<dyn StreamingTranscribeSession>,
+                        Vec<f32>,
+                        Result<Vec<Utterance>>,
+                    ) {
+                        let mut session = session;
+                        if !samples.is_empty() {
+                            if let Err(e) = session.feed(&samples) {
+                                return (session, samples, Err(e));
+                            }
+                        }
+                        let result = session.drain();
+                        (session, samples, result)
+                    },
+                )
+                .await;
 
-        // Cancel-after-drain check: if Stop fired while we were
-        // draining, exit before kicking off transcription. The
-        // session's final-chunk transcription still happens below
-        // (we treat captured as the "last chunk" data); we just
-        // skip the restart that would kick off another cycle.
-        let cancelled_during_drain = ctx.cancel.load(Ordering::Acquire);
+            let (returned_session, returned_buf, drain_result) = match join {
+                Ok(triple) => triple,
+                Err(join_err) => {
+                    tracing::error!(
+                        error = ?join_err,
+                        session_id,
+                        source_kind = source_label,
+                        "meeting pump: streaming inference task panicked; \
+                         leaving streaming disabled for this source for the rest of the session"
+                    );
+                    // Session is gone (panicked closure dropped it).
+                    // Leave the slot None so subsequent ticks skip
+                    // this source.
+                    continue;
+                }
+            };
 
-        for (source, captured_result) in captured {
-            let captured = match captured_result {
-                Ok(c) => c,
+            // Restore the session + buffer for the next tick.
+            ctx.streaming_sessions[i] = Some(returned_session);
+            drain_buffers[i] = returned_buf;
+
+            let utterances = match drain_result {
+                Ok(u) => u,
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
-                        source_kind = ?source.kind_label(),
-                        session_id = ctx.session_id,
-                        "meeting pump: stop of capture session failed"
+                        session_id,
+                        source_kind = source_label,
+                        "meeting pump: streaming feed/drain failed for tick"
                     );
                     continue;
                 }
             };
-            transcribe_and_append(
-                ctx.session_id,
-                source,
-                captured,
-                chunk_start_offset_ms,
-                chunk_end_offset_ms,
-                Arc::clone(&ctx.transcribe),
-                Arc::clone(&ctx.repo),
+
+            dispatch_utterances(
+                session_id,
+                &source_label,
+                utterances,
+                &ctx.partials,
+                &ctx.repo,
             )
             .await;
         }
+    }
 
-        if cancelled || cancelled_during_drain {
-            return;
-        }
-
-        // Not cancelled — open fresh handles for the next chunk.
-        // If a restart fails (TCC permission revoked mid-session,
-        // device unplugged), log and drop that source from
-        // `ctx.sources` so we don't churn the OS asking for a
-        // permission we already lost. Keeping the failed source in
-        // the loop produced a warning every 10 s for the rest of
-        // the session — a 60-min meeting with a denied SCK turned
-        // into ~360 redundant warnings.
-        let sources_at_loop_start = ctx.sources.clone();
-        ctx.sources.clear();
-        for source in sources_at_loop_start {
-            match ctx.audio.start_session(source.clone()) {
-                Ok(h) => {
-                    ctx.handles.push(h);
-                    ctx.sources.push(source);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = ?e,
-                        source_kind = ?source.kind_label(),
-                        session_id = ctx.session_id,
-                        "meeting pump: restart of capture session failed; dropping that source for the rest of the session"
-                    );
-                }
+    // Cancel — flush each streaming session. `finish` drains
+    // anything still in the rolling window as finals; we persist
+    // those before returning so `stop_manual` sees the
+    // tail-of-conversation utterances.
+    #[allow(clippy::needless_range_loop)] // see explanation in the tick loop above
+    for i in 0..ctx.sources.len() {
+        let Some(session) = ctx.streaming_sessions[i].take() else {
+            continue;
+        };
+        let source_label = match &ctx.sources[i] {
+            AudioSource::Microphone(_) => "mic".to_owned(),
+            AudioSource::SystemAudio => "system".to_owned(),
+        };
+        let session_id = ctx.session_id;
+        let join = tokio::task::spawn_blocking(move || session.finish()).await;
+        let finals = match join {
+            Ok(Ok(u)) => u,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = ?e,
+                    session_id,
+                    source_kind = source_label,
+                    "meeting pump: streaming finish failed; tail dropped"
+                );
+                continue;
             }
-        }
+            Err(e) => {
+                tracing::error!(
+                    error = ?e,
+                    session_id,
+                    "meeting pump: streaming finish task panicked"
+                );
+                continue;
+            }
+        };
+        dispatch_utterances(session_id, &source_label, finals, &ctx.partials, &ctx.repo).await;
+    }
 
-        // Every source failed to restart — no point looping further.
-        if ctx.handles.is_empty() {
-            tracing::error!(
-                session_id = ctx.session_id,
-                "meeting pump: no capture sessions could be restarted; pump exiting"
-            );
-            return;
-        }
+    // Belt-and-braces: clear partials for this session id. The
+    // dispatch loop above removes per-source entries on each final
+    // commit; this drops the (now-empty) per-session HashMap so the
+    // partials store doesn't grow unbounded across many sessions.
+    if let Ok(mut guard) = ctx.partials.write() {
+        guard.remove(&ctx.session_id);
     }
 }
 
-/// Transcribe one chunk's captured audio and append the resulting
-/// utterance under `session_id`. Tagged with the source kind in the
-/// `speaker_label` slot ("mic" / "system") as a primitive form of
-/// diarization ahead of #111. Errors are logged + swallowed so a
-/// single bad chunk doesn't abort the whole session.
-async fn transcribe_and_append(
+/// Route streaming-session output: finals land in the database,
+/// partials land in the in-memory map. Tagged with the source-derived
+/// `speaker_label` so the panel can render mic vs system distinct.
+///
+/// Errors are logged + swallowed — a single bad utterance shouldn't
+/// abort the session.
+async fn dispatch_utterances(
     session_id: i64,
-    source: AudioSource,
-    captured: CapturedAudio,
-    started_at_ms: i64,
-    ended_at_ms: i64,
-    transcribe: crate::ipc::TranscribeSlot,
-    repo: Arc<dyn MeetingSessionRepository>,
+    source_label: &str,
+    utterances: Vec<Utterance>,
+    partials: &Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
+    repo: &Arc<dyn MeetingSessionRepository>,
 ) {
-    let speaker_label = match &source {
-        AudioSource::Microphone(_) => Some("mic".to_owned()),
-        AudioSource::SystemAudio => Some("system".to_owned()),
-    };
+    for mut u in utterances {
+        // Source-derived speaker label is the only label the pump
+        // emits today (real diarization is #111). Stamp it on every
+        // utterance so the panel's mic/system colouring works.
+        u.speaker_label = Some(source_label.to_owned());
 
-    // Snapshot the transcriber Arc out of the shared mutex so the
-    // (potentially long) inference doesn't hold the lock.
-    let transcriber = match transcribe.lock() {
-        Ok(g) => g.clone(),
-        Err(_) => {
-            tracing::error!(session_id, "transcribe mutex poisoned in pump");
-            return;
+        if u.is_final {
+            // Skip empty finals — the streaming session usually
+            // filters them, but defence in depth (whitespace-only
+            // text from a non-speech segment) keeps the panel
+            // clean.
+            let trimmed = u.text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Clear the in-flight partial for this source first —
+            // the user just saw the partial firm up into a final, so
+            // the partial slot for this source belongs to whatever
+            // segment comes next. Doing this BEFORE the DB append
+            // means a concurrent IPC poll between the partial-clear
+            // and the DB-append sees neither (better than seeing
+            // both, which would briefly show the same text twice).
+            if let Ok(mut guard) = partials.write() {
+                if let Some(per_session) = guard.get_mut(&session_id) {
+                    per_session.remove(source_label);
+                }
+            }
+
+            if let Err(e) = repo
+                .append_utterance(NewPersistedUtterance {
+                    session_id,
+                    started_at_ms: u.started_at_ms as i64,
+                    ended_at_ms: u.ended_at_ms as i64,
+                    speaker_label: u.speaker_label.clone(),
+                    text: trimmed.to_owned(),
+                })
+                .await
+            {
+                tracing::warn!(
+                    error = ?e,
+                    session_id,
+                    source_kind = source_label,
+                    "meeting pump: utterance append failed; final dropped"
+                );
+            }
+        } else {
+            // Partial — replace the in-flight slot for this source.
+            // The map is keyed by source label so mic + system don't
+            // overwrite each other.
+            if let Ok(mut guard) = partials.write() {
+                guard
+                    .entry(session_id)
+                    .or_insert_with(HashMap::new)
+                    .insert(source_label.to_owned(), u);
+            }
         }
-    };
-    let transcriber = match transcriber {
-        Some(t) => t,
-        None => {
-            tracing::warn!(
-                session_id,
-                "meeting pump: no transcriber loaded; chunk dropped (model picker hasn't been used yet)"
-            );
-            return;
-        }
-    };
-
-    // Whisper-rs is sync + blocking. Run on a blocking thread so
-    // the tokio scheduler keeps the pump's other awaits (the cancel
-    // poll on the next tick, parallel chunks from a sibling source)
-    // responsive.
-    let format = captured.format;
-    let samples = captured.samples;
-    let utterances = match tokio::task::spawn_blocking(move || {
-        transcriber.transcribe_chunks(&[samples], format, "")
-    })
-    .await
-    {
-        Ok(Ok(u)) => u,
-        Ok(Err(e)) => {
-            tracing::warn!(
-                error = ?e,
-                source_kind = source.kind_label(),
-                session_id,
-                "meeting pump: transcription failed; chunk dropped"
-            );
-            return;
-        }
-        Err(e) => {
-            tracing::error!(
-                error = ?e,
-                session_id,
-                "meeting pump: transcribe blocking task panicked"
-            );
-            return;
-        }
-    };
-
-    let text: String = utterances
-        .iter()
-        .filter(|u| u.is_final)
-        .map(|u| u.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_owned();
-
-    if text.is_empty() {
-        // Silent or sub-threshold chunk — don't pollute the panel
-        // with empty rows. The user's eye for "did anything happen"
-        // is the utterance count, and an empty row would inflate
-        // it without telling them anything.
-        return;
-    }
-
-    if let Err(e) = repo
-        .append_utterance(NewPersistedUtterance {
-            session_id,
-            started_at_ms,
-            ended_at_ms,
-            speaker_label,
-            text,
-        })
-        .await
-    {
-        tracing::warn!(
-            error = ?e,
-            session_id,
-            "meeting pump: utterance append failed; chunk dropped"
-        );
     }
 }
 
@@ -1057,6 +1280,302 @@ mod tests {
         assert_eq!(utterances[1].started_at_ms, 2_000);
         assert_eq!(utterances[1].ended_at_ms, 5_000);
         mgr.stop_manual().await.unwrap();
+    }
+
+    // -- Partials store + dispatch -------------------------------------
+    //
+    // The streaming pump's per-tick output goes through
+    // `dispatch_utterances`: finals land in the DB and clear the
+    // matching in-memory partial; partials replace the in-memory
+    // entry for their source. The IPC layer reads the partials store
+    // via `current_partials_for` to merge into `meeting_session_get`.
+    // Unit-test the dispatch + read path against a real
+    // SqliteMeetingSessionRepository to exercise both halves of the
+    // contract.
+
+    fn make_partial(text: &str, started: u64, ended: u64, label: &str) -> Utterance {
+        Utterance {
+            text: text.to_owned(),
+            started_at_ms: started,
+            ended_at_ms: ended,
+            is_final: false,
+            speaker_label: Some(label.to_owned()),
+        }
+    }
+
+    fn make_final(text: &str, started: u64, ended: u64, label: &str) -> Utterance {
+        Utterance {
+            text: text.to_owned(),
+            started_at_ms: started,
+            ended_at_ms: ended,
+            is_final: true,
+            speaker_label: Some(label.to_owned()),
+        }
+    }
+
+    #[tokio::test]
+    async fn current_partials_for_returns_empty_for_new_session() {
+        // Pin: a session with no in-flight inference yet has no
+        // partials. The IPC poll path relies on this to return an
+        // empty Vec rather than None / errors.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+        let partials = mgr.current_partials_for(session.id);
+        assert!(partials.is_empty(), "no partials at session start");
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_partial_is_readable_via_current_partials_for() {
+        // Pin the pump's partial-write path: a partial dispatched
+        // for session S + label "mic" appears in the IPC poll's
+        // response on the next call.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], Some("Zoom".into()))
+            .await
+            .unwrap();
+
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_partial("revising tail", 1_500, 3_000, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        let partials = mgr.current_partials_for(session.id);
+        assert_eq!(partials.len(), 1);
+        assert_eq!(partials[0].text, "revising tail");
+        assert_eq!(partials[0].started_at_ms, 1_500);
+        assert!(!partials[0].is_final);
+        assert_eq!(partials[0].speaker_label.as_deref(), Some("mic"));
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_partial_replaces_previous_partial_for_same_source() {
+        // The pump's per-source slot holds at most one partial. A
+        // newer partial for the same source overwrites the older
+        // one — that's the "in-flight tail revising" behaviour the
+        // panel's italic treatment depends on.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_partial("hello", 0, 500, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_partial("hello world", 0, 1_500, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        let partials = mgr.current_partials_for(session.id);
+        assert_eq!(partials.len(), 1, "one partial per source, not stacked");
+        assert_eq!(partials[0].text, "hello world");
+        assert_eq!(partials[0].ended_at_ms, 1_500);
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_keeps_per_source_partials_independent() {
+        // mic + system run their own streaming sessions; the
+        // partials store keys by speaker_label so the two don't
+        // overwrite each other. Pin so a future map-shape change
+        // (e.g. switching to Vec<Utterance>) preserves
+        // independence.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_partial("you side", 0, 1_000, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+        dispatch_utterances(
+            session.id,
+            "system",
+            vec![make_partial("remote side", 0, 1_000, "system")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        let partials = mgr.current_partials_for(session.id);
+        assert_eq!(partials.len(), 2);
+        // Sorted alphabetically by label — "mic" before "system".
+        assert_eq!(partials[0].speaker_label.as_deref(), Some("mic"));
+        assert_eq!(partials[0].text, "you side");
+        assert_eq!(partials[1].speaker_label.as_deref(), Some("system"));
+        assert_eq!(partials[1].text, "remote side");
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_final_clears_matching_partial_and_persists_row() {
+        // The keystone handoff: a final dispatched for session S +
+        // label L (a) appears in repo.list_utterances and (b)
+        // removes the partial for the same label from the in-memory
+        // store. Without (b) the panel would briefly show the same
+        // text twice (italic partial + solid final) until the next
+        // partial overwrote.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_partial("about to firm up", 0, 500, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+        assert_eq!(mgr.current_partials_for(session.id).len(), 1);
+
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_final("about to firm up", 0, 500, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        // Partial slot for "mic" is cleared.
+        assert!(
+            mgr.current_partials_for(session.id).is_empty(),
+            "final commits should clear the matching partial"
+        );
+
+        // Final lands in the DB.
+        let utterances = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert_eq!(utterances.len(), 1);
+        assert_eq!(utterances[0].text, "about to firm up");
+        assert_eq!(utterances[0].speaker_label.as_deref(), Some("mic"));
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_final_does_not_clear_partial_for_other_source() {
+        // Cross-source isolation: a final for "mic" shouldn't clear
+        // the in-flight partial for "system". Pin so a future bug
+        // that uses the wrong key doesn't silently cause partials
+        // from one source to vanish on the other's commit.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        dispatch_utterances(
+            session.id,
+            "system",
+            vec![make_partial("remote still talking", 0, 2_000, "system")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_final("you finished a sentence", 0, 1_500, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        let partials = mgr.current_partials_for(session.id);
+        assert_eq!(partials.len(), 1, "system partial must survive mic final");
+        assert_eq!(partials[0].speaker_label.as_deref(), Some("system"));
+        assert_eq!(partials[0].text, "remote still talking");
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_skips_empty_finals() {
+        // A whitespace-only final shouldn't pollute the persisted
+        // history. The streaming session usually filters these but
+        // dispatch is the last line of defence.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_final("   ", 0, 1_000, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        let utterances = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert!(
+            utterances.is_empty(),
+            "whitespace final must not be persisted"
+        );
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_manual_clears_partials_for_the_session() {
+        // Defence in depth: stop_manual clears any partials still
+        // in the store for the closing session. Without this, a
+        // subsequent IPC poll between stop_manual returning and the
+        // pump's last dispatch could expose a stale partial.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        dispatch_utterances(
+            session.id,
+            "mic",
+            vec![make_partial("incomplete", 0, 500, "mic")],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+        assert_eq!(mgr.current_partials_for(session.id).len(), 1);
+
+        mgr.stop_manual().await.unwrap();
+        assert!(
+            mgr.current_partials_for(session.id).is_empty(),
+            "stop_manual must clear in-flight partials"
+        );
     }
 
     #[test]
