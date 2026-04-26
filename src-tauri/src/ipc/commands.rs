@@ -1260,17 +1260,17 @@ mod tests {
     #[test]
     fn start_dictation_does_not_overwrite_foreground_on_audio_start_failure() {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatFailsToStart);
-        let state = AppState::new(
-            audio,
-            None,
-            Arc::new(crate::ipc::tests::NoopHistory),
-            Arc::new(crate::ipc::tests::NoopReplacements),
-            Arc::new(crate::ipc::tests::NoopVocabulary),
-            Arc::new(crate::ipc::tests::MemSettings {
+        let state = crate::ipc::AppStateBuilder::new()
+            .audio(audio)
+            .history(Arc::new(crate::ipc::tests::NoopHistory))
+            .replacements(Arc::new(crate::ipc::tests::NoopReplacements))
+            .vocabulary(Arc::new(crate::ipc::tests::NoopVocabulary))
+            .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
-            }),
-            std::path::PathBuf::from("/tmp/hush-test-models"),
-        );
+            }))
+            .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+            .build()
+            .expect("test state: builder fields complete");
 
         // Pre-populate the slot with a sentinel value so a regression in
         // the assignment order — assigning the new capture before
@@ -1303,17 +1303,17 @@ mod tests {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatStarts {
             recording: AtomicBool::new(false),
         });
-        let state = AppState::new(
-            audio,
-            None,
-            Arc::new(crate::ipc::tests::NoopHistory),
-            Arc::new(crate::ipc::tests::NoopReplacements),
-            Arc::new(crate::ipc::tests::NoopVocabulary),
-            Arc::new(crate::ipc::tests::MemSettings {
+        let state = crate::ipc::AppStateBuilder::new()
+            .audio(audio)
+            .history(Arc::new(crate::ipc::tests::NoopHistory))
+            .replacements(Arc::new(crate::ipc::tests::NoopReplacements))
+            .vocabulary(Arc::new(crate::ipc::tests::NoopVocabulary))
+            .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
-            }),
-            std::path::PathBuf::from("/tmp/hush-test-models"),
-        );
+            }))
+            .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+            .build()
+            .expect("test state: builder fields complete");
 
         // We can't observe the OS foreground app reliably from a test
         // process, so we just assert the call returned Ok and the slot is
@@ -1444,17 +1444,17 @@ mod tests {
         vocab: Arc<dyn VocabularyRepository>,
         replacements: Arc<dyn ReplacementRepository>,
     ) -> AppState {
-        AppState::new(
-            audio,
-            None,
-            Arc::new(crate::ipc::tests::NoopHistory),
-            replacements,
-            vocab,
-            Arc::new(crate::ipc::tests::MemSettings {
+        crate::ipc::AppStateBuilder::new()
+            .audio(audio)
+            .history(Arc::new(crate::ipc::tests::NoopHistory))
+            .replacements(replacements)
+            .vocabulary(vocab)
+            .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
-            }),
-            std::path::PathBuf::from("/tmp/hush-test-models"),
-        )
+            }))
+            .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+            .build()
+            .expect("test state: builder fields complete")
     }
 
     fn fixed_audio() -> CapturedAudio {
