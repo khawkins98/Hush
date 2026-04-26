@@ -14,8 +14,11 @@
 //! As the surface has grown past a dozen commands, a quick map for
 //! contributors landing here cold:
 //!
-//! - **Core dictation pipeline.** [`list_input_devices`],
-//!   [`start_dictation`], [`stop_dictation`].
+//! - **Core dictation pipeline.** [`audio_list_sources`] (the picker-
+//!   shaped enumeration; supersedes the legacy [`list_input_devices`]
+//!   which is kept for one transitional release), [`start_dictation`]
+//!   (takes a discriminated [`crate::audio::AudioSource`]),
+//!   [`stop_dictation`].
 //! - **History (read-only browse + delete).** [`history_list`],
 //!   [`history_search`], [`history_delete`], [`history_count`].
 //! - **Replacements (post-transcription find/replace CRUD).**
