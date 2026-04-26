@@ -42,7 +42,7 @@ impl SqliteHistoryRepository {
 
 #[async_trait]
 impl HistoryRepository for SqliteHistoryRepository {
-    async fn insert(&self, entry: NewHistoryEntry) -> Result<i64> {
+    async fn create(&self, entry: NewHistoryEntry) -> Result<i64> {
         let result = sqlx::query(
             "INSERT INTO history (transcript, app_name, window_title, model, duration_ms) \
              VALUES (?, ?, ?, ?, ?)",
@@ -176,7 +176,7 @@ mod tests {
     async fn insert_then_list_returns_the_row() {
         let repo = fresh_repo().await;
         let id = repo
-            .insert(sample("hello world", Some("Slack")))
+            .create(sample("hello world", Some("Slack")))
             .await
             .unwrap();
         assert!(id > 0);
@@ -192,9 +192,9 @@ mod tests {
     #[tokio::test]
     async fn list_orders_newest_first() {
         let repo = fresh_repo().await;
-        repo.insert(sample("first", None)).await.unwrap();
-        repo.insert(sample("second", None)).await.unwrap();
-        repo.insert(sample("third", None)).await.unwrap();
+        repo.create(sample("first", None)).await.unwrap();
+        repo.create(sample("second", None)).await.unwrap();
+        repo.create(sample("third", None)).await.unwrap();
 
         let rows = repo.list(10, 0).await.unwrap();
         let transcripts: Vec<_> = rows.iter().map(|r| r.transcript.as_str()).collect();
@@ -205,7 +205,7 @@ mod tests {
     async fn list_paginates_with_limit_and_offset() {
         let repo = fresh_repo().await;
         for i in 0..5 {
-            repo.insert(sample(&format!("row {i}"), None))
+            repo.create(sample(&format!("row {i}"), None))
                 .await
                 .unwrap();
         }
@@ -221,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn list_caps_excessive_limit_at_max() {
         let repo = fresh_repo().await;
-        repo.insert(sample("only", None)).await.unwrap();
+        repo.create(sample("only", None)).await.unwrap();
         // A nonsense huge limit must not blow up; clamp prevents the
         // sqlite query from binding a value outside i64 sense.
         let rows = repo.list(i64::MAX, 0).await.unwrap();
@@ -231,11 +231,11 @@ mod tests {
     #[tokio::test]
     async fn search_matches_fts5_terms() {
         let repo = fresh_repo().await;
-        repo.insert(sample("the quick brown fox", None))
+        repo.create(sample("the quick brown fox", None))
             .await
             .unwrap();
-        repo.insert(sample("the lazy dog", None)).await.unwrap();
-        repo.insert(sample("brown bears eat fish", None))
+        repo.create(sample("the lazy dog", None)).await.unwrap();
+        repo.create(sample("brown bears eat fish", None))
             .await
             .unwrap();
 
@@ -253,8 +253,8 @@ mod tests {
         // so the frontend can call `search("")` unconditionally on each
         // keystroke without a guard.
         let repo = fresh_repo().await;
-        repo.insert(sample("a", None)).await.unwrap();
-        repo.insert(sample("b", None)).await.unwrap();
+        repo.create(sample("a", None)).await.unwrap();
+        repo.create(sample("b", None)).await.unwrap();
 
         let rows = repo.search("   ", 10, 0).await.unwrap();
         assert_eq!(rows.len(), 2);
@@ -267,7 +267,7 @@ mod tests {
         // confusing "syntax error" from the engine. We wrap and double
         // any embedded quotes so the literal text is the search.
         let repo = fresh_repo().await;
-        repo.insert(sample(r#"the cat said "hello""#, None))
+        repo.create(sample(r#"the cat said "hello""#, None))
             .await
             .unwrap();
 
@@ -281,7 +281,7 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_row_and_updates_count() {
         let repo = fresh_repo().await;
-        let id = repo.insert(sample("doomed", None)).await.unwrap();
+        let id = repo.create(sample("doomed", None)).await.unwrap();
         assert_eq!(repo.count().await.unwrap(), 1);
 
         repo.delete(id).await.unwrap();
@@ -307,7 +307,7 @@ mod tests {
         // trigger as much as the repository.
         let repo = fresh_repo().await;
         let id = repo
-            .insert(sample("haystack needle haystack", None))
+            .create(sample("haystack needle haystack", None))
             .await
             .unwrap();
 
@@ -323,8 +323,8 @@ mod tests {
     async fn count_starts_at_zero_and_grows_with_inserts() {
         let repo = fresh_repo().await;
         assert_eq!(repo.count().await.unwrap(), 0);
-        repo.insert(sample("one", None)).await.unwrap();
-        repo.insert(sample("two", None)).await.unwrap();
+        repo.create(sample("one", None)).await.unwrap();
+        repo.create(sample("two", None)).await.unwrap();
         assert_eq!(repo.count().await.unwrap(), 2);
     }
 }

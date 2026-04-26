@@ -10,8 +10,9 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use crate::db::SqliteDatabase;
+use crate::repository::Repository;
 
-use super::{NewVocabularyTerm, VocabularyRepository, VocabularyTerm};
+use super::{NewVocabularyTerm, VocabularyTerm};
 
 /// SQLite-backed [`VocabularyRepository`]. Mirrors the shape of
 /// [`crate::dictionary::SqliteReplacementRepository`].
@@ -26,7 +27,7 @@ impl SqliteVocabularyRepository {
 }
 
 #[async_trait]
-impl VocabularyRepository for SqliteVocabularyRepository {
+impl Repository<VocabularyTerm, NewVocabularyTerm, i64> for SqliteVocabularyRepository {
     async fn list(&self) -> Result<Vec<VocabularyTerm>> {
         sqlx::query_as::<_, VocabularyTerm>("SELECT id, term FROM dictionary_terms ORDER BY id ASC")
             .fetch_all(self.db.pool())

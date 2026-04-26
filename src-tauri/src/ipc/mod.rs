@@ -16,7 +16,7 @@
 //!   `commands::stop_dictation`, which delegates per-step to the
 //!   helper functions in the same file (`load_vocabulary_prompt`,
 //!   `load_replacement_rules`, `take_foreground_snapshot`,
-//!   `spawn_history_insert`, etc.).
+//!   `spawn_history_create`, etc.).
 //! - Capture the foreground app at the moment recording starts so the
 //!   focused-app metadata is preserved even if Hush's own window grabs
 //!   focus during the recording.
@@ -626,7 +626,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl HistoryRepository for NoopHistory {
-        async fn insert(&self, _: crate::history::NewHistoryEntry) -> anyhow::Result<i64> {
+        async fn create(&self, _: crate::history::NewHistoryEntry) -> anyhow::Result<i64> {
             Ok(0)
         }
         async fn list(&self, _: i64, _: i64) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
@@ -655,7 +655,13 @@ mod tests {
     pub(crate) struct NoopReplacements;
 
     #[async_trait::async_trait]
-    impl ReplacementRepository for NoopReplacements {
+    impl
+        crate::repository::Repository<
+            crate::dictionary::ReplacementRule,
+            crate::dictionary::NewReplacementRule,
+            i64,
+        > for NoopReplacements
+    {
         async fn list(&self) -> anyhow::Result<Vec<crate::dictionary::ReplacementRule>> {
             Ok(vec![])
         }
@@ -680,7 +686,13 @@ mod tests {
     pub(crate) struct NoopVocabulary;
 
     #[async_trait::async_trait]
-    impl VocabularyRepository for NoopVocabulary {
+    impl
+        crate::repository::Repository<
+            crate::dictionary::VocabularyTerm,
+            crate::dictionary::NewVocabularyTerm,
+            i64,
+        > for NoopVocabulary
+    {
         async fn list(&self) -> anyhow::Result<Vec<crate::dictionary::VocabularyTerm>> {
             Ok(vec![])
         }

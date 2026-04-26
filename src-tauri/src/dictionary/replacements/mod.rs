@@ -33,9 +33,9 @@ pub mod sqlite;
 
 pub use sqlite::SqliteReplacementRepository;
 
-use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+use crate::repository::Repository;
 
 /// A persisted replacement rule.
 ///
@@ -61,28 +61,30 @@ pub struct NewReplacementRule {
     pub sort_order: i64,
 }
 
-/// Repository trait at the storage boundary. `Send + Sync` so the IPC
-/// layer holds an `Arc<dyn ReplacementRepository>` across async Tauri
-/// commands; object-safe via `async-trait`.
-#[async_trait]
-pub trait ReplacementRepository: Send + Sync {
-    /// All rules, sorted by `(sort_order, id)`. The list is expected to
-    /// be small (single-user, hand-managed), so no pagination.
-    async fn list(&self) -> Result<Vec<ReplacementRule>>;
+/// Storage-boundary trait for replacement rules.
+///
+/// Pure marker trait whose only job is to alias
+/// [`Repository<ReplacementRule, NewReplacementRule, i64>`] under a
+/// domain-meaningful name. The four CRUD methods (`list`, `create`,
+/// `update`, `delete`) live on the [`Repository`] supertrait — see
+/// `crate::repository` for the rationale.
+///
+/// `Send + Sync` so the IPC layer holds an
+/// `Arc<dyn ReplacementRepository>` across async Tauri commands;
+/// object-safe via `async-trait` on the supertrait.
+pub trait ReplacementRepository:
+    Repository<ReplacementRule, NewReplacementRule, i64> + Send + Sync
+{
+}
 
-    /// Insert a new rule and return the persisted row (with its assigned
-    /// id) so the frontend can append it to its local list without an
-    /// extra round-trip.
-    async fn create(&self, rule: NewReplacementRule) -> Result<ReplacementRule>;
-
-    /// Update an existing rule's fields. No-op if `id` does not exist —
-    /// the frontend's intent (this row should hold these values) is
-    /// satisfied either way.
-    async fn update(&self, rule: ReplacementRule) -> Result<()>;
-
-    /// Delete a single rule. No-op if `id` does not exist, mirroring the
-    /// trait contract on [`crate::history::HistoryRepository::delete`].
-    async fn delete(&self, id: i64) -> Result<()>;
+/// Blanket impl: anything that satisfies the generic [`Repository`]
+/// contract for replacement-rule rows automatically implements
+/// [`ReplacementRepository`]. Lets `SqliteReplacementRepository` (and
+/// any test mock) spell the four CRUD methods once on the `Repository`
+/// impl, without a separate trivial `impl ReplacementRepository for …`.
+impl<T> ReplacementRepository for T where
+    T: Repository<ReplacementRule, NewReplacementRule, i64> + Send + Sync
+{
 }
 
 /// Apply a slice of replacement rules to `text`, returning the rewritten

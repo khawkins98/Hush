@@ -21,9 +21,9 @@ pub mod sqlite;
 
 pub use sqlite::SqliteVocabularyRepository;
 
-use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+use crate::repository::Repository;
 
 /// A persisted vocabulary term.
 ///
@@ -45,31 +45,28 @@ pub struct NewVocabularyTerm {
     pub term: String,
 }
 
-/// Repository trait at the storage boundary. Same `Send + Sync` +
-/// `async-trait` shape as [`crate::dictionary::ReplacementRepository`],
-/// so the IPC layer holds `Arc<dyn VocabularyRepository>` and tests can
-/// mock at the seam.
-#[async_trait]
-pub trait VocabularyRepository: Send + Sync {
-    /// All terms, sorted by `id` (insertion order). Expected to be small
-    /// (the user manages this list by hand), so no pagination.
-    async fn list(&self) -> Result<Vec<VocabularyTerm>>;
+/// Storage-boundary trait for vocabulary terms.
+///
+/// Pure marker trait that aliases
+/// [`Repository<VocabularyTerm, NewVocabularyTerm, i64>`] under a
+/// domain-meaningful name. The four CRUD methods (`list`, `create`,
+/// `update`, `delete`) live on the [`Repository`] supertrait — see
+/// `crate::repository` for the rationale.
+///
+/// Domain-specific contract for `create`: the underlying SQLite impl
+/// errors on `UNIQUE` collision (the `dictionary_terms.term` column
+/// has a `UNIQUE` constraint per migration 0001). The duplicate is
+/// the user's signal to look at their existing list rather than a
+/// silent no-op. `update` carries the same UNIQUE-collision contract.
+pub trait VocabularyRepository:
+    Repository<VocabularyTerm, NewVocabularyTerm, i64> + Send + Sync
+{
+}
 
-    /// Insert a new term. Errors if the term already exists — the
-    /// `dictionary_terms.term` column is `UNIQUE` per the schema, and
-    /// the duplicate is the user's signal to look at their existing
-    /// list rather than a silent no-op (which would be confusing in
-    /// the UI). Returns the persisted row so the frontend can append
-    /// without a follow-up `list`.
-    async fn create(&self, new_term: NewVocabularyTerm) -> Result<VocabularyTerm>;
-
-    /// Update an existing term's text. Errors on `UNIQUE` collision so
-    /// the user can recover ("you already have this term"). No-op if
-    /// `id` does not exist, mirroring the rest of the repos.
-    async fn update(&self, term: VocabularyTerm) -> Result<()>;
-
-    /// Delete a term. No-op if `id` does not exist.
-    async fn delete(&self, id: i64) -> Result<()>;
+/// Blanket impl mirroring [`crate::dictionary::ReplacementRepository`].
+impl<T> VocabularyRepository for T where
+    T: Repository<VocabularyTerm, NewVocabularyTerm, i64> + Send + Sync
+{
 }
 
 /// Cap on the prompt string we hand to whisper.cpp. Whisper.cpp's

@@ -160,6 +160,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Refactor: extract generic `Repository<T, NewT, Id>` trait (#36).**
+  Replaces the four near-identical CRUD declarations on
+  `ReplacementRepository` and `VocabularyRepository` with one generic
+  trait in `src-tauri/src/repository.rs`. Each domain trait is now a
+  marker that aliases the generic under a domain-meaningful name plus
+  a blanket impl, so concrete types implement the four CRUD methods
+  exactly once. `HistoryRepository` deliberately stays standalone (its
+  paginated `list`, plus `search` / `count` / no-`update` semantics
+  don't fit a uniform shape), but its `insert` method was renamed to
+  `create` for naming consistency with the rest of the repos. The
+  `spawn_history_insert` helper became `spawn_history_create` to
+  match. `SettingsRepository` stays its own trait — K/V semantics are
+  genuinely different. Pure refactor; tests unchanged.
 - **Refactor: `AppStateBuilder` replaces 7-arg constructor (#37).**
   `AppState::new(audio, transcribe, history, replacements,
   vocabulary, settings, models_dir)` was at the readable threshold
