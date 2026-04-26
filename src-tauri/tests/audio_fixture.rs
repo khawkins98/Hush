@@ -26,14 +26,15 @@
 //! cargo test --features whisper --test audio_fixture -- --ignored
 //! ```
 //!
-//! ## Why the fixture is not committed
+//! ## Bundled fixture
 //!
-//! No public-domain audio file with a verifiable transcript is small
-//! enough to commit comfortably to a git repo (LibriVox excerpts are
-//! a few MB minimum; LFS adds friction). The contributor running
-//! the test downloads the fixture out-of-band and points
-//! `HUSH_TEST_AUDIO` at it. See `tests/fixtures/README.md` for
-//! recommended sources.
+//! `tests/fixtures/jfk.wav` is committed (~344 KB, public-domain JFK
+//! "ask not what your country can do for you" clip — 16 kHz mono PCM
+//! lifted from whisper.cpp's `samples/jfk.wav`). Used as the default
+//! when `HUSH_TEST_AUDIO` is unset, so contributors with a model on
+//! disk can just run `cargo test --features whisper -- --ignored`
+//! without staging an audio file. Override with `HUSH_TEST_AUDIO` if
+//! you want to point at a different clip.
 //!
 //! When system-audio capture (#33) lands, the loopback half of #34
 //! gets its own integration test that plays the same fixture
@@ -47,29 +48,48 @@ use std::path::PathBuf;
 use hush_lib::audio::{CaptureFormat, CapturedAudio};
 use hush_lib::transcription::{Transcribe, WhisperTranscription};
 
-/// Read the path env var, returning `None` with a helpful skip
-/// message printed to stderr if it is unset or points at a missing
-/// file. Tests `unwrap()` the result and skip via early-return at
-/// the call site — Rust's test harness has no native skip mechanism,
-/// so a soft pass is the only option.
-fn read_path_env(var: &str) -> Option<PathBuf> {
-    match std::env::var(var) {
-        Ok(value) => {
-            let path = PathBuf::from(&value);
-            if path.exists() {
-                Some(path)
-            } else {
-                eprintln!(
-                    "skip: {var}={value} but the file does not exist; skipping audio_fixture test"
-                );
-                None
+/// Resolve the path env var, returning `None` with a skip message
+/// printed to stderr if the env-var-pointed file does not exist.
+/// Tests `unwrap()` the result and skip via early-return at the call
+/// site — Rust's test harness has no native skip mechanism, so a soft
+/// pass is the only option.
+///
+/// `default` is the fall-back used when the env var is unset; pass
+/// `None` for "no default; unset env var means skip" (the model path,
+/// which we deliberately don't commit), or `Some(path)` for "fall
+/// back to this bundled fixture" (the audio path).
+fn read_path_env(var: &str, default: Option<PathBuf>) -> Option<PathBuf> {
+    let candidate = match std::env::var(var) {
+        Ok(value) => PathBuf::from(value),
+        Err(_) => match default {
+            Some(d) => d,
+            None => {
+                eprintln!("skip: {var} is not set; skipping audio_fixture test");
+                return None;
             }
-        }
-        Err(_) => {
-            eprintln!("skip: {var} is not set; skipping audio_fixture test");
-            None
-        }
+        },
+    };
+
+    if candidate.exists() {
+        Some(candidate)
+    } else {
+        eprintln!(
+            "skip: {var} → {} does not exist; skipping audio_fixture test",
+            candidate.display()
+        );
+        None
     }
+}
+
+/// Path to the bundled JFK clip relative to this test file.
+///
+/// Resolved at runtime via `CARGO_MANIFEST_DIR` so the test works
+/// regardless of where `cargo` is invoked from.
+fn bundled_jfk_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("jfk.wav")
 }
 
 /// Load a WAV file into the [`CapturedAudio`] shape the transcription
@@ -135,10 +155,10 @@ fn expected_words() -> Vec<String> {
 #[test]
 #[ignore] // Requires HUSH_TEST_AUDIO + HUSH_TEST_MODEL; see module doc.
 fn fixture_audio_transcribes_to_expected_words() {
-    let Some(audio_path) = read_path_env("HUSH_TEST_AUDIO") else {
+    let Some(audio_path) = read_path_env("HUSH_TEST_AUDIO", Some(bundled_jfk_path())) else {
         return;
     };
-    let Some(model_path) = read_path_env("HUSH_TEST_MODEL") else {
+    let Some(model_path) = read_path_env("HUSH_TEST_MODEL", None) else {
         return;
     };
 
