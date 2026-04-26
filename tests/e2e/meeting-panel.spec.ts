@@ -162,6 +162,19 @@ test.describe("meeting panel — multi-source picker", () => {
           notes: null,
         },
       ],
+      meeting_session_get: () => ({
+        session: {
+          id: 42,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+        },
+        utterances: [],
+      }),
     });
     await page.goto("/");
 
@@ -179,5 +192,128 @@ test.describe("meeting panel — multi-source picker", () => {
     await expect(
       panel.getByRole("button", { name: "Stop session" }),
     ).toBeVisible();
+  });
+
+  test("active session renders the live transcript with mic / system speaker badges", async ({
+    page,
+  }) => {
+    // PR4 (live transcript view) polls `meeting_session_get` every
+    // ~3s while a session is in flight and renders each utterance
+    // with a coarse "You" / "Remote" badge tied to the source the
+    // chunk came from. Pin the rendered shape so a regression that
+    // drops the badge or mis-tags the source surfaces here.
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: 99 }),
+      meeting_sessions_list: () => [
+        {
+          id: 99,
+          appName: "us.zoom.xos",
+          appKind: "meeting",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 2,
+          notes: null,
+        },
+      ],
+      meeting_session_get: () => ({
+        session: {
+          id: 99,
+          appName: "us.zoom.xos",
+          appKind: "meeting",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 2,
+          notes: null,
+        },
+        utterances: [
+          {
+            id: 1,
+            sessionId: 99,
+            startedAtMs: 0,
+            endedAtMs: 10_000,
+            speakerLabel: "mic",
+            text: "Hello, can you hear me?",
+            isFinal: true,
+          },
+          {
+            id: 2,
+            sessionId: 99,
+            startedAtMs: 10_000,
+            endedAtMs: 20_000,
+            speakerLabel: "system",
+            text: "Yes, loud and clear.",
+            isFinal: true,
+          },
+        ],
+      }),
+    });
+    await page.goto("/");
+
+    const panel = page.locator("section.panel-meetings");
+    const transcript = panel.locator("ol.live-transcript");
+    await expect(transcript).toBeVisible();
+
+    // Two utterances rendered, in order.
+    const items = transcript.locator("li.utterance");
+    await expect(items).toHaveCount(2);
+
+    // Mic-side utterance shows "You" badge + the right text.
+    const micRow = items.filter({ has: page.locator(".speaker-mic") }).first();
+    await expect(micRow).toContainText("You");
+    await expect(micRow).toContainText("Hello, can you hear me?");
+    await expect(micRow).toContainText("0:00");
+
+    // System-side utterance shows "Remote" badge + the right text.
+    const sysRow = items
+      .filter({ has: page.locator(".speaker-system") })
+      .first();
+    await expect(sysRow).toContainText("Remote");
+    await expect(sysRow).toContainText("Yes, loud and clear.");
+    await expect(sysRow).toContainText("0:10");
+  });
+
+  test("active session shows listening placeholder when no utterances yet", async ({
+    page,
+  }) => {
+    // First poll lands an empty utterances array — the panel must
+    // make it visible that recording is in progress and the user
+    // should expect text shortly. Pinned so a regression that
+    // suppresses the empty-state line silently doesn't leave the
+    // panel looking broken at session-start.
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: 7 }),
+      meeting_sessions_list: () => [
+        {
+          id: 7,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+        },
+      ],
+      meeting_session_get: () => ({
+        session: {
+          id: 7,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+        },
+        utterances: [],
+      }),
+    });
+    await page.goto("/");
+
+    const panel = page.locator("section.panel-meetings");
+    await expect(panel).toContainText(/Listening/i);
+    await expect(panel.locator("ol.live-transcript")).toHaveCount(0);
   });
 });
