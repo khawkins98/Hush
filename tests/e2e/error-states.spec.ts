@@ -45,16 +45,18 @@ test.describe("first-time setup banner", () => {
     await installMocks(page, {
       // Override the default catalog mock to simulate fresh install:
       // no card has `isDownloaded: true`.
+      // Field shape mirrors the Rust ModelCard serde rename — see
+      // tests/e2e/_mock.ts for the canonical default and the rationale.
       model_list: () => [
         {
           id: "whisper-base",
           displayName: "Whisper Base",
           filename: "ggml-base.bin",
-          sizeBytes: 147951465,
-          sizeLabel: "142 MB",
-          speed: 4,
-          accuracy: 2,
+          sizeMb: 142,
+          speedRating: 9,
+          accuracyRating: 6,
           description: "Default. Fast, decent for dictation.",
+          isDefault: true,
           downloadUrl: "https://example.test/ggml-base.bin",
           sha256: "abc",
           isDownloaded: false,

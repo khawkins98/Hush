@@ -137,11 +137,32 @@ pub struct CpalAudioCapture {
     is_recording: Arc<AtomicBool>,
     /// Latest RMS level, encoded as `f32::to_bits()`. Written by the cpal
     /// callback at audio-callback rate (~100 Hz at 48 kHz / 480-frame
-    /// callbacks), read by the HUD level pump at ~30 Hz. `Relaxed`
-    /// ordering is sound: each store is independent, the read does not
-    /// synchronise with anything else, and a stale read just means the
-    /// HUD shows the previous level for one extra frame. Cleared back
-    /// to `0.0` on stop so the meter idles cleanly.
+    /// callbacks), read by the HUD level pump at ~30 Hz.
+    ///
+    /// `Relaxed` ordering is the load-bearing invariant here, and the
+    /// reasoning is worth spelling out so a future change doesn't
+    /// "tighten" it without understanding why it's safe today:
+    ///
+    /// 1. **The level field is independent.** No other shared state
+    ///    needs to be observed alongside it — there's no "if level >
+    ///    threshold AND state == X" guard, no state-machine that
+    ///    depends on level transitions. Each store is meaningful on
+    ///    its own.
+    /// 2. **A stale read is acceptable.** The HUD pump consumes whatever
+    ///    value is in the atomic at tick time and renders one frame
+    ///    of the level meter. Showing "the previous frame's level"
+    ///    for one ~30 ms tick is invisible to a human.
+    /// 3. **No happens-before relationship is needed** with anything else
+    ///    in the codebase — Acquire/Release would only matter if a
+    ///    reader needed to observe other writes that happened on the
+    ///    callback thread before this store, and no such other writes
+    ///    exist on the path.
+    ///
+    /// If level ever becomes load-bearing for a state machine
+    /// (e.g. "stop dictation if RMS < X for 2s" voice-activity
+    /// detection), upgrade to Acquire/Release pairs at that point —
+    /// the new dependency would be the new ordering requirement.
+    /// Cleared back to `0.0` on stop so the meter idles cleanly.
     level: Arc<AtomicU32>,
     /// Joined on drop. Wrapped in [`Option`] so [`Drop`] can take ownership.
     worker: Option<JoinHandle<()>>,
@@ -563,8 +584,8 @@ mod tests {
 
     /// Compile-time check that the trait is object-safe. If this ever fails
     /// to compile, a higher layer cannot store an `Arc<dyn AudioCapture>`,
-    /// which is how the IPC layer (TODO(#9)) plugs in either the cpal
-    /// backend or a test mock.
+    /// which is how the IPC layer plugs in either the cpal backend or a
+    /// test mock.
     #[test]
     fn audio_capture_trait_is_object_safe() {
         fn _assert_object_safe(_: &dyn AudioCapture) {}

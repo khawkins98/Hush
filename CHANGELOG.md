@@ -256,7 +256,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Audio stop no longer fails with "audio buffer still shared after
+- **Audio buffer take is timing-tolerant on stream cleanup.** Earlier
+  versions failed with "audio buffer still shared after
   stream drop".** `stop_session` previously used `Arc::try_unwrap` to
   pull the captured samples out of `Arc<Mutex<Vec<f32>>>`, requiring
   *sole* Arc ownership. On some platforms cpal's stream cleanup is
@@ -283,7 +284,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trap is still defended (typo-squats like `myhf.co` and
   `hf.co.attacker.com` are unit-tested as rejected). Hop cap of 4
   unchanged.
-- **Whisper transcription is now compiled in by default** (closes
+- **Whisper transcription compiled in by default** (closes
   the silent-no-model bug surfaced in hands-on testing). Pre-fix:
   `npm run tauri dev` built without `--features whisper`, so the
   binary contained no Whisper loader code. Users could download a
@@ -315,7 +316,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the banner-shown and banner-hidden cases; the existing
   `transcription-unavailable` spec now asserts the new copy and
   asserts the old `HUSH_MODEL_PATH` reference does *not* appear.
-- **Model auto-download now actually downloads** (closes #41). The
+- **Model auto-download is functional end-to-end** (closes #41). The
   five Whisper variants in `transcription::catalog` shipped with
   empty `sha256` strings — the auto-download orchestrator's
   defence-in-depth gate refused to start a download without a
@@ -330,7 +331,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `shasum -a 256` against the API value. The download orchestrator's
   empty-hash gate stays in place so a future catalog addition can't
   silently bypass SHA verification.
-- **PTT no longer crashes the app on macOS 26+** (closes the crash
+- **PTT crash on macOS 26+ contained** (closes the crash
   half of the rdev issue; native CGEventTap replacement tracked
   separately). rdev 0.5's CGEventTap callback unconditionally calls
   `TSMGetInputSourceProperty` from its listener thread to compute a
@@ -345,7 +346,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Documented in `docs/macos-permissions.md`. The proper fix — a
   native CGEventTap that bypasses TSM — is a follow-up tracking
   issue.
-- **HUD window is actually transparent on macOS (closes #62).** The
+- **HUD window transparency on macOS via `macos-private-api` (closes #62).** The
   HUD's `transparent: true` window flag was a no-op on macOS without
   Tauri's `macos-private-api` Cargo feature + the matching
   `macOSPrivateApi: true` app-config flag. Without those, the dark

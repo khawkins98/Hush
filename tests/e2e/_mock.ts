@@ -81,16 +81,25 @@ export async function installMocks(
       vocabulary_delete: () => undefined,
 
       // ---- model picker ----
+      // Field shape mirrors `ModelCard` on the Rust side, which flattens
+      // `ModelMetadata` and applies `#[serde(rename_all = "camelCase")]`.
+      // Keep this in sync with `src-tauri/src/transcription/catalog.rs`
+      // and `src-tauri/src/ipc/commands.rs::ModelCard` — a stale field
+      // name here surfaces as `undefined` in the page component, which
+      // the Playwright suite may not catch unless a spec asserts on the
+      // value. Round-5 review caught a regression where the mock had
+      // `sizeBytes`/`sizeLabel`/`speed`/`accuracy` while Rust serialised
+      // `sizeMb`/`speedRating`/`accuracyRating`. Don't repeat that.
       model_list: () => [
         {
           id: "whisper-base",
           displayName: "Whisper Base",
           filename: "ggml-base.bin",
-          sizeBytes: 147951465,
-          sizeLabel: "142 MB",
-          speed: 4,
-          accuracy: 2,
+          sizeMb: 142,
+          speedRating: 9,
+          accuracyRating: 6,
           description: "Default. Fast, decent for dictation.",
+          isDefault: true,
           downloadUrl: "https://example.test/ggml-base.bin",
           sha256: "abc123",
           isDownloaded: true,
@@ -98,7 +107,7 @@ export async function installMocks(
           expectedPath: "/tmp/models/ggml-base.bin",
         },
       ],
-      model_select: () => undefined,
+      model_select: () => ({ loaded: true }),
       model_download: () => undefined,
       model_cancel_download: () => undefined,
       model_remove: () => undefined,
