@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Audio source picker — first user-visible step of the system-audio +
+  meeting-mode pivot (Phase A1, refs #33; design memo at
+  `docs/system-audio-meeting-mode-proposal.md`). The mic dropdown is
+  now a grouped `<select>` with two `<optgroup>`s: every input device
+  under "Microphone", and a single "System audio" entry under "System
+  audio". The system-audio option is rendered disabled with a
+  "(coming soon — #33)" suffix until the per-platform backend ships.
+  New IPC command `audio_list_sources` returns enriched listings
+  including capability flags. `start_dictation` now takes a
+  discriminated `AudioSource` argument (`{ kind: "microphone",
+  deviceId }` or `{ kind: "system-audio" }`) instead of the bare
+  device id; the IPC accepts `null` for the default-mic case so
+  hotkey-triggered dictation stays one-click. `list_input_devices`
+  is kept as a transitional alias for one release. Three new Rust
+  tests pin the listing default impl, the override path, and the
+  camelCase wire shape.
 - `AudioSource` enum (`Microphone(Option<String>)` / `SystemAudio`)
   and `AudioCapture::start_with_source` trait method on the audio
   backend boundary (#96, foundation for #33). No behaviour change

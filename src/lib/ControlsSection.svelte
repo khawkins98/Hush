@@ -1,9 +1,13 @@
 <script lang="ts">
-  import type { AudioDevice } from "./types";
+  import type { AudioSourceListing } from "./types";
 
   type Props = {
-    devices: AudioDevice[];
-    devicesLoaded: boolean;
+    sources: AudioSourceListing[];
+    sourcesLoaded: boolean;
+    /// Selected source id. Mic devices use their device name; the
+    /// system-audio entry uses the literal string `"system"`. The
+    /// parent page maps this to an `AudioSource` argument when calling
+    /// `start_dictation`.
     selected: string | null;
     recording: boolean;
     busy: boolean;
@@ -16,8 +20,8 @@
   };
 
   let {
-    devices,
-    devicesLoaded,
+    sources,
+    sourcesLoaded,
     selected = $bindable(),
     recording,
     busy,
@@ -28,6 +32,29 @@
     onStop,
     onScrollToModelPicker,
   }: Props = $props();
+
+  // Derived: separate the mic devices from the system-audio entry so
+  // the picker can group them (mics first, then system audio with a
+  // visual divider). Disabled mic-less platforms still get the
+  // system-audio entry — when it's not yet supported, the option is
+  // rendered disabled with a "coming soon" suffix.
+  let mics = $derived(sources.filter((s) => s.kind === "microphone"));
+  let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
+
+  // Total picker option count, including the disabled system-audio
+  // entry. Used to size the "no audio sources at all" empty state —
+  // we should never get here in practice (the backend always pushes
+  // a system-audio listing) but it's a safety net for the UI to not
+  // render an empty `<select>`.
+  let pickableCount = $derived(mics.length + (systemAudio ? 1 : 0));
+
+  // Can the user actually start? At least one *supported* source must
+  // exist. Mics are always supported when present; the system-audio
+  // entry is supported only when the backend says so. A platform with
+  // zero mics AND no system-audio support would have nothing usable.
+  let hasUsableSource = $derived(
+    mics.length > 0 || (systemAudio?.isSupported ?? false),
+  );
 </script>
 
 {#if noModelInstalled}
@@ -53,22 +80,41 @@
 
 <section class="controls">
   <label>
-    Input device
-    {#if !devicesLoaded}
-      <p class="empty-devices">Loading devices…</p>
-    {:else if devices.length === 0}
+    Audio source
+    {#if !sourcesLoaded}
+      <p class="empty-devices">Loading sources…</p>
+    {:else if pickableCount === 0}
       <p class="empty-devices">
-        No microphones detected. On macOS, grant microphone access in
+        No audio sources detected. On macOS, grant microphone access in
         System Settings → Privacy &amp; Security. On Linux, check that
         PulseAudio / PipeWire is running.
       </p>
     {:else}
+      <!--
+        Two groups: mic devices (always supported) and the system-audio
+        entry (currently disabled on every platform — see #33 for the
+        per-OS roadmap). Splitting via <optgroup> makes the structure
+        clear to assistive tech; the disabled attribute on the
+        not-yet-supported option means the user can't accidentally
+        pick it and hit a runtime error.
+      -->
       <select bind:value={selected} disabled={recording || busy}>
-        {#each devices as device (device.id)}
-          <option value={device.id}>
-            {device.name}{device.isDefault ? " (default)" : ""}
-          </option>
-        {/each}
+        <optgroup label="Microphone">
+          {#each mics as mic (mic.id)}
+            <option value={mic.id}>
+              {mic.name}{mic.isDefault ? " (default)" : ""}
+            </option>
+          {/each}
+        </optgroup>
+        {#if systemAudio}
+          <optgroup label="System audio">
+            <option value={systemAudio.id} disabled={!systemAudio.isSupported}>
+              {systemAudio.name}{systemAudio.isSupported
+                ? ""
+                : " (coming soon — #33)"}
+            </option>
+          </optgroup>
+        {/if}
       </select>
     {/if}
   </label>
@@ -76,7 +122,7 @@
   {#if !recording}
     <button
       onclick={onStart}
-      disabled={busy || devices.length === 0 || noModelInstalled}
+      disabled={busy || !hasUsableSource || noModelInstalled}
       aria-label={busy
         ? "Working"
         : noModelInstalled
