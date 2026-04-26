@@ -256,6 +256,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Audio stop no longer fails with "audio buffer still shared after
+  stream drop".** `stop_session` previously used `Arc::try_unwrap` to
+  pull the captured samples out of `Arc<Mutex<Vec<f32>>>`, requiring
+  *sole* Arc ownership. On some platforms cpal's stream cleanup is
+  asynchronous — the callback's Arc clone can outlive the
+  `drop(session.stream)` call by a beat — so `try_unwrap` would error
+  on a successful recording and the user got "Microphone error: audio
+  buffer still shared after stream drop. Try selecting a different
+  input device." Replaced with a `lock()` + `mem::take`. Locking is
+  correct regardless of how many Arc clones are alive: if a final
+  callback is mid-write we wait the milliseconds it takes to finish;
+  otherwise the lock is uncontended. The leftover Arc clones drop on
+  their own as cpal finishes cleanup. Surfaced during hands-on
+  testing on macOS 26 — the issue was likely always intermittent on
+  some configurations but the user kept hitting it.
 - **Model download wasn't actually reaching the file** (regression
   surfaced by user during hands-on testing of #41/#72). Hugging
   Face migrated large-file serving to their Xet content-addressed
