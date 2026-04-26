@@ -121,7 +121,7 @@ Verify in order:
   the per-model SHA-256 hashes are still empty, gating
   auto-download until #41 lands).
 - Replacements and Vocabulary panels both add/delete rules.
-- The toggle hotkey (`⌘/Ctrl+Shift+Space`) on macOS prompts for
+- The toggle hotkey (`Ctrl+⌥/Alt+H`) on macOS prompts for
   Input Monitoring; on Linux + X11 it works straight away.
 - Pressing Start → Stop without a model shows the friendly
   "transcription isn't set up yet" error.

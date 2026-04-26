@@ -151,6 +151,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Default toggle hotkey changed from `⌘/Ctrl+Shift+Space` to
+  `Ctrl+⌥/Alt+H`** (literal Control + Option/Alt + H — `⌃⌥H` on
+  macOS). The previous default conflicted with macOS's character-
+  picker chord on some configurations. `Ctrl+Shift+H` was
+  considered but collides with Finder's "Go to Home folder"; the
+  Ctrl+Alt family doesn't have any system bindings on macOS,
+  Linux, or Windows for the `H` key, and sits in the same modifier-
+  family VoiceInk uses (`⌃⌥V`) so users coming from a similar
+  tool find it immediately reachable. Frontend hint card, README,
+  STATUS, and the hotkey doc comment all updated in lockstep.
+  Override via `HUSH_TOGGLE_HOTKEY` env var.
+- **macOS permission troubleshooting docs.** New
+  `docs/macos-permissions.md` covers the dev-build permission
+  flakiness — why `cargo tauri dev` permissions aren't as sticky as
+  signed-bundle permissions, the symptoms ("PTT silently does
+  nothing", "transcript is empty / silence", "prompt attributes to
+  Terminal"), and the `tccutil reset Microphone com.khawkins.hush` /
+  `tccutil reset ListenEvent com.khawkins.hush` recipe to unstick
+  them. Linked from `CONTRIBUTING.md` and the README docs table.
 - **HUD polish — top-right placement, light-desktop contrast,
   screen-reader title.** Three round-4 reviewer items the a11y batch
   in #48 deferred:

@@ -708,7 +708,7 @@
   -->
   <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
     <strong>Shortcuts:</strong>
-    <kbd>⌘/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> to toggle,
+    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
     or hold <kbd>Right Ctrl</kbd> to push-to-talk.
   </aside>
 
