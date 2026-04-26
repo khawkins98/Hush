@@ -237,6 +237,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Model auto-download now actually downloads** (closes #41). The
+  five Whisper variants in `transcription::catalog` shipped with
+  empty `sha256` strings — the auto-download orchestrator's
+  defence-in-depth gate refused to start a download without a
+  verified hash, so every "Download" click returned the friendly
+  "configure manually for now" message and required the user to
+  curl the model themselves and place it in the app-data models
+  directory. Hashes are now sourced from Hugging Face's git-LFS
+  `oid` field (content-addressed, can't drift independently of the
+  file content) for `ggml-tiny.bin`, `ggml-base.bin`,
+  `ggml-small.bin`, `ggml-medium.bin`, `ggml-large-v3.bin`.
+  `ggml-tiny` was independently verified by downloading and running
+  `shasum -a 256` against the API value. The download orchestrator's
+  empty-hash gate stays in place so a future catalog addition can't
+  silently bypass SHA verification.
 - **PTT no longer crashes the app on macOS 26+** (closes the crash
   half of the rdev issue; native CGEventTap replacement tracked
   separately). rdev 0.5's CGEventTap callback unconditionally calls

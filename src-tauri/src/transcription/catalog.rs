@@ -113,11 +113,22 @@ fn download_url_for(filename: &str) -> String {
 /// shared static `Vec` would be. The IPC command builds it once per
 /// `model_list` call; nothing on the hot path consults this.
 pub fn whisper_models() -> Vec<ModelMetadata> {
-    // SHA-256 hashes deliberately empty for the initial cut. The
-    // auto-download command checks for an empty string and refuses to
-    // start the download with a clear "download manually until the
-    // hash is verified" error. Fill in per-model as a contributor
-    // verifies the hash from upstream — see TODO(#41).
+    // SHA-256 hashes sourced from Hugging Face's git-lfs `oid` field
+    // for ggerganov/whisper.cpp (closes #41). Verified 2026-04-26 by
+    // pulling the tiny model and confirming `shasum -a 256` matched
+    // the API value. The other four are taken from the same API
+    // response in the same call; LFS oids are content-addressed so
+    // they cannot drift independently of the file itself, but if
+    // upstream re-uploads the model with the same filename these
+    // hashes need updating and the auto-download will surface a
+    // clean SHA-256 mismatch error to the user.
+    //
+    // To refresh:
+    //
+    //     curl -s "https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main?expand=true" \
+    //       | python3 -c 'import sys,json; \
+    //         [print(f"{f[\"path\"]}: {f.get(\"lfs\",{}).get(\"oid\",\"?\")}") \
+    //          for f in json.load(sys.stdin) if f.get("path","").startswith("ggml-")]'
     vec![
         ModelMetadata {
             id: "whisper-tiny".into(),
@@ -130,7 +141,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
                 .into(),
             is_default: false,
             download_url: download_url_for("ggml-tiny.bin"),
-            sha256: String::new(),
+            sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21".into(),
         },
         ModelMetadata {
             id: "whisper-base".into(),
@@ -142,7 +153,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             description: "Recommended default. Solid accuracy at near-real-time speed.".into(),
             is_default: true,
             download_url: download_url_for("ggml-base.bin"),
-            sha256: String::new(),
+            sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe".into(),
         },
         ModelMetadata {
             id: "whisper-small".into(),
@@ -155,7 +166,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
                 .into(),
             is_default: false,
             download_url: download_url_for("ggml-small.bin"),
-            sha256: String::new(),
+            sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b".into(),
         },
         ModelMetadata {
             id: "whisper-medium".into(),
@@ -167,7 +178,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             description: "High-accuracy. Recommended only on M-series Macs or recent x86.".into(),
             is_default: false,
             download_url: download_url_for("ggml-medium.bin"),
-            sha256: String::new(),
+            sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208".into(),
         },
         ModelMetadata {
             id: "whisper-large-v3".into(),
@@ -180,7 +191,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
                 .into(),
             is_default: false,
             download_url: download_url_for("ggml-large-v3.bin"),
-            sha256: String::new(),
+            sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2".into(),
         },
     ]
 }
