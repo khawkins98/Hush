@@ -1,6 +1,6 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-04-26, evening
+**Snapshot:** 2026-04-26, late
 **Author:** Claude (working async on Ken's behalf)
 
 A working hand-off doc; not the canonical CHANGELOG or PRD. The goal:
@@ -12,27 +12,41 @@ pickup, don't try to keep it incrementally up-to-date.
 
 ## Where the project stands
 
-The dictation loop is **end-to-end functional on macOS for the
+The dictation loop is **end-to-end functional on macOS 26 for the
 maintainer**: hotkey or button → record → transcribe → clipboard →
-notification → searchable history. Hands-on testing this round
-(2026-04-26) closed the model integration story:
+notification → searchable history. Older macOS versions, Linux, and
+Windows are not hands-on tested.
 
-- SHA-256 hashes filled in for all five Whisper variants (#72), so
-  the picker's Download button actually works.
-- Hugging Face's CDN moved to `*.hf.co`; the redirect predicate now
-  allows both HF zones (#74).
-- `whisper` is a default Cargo feature; `npm run tauri dev` boots
-  with the loader present (#75). cmake is a hard prereq.
-- Hot-load on model select — pick a downloaded model, the
-  transcriber swaps without restart. Pick an undownloaded one, the
-  picker tells you to Download first (#76).
-- Audio buffer take is now timing-tolerant on stream cleanup (#77),
-  with regression tests pinning the invariant (#78).
+This session (post-2026-04-25) landed eight PRs that close the
+M3-era polish punchlist and tighten internal architecture:
 
-Test count: **133** Rust unit tests; **7** Playwright frontend
+- **#83** — In-app macOS permission diagnostic + `tccutil reset`
+  recovery panel (closes #67).
+- **#84** — Split monolithic `+page.svelte` (2351 → 1080 lines) into
+  seven per-section components under `src/lib/` (closes #40).
+- **#85** — Round-6 reviewer consolidation: scoped CSS for the new
+  diagnostic panel, CTA wording, type docstrings, CHANGELOG and
+  docs grammar.
+- **#86** — Split `dictionary/` into `replacements/` and
+  `vocabulary/` submodules (closes #39).
+- **#87** — `AppStateBuilder` replaces the 7-arg `AppState::new`
+  constructor (closes #37).
+- **#88** — Generic `Repository<T, NewT, Id>` trait for
+  replacements + vocabulary; history's `insert` renamed to
+  `create` for naming consistency (closes #36).
+- **#89** — Bundled JFK audio fixture (~344 KB) so the
+  `audio_fixture.rs` integration test runs from a single env var
+  (closes #34 part-a).
+- **#29** — Closed by audit: round-2 polish was substantially
+  complete across earlier rounds (UNIQUE-update test, `aria-live`,
+  focus management, sticky hint, dark-mode contrast all already
+  done).
+
+Test count: **135** Rust unit tests; **7** Playwright frontend
 smoke tests (mocked-Tauri); 1 ignored audio-fixture integration
-test that activates with a contributor-supplied WAV. Frontend
-type-check clean, zero warnings. Clippy + rustfmt clean.
+test that now defaults to the bundled JFK clip when
+`HUSH_TEST_MODEL` is set. Frontend type-check 0 errors / 0 warnings.
+Clippy + rustfmt clean.
 
 For the prose record of what shipped and why, see
 [`CHANGELOG.md`](./CHANGELOG.md) (`[Unreleased]` section) and
@@ -46,18 +60,23 @@ For the prose record of what shipped and why, see
 |---|---|---|
 | `audio` (cpal + RMS level meter + drain_buffer) | shipped | 16 |
 | `transcription::resample` | shipped | 9 |
-| `transcription::whisper` (default-feature now) | shipped | stub-tested + manual smoke |
-| `transcription::catalog` (SHAs filled in #72) | shipped | 6 |
+| `transcription::whisper` (default-feature) | shipped | stub-tested + manual smoke |
+| `transcription::catalog` (SHAs filled in) | shipped | 6 |
 | `transcription::download` | shipped | 7 |
 | `db` (sqlx pool + migrations) | shipped | 4 |
-| `history` (CRUD + FTS5) | shipped | 11 |
-| `dictionary::replacements` | shipped | 9 + 6 sqlite |
-| `dictionary::vocabulary` | shipped | 9 + 7 sqlite |
+| `history` (CRUD + FTS5; `insert`→`create` post-#88) | shipped | 11 |
+| `dictionary::replacements` (own submodule post-#86) | shipped | 9 + 6 sqlite |
+| `dictionary::vocabulary` (own submodule post-#86) | shipped | 9 + 8 sqlite |
+| `repository` (generic CRUD trait, new in #88) | shipped | — |
 | `settings` (K/V) | shipped | 6 |
-| `ipc` (~22 Tauri commands; transcribe Mutex hot-swap) | shipped | 17+ |
+| `ipc` (~24 Tauri commands; `AppStateBuilder` post-#87) | shipped | 17+ |
 | `hotkey` (toggle ⌃⌥H; PTT macOS-disabled) | shipped | 12 (incl. enablement matrix) |
-| `hud` (transparent on macOS via macos-private-api; top-right placement) | shipped | — (manual smoke) |
+| `hud` (transparent on macOS via macos-private-api) | shipped | — (manual smoke) |
 | `updater` | stub (registration deferred to #10) | — |
+
+Frontend: 7 components under `src/lib/` (post-#84) + a thin
+`src/routes/+page.svelte` (1080 lines of layout + cross-cutting
+state) + shared types in `src/lib/types.ts`.
 
 Tauri events flowing backend → frontend:
 `hotkey:toggle`, `hotkey:ptt-press`, `hotkey:ptt-release`,
@@ -68,21 +87,15 @@ Tauri events flowing backend → frontend:
 
 ## Decisions still in force
 
-Locked in over rounds 1–5 (latest revisions noted):
-
 - **Whisper.cpp via `whisper-rs` is the v1 engine.** Cmake-gated
-  behind the `whisper` Cargo feature, which is now a **default**
-  feature (revised 2026-04-26 in PR #75 because the user hit a
-  silent-no-model bug from forgetting `--features whisper`).
+  behind the `whisper` Cargo feature, which is a **default**
+  feature.
 - **Parakeet** approved via ONNX (#32, not yet started).
-- **Hot-load on model selection** is **shipped** as of #76. (Earlier
-  rounds noted it as deferred; that's no longer accurate.)
-- **Auto-download** gated on per-model verified SHA-256 (filled in
-  #72). Empty-hash gate stays in place for future catalog adds.
+- **Hot-load on model selection** is shipped.
+- **Auto-download** gated on per-model verified SHA-256.
 - **Download client redirect policy** is host-restricted to both
-  `huggingface.co` and `hf.co` zones (revised 2026-04-26 in PR #74
-  after HF migrated their CDN to `*.xethub.hf.co`). Hop cap 4. SHA
-  verification still applies on top.
+  `huggingface.co` and `hf.co` zones. Hop cap 4. SHA verification
+  still applies on top.
 - **No outbound network traffic** except the explicit user-clicked
   model download. Updater plugin registration is deferred until #10
   (it panicked on null config; commented out in `lib.rs` until the
@@ -90,10 +103,16 @@ Locked in over rounds 1–5 (latest revisions noted):
 - **PTT disabled by default on macOS** (#69) due to the rdev/TSM
   crash on macOS 26+. Native CGEventTap replacement parked under
   #70 until production demand justifies it.
+- **macOS 26 is the only hands-on-tested platform.** Older macOS
+  versions and Linux/Windows compile + pass CI but the maintainer
+  doesn't run them.
 - **CSP is `null`** — pre-existing tradeoff documented in
   `learnings.md`. Revisit before non-technical-user shipping.
-- **`tauri-plugin-shell` removed.** Was registered but never
-  invoked.
+- **Per-domain repository traits aliased through a generic
+  `Repository<T, NewT, Id>`** for replacements + vocabulary
+  (post-#88). History stays standalone (paginated list + search +
+  count + no-update don't fit). Settings stays its own trait
+  (K/V semantics).
 
 ---
 
@@ -105,7 +124,7 @@ brew install cmake          # whisper-rs needs it; mandatory now
 nvm install 22 && nvm use 22
 
 # Per-checkout:
-cd /Users/khawkins/Documents/git/Hush
+cd Hush
 npm install
 ```
 
@@ -135,6 +154,10 @@ record immediately. If not:
 
 ### b) Stuck on macOS permissions
 
+In-app: open the **macOS permissions — diagnostic and reset**
+disclosure at the bottom of the page (#83 / #67). Or from the
+shell:
+
 ```bash
 npm run dev-cleanup -- --reset
 # Resets TCC entries for com.khawkins.hush. Next launch re-prompts.
@@ -154,36 +177,34 @@ npm run tauri:ui-only
 ### d) Automated suites
 
 ```bash
-cd src-tauri && cargo test --lib            # 133 unit tests
-cargo test --lib -- --ignored audio_fixture # whisper-fixture (needs HUSH_TEST_AUDIO)
-cd .. && npm run check                      # frontend type check
-npm run test:e2e                            # 7 Playwright specs (mocked Tauri)
+cd src-tauri && cargo test --lib            # 135 unit tests
+HUSH_TEST_MODEL=/path/to/ggml-base.bin \
+  cargo test --features whisper --test audio_fixture -- --ignored
+                                             # bundled JFK fixture
+cd .. && npm run check                       # frontend type check
+npm run test:e2e                             # 7 Playwright specs (mocked Tauri)
 ```
 
 ---
 
 ## Open issues, by priority
 
-### Next to land
+### Substantial / needs design or decision
 
-1. **#48-class polish from round 5** — see CHANGELOG `[Unreleased]`
-   and the round-5 review consolidation. Tracking PRs are open as
-   of this snapshot.
-2. **#33** System-audio loopback (loopback half of audio fixture).
-3. **#32** Parakeet via ONNX — second engine.
+1. **#33** System-audio loopback. Substantial; would benefit from a
+   design pass first.
+2. **#32** Parakeet via ONNX — second engine.
+3. **#10** Updater (signed channel) — needs the signing key + endpoint
+   setup.
+4. **#70** Native CGEventTap to bring back default-on PTT on macOS.
 
-### Tracking from earlier rounds
+### Smaller / scoped
 
-- **#10** Updater (signed channel) — release-engineering work.
-- **#29** Polish punch list.
-- **#36** `Repository<T,Id>` trait extraction.
-- **#37** `AppStateBuilder`.
-- **#39** `dictionary` split into `replacements/` + `vocabulary/`.
-- **#40** `+page.svelte` split into per-section components.
-- **#55** `rtrb` SPSC ring for cpal callback (replaces `Mutex<Vec<f32>>`).
-- **#57** tauri-driver Path B (full-stack E2E).
-- **#67** In-app macOS permission diagnostic.
-- **#70** Native CGEventTap on macOS (replaces rdev for PTT).
+- **#55** `rtrb` SPSC ring for cpal callback (replaces
+  `Mutex<Vec<f32>>`). Needs hands-on mic smoke; CI can't verify.
+- **#57** tauri-driver Path B (full-stack E2E). Infra, large lift.
+- **#82** `ipc/commands.rs` sub-module structure (1.4k LOC). Polish-
+  only; explicitly tracked but not actioned.
 
 ---
 

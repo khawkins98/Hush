@@ -10,7 +10,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 ## Status
 
-🚧 **Active development — usable on macOS for early testers.** M3 persistence shipped: history search, settings, model picker with auto-download, replacements, vocabulary, first-run welcome, recording HUD with live level meter. Auto-update and direct-text-insertion are deferred. See [STATUS.md](./STATUS.md) for the latest snapshot.
+🚧 **Active development — usable on macOS 26 for early testers.** M3 persistence shipped: history search, settings, model picker with auto-download, replacements, vocabulary, first-run welcome, recording HUD with live level meter. Auto-update and direct-text-insertion are deferred. Older macOS versions, Linux, and Windows are not hands-on tested by the maintainer; see the platform table below. See [STATUS.md](./STATUS.md) for the latest snapshot.
 
 ---
 
@@ -40,15 +40,15 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 | Platform | Status | Tested by maintainer |
 |---|---|---|
-| **macOS** (13+) | Primary target. Daily-driven. | ✅ Yes |
-| **macOS 26+** | Same as above, but PTT disabled by default ([#69](https://github.com/khawkins98/Hush/issues/69) / [#70](https://github.com/khawkins98/Hush/issues/70)) | ✅ Yes |
-| **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested by the maintainer |
+| **macOS 26** | Primary target. Daily-driven. PTT disabled by default ([#69](https://github.com/khawkins98/Hush/issues/69) / [#70](https://github.com/khawkins98/Hush/issues/70)). | ✅ Yes |
+| **macOS 13–15** | Should work in principle (Tauri + cpal + whisper.cpp all support it), but the maintainer doesn't run anything older than 26. | ❌ Not hands-on tested |
+| **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested |
 | **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ❌ Not hands-on tested |
 | **Windows** | Theoretically supported. Was in the original CI matrix but dropped to keep CI fast (PRD §11 — Windows distribution lands at M6). | ❌ Not hands-on tested |
 
-**Linux and Windows hands-on contributions are welcome.** If you run Hush on either and something is broken, file an issue with steps to reproduce + your distribution / version. Build prerequisites are in [`CONTRIBUTING.md`](./CONTRIBUTING.md). PRs that fix platform-specific gaps are exactly the right contribution shape — small, scoped, and address a real reported bug.
+**Older-macOS, Linux, and Windows hands-on contributions are welcome.** If you run Hush on any of those and something is broken, file an issue with steps to reproduce + your platform version. Build prerequisites are in [`CONTRIBUTING.md`](./CONTRIBUTING.md). PRs that fix platform-specific gaps are exactly the right contribution shape — small, scoped, and address a real reported bug.
 
-The maintainer's focus is the macOS path; Linux + Windows are validated only at the "compiles cleanly, unit tests pass, frontend type-checks" CI level. That's a meaningful gap from "this app actually works on your machine."
+The maintainer's focus is macOS 26; everything else is validated only at the "compiles cleanly, unit tests pass, frontend type-checks" CI level. That's a meaningful gap from "this app actually works on your machine."
 
 ---
 

@@ -41,10 +41,11 @@ use crate::transcription::{Transcribe, WHISPER_SAMPLE_RATE};
 ///
 /// Whisper.cpp scales roughly linearly up to ~4 threads on Apple Silicon and
 /// modern x86; beyond that the gains are small and the contention with the
-/// UI thread starts to bite. M1 picks a fixed conservative value rather than
+/// UI thread starts to bite. We pick a fixed conservative value rather than
 /// `num_cpus`-based auto-detection so behaviour is reproducible across
-/// machines while we measure latency. The model picker (TODO M3) will expose
-/// this as a setting.
+/// machines. Exposing this as a per-user setting is intentionally deferred
+/// until someone has measured a workload where the default leaves
+/// performance on the table.
 const DEFAULT_INFERENCE_THREADS: i32 = 4;
 
 /// `whisper-rs` backed implementation of [`Transcribe`].
