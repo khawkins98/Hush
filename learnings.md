@@ -454,3 +454,35 @@ Picked #3. Triggered by `HUSH_E2E=1`; vite resolves `@tauri-apps/api/core` to `t
 **`test.fixme` as a regression marker.** The Escape-key dismissal test for the welcome modal is `fixme`'d (skipped) today because the underlying a11y bug (#48) hasn't been fixed. It will flip green automatically when the fix lands; until then it documents the gap inline next to the other modal tests, where future contributors will see it. Cheaper than a separate tracking spreadsheet of "tests I want to write someday".
 
 **What this suite cannot catch.** Real IPC errors (serialisation mismatches, unregistered commands like the bug surfaced in PR #46), HUD lifecycle, hotkey registration, real audio, real model download. Those need the platform webview, which Playwright doesn't drive — that's the tauri-driver path tracked in #57. The trade-off: Path A is half a day of investment, runs on every PR, catches the round-4 reviewer's modal a11y / aria-attribute / error-copy class of finding. Path B is a multi-day setup with macOS rough edges; we'll add it when the value of full-stack coverage exceeds that complexity cost.
+
+## 2026-04-26 — CI's blind spot: startup-time panics, and the `npm run tauri dev` smoke
+
+Hit a regression today that none of our automated suites caught: the `tauri-plugin-updater` plugin was registered in `lib.rs` without a corresponding `plugins.updater` block in `tauri.conf.json`, and the plugin's deserialiser panics on null at app startup. Pre-fix:
+
+```
+Running `target/debug/hush`
+thread 'main' panicked at src/lib.rs:167:10:
+error while running Hush: PluginInitialization("updater",
+  "Error deserializing 'plugins.updater' within your Tauri
+   configuration: invalid type: null, expected struct Config")
+```
+
+The user hit it on their first `npm run tauri dev` after a stretch of CI-green PRs. PR #61 deferred the registration until #10.
+
+**Why CI couldn't catch this.** Hush's CI runs `cargo test --lib`, `cargo clippy --all-targets`, `cargo fmt --check`, `npm run check`, and `npm run test:e2e` (Playwright + mocked Tauri IPC). None of those instantiate a real `tauri::Builder`. The unit tests construct `AppState` directly via `mock_state()` — they never call `tauri::Builder::default().setup(...).run(...)`. Clippy doesn't execute code. Playwright runs in plain Chromium with `@tauri-apps/api/{core,event}` aliased to in-tree stubs, so the Rust runtime never starts. Even `cargo test` against a real binary wouldn't help — Tauri's plugin init only fires under `Builder::run`.
+
+That means the entire class of "app fails to start" bugs is invisible to automation:
+
+- Plugin-config deserialisation failures (this case).
+- `tauri::generate_handler!` referencing a command symbol that's been removed but not deregistered.
+- `app.manage(state)` panicking because two managed states have the same type.
+- A capability file referencing a window label that no longer exists.
+- A Cargo dep update that breaks `Builder::default()` at link time but compiles individual lib targets fine.
+
+**The smoke fix.** A single `npm run tauri dev` run before opening a PR is the cheapest possible coverage: Tauri compiles, runs `setup`, registers plugins, and waits for the event loop. If any of the above fails, the panic appears within ~5 seconds of "Running `target/debug/hush`". Killing the process after that confirms the boot path; the contributor doesn't need to interact with the window.
+
+**Why this isn't in CI.** A real Tauri runtime needs a display server, microphone permissions on macOS, and roughly two minutes of Cargo compile time even with caching. Adding a "boot the app, look for a panic, kill it" CI job would double per-PR runtime and add platform-specific permission flake. The cost-benefit doesn't work — the same coverage costs ~30 seconds locally.
+
+**Where this lives now.** Required smoke step for any PR that touches `lib.rs`, `tauri.conf.json`, `Cargo.toml` plugin deps, capability files, or `.plugin(...)` registrations. Documented in `CONTRIBUTING.md` (Testing → Dev-launch smoke), the PR template, and the PR checklist. The smoke is a checklist item, not a CI gate, because requiring it gates the workflow on the contributor's own honesty — but the alternative (a CI job that costs minutes per PR for a check the contributor can do in 30 seconds) is worse.
+
+**Concrete heuristic for this repo.** When an edit touches any of those files, run `npm run tauri dev` before opening the PR. Same shape as running `cargo test` after a Rust change or `npm run check` after a Svelte change — it's a fixed habit, not a judgement call.
