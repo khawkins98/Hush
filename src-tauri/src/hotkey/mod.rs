@@ -69,11 +69,26 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 
 /// Default global hotkey, in `tauri-plugin-global-shortcut` syntax.
 ///
-/// `CmdOrCtrl` resolves to ⌘ on macOS and Ctrl on Windows / Linux.
-/// Spacebar is borrowed from VoiceInk's default — it's a reasonable choice
-/// because it doesn't conflict with the most common system shortcuts and
-/// reads as "talk" to muscle memory from push-to-talk apps.
-pub const DEFAULT_TOGGLE_HOTKEY: &str = "CmdOrCtrl+Shift+Space";
+/// `Ctrl+Alt+H` resolves to literal Control + Option/Alt + H on all
+/// three platforms — this is `⌃⌥H` on macOS. Picked because:
+///
+/// - Free on macOS: no system shortcut, no Finder/app default, and
+///   no overlap with the character-picker chord (`⌃⌘Space`) or
+///   Spotlight (`⌘Space`). The earlier candidate `⌘+Shift+H` was
+///   considered but conflicts with Finder's Go → Home shortcut.
+/// - Free on Linux: GNOME/KDE/i3 don't bind `Ctrl+Alt+H` by default.
+/// - Free on Windows: no system or common-app default.
+/// - `H` for "Hush" — easy mnemonic.
+/// - Sits in the same modifier-family VoiceInk uses (`⌃⌥V`), so
+///   users coming from a similar tool find it immediately reachable.
+///
+/// Note: `Ctrl` here is *not* `CmdOrCtrl`. On macOS this is the
+/// literal Control key, not Command — that's intentional, because
+/// `Cmd+Alt+H` is "Hide All Other Apps" on macOS and would conflict.
+///
+/// Override with `HUSH_TOGGLE_HOTKEY` until the settings UI exposes
+/// a picker.
+pub const DEFAULT_TOGGLE_HOTKEY: &str = "Ctrl+Alt+H";
 
 /// Environment variable consulted at app startup to override the default.
 /// Once the settings UI lands (M3), this becomes a development override

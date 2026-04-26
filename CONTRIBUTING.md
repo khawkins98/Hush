@@ -152,3 +152,4 @@ Each PR template renders the checklist below. The short version:
 - [`SECURITY.md`](./SECURITY.md) — vulnerability reporting policy.
 - [`tests/e2e/README.md`](./tests/e2e/README.md) — Playwright suite authoring guide.
 - [`src-tauri/tests/fixtures/README.md`](./src-tauri/tests/fixtures/README.md) — audio-fixture setup.
+- [`docs/macos-permissions.md`](./docs/macos-permissions.md) — troubleshooting Microphone + Input Monitoring on dev builds, plus the `tccutil reset` recipe for stuck states.

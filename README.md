@@ -18,7 +18,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 ### Shipped
 
-- 🎙️ Push-to-talk (`RightControl` by default) and toggle-record (`⌘/Ctrl+Shift+Space`) global hotkeys
+- 🎙️ Push-to-talk (`RightControl` by default) and toggle-record (`Ctrl+⌥/Alt+H`) global hotkeys
 - 🤫 100 % local transcription — whisper.cpp on your machine; no audio ever leaves the device
 - 📋 Transcription written to clipboard with a "Ready to paste" notification
 - 🔴 Recording HUD overlay — borderless transparent always-on-top window with a pulsing dot and a live RMS-driven level meter
@@ -102,6 +102,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md#testing) for the layered breakdown —
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | How to develop, test, and submit changes. |
 | [`SECURITY.md`](./SECURITY.md) | Vulnerability reporting policy. |
 | [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) | Community standards. |
+| [`docs/macos-permissions.md`](./docs/macos-permissions.md) | Troubleshooting macOS Microphone + Input Monitoring on dev builds. |
 
 ---
 
