@@ -54,12 +54,22 @@
 //! both surfaces independent.
 
 use anyhow::{Context, Result};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Manager, PhysicalPosition, Runtime};
 
 /// Window label that matches the `tauri.conf.json` `windows[].label`.
 /// Centralised here so a typo in one call site doesn't silently miss
 /// the HUD window.
 pub const HUD_LABEL: &str = "hud";
+
+/// HUD logical width in CSS pixels. Mirrors `tauri.conf.json` so the
+/// position math has a single source of truth — if the window is
+/// resized, the corner offset stays accurate.
+const HUD_LOGICAL_WIDTH: f64 = 220.0;
+
+/// Top + right margin from the screen edge. Matches the visual
+/// breathing room every other system HUD uses (Zoom, Discord, the
+/// macOS Recording Indicator). Logical pixels.
+const HUD_MARGIN: f64 = 40.0;
 
 /// Make the HUD window visible. Best-effort: if the HUD window
 /// doesn't exist (e.g. a misconfigured `tauri.conf.json`), logs an
@@ -69,15 +79,26 @@ pub const HUD_LABEL: &str = "hud";
 pub fn show<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     match app.get_webview_window(HUD_LABEL) {
         Some(window) => {
+            // Position before showing so the window doesn't visibly
+            // jump from its previous spot. Computing on every show
+            // (rather than once at startup) handles the case where
+            // the user has moved the laptop to an external display
+            // between dictations — the HUD always lands top-right of
+            // wherever the primary monitor currently is.
+            //
+            // Failure here is non-fatal: if monitor info is
+            // unavailable for some reason, the OS picks the position
+            // and the HUD still appears. Recording > placement.
+            if let Err(e) = position_top_right(&window) {
+                tracing::warn!(error = ?e, "failed to position HUD top-right; falling back to OS default");
+            }
             window.show().context("show HUD window")?;
             // `set_focus(false)` would be ideal but Tauri 2 doesn't
             // expose a "show without focus" call directly — once a
             // hidden window appears it gets focus by default on most
-            // platforms. We immediately re-focus the previous window
-            // through a no-op pattern; in practice on macOS the
-            // `acceptFirstMouse: false` config keeps interaction-
-            // claiming minimal and the user's target app retains
-            // typing focus.
+            // platforms. The `acceptFirstMouse: false` config keeps
+            // interaction-claiming minimal and the user's target app
+            // retains typing focus on first input.
         }
         None => {
             tracing::error!(
@@ -86,6 +107,34 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// Place the HUD `HUD_MARGIN` logical pixels from the top-right
+/// corner of the primary monitor.
+///
+/// Multi-monitor: uses the monitor's physical origin so the HUD lands
+/// on whichever screen is the primary one *now*. We do the math in
+/// physical pixels because Tauri's `Monitor` exposes physical sizes;
+/// `set_position(PhysicalPosition)` matches.
+fn position_top_right<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<()> {
+    let monitor = window
+        .primary_monitor()
+        .context("query primary monitor")?
+        .ok_or_else(|| anyhow::anyhow!("no primary monitor reported"))?;
+    let scale = monitor.scale_factor();
+    let mon_pos = monitor.position();
+    let mon_size = monitor.size();
+
+    let hud_w_phys = (HUD_LOGICAL_WIDTH * scale) as i32;
+    let margin_phys = (HUD_MARGIN * scale) as i32;
+
+    let x = mon_pos.x + mon_size.width as i32 - hud_w_phys - margin_phys;
+    let y = mon_pos.y + margin_phys;
+
+    window
+        .set_position(PhysicalPosition::new(x, y))
+        .context("set HUD position")?;
     Ok(())
 }
 

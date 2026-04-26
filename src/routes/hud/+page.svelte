@@ -172,4 +172,23 @@
       animation: none;
     }
   }
+
+  /*
+    Light-desktop / light-OS-theme override. The pill stays dark
+    (it's the contrast carrier for the white text + red dot), but
+    the dot's red glow is bumped to nearly-opaque so it stays
+    visible against a light desktop wallpaper, and the pill border
+    flips to a darker rgba so the rectangle edge isn't lost on a
+    bright background. Round-4 reviewer flagged the dim glow on
+    light desktops; this is the targeted fix.
+  */
+  @media (prefers-color-scheme: light) {
+    .hud-root {
+      border-color: rgba(0, 0, 0, 0.2);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    }
+    .hud-dot {
+      box-shadow: 0 0 12px rgba(255, 64, 64, 0.9);
+    }
+  }
 </style>

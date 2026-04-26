@@ -151,6 +151,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **HUD polish — top-right placement, light-desktop contrast,
+  screen-reader title.** Three round-4 reviewer items the a11y batch
+  in #48 deferred:
+  - HUD now positions itself top-right of the primary monitor on
+    every show (40 logical-px margin, multi-monitor aware via
+    `Window::primary_monitor`). Previously the OS picked the spot,
+    which often centered the HUD over whatever the user was
+    dictating into. Computing on every show — not once at startup —
+    handles laptops moved between displays mid-session.
+  - Light-desktop contrast: a `prefers-color-scheme: light` block
+    bumps the dot's red glow from `0.55` to `0.9` opacity and flips
+    the pill border to `rgba(0, 0, 0, 0.2)` so the indicator stays
+    visible against a bright wallpaper. Pill background stays dark
+    — it's the contrast carrier for the white text.
+  - HUD window title changed from `"Hush HUD"` to `"Hush —
+    Recording"` so screen readers announce something meaningful
+    when the window is enumerated. Visible in some platform
+    accessibility trees even though `skipTaskbar: true` is set.
 - **`stop_dictation` decomposed (closes #38).** The Tauri command's body
   shrank from ~95 lines across 8 inline steps to a flat sequence of
   named helpers: `stop_audio_capture`, `load_vocabulary_prompt`,
