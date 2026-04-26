@@ -998,8 +998,7 @@ fn worker_loop(
                 // pump (#108 PR3) calls this on a tight tick.
                 match session.as_ref() {
                     Some(s) => {
-                        let result = drain_buffer(&s.buffer)
-                            .map(|samples| (samples, s.format));
+                        let result = drain_buffer(&s.buffer).map(|samples| (samples, s.format));
                         let _ = reply.send(result);
                     }
                     None => {
