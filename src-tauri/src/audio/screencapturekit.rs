@@ -178,10 +178,24 @@ impl SCStreamOutputTrait for AudioHandler {
         // Locking the mutex briefly is fine — the only other holder is
         // the worker thread on stop, by which point capture has been
         // halted via `stop_capture()` and no more callbacks land.
-        match self.buffer.lock() {
-            Ok(mut guard) => guard.extend_from_slice(&samples),
-            Err(poisoned) => poisoned.into_inner().extend_from_slice(&samples),
+        // Apply the same defensive `MAX_BUFFER_FRAMES` ceiling the
+        // cpal mic path uses, so an SCK stream whose drain has
+        // wedged can't grow without bound either.
+        let mut guard = match self.buffer.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.extend_from_slice(&samples);
+        if guard.len() > super::MAX_BUFFER_FRAMES {
+            let drop_count = guard.len() - super::MAX_BUFFER_FRAMES;
+            guard.drain(..drop_count);
+            tracing::warn!(
+                dropped_samples = drop_count,
+                buffer_cap_frames = super::MAX_BUFFER_FRAMES,
+                "SCK audio buffer exceeded cap; dropping oldest samples"
+            );
         }
+        drop(guard);
 
         if count > 0 {
             let rms = (sum_sq / count as f32).sqrt();
