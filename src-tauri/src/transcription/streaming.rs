@@ -266,10 +266,10 @@ impl SlidingWindowState {
         let segments = inferer.infer(&self.window)?;
         self.samples_since_last_inference = 0;
 
-        let window_duration_ms =
-            samples_to_ms(self.window.len(), self.sample_rate);
-        let window_end_offset_ms =
-            self.window_start_offset_ms.saturating_add(window_duration_ms);
+        let window_duration_ms = samples_to_ms(self.window.len(), self.sample_rate);
+        let window_end_offset_ms = self
+            .window_start_offset_ms
+            .saturating_add(window_duration_ms);
 
         // Stable cutoff: any segment whose end is at or before this
         // (relative-to-window-start) is old enough to commit. Saturating
@@ -361,8 +361,8 @@ impl SlidingWindowState {
         // committed segment's *relative* end — which is window time, so
         // it converts directly to a sample index.
         if let Some(commit_end_rel_ms) = last_committed_rel_end_ms {
-            let drop_samples = ms_to_samples(commit_end_rel_ms, self.sample_rate)
-                .min(self.window.len());
+            let drop_samples =
+                ms_to_samples(commit_end_rel_ms, self.sample_rate).min(self.window.len());
             self.window.drain(..drop_samples);
             self.window_start_offset_ms = self
                 .window_start_offset_ms
@@ -414,8 +414,7 @@ impl SlidingWindowState {
         if total_ms < self.config.min_first_inference_ms {
             return false;
         }
-        let interval_samples =
-            ms_to_samples(self.config.infer_interval_ms, self.sample_rate);
+        let interval_samples = ms_to_samples(self.config.infer_interval_ms, self.sample_rate);
         self.samples_since_last_inference >= interval_samples
     }
 }
@@ -523,8 +522,7 @@ where
         };
         let format = self.format;
         let samples = std::mem::take(&mut self.samples);
-        let total_frames =
-            (samples.len() as u64) / (format.channels.max(1) as u64);
+        let total_frames = (samples.len() as u64) / (format.channels.max(1) as u64);
         let duration_ms = if format.sample_rate == 0 {
             0
         } else {
@@ -899,13 +897,11 @@ mod tests {
     fn finish_emits_remaining_window_as_finals() {
         let mut state = SlidingWindowState::new(16_000, config_for_test());
         state.feed_mono(&one_second_of_audio());
-        let mut inferer = ScriptedInferer::new(vec![vec![
-            StreamSegment {
-                start_ms: 0,
-                end_ms: 1_000,
-                text: "tail of session".into(),
-            },
-        ]]);
+        let mut inferer = ScriptedInferer::new(vec![vec![StreamSegment {
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "tail of session".into(),
+        }]]);
         let finals = state.finish(&mut inferer).unwrap();
         assert_eq!(finals.len(), 1);
         assert!(finals[0].is_final, "finish always emits as final");
@@ -983,15 +979,13 @@ mod tests {
         // is not before the dropped region.
         let mut state = SlidingWindowState::new(16_000, config_for_test());
         // window_max_ms = 6_000; feed 10 s with empty inference.
-        let empty_inferer_responses: Vec<Vec<StreamSegment>> = (0..10).map(|_| Vec::new()).collect();
+        let empty_inferer_responses: Vec<Vec<StreamSegment>> =
+            (0..10).map(|_| Vec::new()).collect();
         let mut inferer = ScriptedInferer::new(empty_inferer_responses);
         for _ in 0..10 {
             state.feed_mono(&one_second_of_audio());
             let out = state.tick(&mut inferer).unwrap();
-            assert!(
-                out.is_empty(),
-                "no text means no utterances; got: {out:?}"
-            );
+            assert!(out.is_empty(), "no text means no utterances; got: {out:?}");
         }
         // Window must be capped at window_max_ms.
         let max_samples = ms_to_samples(state.config.window_max_ms, state.sample_rate);

@@ -104,8 +104,7 @@ fn streaming_fixture_emits_partials_and_finals() {
     let captured = load_wav_as_captured_audio(&audio_path);
     let format = captured.format;
     let total_samples = captured.samples.len();
-    let total_ms =
-        ((total_samples as u64) * 1000) / (format.sample_rate as u64).max(1);
+    let total_ms = ((total_samples as u64) * 1000) / (format.sample_rate as u64).max(1);
     eprintln!(
         "streaming_fixture loaded: {} samples, {} Hz, {} channels, ~{} ms",
         total_samples, format.sample_rate, format.channels, total_ms
