@@ -58,7 +58,7 @@ The maintainer's focus is the macOS path; Linux + Windows are validated only at 
 
 - Rust stable (`rustup update stable`)
 - Node.js ≥ 20 (`nvm install 22`)
-- `cmake` (whisper.cpp's bindings need it; macOS: `brew install cmake`)
+- **`cmake`** — required for whisper.cpp's bindings to compile. On macOS: `brew install cmake`. On Ubuntu: `sudo apt install cmake`. **The default build now includes the Whisper transcription backend, so cmake is mandatory unless you explicitly opt out (see UI-only path below).**
 - Platform build deps: see [Tauri prerequisites](https://tauri.app/start/prerequisites/)
 
 ```bash
@@ -66,11 +66,13 @@ git clone https://github.com/khawkins98/Hush.git
 cd Hush
 npm install
 
-# UI shell (no transcription — useful for frontend work)
+# Full app with Whisper transcription (the default path; needs cmake)
 npm run tauri dev
 
-# Full app with whisper transcription
-cd src-tauri && cargo tauri dev --features whisper
+# UI-only path (no cmake needed, no transcription) for frontend
+# work. The Models picker still renders but Start surfaces the
+# "no transcription compiled in" error if you click it.
+npm run tauri:ui-only
 ```
 
 For full setup including model placement, see the testing guide in [`STATUS.md`](./STATUS.md) §b.
