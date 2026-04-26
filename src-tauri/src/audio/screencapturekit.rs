@@ -303,6 +303,28 @@ impl ScreenCaptureKitSession {
         Ok(std::mem::take(&mut *guard))
     }
 
+    /// Drain whatever samples have accumulated **without stopping**
+    /// the SCStream. The streaming pump (#108 PR3) uses this on a
+    /// tight tick to feed a `WhisperStreamingSession` between
+    /// stop()-style chunk boundaries.
+    ///
+    /// The SCK callback continues writing into the same buffer
+    /// `Arc<Mutex<Vec<f32>>>` after the drain — `mem::take` swaps
+    /// in a fresh empty `Vec` for the inner storage, leaving the
+    /// callback's Arc clone valid. The callback's next write
+    /// re-grows the (now-empty) Vec.
+    ///
+    /// Returns an empty Vec if the callback hasn't written anything
+    /// since the previous drain — that's a normal "tick fired
+    /// faster than the audio callback" condition, not an error.
+    pub fn drain_buffer(&self) -> Result<Vec<f32>> {
+        let mut guard = self
+            .buffer
+            .lock()
+            .map_err(|_| anyhow!("audio buffer mutex poisoned"))?;
+        Ok(std::mem::take(&mut *guard))
+    }
+
     /// Format the in-flight buffer is being captured in. Used by
     /// the public `stop()` to package the drained samples back into
     /// a [`super::CapturedAudio`].

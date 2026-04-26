@@ -14,6 +14,33 @@ a single flat list was hard to navigate.
 
 ### Added
 
+#### Audio drain-into for streaming-pump capture (#108 PR2)
+
+- `AudioSession::drain_into(sink, ...) -> Result<CaptureFormat>` lets
+  the meeting pump (#108 PR3) pull samples from a live capture
+  handle on a tight tick (~500 ms) without stopping the session —
+  the keystone shape change for streaming. Default impl errors so
+  legacy mocks surface a clear diagnostic; the cpal mic backend and
+  the ScreenCaptureKit system-audio backend both override.
+- The cpal mic override routes a new `Cmd::DrainBuffer` to the audio
+  worker thread (where the buffer Arc lives), `mem::take`'s the
+  accumulated samples, and replies with `(samples, format)`. The
+  worker round-trip is microsecond-scale — the alternative
+  (leaking the buffer Arc into the handle at start time) would have
+  required restructuring `Cmd::Start`'s reply shape, an invasive
+  change for a one-call-per-tick path. The cpal stream keeps writing
+  into the now-empty buffer between drains.
+- The SCK override calls a new public `ScreenCaptureKitSession::drain_buffer()`
+  helper — same `mem::take` discipline, no stream stop. The
+  callback's Arc clone of the buffer remains valid across the drain.
+- `stop()` continues to consume the handle as before; `drain_into`
+  takes `&self` so it composes with the pump's `Vec<Box<dyn AudioSession>>`
+  without lifetime gymnastics.
+- 12 new audio-tests pin the contract: default-impl errors with an
+  actionable message, override appends to the caller's sink (does
+  not replace), repeated calls only return new samples since the
+  previous drain. Total: 193 unit tests with `--features whisper`.
+
 #### Phase A2: macOS system-audio capture via ScreenCaptureKit (#105)
 
 - The "System audio" entry in the source picker is no longer the

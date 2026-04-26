@@ -246,6 +246,40 @@ pub trait AudioSession: Send + Sync {
         0.0
     }
 
+    /// Drain whatever samples have accumulated in the underlying
+    /// capture buffer **without stopping the session**. The pump
+    /// (post-#108) calls this on its tight tick (~500 ms) to feed
+    /// samples into a streaming inference session that needs to keep
+    /// receiving fresh audio between drains.
+    ///
+    /// `sink` is the destination buffer; the implementation appends
+    /// samples to it. Returns the [`CaptureFormat`] the samples were
+    /// captured in (rate + channel count) so the caller can resample
+    /// without re-querying state. The returned format is identical to
+    /// what [`Self::stop`] would have surfaced for the same session.
+    ///
+    /// Default impl errors — backends opt in. The cpal mic backend and
+    /// the ScreenCaptureKit system-audio backend both override; test
+    /// mocks that aren't wired into the streaming pump can leave the
+    /// default to surface a clear "no streaming support" message at
+    /// the call site.
+    ///
+    /// **Why an out-parameter, not a return value.** The pump owns
+    /// one persistent buffer per source and reuses it across drains
+    /// to avoid the realloc tail of growing a fresh `Vec` every tick.
+    /// Appending into a caller-owned buffer is the cheaper shape
+    /// (single capacity-extend per drain at most). A hypothetical
+    /// `fn drain(&self) -> Vec<f32>` would force a fresh allocation
+    /// per tick and a copy at the call site.
+    fn drain_into(&self, sink: &mut Vec<f32>) -> Result<CaptureFormat> {
+        let _ = sink;
+        Err(anyhow!(
+            "drain_into is not implemented for this AudioSession backend; \
+             override the method to opt into streaming-pump capture (used by the \
+             meeting pump's continuous drain cadence)"
+        ))
+    }
+
     /// Stop capture and drain the buffer. Consumes the handle so
     /// the type system rules out double-drains.
     fn stop(self: Box<Self>) -> Result<CapturedAudio>;
@@ -483,6 +517,13 @@ enum Cmd {
         reply: mpsc::Sender<Result<()>>,
     },
     Stop(mpsc::Sender<Result<CapturedAudio>>),
+    /// Take everything currently in the active session's buffer
+    /// without stopping the session — the streaming pump's tick.
+    /// Reply carries `(samples, format)` if a session is active or
+    /// an error if not. Empty `Vec` is a normal reply (tick fired
+    /// before the audio callback wrote anything new); the caller
+    /// just appends nothing and waits for the next tick.
+    DrainBuffer(mpsc::Sender<Result<(Vec<f32>, CaptureFormat)>>),
     Shutdown,
 }
 
@@ -744,6 +785,27 @@ impl AudioSession for CpalMicSessionHandle {
         // which is fine for the HUD's single-bar meter.
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
+    fn drain_into(&self, sink: &mut Vec<f32>) -> Result<CaptureFormat> {
+        // Round-trip via Cmd::DrainBuffer because the cpal Session
+        // (which holds the buffer Arc) lives on the worker thread.
+        // The mpsc round-trip is microsecond-scale; the alternative
+        // — leaking the buffer Arc into the handle at start-time —
+        // would require expanding Cmd::Start's reply shape, an
+        // invasive change for a one-call-per-tick path.
+        let cmd_tx = self
+            .cmd_tx
+            .as_ref()
+            .ok_or_else(|| anyhow!("mic session already stopped; drain_into unavailable"))?;
+        let (tx, rx) = mpsc::channel::<Result<(Vec<f32>, CaptureFormat)>>();
+        cmd_tx
+            .send(Cmd::DrainBuffer(tx))
+            .map_err(|_| anyhow!("audio worker thread has exited"))?;
+        let (samples, format) = rx
+            .recv()
+            .map_err(|_| anyhow!("audio worker dropped reply channel"))??;
+        sink.extend_from_slice(&samples);
+        Ok(format)
+    }
     fn stop(mut self: Box<Self>) -> Result<CapturedAudio> {
         let cmd_tx = self
             .cmd_tx
@@ -806,6 +868,22 @@ impl AudioSession for SckSessionHandle {
     }
     fn current_level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
+    }
+    fn drain_into(&self, sink: &mut Vec<f32>) -> Result<CaptureFormat> {
+        // SCK keeps the buffer Arc inside `inner` (the
+        // ScreenCaptureKitSession). We can't `take` it because the
+        // session is still running — instead we expose a public
+        // drain helper on the SCK session that locks the Mutex,
+        // mem::takes the inner Vec, and returns the samples while
+        // leaving the SCStream callback's Arc clone intact (the
+        // callback continues writing to the now-empty buffer).
+        let session = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| anyhow!("sck session already stopped; drain_into unavailable"))?;
+        let samples = session.drain_buffer()?;
+        sink.extend_from_slice(&samples);
+        Ok(session.format())
     }
     fn stop(mut self: Box<Self>) -> Result<CapturedAudio> {
         let session = self
@@ -911,6 +989,23 @@ fn worker_loop(
                         // No session to drain; don't touch the refcount —
                         // a no-op stop must not underflow the counter.
                         let _ = reply.send(Err(anyhow!("no recording in progress")));
+                    }
+                }
+            }
+            Cmd::DrainBuffer(reply) => {
+                // Like Stop, but leaves the session in place so the
+                // cpal stream keeps writing samples post-drain. The
+                // pump (#108 PR3) calls this on a tight tick.
+                match session.as_ref() {
+                    Some(s) => {
+                        let result = drain_buffer(&s.buffer)
+                            .map(|samples| (samples, s.format));
+                        let _ = reply.send(result);
+                    }
+                    None => {
+                        let _ = reply.send(Err(anyhow!(
+                            "no recording in progress; cannot drain buffer"
+                        )));
                     }
                 }
             }
@@ -1199,6 +1294,146 @@ mod tests {
         // Pump (PR2) holds these via `Vec<Box<dyn AudioSession>>`,
         // so object-safety is load-bearing.
         fn _assert_object_safe(_: &dyn AudioSession) {}
+    }
+
+    /// Stub session for tests that don't need a real audio backend.
+    /// Used by both the default-impl test and the override-behaviour
+    /// test below. The override holds a shared buffer the test can
+    /// preload so we can assert `drain_into` correctly appends to
+    /// the caller's sink without touching cpal.
+    struct StubSession {
+        source: AudioSource,
+        prefilled: std::sync::Mutex<Vec<f32>>,
+        format: CaptureFormat,
+        overrides_drain: bool,
+    }
+    impl AudioSession for StubSession {
+        fn source(&self) -> &AudioSource {
+            &self.source
+        }
+        fn drain_into(&self, sink: &mut Vec<f32>) -> Result<CaptureFormat> {
+            if !self.overrides_drain {
+                // Force the default-impl path even though we're
+                // overriding the method (the test below distinguishes
+                // override-vs-default by this flag).
+                return Err(anyhow!("override path disabled for this stub"));
+            }
+            let mut guard = self.prefilled.lock().unwrap();
+            sink.extend(guard.drain(..));
+            Ok(self.format)
+        }
+        fn stop(self: Box<Self>) -> Result<CapturedAudio> {
+            Ok(CapturedAudio {
+                samples: self.prefilled.lock().unwrap().clone(),
+                format: self.format,
+            })
+        }
+    }
+
+    #[test]
+    fn drain_into_default_impl_errors_with_actionable_message() {
+        // The default impl (which the legacy mocks inherit) errors so
+        // the streaming pump (#108 PR3) gets a clear "this backend
+        // doesn't do streaming" diagnostic at call time rather than
+        // silently dropping samples. Pin the message so a caller's
+        // "if drain_into errors, fall back to chunk-and-restart"
+        // branch can rely on the wording.
+        struct LegacySession {
+            source: AudioSource,
+        }
+        impl AudioSession for LegacySession {
+            fn source(&self) -> &AudioSource {
+                &self.source
+            }
+            fn stop(self: Box<Self>) -> Result<CapturedAudio> {
+                Ok(CapturedAudio {
+                    samples: vec![],
+                    format: CaptureFormat {
+                        sample_rate: 16_000,
+                        channels: 1,
+                    },
+                })
+            }
+        }
+        let s: Box<dyn AudioSession> = Box::new(LegacySession {
+            source: AudioSource::default_microphone(),
+        });
+        let mut sink = Vec::new();
+        let err = s.drain_into(&mut sink).expect_err("default impl errors");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("not implemented"),
+            "default drain_into should call out the missing impl; got: {msg}"
+        );
+        assert!(
+            msg.contains("override"),
+            "default drain_into should hint at how to opt in; got: {msg}"
+        );
+        assert!(sink.is_empty(), "sink must remain untouched on error");
+    }
+
+    #[test]
+    fn drain_into_override_appends_to_sink_and_returns_format() {
+        // Pin the contract the cpal mic + SCK overrides have to
+        // honour: samples land in the caller's sink (appended, not
+        // replaced); format matches what the session was capturing in.
+        let session = StubSession {
+            source: AudioSource::default_microphone(),
+            prefilled: std::sync::Mutex::new(vec![0.1, 0.2, 0.3]),
+            format: CaptureFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            },
+            overrides_drain: true,
+        };
+        let mut sink = vec![0.9_f32]; // Pre-existing content in the sink
+        let format = session.drain_into(&mut sink).unwrap();
+        assert_eq!(format.sample_rate, 48_000);
+        assert_eq!(format.channels, 2);
+        assert_eq!(
+            sink,
+            vec![0.9, 0.1, 0.2, 0.3],
+            "drain_into appends — does not replace the sink"
+        );
+    }
+
+    #[test]
+    fn drain_into_repeated_calls_drain_only_new_samples() {
+        // The pump calls drain_into on a tick; each call should only
+        // see samples accumulated since the previous drain. Stub
+        // behaviour: the prefilled buffer is .drain(..)'d, so a
+        // second call returns nothing new. Pins the cumulative
+        // behaviour the cpal worker's mem::take + the SCK
+        // mem::take both implement.
+        let session = StubSession {
+            source: AudioSource::default_microphone(),
+            prefilled: std::sync::Mutex::new(vec![0.1, 0.2]),
+            format: CaptureFormat {
+                sample_rate: 16_000,
+                channels: 1,
+            },
+            overrides_drain: true,
+        };
+        let mut sink_a = Vec::new();
+        session.drain_into(&mut sink_a).unwrap();
+        assert_eq!(sink_a, vec![0.1, 0.2]);
+
+        let mut sink_b = Vec::new();
+        session.drain_into(&mut sink_b).unwrap();
+        assert!(
+            sink_b.is_empty(),
+            "second drain returns no new samples until callback writes more; got: {sink_b:?}"
+        );
+
+        // Simulate the audio callback writing more samples between drains.
+        session
+            .prefilled
+            .lock()
+            .unwrap()
+            .extend_from_slice(&[0.7, 0.8]);
+        let mut sink_c = Vec::new();
+        session.drain_into(&mut sink_c).unwrap();
+        assert_eq!(sink_c, vec![0.7, 0.8]);
     }
 
     #[test]
