@@ -683,11 +683,19 @@
   async function startMeetingSession() {
     meetingBusy = true;
     try {
-      // Without a per-platform foreground-app fetch wired up yet
-      // (#105 et al), passing `null` falls through to the manager's
-      // "manual" label. A future iteration captures the active
-      // foreground app via active-win-pos-rs at click time.
-      await invoke("meeting_start_manual", { appName: null });
+      // The pump (#122 PR2) captures continuously from the chosen
+      // source(s) until stop_manual fires. v1 sends one source —
+      // whatever the meeting panel's picker resolved to — so the
+      // user gets auto-recording without a second hotkey press.
+      // Phase 3 of #122 promotes mic + system-audio in parallel as
+      // the meeting default.
+      const source = selectedAsAudioSource();
+      const sources: AudioSource[] = source !== null ? [source] : [];
+      // Without a per-platform foreground-app fetch wired up yet,
+      // passing `null` falls through to the manager's "manual"
+      // label. A future iteration captures the active foreground
+      // app via active-win-pos-rs at click time.
+      await invoke("meeting_start_manual", { sources, appName: null });
       await refreshMeetingSessions();
     } catch (e) {
       meetingSessionsError = e instanceof Error ? e.message : "Failed to start session.";
