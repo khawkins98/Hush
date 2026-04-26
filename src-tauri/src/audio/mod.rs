@@ -387,14 +387,25 @@ fn stop_session(session: Session) -> Result<CapturedAudio> {
     let _ = session.stream.pause();
     drop(session.stream);
 
-    // After dropping the stream, the cpal callback can no longer hold a
-    // reference to the buffer's Arc, so `try_unwrap` should succeed. If it
-    // does not, we are in an unexpected state and surfacing an error is
-    // safer than silently cloning a partial buffer.
-    let samples = Arc::try_unwrap(session.buffer)
-        .map_err(|_| anyhow!("audio buffer still shared after stream drop"))?
-        .into_inner()
-        .map_err(|_| anyhow!("audio buffer mutex poisoned"))?;
+    // Take the buffer contents via a brief lock rather than requiring sole
+    // Arc ownership. Earlier versions called `Arc::try_unwrap`, but on some
+    // platforms cpal's stream cleanup is asynchronous — the closure clone
+    // of the Arc may live a beat longer than the `drop(session.stream)`
+    // call above, and `try_unwrap` then errors with "audio buffer still
+    // shared after stream drop" even though the recording was successful
+    // and the buffer is in a valid state. Locking is correct regardless of
+    // how many Arc clones are still alive: if a final callback is mid-write
+    // we wait the milliseconds it takes to finish; otherwise the lock is
+    // uncontended. The leftover Arc clone(s) drop on their own as cpal
+    // finishes cleanup. `mem::take` swaps the Vec out of the mutex so we
+    // own the samples and the mutex's interior goes back to an empty Vec.
+    let samples = {
+        let mut guard = session
+            .buffer
+            .lock()
+            .map_err(|_| anyhow!("audio buffer mutex poisoned"))?;
+        std::mem::take(&mut *guard)
+    };
 
     Ok(CapturedAudio {
         samples,
