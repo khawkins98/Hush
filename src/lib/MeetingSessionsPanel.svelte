@@ -30,7 +30,7 @@
   //     then `speakerLabel` is null and the panel renders all
   //     utterances as "Unknown speaker."
 
-  import type { MeetingSession } from "./types";
+  import type { AudioSourceListing, MeetingSession } from "./types";
 
   type Props = {
     sessions: MeetingSession[];
@@ -42,6 +42,20 @@
     /// + a live status indicator.
     activeSessionId: number | null;
     busy: boolean;
+    /// Audio source listings (mic devices + system-audio). Same prop
+    /// the dictation `ControlsSection` reads, surfaced here so the
+    /// user picks the meeting's audio source in the same place where
+    /// they start the session — Phase 1 of the meeting-mode UX
+    /// roadmap (#122). Once #108 streaming lands, this picker drives
+    /// auto-capture; today it's still the dictation hotkey that
+    /// produces utterances, but the source state lives here so the
+    /// switch doesn't move on the user when streaming arrives.
+    sources: AudioSourceListing[];
+    sourcesLoaded: boolean;
+    /// Selected source id, two-way bound to the page's `selected` so
+    /// changing it here also changes the dictation hot path's source.
+    /// Mic devices use their device name; system-audio uses `"system"`.
+    selected: string | null;
     onDelete: (session: MeetingSession) => void | Promise<void>;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
@@ -53,10 +67,42 @@
     sessionsError,
     activeSessionId,
     busy,
+    sources,
+    sourcesLoaded,
+    selected = $bindable(),
     onDelete,
     onStart,
     onStop,
   }: Props = $props();
+
+  // Same split the dictation `ControlsSection` does. Repeated rather
+  // than factored into a shared util because the two pickers may
+  // diverge (Phase 3 multi-source — #122 — wants a checkbox group
+  // here, dictation stays single-select).
+  let mics = $derived(sources.filter((s) => s.kind === "microphone"));
+  let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
+  let pickableCount = $derived(mics.length + (systemAudio ? 1 : 0));
+
+  // Active session row for live-status reads (utterance counter,
+  // source label). The page re-fetches `sessions` after each
+  // `stop_dictation` while a session is active, so this row's
+  // `utteranceCount` is the live count without any extra wiring.
+  let activeSession = $derived(
+    activeSessionId === null
+      ? null
+      : sessions.find((s) => s.id === activeSessionId) ?? null,
+  );
+
+  // Human-readable label for the currently-picked source. Used in
+  // the active-session line so the user can see at a glance which
+  // audio path the next dictation will capture from. Falls back to
+  // the raw id for sources we don't recognise (defensive — the
+  // listing should always cover what `selected` could be).
+  let selectedSourceName = $derived.by(() => {
+    if (selected === null) return "no source picked";
+    const match = sources.find((s) => s.id === selected);
+    return match?.name ?? selected;
+  });
 
   function formatDuration(start: string, end: string | null): string {
     if (!end) return "in progress";
@@ -126,26 +172,75 @@
   </p>
 
   <!--
-    Manual session lifecycle controls (#110 MVP). Auto-detect from
-    foreground app is a follow-up; today the user clicks Start, dictates
-    as usual, each transcript lands as an utterance under the active
-    session, then they click Stop.
+    Manual session lifecycle controls (#110 MVP). Source picker lives
+    here too (Phase 1 of #122) so the user picks mic vs system-audio
+    in the same place where they start the session. While a session
+    is active the picker is hidden — switching sources mid-session
+    isn't supported today and the source is shown as a static label
+    so the user can see what the next dictation will capture from.
+
+    Auto-detect from foreground app is a follow-up (#112); today the
+    user clicks Start, dictates with the hotkey, each transcript lands
+    as an utterance under the active session, then they click Stop.
   -->
   <div class="meeting-controls" role="group" aria-label="Meeting session controls">
     {#if activeSessionId !== null}
-      <span class="meeting-active-indicator" role="status" aria-live="polite">
-        <span class="meeting-active-dot" aria-hidden="true"></span>
-        Session in progress — each transcription is appended below.
-      </span>
+      <div class="meeting-active-stack">
+        <span class="meeting-active-indicator" role="status" aria-live="polite">
+          <span class="meeting-active-dot" aria-hidden="true"></span>
+          Session in progress
+          {#if activeSession}
+            — {activeSession.utteranceCount} utterance{activeSession.utteranceCount === 1
+              ? ""
+              : "s"} so far
+          {/if}
+        </span>
+        <p class="meeting-dictate-prompt">
+          <strong>Press your dictation hotkey</strong> (or use the
+          recording controls above) to add an utterance. Source:
+          <code>{selectedSourceName}</code>.
+        </p>
+      </div>
       <button type="button" class="primary" onclick={onStop} disabled={busy}>
         Stop session
       </button>
     {:else}
+      <label class="meeting-source-label">
+        Audio source
+        {#if !sourcesLoaded}
+          <span class="meeting-source-loading">Loading sources…</span>
+        {:else if pickableCount === 0}
+          <span class="meeting-source-empty">No audio sources detected.</span>
+        {:else}
+          <select bind:value={selected} disabled={busy}>
+            <optgroup label="Microphone">
+              {#each mics as mic (mic.id)}
+                <option value={mic.id}>
+                  {mic.name}{mic.isDefault ? " (default)" : ""}
+                </option>
+              {/each}
+            </optgroup>
+            {#if systemAudio}
+              <optgroup label="System audio">
+                <option
+                  value={systemAudio.id}
+                  disabled={!systemAudio.isSupported}
+                >
+                  {systemAudio.name}{systemAudio.isSupported
+                    ? ""
+                    : " (coming soon — #33)"}
+                </option>
+              </optgroup>
+            {/if}
+          </select>
+        {/if}
+      </label>
       <button type="button" class="primary" onclick={onStart} disabled={busy}>
         Start a session
       </button>
       <span class="meeting-controls-hint">
-        Click before your meeting; dictate as usual; click Stop when done.
+        Pick the source, click Start, then dictate with your hotkey to
+        add utterances. Click Stop when done.
       </span>
     {/if}
   </div>
@@ -355,7 +450,7 @@
 .meeting-controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.6rem;
   margin: 0.5rem 0 1rem;
 }
@@ -363,6 +458,56 @@
 .meeting-controls-hint {
   font-size: 0.85rem;
   color: #777;
+  flex-basis: 100%;
+}
+
+.meeting-source-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: #555;
+  min-width: 14rem;
+}
+
+.meeting-source-label select {
+  padding: 0.45em 0.7em;
+  font-size: 0.9rem;
+  border-radius: 6px;
+  border: 1px solid #d1d1d1;
+  background-color: #ffffff;
+  color: #0f0f0f;
+  font-family: inherit;
+}
+
+.meeting-source-loading,
+.meeting-source-empty {
+  font-size: 0.85rem;
+  color: #777;
+  padding: 0.4rem 0;
+}
+
+.meeting-active-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1 1 18rem;
+}
+
+.meeting-dictate-prompt {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: #333;
+}
+
+.meeting-dictate-prompt code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+  color: #1a1a1a;
 }
 
 .meeting-active-indicator {
@@ -602,6 +747,24 @@ button:disabled {
   }
   .hint-prose {
     color: #aaa;
+  }
+  .meeting-source-label,
+  .meeting-source-loading,
+  .meeting-source-empty,
+  .meeting-controls-hint {
+    color: #aaa;
+  }
+  .meeting-source-label select {
+    color: #f0f0f0;
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  .meeting-dictate-prompt {
+    color: #ddd;
+  }
+  .meeting-dictate-prompt code {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #f0f0f0;
   }
   .empty-meetings {
     background-color: #3a2e10;
