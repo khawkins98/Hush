@@ -1,6 +1,6 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-04-25, late afternoon
+**Snapshot:** 2026-04-25, evening
 **Author:** Claude (working async on Ken's behalf)
 
 A working hand-off doc; not the canonical CHANGELOG or PRD. The goal:
@@ -14,13 +14,17 @@ pickup, don't try to keep it incrementally up-to-date.
 
 The dictation loop is **end-to-end functional and feature-complete for
 v1's core path**: hotkey or button → record → transcribe → clipboard
-→ notification → searchable history. The model picker now does
-auto-download; replacements and vocabulary biasing are wired into the
-transcription pipeline. Whisper-only for now per PRD §5 (revised) —
-Parakeet via ONNX is on the v1.x roadmap (#32).
+→ notification → searchable history. The recording HUD overlay is
+shipped with a live RMS-driven level meter. Auto-download is wired
+through the model picker; replacements + vocabulary are wired into
+the transcription pipeline. macOS first-run welcome explains
+permissions. Whisper-only for now per PRD §5 (revised) — Parakeet
+via ONNX is on the v1.x roadmap (#32).
 
-Test count: **109** Rust unit tests, all passing on default features.
-Frontend type-check clean, zero warnings.
+Test count: **121** Rust unit tests; **3** Playwright frontend
+smoke tests (mocked-Tauri); 1 ignored audio-fixture integration
+test that activates with a contributor-supplied WAV. Frontend
+type-check clean, zero warnings. Clippy + rustfmt clean.
 
 For the prose record of what shipped and why, see
 [`CHANGELOG.md`](./CHANGELOG.md) (`[Unreleased]` section) and
@@ -32,30 +36,31 @@ For the prose record of what shipped and why, see
 
 | Module | Status | Tests |
 |---|---|---|
-| `audio` | shipped | 9 |
+| `audio` (cpal + RMS level meter) | shipped | 13 |
 | `transcription::resample` | shipped | 9 |
 | `transcription::whisper` (gated) | shipped | stub-tested + manual smoke |
 | `transcription::catalog` | shipped | 6 |
-| `transcription::download` | shipped (#42) | 7 |
+| `transcription::download` | shipped | 7 |
 | `db` (sqlx pool + migrations) | shipped | 4 |
 | `history` (CRUD + FTS5) | shipped | 11 |
 | `dictionary::replacements` | shipped | 9 + 6 sqlite |
 | `dictionary::vocabulary` | shipped | 9 + 7 sqlite |
 | `settings` (K/V) | shipped | 6 |
-| `ipc` (~17 Tauri commands) | shipped | 8 + mocks |
+| `ipc` (~21 Tauri commands) | shipped | 15 (incl. helper tests for `stop_dictation` decomposition) |
 | `hotkey` (toggle + PTT) | shipped | 3 + manual |
+| `hud` (secondary window + level meter) | shipped | — (manual smoke) |
 | `updater` | stub | — |
 
-Five Tauri events flow backend → frontend:
+Tauri events flowing backend → frontend:
 `hotkey:toggle`, `hotkey:ptt-press`, `hotkey:ptt-release`,
-`model:download-progress`, `model:download-done`,
+`audio:level`, `model:download-progress`, `model:download-done`,
 `model:download-failed`.
 
 ---
 
 ## Decisions still in force
 
-Locked in 2026-04-25 (afternoon and earlier):
+Locked in 2026-04-25:
 
 - **Whisper.cpp via `whisper-rs` is the v1 engine.** Cmake-gated
   behind the `whisper` Cargo feature.
@@ -67,10 +72,18 @@ Locked in 2026-04-25 (afternoon and earlier):
 - **Auto-download** stays gated per-model on a verified SHA-256
   (#41 tracks the contributor task to fill them in). No
   trust-on-first-use.
+- **Download client redirect policy is host-restricted** to
+  `huggingface.co` (predicate unit-tested for typo-squat traps).
+  Hop-cap 4. SHA-256 verification still applies on top.
 - **No outbound network traffic** except the explicit user-clicked
   model download. Updater plugin is stubbed; no telemetry.
+  README/PRD now disclose the model fetch as the only network
+  surface.
 - **CSP is currently `null`**, acceptable while the frontend stays
   small. Revisit before shipping to non-technical users.
+- **`tauri-plugin-shell` was removed.** It was registered but never
+  invoked; the privacy-pane command uses `std::process::Command`
+  directly with hard-coded URLs.
 
 ---
 
@@ -112,6 +125,8 @@ Verify in order:
   Input Monitoring; on Linux + X11 it works straight away.
 - Pressing Start → Stop without a model shows the friendly
   "transcription isn't set up yet" error.
+- The recording HUD window appears on Start, disappears on Stop,
+  and the level bar moves with voice.
 
 ### b) With a model — full dictation loop
 
@@ -153,12 +168,31 @@ dictation path:
       in ~200 ms.
 - [ ] Hold the PTT key (`Right Ctrl` by default); release to stop.
 - [ ] Quit Hush, relaunch — every panel rehydrates from SQLite.
+- [ ] HUD overlay appears on Start, level bar tracks voice, hides
+      on Stop.
 
-When auto-download is unblocked (after #41), step (b) above
-collapses to "click Download on the card". The end-to-end pipeline
-test in #34(a) (next planned PR) automates the
-`downloaded model + known-text WAV → expected transcript`
-verification.
+### d) Automated suites
+
+```bash
+# Rust unit tests (default features)
+cd src-tauri && cargo test --lib
+
+# Rust unit tests including the whisper-gated path (needs cmake)
+cargo test --lib --features whisper
+
+# Frontend type check
+npm run check
+
+# Frontend e2e via Playwright (mocked Tauri IPC)
+npm run test:e2e
+```
+
+The audio-fixture integration test in
+`src-tauri/tests/audio_fixture.rs` is `#[ignore]`'d by default; set
+`HUSH_TEST_AUDIO=/path/to/clip.wav` and run
+`cargo test --features whisper -- --ignored audio_fixture` to
+exercise the full transcription pipeline end-to-end against a known
+clip.
 
 ---
 
@@ -166,20 +200,35 @@ verification.
 
 ### Next to land
 
-1. **#34** Audio test fixture (file-based integration test). Small,
-   independent, validates the auto-download work end-to-end.
+1. **#48** Welcome modal a11y batch (Escape + focus trap +
+   `aria-valuemax` for null-total downloads + retry-UX race).
+   Smallest closer of the round-4 reviewer findings; auto-flips
+   the `fixme`-marked Playwright spec to green.
 2. **#41** Fill in per-model SHA-256 hashes — unblocks
    auto-download for each Whisper variant.
-3. **#22** macOS first-run permission onboarding.
-4. **#21** Recording HUD with level meter.
-5. **#32** Parakeet via ONNX (second engine).
-6. **#33** System audio capture.
+3. **#33** System-audio loopback (loopback half of the audio
+   fixture; CoreAudio aggregate device on macOS, PulseAudio
+   monitor on Linux).
+4. **#32** Parakeet via ONNX — second engine.
+
+### Tracking issues opened during round-4 review
+
+- **#48** A11y polish on welcome modal + download progress.
+- **#49** Security hardening (✅ closed by PR #53 — redirect
+  policy, README disclosure, shell-plugin removal).
+- **#50** HUD window scoped capability (✅ closed by PR #56).
+- **#51** Docs drift — README status, CONTRIBUTING test
+  patterns. (Closed in part by this docs refresh.)
+- **#55** Replace `Mutex<Vec<f32>>` in cpal callback with `rtrb`
+  SPSC ring (realtime safety). Not urgent — uncontended today.
+- **#57** Tauri-driver E2E (full-stack, complement to the
+  Playwright Path A suite).
 
 ### Backlog
 
 - **#10** Updater (signed channel) — M6 release-engineering work.
-- **#29** Polish punch list — running tracker; fold leftovers into
-  PRs as convenient.
+- **#29** Polish punch list — running tracker; fold leftovers
+  into PRs as convenient.
 
 ### Architecture refactors (interleave with feature work)
 
@@ -187,15 +236,20 @@ The round-3 architecture review opened five tracking issues:
 
 - **#36** Extract `Repository<T, Id>` trait — before #32 Parakeet
   brings a fifth repo.
-- **#37** `AppStateBuilder` — before the next feature adds an 8th
-  field.
-- **#38** Decompose `stop_dictation` into a Tauri-free
-  orchestrator — when #21 HUD or #33 system-audio touches the same
-  surface.
+- **#37** `AppStateBuilder` — before the next feature adds a 9th
+  field. **Architecture comment dropped** with two notes from
+  the 2026-04-25 web-research pass: don't wrap the result in
+  outer `Arc`, and re-evaluate cohesion boundary
+  (`TranscriptionDeps` vs `EditingDeps` vs `DownloadDeps`)
+  before locking the builder API.
+- **#38** Decompose `stop_dictation` (✅ closed by PR #52).
 - **#39** Split `dictionary` into `replacements/` + `vocabulary/`
   submodules — before #32 lands.
 - **#40** Split `+page.svelte` into per-section components —
-  before the next UI panel (#22 / #33) lands.
+  before the next UI panel lands. **Architecture comment
+  dropped** suggesting class-based reactive state in
+  `.svelte.ts` over module-level `$state` exports, plus a
+  `$effect` audit.
 
 ---
 
