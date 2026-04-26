@@ -252,6 +252,17 @@ pub async fn stop_dictation(
     // Vocabulary + replacements load are best-effort. Inference itself
     // is fatal — without text there's nothing for the user to paste.
     let prompt = load_vocabulary_prompt(&state).await;
+    // If the user has vocabulary terms configured but the loaded
+    // backend can't act on them, warn once per dictation. This is the
+    // place where "vocabulary terms silently produce no effect"
+    // would otherwise hide. The check is gated on `!prompt.is_empty()`
+    // so the no-vocab case doesn't spam the log on every dictation.
+    if !prompt.is_empty() && !transcriber.supports_prompt_biasing() {
+        tracing::warn!(
+            backend = transcriber.model_label(),
+            "vocabulary terms configured but the active transcription backend does not support prompt biasing — terms will not affect this transcript"
+        );
+    }
     let raw_text = transcriber
         .transcribe_with_prompt(&captured, &prompt)
         .map_err(|e| IpcError::Transcription(e.to_string()))?;
