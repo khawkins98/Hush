@@ -237,6 +237,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **First-time-user flow: "Set up your first model" banner.** Two
+  problems hit the user on the first launch with no model: (a) the
+  prominent action surface was Start recording, which on click
+  surfaced a stale error pointing at `HUSH_MODEL_PATH` and rebuilding
+  with `--features whisper` — instructions for the M1 dev workflow,
+  not the M3 user workflow; (b) the actual setup path (the model
+  picker) was below the fold with no signpost. Replaced with: a
+  prominent "Set up your first model" banner above the recording
+  controls, shown only when `models.some(isDownloaded) === false`,
+  with a "Choose a model" button that scrolls to the picker. Start
+  recording is also disabled in that state with a clear hover/aria
+  hint ("Choose a model first") rather than a click-then-error
+  flow. The `transcription-unavailable` error copy is rewritten to
+  point at the in-app picker instead of env vars, and the click-
+  through still scrolls to the picker. Two new Playwright specs pin
+  the banner-shown and banner-hidden cases; the existing
+  `transcription-unavailable` spec now asserts the new copy and
+  asserts the old `HUSH_MODEL_PATH` reference does *not* appear.
 - **Model auto-download now actually downloads** (closes #41). The
   five Whisper variants in `transcription::catalog` shipped with
   empty `sha256` strings — the auto-download orchestrator's
