@@ -21,9 +21,9 @@ Upstream VoiceInk does not accept pull requests, so Hush is a parallel project, 
 
 ## 3. Goals (v1)
 
-- Cross-platform offline dictation on macOS, Windows, and Linux from one codebase.
+- Cross-platform offline dictation on macOS, Windows, and Linux from one codebase. **Reality check (2026-04-26):** macOS is the maintainer's daily-driver and primary target; Linux and Windows are validated only at the CI level (`cargo test`, `clippy`, `npm run check`) and not hands-on tested. Hush should run on Linux/X11 and Windows as far as the code goes — contributions and bug reports for those platforms are welcome and where they hit issues, those issues become the prioritisation signal.
 - Local-only transcription using whisper.cpp via Rust bindings. No audio ever leaves the device, no cloud round-trip during transcription. (The Whisper model itself is fetched once from Hugging Face when the user picks one in the picker, then cached in `<app-data>/models/`. After download, transcription is fully offline.)
-- Global push-to-talk and toggle-record hotkeys.
+- Global toggle-record hotkey (works on every platform). Push-to-talk on Linux + Windows; on macOS deferred to v1.x — see §9 and the platform-support note for the rdev / macOS 26 issue.
 - Transcribed output written to the system clipboard, with a confirmation notification.
 - Foreground application name captured on each transcription, stored as metadata.
 - Local SQLite history with search, copy, and delete.
@@ -110,7 +110,7 @@ These are tagged as future work, with a brief note on what each will need when p
 
 - Multi-platform builds: macOS universal, Windows x64 + arm64, Linux x64 (.deb and .AppImage).
 - Whisper model picker with download progress, SHA verification, and disk-usage display.
-- Push-to-talk and toggle-record hotkeys, user-configurable.
+- Push-to-talk and toggle-record hotkeys, user-configurable. **Reality check (2026-04-26):** PTT is currently disabled by default on macOS — rdev 0.5 hard-aborts on macOS 26+ via a TSM dispatch-queue assertion (#69). A native CGEventTap reimplementation is tracked as #70 but parked until production demand justifies it; toggle covers most dictation use cases, so PTT-on-macOS is effectively a v1.x deliverable rather than v1. Linux/Windows PTT continues to work via rdev.
 - Recording HUD overlay (transparent window) shown while listening, with a level meter.
 - Transcribed text written to system clipboard with a "Ready to paste" notification.
 - History view: paginated list, full-text search, copy-to-clipboard, delete, export to CSV.

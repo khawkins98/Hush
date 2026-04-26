@@ -151,6 +151,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **README + PRD honesty pass on PTT and platform support.** README's
+  Shipped list now separates toggle-record (works everywhere) from
+  push-to-talk (Linux + Windows only by default; macOS opt-in, with
+  the rdev/macOS-26 caveat called out and linked to issues #69 + #70).
+  A new "Platform support — honest version" table notes that
+  Linux + Windows are theoretically supported and CI-validated but
+  not hands-on tested by the maintainer, and invites contributions
+  and bug reports for those platforms. PRD §3 (Goals) and §9 (v1
+  feature list) both updated with reality checks dated 2026-04-26 so
+  the policy doc stops promising what the code can't currently
+  deliver on macOS 26.
 - **Default toggle hotkey changed from `⌘/Ctrl+Shift+Space` to
   `Ctrl+⌥/Alt+H`** (literal Control + Option/Alt + H — `⌃⌥H` on
   macOS). The previous default conflicted with macOS's character-
