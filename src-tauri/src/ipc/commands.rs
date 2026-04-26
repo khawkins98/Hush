@@ -1017,12 +1017,26 @@ pub async fn meeting_sessions_list(
 }
 
 /// Full detail for one session: the row plus all its persisted
-/// utterances ordered by `started_at_ms ASC`.
+/// utterances ordered by `started_at_ms ASC`, plus any in-flight
+/// partials the streaming pump has produced for the still-active
+/// session (post-#108 PR3).
+///
+/// `current_partials` is **never persisted** — it lives in the
+/// `SessionManager`'s in-memory partials store and gets merged into
+/// this response on each poll. The frontend is expected to render
+/// these with reduced opacity / italic to distinguish from the
+/// settled `utterances` list (#108 PR4). For closed sessions
+/// (`session.endedAt` is non-null), `current_partials` is always
+/// empty — the pump cleared its store on stop.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetingSessionDetail {
     pub session: crate::meeting::MeetingSession,
     pub utterances: Vec<crate::meeting::PersistedUtterance>,
+    /// In-flight partials, one per active source. Sorted alphabet-
+    /// ically by `speakerLabel` so the frontend's render order is
+    /// stable across polls.
+    pub current_partials: Vec<crate::transcription::Utterance>,
 }
 
 /// Detail view for one session — used by the panel's
@@ -1049,9 +1063,15 @@ pub async fn meeting_session_get(
         .list_utterances(id)
         .await
         .map_err(|e| IpcError::MeetingSessions(format!("session utterances: {e}")))?;
+    // Read in-flight partials from the manager's in-memory store.
+    // The poll path is hot (every ~1 s while a session is active);
+    // `current_partials_for` uses an `RwLock::read` and clones a
+    // small Vec, so the cost is negligible.
+    let current_partials = state.meeting_manager.current_partials_for(id);
     Ok(MeetingSessionDetail {
         session,
         utterances,
+        current_partials,
     })
 }
 
