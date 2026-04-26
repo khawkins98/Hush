@@ -51,7 +51,13 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
         ))
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // Updater plugin is deferred until #10 — registering it without a
+        // `plugins.updater` block in tauri.conf.json (pubkey + endpoints)
+        // panics at startup with "Error deserializing 'plugins.updater'".
+        // We leave the dep + module stub in place so #10 can wire the
+        // signing key and endpoints in one focused PR; until then, no
+        // plugin is registered.
+        //.plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // The platform app-data directory is only resolvable from a
