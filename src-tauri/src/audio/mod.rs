@@ -41,7 +41,7 @@ mod screencapturekit;
 
 pub use format::downmix_to_mono;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -171,6 +171,53 @@ pub struct CapturedAudio {
     pub format: CaptureFormat,
 }
 
+/// Handle owning the lifecycle of one capture session.
+///
+/// Returned by [`AudioCapture::start_session`]. Multiple handles may be
+/// alive concurrently when the underlying backend supports parallel
+/// capture (the [`CpalAudioCapture`] backend does — one mic via cpal
+/// alongside one system-audio via ScreenCaptureKit, which is the
+/// canonical shape the meeting pump uses to capture both sides of a
+/// Zoom call).
+///
+/// # Single-stop discipline
+///
+/// `stop` consumes the boxed handle (`self: Box<Self>`), so a
+/// double-stop is a compile-time error rather than a runtime check.
+/// The pump (PR2) relies on this — the cancellation path takes the
+/// handle out of an `Option<Box<dyn AudioSession>>` slot exactly once
+/// and the type system prevents a second drop racing with the drain.
+///
+/// # Why a separate trait from `AudioCapture`
+///
+/// The legacy [`AudioCapture::start_with_source`] / [`AudioCapture::stop`]
+/// pair models capture as a singleton operation on the backend itself.
+/// That fits the dictation hot path (one source, one transcript,
+/// short burst) but doesn't compose for meeting capture, where the
+/// pump needs to track several concurrent sources independently.
+/// Promoting the session to its own object lets the caller hold N of
+/// them — one per source — and stop each on its own cadence.
+pub trait AudioSession: Send + Sync {
+    /// The source this session is capturing from. Inspected by the
+    /// pump so the per-source utterance dispatch can tag each chunk
+    /// with the originating mic / system-audio entry.
+    fn source(&self) -> &AudioSource;
+
+    /// Latest RMS level for *this* session, in roughly `[0.0, 1.0]`.
+    /// Default returns `0.0` for backends that don't track per-session
+    /// levels (every test mock today). The cpal-backed mic session
+    /// and the ScreenCaptureKit-backed system-audio session both
+    /// override; the HUD's level pump reads whichever session is
+    /// currently active.
+    fn current_level(&self) -> f32 {
+        0.0
+    }
+
+    /// Stop capture and drain the buffer. Consumes the handle so
+    /// the type system rules out double-drains.
+    fn stop(self: Box<Self>) -> Result<CapturedAudio>;
+}
+
 /// Trait at the OS boundary. Higher layers (IPC, transcription pipeline)
 /// depend only on this trait so OS-touching code can be mocked at the seam.
 pub trait AudioCapture: Send + Sync {
@@ -210,6 +257,40 @@ pub trait AudioCapture: Send + Sync {
                 "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
             )),
         }
+    }
+
+    /// Begin capturing `source` and return a handle that owns the
+    /// session's lifecycle. Multiple handles may be alive concurrently
+    /// when the backend supports parallel capture (the
+    /// [`CpalAudioCapture`] backend does — one mic via cpal + one
+    /// system-audio via ScreenCaptureKit, which is the canonical
+    /// shape the meeting pump uses to capture both sides of a Zoom
+    /// call).
+    ///
+    /// The default impl errors so existing mocks (which only need
+    /// the singleton [`AudioCapture::start_with_source`] /
+    /// [`AudioCapture::stop`] API for the dictation hot path) keep
+    /// compiling unchanged. Backends that participate in the meeting
+    /// pump override.
+    ///
+    /// # Why a separate API from `start_with_source`
+    ///
+    /// `start_with_source` is the dictation hot path: short burst,
+    /// one source, one transcript, write to clipboard, done. The
+    /// meeting pump needs a different shape — long-running, multiple
+    /// sources concurrently, periodic chunk drains — and trying to
+    /// layer it on top of the singleton API would force every
+    /// backend to track per-source state internally. The handle-
+    /// based API moves that state into the handle itself, where it
+    /// composes naturally with the pump's
+    /// `Vec<Box<dyn AudioSession>>`.
+    fn start_session(&self, source: AudioSource) -> Result<Box<dyn AudioSession>> {
+        let _ = source;
+        Err(anyhow!(
+            "start_session is not implemented for this AudioCapture backend; \
+             override the method to opt into handle-based parallel capture \
+             (used by the meeting pump for mic + system-audio in parallel)"
+        ))
     }
 
     /// Flat list of every source the user can choose from in the
@@ -309,9 +390,18 @@ pub struct CpalAudioCapture {
     /// Wrapped in a [`Mutex`] because [`mpsc::Sender`] is `Send` but `!Sync`,
     /// and we need `&self` access from multiple threads through the trait.
     cmd_tx: Mutex<mpsc::Sender<Cmd>>,
-    /// Cheap, lock-free read of "is something recording right now?".
-    /// Updated by the worker, read by the public API.
-    is_recording: Arc<AtomicBool>,
+    /// Reference count of active capture sessions. The legacy
+    /// singleton path (cpal mic via worker, SCK via `sck_session`
+    /// slot) plus the handle-based [`AudioCapture::start_session`]
+    /// paths all increment this on start and decrement on stop.
+    ///
+    /// Modelled as a count rather than a bool so parallel mic +
+    /// system-audio capture (the meeting pump's canonical config)
+    /// reports `is_recording() == true` while either is in flight,
+    /// without the two paths racing on a shared bool. The legacy
+    /// hot path still treats it as a binary "any capture active",
+    /// which works because the count is monotonically positive.
+    active_sessions: Arc<AtomicU32>,
     /// Latest RMS level, encoded as `f32::to_bits()`. Written by the cpal
     /// callback at audio-callback rate (~100 Hz at 48 kHz / 480-frame
     /// callbacks), read by the HUD level pump at ~30 Hz.
@@ -371,9 +461,9 @@ impl CpalAudioCapture {
     /// thread is already alive and blocked on `recv`.
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
-        let is_recording = Arc::new(AtomicBool::new(false));
+        let active_sessions = Arc::new(AtomicU32::new(0));
         let level = Arc::new(AtomicU32::new(0_f32.to_bits()));
-        let worker_flag = Arc::clone(&is_recording);
+        let worker_flag = Arc::clone(&active_sessions);
         let worker_level = Arc::clone(&level);
 
         let worker = thread::Builder::new()
@@ -383,7 +473,7 @@ impl CpalAudioCapture {
 
         Self {
             cmd_tx: Mutex::new(cmd_tx),
-            is_recording,
+            active_sessions,
             level,
             worker: Some(worker),
             #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
@@ -433,22 +523,11 @@ impl AudioCapture for CpalAudioCapture {
     }
 
     fn start(&self, device_id: Option<&str>) -> Result<()> {
-        // Refuse to start a mic capture while an SCK system-audio
-        // session is in flight. Only one capture path at a time —
-        // is_recording is the cross-path source of truth, but checking
-        // the SCK slot directly gives a clearer error message.
-        #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
-        {
-            let guard = self
-                .sck_session
-                .lock()
-                .map_err(|_| anyhow!("sck session lock poisoned"))?;
-            if guard.is_some() {
-                return Err(anyhow!(
-                    "system-audio capture already in progress; stop it first"
-                ));
-            }
-        }
+        // The cpal worker rejects a second mic Start while its
+        // singleton mic Session is occupied. Mic + SCK in parallel
+        // is fine — different backends, different singletons — so
+        // we no longer block on the SCK slot here. The pump (PR2)
+        // exercises this combination as its canonical config.
         let device_id = device_id.map(str::to_owned);
         self.dispatch(|reply| Cmd::Start { device_id, reply })
     }
@@ -458,9 +537,6 @@ impl AudioCapture for CpalAudioCapture {
             AudioSource::Microphone(device_id) => self.start(device_id.as_deref()),
             #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
             AudioSource::SystemAudio => {
-                if self.is_recording() {
-                    return Err(anyhow!("recording already in progress"));
-                }
                 let mut guard = self
                     .sck_session
                     .lock()
@@ -474,7 +550,11 @@ impl AudioCapture for CpalAudioCapture {
                     Arc::clone(&self.level),
                 )?;
                 *guard = Some(session);
-                self.is_recording.store(true, Ordering::Release);
+                // Increment the cross-path session count so the legacy
+                // `is_recording()` reads true while SCK is in flight,
+                // even alongside a parallel mic session via the new
+                // handle API.
+                self.active_sessions.fetch_add(1, Ordering::Release);
                 Ok(())
             }
             #[cfg(not(all(target_os = "macos", feature = "screencapturekit")))]
@@ -496,10 +576,10 @@ impl AudioCapture for CpalAudioCapture {
     fn stop(&self) -> Result<CapturedAudio> {
         // SCK path first: if a system-audio session is active, drain
         // it and skip the cpal worker round-trip entirely. Order
-        // matters — we must clear the SCK slot before dropping the
-        // is_recording flag, so a concurrent start() call can't see
-        // a "not recording" state while the SCK session is still
-        // mid-stop.
+        // matters — we must clear the SCK slot before decrementing
+        // the active-sessions counter, so a concurrent start() call
+        // can't see a "not recording" state while the SCK session is
+        // still mid-stop.
         #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
         {
             let mut guard = self
@@ -509,8 +589,10 @@ impl AudioCapture for CpalAudioCapture {
             if let Some(session) = guard.take() {
                 let format = session.format();
                 let samples = session.stop()?;
-                self.is_recording.store(false, Ordering::Release);
-                self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+                self.active_sessions.fetch_sub(1, Ordering::Release);
+                if self.active_sessions.load(Ordering::Acquire) == 0 {
+                    self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+                }
                 return Ok(CapturedAudio { samples, format });
             }
         }
@@ -518,9 +600,11 @@ impl AudioCapture for CpalAudioCapture {
     }
 
     fn is_recording(&self) -> bool {
-        // Acquire ordering so a `true` reading happens-after the worker's
-        // store, ensuring the corresponding stream is actually live.
-        self.is_recording.load(Ordering::Acquire)
+        // True while any capture session — legacy singleton or
+        // handle-based — is in flight. Acquire ordering pairs with the
+        // Release on each fetch_add / fetch_sub so a `true` reading
+        // happens-after the corresponding start.
+        self.active_sessions.load(Ordering::Acquire) > 0
     }
 
     fn current_level(&self) -> f32 {
@@ -533,6 +617,152 @@ impl AudioCapture for CpalAudioCapture {
             f32::from_bits(self.level.load(Ordering::Relaxed))
         } else {
             0.0
+        }
+    }
+
+    fn start_session(&self, source: AudioSource) -> Result<Box<dyn AudioSession>> {
+        match source {
+            AudioSource::Microphone(device_id) => {
+                // Dispatches to the same cpal worker the legacy
+                // `start` path uses; the worker rejects if its
+                // singleton mic Session slot is already occupied.
+                // That mutual-exclusion is fine — only one mic
+                // capture per process at a time is what cpal
+                // supports, and the meeting pump's two-source
+                // config is mic + SCK, not mic + mic.
+                let device_id_owned = device_id.clone();
+                self.dispatch::<()>(|reply| Cmd::Start {
+                    device_id: device_id_owned,
+                    reply,
+                })?;
+                let cmd_tx = self
+                    .cmd_tx
+                    .lock()
+                    .map_err(|_| anyhow!("audio command channel lock poisoned"))?
+                    .clone();
+                Ok(Box::new(CpalMicSessionHandle {
+                    source: AudioSource::Microphone(device_id),
+                    cmd_tx,
+                    level: Arc::clone(&self.level),
+                }))
+            }
+            #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+            AudioSource::SystemAudio => {
+                // Independent SCStream owned by the handle. Doesn't
+                // touch `sck_session` (the legacy hot-path slot), so
+                // the dictation hot path's SystemAudio capture and
+                // the meeting pump's SystemAudio capture don't race
+                // on the same slot. ScreenCaptureKit allows multiple
+                // SCStream instances per process; if the pump and
+                // dictation ever do run simultaneously the two
+                // streams just see the same audio independently.
+                let session = screencapturekit::ScreenCaptureKitSession::start(
+                    Arc::clone(&self.level),
+                )?;
+                self.active_sessions.fetch_add(1, Ordering::Release);
+                Ok(Box::new(SckSessionHandle {
+                    source: AudioSource::SystemAudio,
+                    inner: Some(session),
+                    active_sessions: Arc::clone(&self.active_sessions),
+                    level: Arc::clone(&self.level),
+                }))
+            }
+            #[cfg(not(all(target_os = "macos", feature = "screencapturekit")))]
+            AudioSource::SystemAudio => Err(anyhow!(
+                "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
+            )),
+        }
+    }
+}
+
+/// Handle returned by [`CpalAudioCapture::start_session`] for a
+/// microphone source. Owns the right to send a `Cmd::Stop` to the
+/// cpal worker on drop / explicit stop.
+///
+/// The worker thread keeps the actual `Session` (the cpal stream + buffer);
+/// this handle is just a typed permission slip that can issue the
+/// stop command and receive the drained samples back.
+struct CpalMicSessionHandle {
+    source: AudioSource,
+    cmd_tx: mpsc::Sender<Cmd>,
+    level: Arc<AtomicU32>,
+}
+
+impl AudioSession for CpalMicSessionHandle {
+    fn source(&self) -> &AudioSource {
+        &self.source
+    }
+    fn current_level(&self) -> f32 {
+        // The worker writes the latest RMS into the shared atomic
+        // on every callback. The handle just reads it; there is no
+        // per-handle filtering today (a pump running mic + SCK in
+        // parallel sees the most-recent reading from either path),
+        // which is fine for the HUD's single-bar meter.
+        f32::from_bits(self.level.load(Ordering::Relaxed))
+    }
+    fn stop(self: Box<Self>) -> Result<CapturedAudio> {
+        let (tx, rx) = mpsc::channel::<Result<CapturedAudio>>();
+        self.cmd_tx
+            .send(Cmd::Stop(tx))
+            .map_err(|_| anyhow!("audio worker thread has exited"))?;
+        rx.recv()
+            .map_err(|_| anyhow!("audio worker dropped reply channel"))?
+    }
+}
+
+/// Handle returned by [`CpalAudioCapture::start_session`] for a
+/// system-audio source on macOS. Owns the underlying SCStream session
+/// directly, so dropping the handle ends the capture without any
+/// channel round-trip.
+#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+struct SckSessionHandle {
+    source: AudioSource,
+    /// `Option` so the explicit `stop()` path can take it out, while
+    /// the implicit `Drop` path (a panic between start and stop, say)
+    /// can still see whether there's anything to clean up.
+    inner: Option<screencapturekit::ScreenCaptureKitSession>,
+    active_sessions: Arc<AtomicU32>,
+    level: Arc<AtomicU32>,
+}
+
+#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+impl AudioSession for SckSessionHandle {
+    fn source(&self) -> &AudioSource {
+        &self.source
+    }
+    fn current_level(&self) -> f32 {
+        f32::from_bits(self.level.load(Ordering::Relaxed))
+    }
+    fn stop(mut self: Box<Self>) -> Result<CapturedAudio> {
+        let session = self
+            .inner
+            .take()
+            .ok_or_else(|| anyhow!("sck session already stopped"))?;
+        let format = session.format();
+        let samples = session.stop()?;
+        self.active_sessions.fetch_sub(1, Ordering::Release);
+        if self.active_sessions.load(Ordering::Acquire) == 0 {
+            self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+        }
+        Ok(CapturedAudio { samples, format })
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+impl Drop for SckSessionHandle {
+    fn drop(&mut self) {
+        // If the handle is dropped without an explicit stop (panic in
+        // the pump task, say), best-effort drain so the SCStream is
+        // closed and the active-sessions count stays consistent. The
+        // drained samples are discarded — there's nowhere to send them.
+        if let Some(session) = self.inner.take() {
+            if let Err(e) = session.stop() {
+                tracing::warn!(error = ?e, "SCK session stop failed during Drop");
+            }
+            self.active_sessions.fetch_sub(1, Ordering::Release);
+            if self.active_sessions.load(Ordering::Acquire) == 0 {
+                self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+            }
         }
     }
 }
@@ -550,7 +780,11 @@ struct Session {
     buffer: Arc<Mutex<Vec<f32>>>,
 }
 
-fn worker_loop(cmd_rx: mpsc::Receiver<Cmd>, is_recording: Arc<AtomicBool>, level: Arc<AtomicU32>) {
+fn worker_loop(
+    cmd_rx: mpsc::Receiver<Cmd>,
+    active_sessions: Arc<AtomicU32>,
+    level: Arc<AtomicU32>,
+) {
     // The cpal host is created on the worker thread to avoid any chance of
     // cross-thread state: some backends keep thread-locals pointing back at
     // the host that constructed them.
@@ -567,10 +801,13 @@ fn worker_loop(cmd_rx: mpsc::Receiver<Cmd>, is_recording: Arc<AtomicBool>, level
                     let _ = reply.send(Err(anyhow!("recording already in progress")));
                     continue;
                 }
-                match start_session(&host, device_id.as_deref(), Arc::clone(&level)) {
+                match start_cpal_session(&host, device_id.as_deref(), Arc::clone(&level)) {
                     Ok(s) => {
                         // Release ordering pairs with Acquire in `is_recording()`.
-                        is_recording.store(true, Ordering::Release);
+                        // fetch_add returns the previous value; if it was 0 we
+                        // just transitioned from "no captures" to "one capture",
+                        // which is what the legacy `is_recording` bool tracked.
+                        active_sessions.fetch_add(1, Ordering::Release);
                         session = Some(s);
                         let _ = reply.send(Ok(()));
                     }
@@ -580,18 +817,28 @@ fn worker_loop(cmd_rx: mpsc::Receiver<Cmd>, is_recording: Arc<AtomicBool>, level
                 }
             }
             Cmd::Stop(reply) => {
-                let result = match session.take() {
-                    Some(s) => stop_session(s),
-                    None => Err(anyhow!("no recording in progress")),
-                };
-                // Always clear the flag, even on error: a failed stop should
-                // not leave us stuck pretending we're still recording.
-                is_recording.store(false, Ordering::Release);
-                // Reset the level so the HUD's meter idles cleanly between
-                // sessions instead of holding the last RMS reading until
-                // the next start.
-                level.store(0_f32.to_bits(), Ordering::Relaxed);
-                let _ = reply.send(result);
+                match session.take() {
+                    Some(s) => {
+                        let result = stop_cpal_session(s);
+                        // Decrement only on success-or-attempt path: we held
+                        // a session, so a corresponding fetch_add happened
+                        // on the matching Start. fetch_sub here pairs with it.
+                        active_sessions.fetch_sub(1, Ordering::Release);
+                        // Only zero the HUD level if no other capture path
+                        // is currently running. Otherwise an in-flight SCK
+                        // session would see its meter blanked while it's
+                        // still actively writing samples.
+                        if active_sessions.load(Ordering::Acquire) == 0 {
+                            level.store(0_f32.to_bits(), Ordering::Relaxed);
+                        }
+                        let _ = reply.send(result);
+                    }
+                    None => {
+                        // No session to drain; don't touch the refcount —
+                        // a no-op stop must not underflow the counter.
+                        let _ = reply.send(Err(anyhow!("no recording in progress")));
+                    }
+                }
             }
             Cmd::Shutdown => break,
         }
@@ -622,7 +869,7 @@ fn list_devices(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
     Ok(out)
 }
 
-fn start_session(
+fn start_cpal_session(
     host: &cpal::Host,
     device_id: Option<&str>,
     level: Arc<AtomicU32>,
@@ -662,7 +909,7 @@ fn start_session(
     })
 }
 
-fn stop_session(session: Session) -> Result<CapturedAudio> {
+fn stop_cpal_session(session: Session) -> Result<CapturedAudio> {
     // Pause first so no further callbacks can land while we move the buffer
     // out of the Arc. Dropping the stream alone is technically sufficient on
     // every backend we currently target, but `pause()` makes the intent
@@ -851,6 +1098,57 @@ mod tests {
     #[test]
     fn audio_capture_trait_is_object_safe() {
         fn _assert_object_safe(_: &dyn AudioCapture) {}
+    }
+
+    #[test]
+    fn audio_session_trait_is_object_safe() {
+        // Pump (PR2) holds these via `Vec<Box<dyn AudioSession>>`,
+        // so object-safety is load-bearing.
+        fn _assert_object_safe(_: &dyn AudioSession) {}
+    }
+
+    #[test]
+    fn default_start_session_errors_for_backends_that_do_not_override() {
+        // Mocks that don't override start_session inherit the
+        // default-impl error. Pinning the message so callers (the
+        // pump's "this backend can't do parallel capture" branch)
+        // can rely on the wording for a useful diagnostic.
+        struct LegacyOnly;
+        impl AudioCapture for LegacyOnly {
+            fn list_input_devices(&self) -> Result<Vec<AudioDevice>> {
+                Ok(vec![])
+            }
+            fn start(&self, _: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+            fn stop(&self) -> Result<CapturedAudio> {
+                Ok(CapturedAudio {
+                    samples: vec![],
+                    format: CaptureFormat {
+                        sample_rate: 16_000,
+                        channels: 1,
+                    },
+                })
+            }
+            fn is_recording(&self) -> bool {
+                false
+            }
+        }
+        // `expect_err` would require Debug on `Box<dyn AudioSession>`,
+        // which is not derivable, so destructure manually.
+        let err = match LegacyOnly.start_session(AudioSource::default_microphone()) {
+            Ok(_) => panic!("default start_session must error, got Ok"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("not implemented"),
+            "default start_session should call out the missing impl; got: {msg}"
+        );
+        assert!(
+            msg.contains("override"),
+            "error should hint at how to opt in; got: {msg}"
+        );
     }
 
     #[test]
