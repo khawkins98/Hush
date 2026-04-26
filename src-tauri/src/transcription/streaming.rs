@@ -998,6 +998,52 @@ mod tests {
     }
 
     #[test]
+    fn stable_cutoff_boundary_inclusive_segment_commits() {
+        // Pin the boundary semantics of the stable_cutoff comparison:
+        // a segment ending *exactly* at `stable_cutoff_rel_ms` is
+        // committed (the comparison is `<=`, not `<`). The reviewer
+        // round-9 cycle flagged this as worth an explicit test
+        // because the boundary is load-bearing — a future change that
+        // tightens to `<` would let a segment that "should" be stable
+        // sit in the partial slot for one extra inference window
+        // before committing.
+        //
+        // Setup: window of 4 s, commit_tail = 2 s, so stable_cutoff_rel
+        // = 2000 ms. A segment ending at exactly 2000 ms is at the
+        // boundary.
+        let mut state = SlidingWindowState::new(16_000, config_for_test());
+        for _ in 0..4 {
+            state.feed_mono(&one_second_of_audio());
+        }
+        let mut inferer = ScriptedInferer::new(vec![vec![
+            StreamSegment {
+                start_ms: 1_500,
+                end_ms: 2_000, // exactly at the boundary
+                text: "boundary segment".into(),
+            },
+            StreamSegment {
+                start_ms: 2_500,
+                end_ms: 3_500,
+                text: "later tail".into(),
+            },
+        ]]);
+        let out = state.tick(&mut inferer).unwrap();
+        let finals: Vec<_> = out.iter().filter(|u| u.is_final).collect();
+        assert_eq!(
+            finals.len(),
+            1,
+            "boundary segment must commit (the <= comparison is intentional); got: {out:?}"
+        );
+        assert_eq!(finals[0].text, "boundary segment");
+        assert_eq!(finals[0].ended_at_ms, 2_000);
+
+        // And the strictly-younger tail stays a partial.
+        let partials: Vec<_> = out.iter().filter(|u| !u.is_final).collect();
+        assert_eq!(partials.len(), 1);
+        assert_eq!(partials[0].text, "later tail");
+    }
+
+    #[test]
     fn empty_segment_text_is_filtered() {
         // Whisper occasionally emits a segment with whitespace-only
         // text (non-speech intervals); the policy must skip these

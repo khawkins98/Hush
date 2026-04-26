@@ -274,7 +274,15 @@
       liveTranscriptFollowing = true;
     } else if (liveTranscriptFollowing) {
       liveTranscriptFollowing = false;
-      liveTranscriptFrozenAt = activeDetail?.utterances.length ?? 0;
+      // Snapshot finals + partials at freeze time so the "↓ N new"
+      // pill counts both. Pre-#108 polish: the snapshot was finals-
+      // only, which let the pill report "0 new" while whisper kept
+      // revising the in-flight tail mid-monologue. The user's mental
+      // model of "new" is "anything that landed since I scrolled up,"
+      // partials included.
+      liveTranscriptFrozenAt =
+        (activeDetail?.utterances.length ?? 0) +
+        (activeDetail?.currentPartials?.length ?? 0);
     }
   }
 
@@ -315,10 +323,18 @@
   });
 
   // "N new since you scrolled up" — only meaningful while frozen.
+  // Includes both finals AND in-flight partials so the pill counts
+  // anything the user might want to scroll back to (a revising
+  // partial mid-monologue still counts as "new since I last looked").
   let liveTranscriptNewCount = $derived(
     liveTranscriptFollowing
       ? 0
-      : Math.max(0, liveUtteranceCount - liveTranscriptFrozenAt),
+      : Math.max(
+          0,
+          liveUtteranceCount +
+            (activeDetail?.currentPartials?.length ?? 0) -
+            liveTranscriptFrozenAt,
+        ),
   );
 
   function formatDuration(start: string, end: string | null): string {
@@ -550,15 +566,27 @@
           </li>
         {/each}
         {#each activeDetail.currentPartials ?? [] as partial (partial.speakerLabel ?? 'unknown')}
+          <!--
+            `aria-live="off"` (inherited from the parent <ol> by
+            default, but spelled out here so a future change to the
+            list-level live setting doesn't accidentally start
+            re-announcing partial revisions). The screen-reader cue
+            "(in progress)" tacked onto the speaker badge below is
+            announced once per row mount, not on every text revision —
+            partial text content updates inside the same row don't
+            re-trigger the announcement, since the row's accessible
+            name comes from the badge label rather than the text.
+          -->
           <li
             class="utterance utterance-partial speaker-row-{partial.speakerLabel ?? 'unknown'}"
-            aria-label="In-flight partial transcript, still being refined"
+            aria-live="off"
           >
             <div class="utterance-meta">
               <span
                 class="speaker-badge speaker-{partial.speakerLabel ?? 'unknown'}"
               >
                 {speakerLabel(partial)}
+                <span class="sr-only"> (in progress)</span>
               </span>
               <span class="utterance-time"
                 >{formatOffset(partial.startedAtMs)}</span
@@ -1010,6 +1038,25 @@
 
 .utterance-partial .utterance-text {
   font-style: italic;
+}
+
+/*
+  Visually hidden but exposed to assistive tech. Used by the partial
+  row's "(in progress)" suffix on the speaker badge so screen readers
+  announce status without it consuming visual space. Standard
+  WCAG-recommended pattern (clip-path + 1px box keeps the element
+  reachable to AT but invisible / unfocusable for sighted users).
+*/
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .partial-indicator {
