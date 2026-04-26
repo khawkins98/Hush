@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `AudioSource` enum (`Microphone(Option<String>)` / `SystemAudio`)
+  and `AudioCapture::start_with_source` trait method on the audio
+  backend boundary (#96, foundation for #33). No behaviour change
+  yet — the dictation hot path still calls `start(device_id)` —
+  but downstream PRs that wire ScreenCaptureKit (macOS), WASAPI
+  loopback (Windows), and PulseAudio monitor sources (Linux) now
+  have a clean trait shape to slot into. Five new unit tests pin
+  the default behaviour (Microphone forwards correctly, SystemAudio
+  errors usefully, capability check defaults correct, serde wire
+  shape round-trips). Refs the meeting-mode design memo at
+  `docs/system-audio-meeting-mode-proposal.md`.
+
+### Changed
+
+- Removed unused `zip` dependency from Cargo.toml (#91). It was
+  declared with an "Archive/export support" comment but no source
+  file imported it; the only `zip` references in the codebase are
+  `iter().zip()` calls from std. Removing it cuts 188 lines from
+  Cargo.lock (zip pulled in a substantial transitive subtree: aes,
+  bzip2-rs, deflate64, flate2, indexmap, lzma-rs, pbkdf2, zopfli,
+  etc.) — meaningful build-time and binary-size savings, plus a
+  smaller supply-chain surface to audit.
+- `sha2` dependency upgraded 0.10 → 0.11 (#94). The 0.11 release
+  dropped its `LowerHex` impl on the digest array returned by
+  `finalize()` (the underlying type changed from `GenericArray` to
+  `hybrid_array::Array`); replaced both `format!("{:x}", ...)`
+  call sites in `transcription/download.rs` with a small inline
+  `hex_encode` helper. No behaviour change for the user — the
+  on-disk hex format is byte-identical to the prior `LowerHex`
+  output.
+- `active-win-pos-rs` dependency upgraded 0.8 → 0.10 (#95).
+  Transparent — `get_active_window()`'s return type and the
+  `ActiveWindow.app_name` / `.title` fields used in
+  `capture_foreground` are unchanged. 0.10 is the line that has
+  macOS 26 / Sequoia compatibility tweaks; staying on 0.8 risked
+  foreground-detection drift on the project's primary target
+  platform.
+
+## [0.1.0] - 2026-04-26
+
+First tagged release. Captures the M3-complete state of Hush —
+end-to-end functional dictation on macOS 26 with history,
+replacements, vocabulary, model picker, auto-download, first-run
+welcome, recording HUD, and an in-app permission diagnostic.
+
+### Added
+
 - Bundled audio test fixture (#34, follow-up to part-a). The
   ~344 KB public-domain JFK "ask not what your country can do for
   you" clip (16 kHz mono PCM, lifted from whisper.cpp's
