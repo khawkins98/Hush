@@ -82,7 +82,18 @@
   let models = $state<ModelCard[]>([]);
   let modelsLoaded = $state(false);
   let modelsError = $state<string | null>(null);
-  let modelsRestartNotice = $state(false);
+  // Notice pill shown after the user picks a model. Three flavours:
+  //   - "loaded"         : backend hot-swapped; ready to record now.
+  //   - "needs-download" : selection persisted but the model file is
+  //                        not on disk yet — user has to Download.
+  //   - "needs-restart"  : the file is on disk but hot-swap returned
+  //                        false (whisper feature off, or some other
+  //                        backend reason). Restart picks it up. Rare
+  //                        in practice; covers the edge case so the
+  //                        message stays accurate.
+  //   - null             : no notice currently visible.
+  type ModelSelectNotice = "loaded" | "needs-download" | "needs-restart" | null;
+  let modelsRestartNotice = $state<ModelSelectNotice>(null);
 
   // First-run welcome flow. Renders on the first launch (regardless
   // of platform — the welcome explains permissions that exist
@@ -446,13 +457,22 @@
   }
 
   async function selectModel(card: ModelCard) {
-    if (!card.isDownloaded) return; // greyed-out cards are click-no-ops
     try {
-      await invoke("model_select", { id: card.id });
-      // Backend has no hot-swap yet; surface a restart hint and update
-      // the local card state optimistically so the badge moves.
+      const result = await invoke<{ loaded: boolean }>("model_select", { id: card.id });
+      // Local card state moves the Default badge regardless of load
+      // outcome — the selection has persisted either way.
       models = models.map((m) => ({ ...m, isSelected: m.id === card.id }));
-      modelsRestartNotice = true;
+      // `loaded === true` means the backend hot-swapped to the new
+      // transcriber and the user can record immediately. `false`
+      // means the file isn't on disk yet (or the whisper feature is
+      // off in this build); selection persists, but they need to
+      // Download before they can use it. The notice pill below
+      // branches on this.
+      modelsRestartNotice = result.loaded
+        ? "loaded"
+        : card.isDownloaded
+          ? "needs-restart"
+          : "needs-download";
     } catch (err) {
       modelsError = formatError(err);
     }
@@ -986,10 +1006,18 @@
       </p>
     {/if}
 
-    {#if modelsRestartNotice}
+    {#if modelsRestartNotice === "loaded"}
+      <p class="restart-notice notice-loaded" role="status">
+        ✓ Loaded. Ready to record.
+      </p>
+    {:else if modelsRestartNotice === "needs-download"}
+      <p class="restart-notice notice-warn" role="status">
+        Saved as default — but this model isn't downloaded yet. Click
+        <strong>Download</strong> on the card below to fetch it.
+      </p>
+    {:else if modelsRestartNotice === "needs-restart"}
       <p class="restart-notice" role="status">
-        Saved. Restart Hush to use the new model. (Hot-swap is
-        coming.)
+        Saved. Restart Hush to use the new model.
       </p>
     {/if}
 
@@ -1007,83 +1035,58 @@
           class:unavailable={!card.isDownloaded && !inFlight}
         >
           <!--
-            The clickable area (the card body) is split from the
-            per-card action buttons because nesting buttons is invalid
-            HTML and the previous version did exactly that. Only
-            downloaded cards get a click-to-select button; everything
-            else falls back to a plain `<div>` for the metadata.
+            The card body is a `<button>` so the user can click any
+            card to set it as default — including ones that aren't
+            downloaded yet (the `selectModel` handler persists the
+            selection and the notice pill above tells the user they
+            need to Download next). Action buttons (Download, Cancel,
+            Try again, Remove) live in a sibling `<footer>` below;
+            keeping them out of the card-body button avoids invalid
+            nested-button HTML.
           -->
-          {#if card.isDownloaded}
-            <button
-              type="button"
-              class="model-card-button"
-              onclick={() => selectModel(card)}
-              aria-label="Select {card.displayName}"
-              aria-pressed={card.isSelected}
-            >
-              <header class="model-card-head">
-                <h3 class="model-name">
-                  {card.displayName}
-                  {#if card.isSelected}
-                    <span class="badge default-badge">Default</span>
-                  {/if}
-                </h3>
+          <button
+            type="button"
+            class="model-card-button"
+            onclick={() => selectModel(card)}
+            aria-label={card.isDownloaded
+              ? `Select ${card.displayName}`
+              : `Select ${card.displayName} (will need Download to use)`}
+            aria-pressed={card.isSelected}
+          >
+            <header class="model-card-head">
+              <h3 class="model-name">
+                {card.displayName}
                 {#if card.isSelected}
-                  <span class="model-card-current" aria-hidden="true">●</span>
+                  <span class="badge default-badge">Default</span>
                 {/if}
-              </header>
-              <p class="model-stats">
-                <span>{card.sizeMb} MB</span>
-                <span class="stat">
-                  Speed
-                  <span class="bars" aria-label="{card.speedRating} of 10">
-                    {#each Array(10) as _, i}
-                      <span class:on={i < card.speedRating}></span>
-                    {/each}
-                  </span>
-                  {card.speedRating.toFixed(1)}
+              </h3>
+              {#if card.isSelected}
+                <span class="model-card-current" aria-hidden="true">●</span>
+              {/if}
+            </header>
+            <p class="model-stats">
+              <span>{card.sizeMb} MB</span>
+              <span class="stat">
+                Speed
+                <span class="bars" aria-label="{card.speedRating} of 10">
+                  {#each Array(10) as _, i}
+                    <span class:on={i < card.speedRating}></span>
+                  {/each}
                 </span>
-                <span class="stat">
-                  Accuracy
-                  <span class="bars" aria-label="{card.accuracyRating} of 10">
-                    {#each Array(10) as _, i}
-                      <span class:on={i < card.accuracyRating}></span>
-                    {/each}
-                  </span>
-                  {card.accuracyRating.toFixed(1)}
+                {card.speedRating.toFixed(1)}
+              </span>
+              <span class="stat">
+                Accuracy
+                <span class="bars" aria-label="{card.accuracyRating} of 10">
+                  {#each Array(10) as _, i}
+                    <span class:on={i < card.accuracyRating}></span>
+                  {/each}
                 </span>
-              </p>
-              <p class="model-desc">{card.description}</p>
-            </button>
-          {:else}
-            <div class="model-card-content">
-              <header class="model-card-head">
-                <h3 class="model-name">{card.displayName}</h3>
-              </header>
-              <p class="model-stats">
-                <span>{card.sizeMb} MB</span>
-                <span class="stat">
-                  Speed
-                  <span class="bars" aria-label="{card.speedRating} of 10">
-                    {#each Array(10) as _, i}
-                      <span class:on={i < card.speedRating}></span>
-                    {/each}
-                  </span>
-                  {card.speedRating.toFixed(1)}
-                </span>
-                <span class="stat">
-                  Accuracy
-                  <span class="bars" aria-label="{card.accuracyRating} of 10">
-                    {#each Array(10) as _, i}
-                      <span class:on={i < card.accuracyRating}></span>
-                    {/each}
-                  </span>
-                  {card.accuracyRating.toFixed(1)}
-                </span>
-              </p>
-              <p class="model-desc">{card.description}</p>
-            </div>
-          {/if}
+                {card.accuracyRating.toFixed(1)}
+              </span>
+            </p>
+            <p class="model-desc">{card.description}</p>
+          </button>
 
           <!-- Per-card action footer: Download / Cancel / Try again / Remove. -->
           <footer class="model-card-actions">
@@ -1780,6 +1783,35 @@ button.primary:hover:not(:disabled) {
   font-size: 0.9rem;
 }
 
+/* Three flavours of post-select notice. The default green (above)
+   covers the "needs-restart" edge case. `notice-loaded` is the happy
+   path — saturated green to read as success. `notice-warn` is amber
+   — selection persisted but user has work left (Download). */
+.notice-loaded {
+  background-color: #d1f0d1;
+  border-color: #8fc88f;
+  color: #1a4a1a;
+}
+
+.notice-warn {
+  background-color: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .notice-loaded {
+    background-color: #14532d;
+    border-color: #166534;
+    color: #bbf7d0;
+  }
+  .notice-warn {
+    background-color: #422006;
+    border-color: #92400e;
+    color: #fde68a;
+  }
+}
+
 .model-grid {
   list-style: none;
   margin: 0;
@@ -1891,10 +1923,6 @@ button.primary:hover:not(:disabled) {
   font-size: 0.85rem;
   color: #444;
   line-height: 1.45;
-}
-
-.model-card-content {
-  padding: 0.85rem 1.1rem;
 }
 
 .model-card-actions {

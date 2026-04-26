@@ -124,7 +124,17 @@ pub struct ForegroundApp {
 ///   serial.
 pub struct AppState {
     pub audio: Arc<dyn AudioCapture>,
-    pub transcribe: Option<Arc<dyn Transcribe>>,
+    /// Wrapped in a `Mutex` so `model_select` can hot-swap the loaded
+    /// transcriber at runtime without restarting the app. The lock is
+    /// held for the duration of one of two operations only: a clone
+    /// of the inner `Arc` (microseconds, on the dictation hot path) or
+    /// a wholesale replacement (only when the user picks a new model
+    /// in the picker). No async work happens inside the lock — the
+    /// model file load is done on a `spawn_blocking` task and only
+    /// the resulting `Arc` is moved into the lock. See
+    /// `swap_transcriber` for the swap path; `stop_dictation` for the
+    /// read path.
+    pub transcribe: Mutex<Option<Arc<dyn Transcribe>>>,
     pub history: Arc<dyn HistoryRepository>,
     pub replacements: Arc<dyn ReplacementRepository>,
     pub vocabulary: Arc<dyn VocabularyRepository>,
@@ -159,7 +169,7 @@ impl AppState {
     ) -> Self {
         Self {
             audio,
-            transcribe,
+            transcribe: Mutex::new(transcribe),
             history,
             replacements,
             vocabulary,
@@ -252,6 +262,73 @@ impl AppState {
             settings,
             models_dir,
         ))
+    }
+}
+
+impl AppState {
+    /// Hot-swap the loaded transcriber.
+    ///
+    /// Called from `model_select` after the user picks a model that
+    /// has a downloaded file on disk. The lock is acquired only after
+    /// the (potentially-slow) GGUF load completes on a blocking task,
+    /// so the dictation hot path is never blocked on disk I/O.
+    ///
+    /// Returns the previous value so the caller can drop it explicitly
+    /// if it wants — the default `Drop` is fine for `Arc<dyn Trait>`,
+    /// but returning is cheap and lets callers diagnose "did we
+    /// actually swap something?" if they care.
+    pub fn swap_transcriber(
+        &self,
+        new: Option<Arc<dyn Transcribe>>,
+    ) -> Result<Option<Arc<dyn Transcribe>>> {
+        let mut guard = self
+            .transcribe
+            .lock()
+            .map_err(|_| anyhow::anyhow!("transcribe mutex poisoned"))?;
+        Ok(std::mem::replace(&mut *guard, new))
+    }
+}
+
+/// Try to load the GGUF for a single catalog model id. Returns `None`
+/// if the model isn't in the catalog, the file isn't on disk, or the
+/// `whisper` Cargo feature is off. Returns an error if the file is on
+/// disk but `WhisperTranscription::new` fails — the caller decides
+/// whether to surface that to the user or silently fall through.
+///
+/// Pulled out as its own function so `model_select` can hot-load a
+/// specific model without going through the full startup-time
+/// fallback chain in [`build_transcriber`] (which also tries the
+/// legacy `HUSH_MODEL_PATH` env var, irrelevant once the user is
+/// driving the picker).
+#[cfg_attr(not(feature = "whisper"), allow(unused_variables))]
+pub fn load_transcriber_for_model(
+    model_id: &str,
+    models_dir: &Path,
+) -> Result<Option<Arc<dyn Transcribe>>> {
+    #[cfg(feature = "whisper")]
+    {
+        use crate::transcription::catalog;
+
+        let Some(meta) = catalog::find_by_id(model_id) else {
+            return Ok(None);
+        };
+        let path = models_dir.join(&meta.filename);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let transcriber = crate::transcription::WhisperTranscription::new(&path)
+            .with_context(|| format!("load whisper model {} from {}", meta.id, path.display()))?;
+        tracing::info!(
+            model_id = %meta.id,
+            path = %path.display(),
+            "hot-loaded whisper model"
+        );
+        Ok(Some(Arc::new(transcriber) as Arc<dyn Transcribe>))
+    }
+
+    #[cfg(not(feature = "whisper"))]
+    {
+        Ok(None)
     }
 }
 
@@ -596,7 +673,7 @@ mod tests {
         // stop. We just check construction here; the unavailable behaviour
         // is exercised by the `commands` module's runtime path.
         let state = mock_state();
-        assert!(state.transcribe.is_none());
+        assert!(state.transcribe.lock().unwrap().is_none());
     }
 
     #[test]
