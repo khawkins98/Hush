@@ -652,8 +652,8 @@
       <header>
         <h2 id="first-run-heading">Welcome to Hush</h2>
         <p class="first-run-tagline">
-          Local, private voice-to-text. Two permissions worth knowing
-          about before you start.
+          Local, private voice-to-text. Here's what to know about
+          permissions and privacy before you start.
         </p>
       </header>
 
