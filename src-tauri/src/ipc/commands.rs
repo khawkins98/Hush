@@ -53,7 +53,7 @@ use super::{AppState, ForegroundApp};
 /// recording — not at stop, because by stop time the user has alt-tabbed
 /// back to Hush and "current foreground" would always be us. The backend
 /// already inserts a history row with this metadata via the
-/// fire-and-forget `spawn_history_insert` helper in `stop_dictation`, so
+/// fire-and-forget `spawn_history_create` helper in `stop_dictation`, so
 /// the frontend doesn't need to round-trip it back through `history_*`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -273,7 +273,7 @@ pub async fn stop_dictation(
     fire_ready_notification(&app);
 
     let foreground = take_foreground_snapshot(&state)?;
-    spawn_history_insert(
+    spawn_history_create(
         Arc::clone(&state.history),
         NewHistoryEntry {
             transcript: text.clone(),
@@ -365,12 +365,12 @@ fn fire_ready_notification(app: &AppHandle) {
 /// the user — the clipboard write is what they care about. If history
 /// ever becomes load-bearing for a downstream pipeline, this needs
 /// revisiting.
-fn spawn_history_insert(
+fn spawn_history_create(
     history: Arc<dyn crate::history::HistoryRepository>,
     entry: NewHistoryEntry,
 ) {
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = history.insert(entry).await {
+        if let Err(e) = history.create(entry).await {
             tracing::error!(error = ?e, "failed to persist transcription to history");
         }
     });
@@ -1385,7 +1385,7 @@ mod tests {
     struct VocabWithTerms(Vec<VocabularyTerm>);
 
     #[async_trait::async_trait]
-    impl VocabularyRepository for VocabWithTerms {
+    impl crate::repository::Repository<VocabularyTerm, NewVocabularyTerm, i64> for VocabWithTerms {
         async fn list(&self) -> anyhow::Result<Vec<VocabularyTerm>> {
             Ok(self.0.clone())
         }
@@ -1403,7 +1403,7 @@ mod tests {
     struct FailingVocab;
 
     #[async_trait::async_trait]
-    impl VocabularyRepository for FailingVocab {
+    impl crate::repository::Repository<VocabularyTerm, NewVocabularyTerm, i64> for FailingVocab {
         async fn list(&self) -> anyhow::Result<Vec<VocabularyTerm>> {
             Err(anyhow!("table missing"))
         }
@@ -1421,7 +1421,9 @@ mod tests {
     struct FailingReplacements;
 
     #[async_trait::async_trait]
-    impl ReplacementRepository for FailingReplacements {
+    impl crate::repository::Repository<ReplacementRule, crate::dictionary::NewReplacementRule, i64>
+        for FailingReplacements
+    {
         async fn list(&self) -> anyhow::Result<Vec<ReplacementRule>> {
             Err(anyhow!("table missing"))
         }

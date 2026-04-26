@@ -80,7 +80,17 @@ pub struct NewHistoryEntry {
 #[async_trait]
 pub trait HistoryRepository: Send + Sync {
     /// Insert a new row and return its generated id.
-    async fn insert(&self, entry: NewHistoryEntry) -> Result<i64>;
+    ///
+    /// Named `create` for naming consistency with
+    /// [`crate::dictionary::ReplacementRepository`] /
+    /// [`crate::dictionary::VocabularyRepository`] (both expose
+    /// `create`, not `insert`). History does not implement the
+    /// generic [`crate::repository::Repository`] trait — its
+    /// surface is fundamentally different (paginated list, plus
+    /// `search` and `count`, no `update`) — but adopting the same
+    /// method name removes the gratuitous drift flagged by the
+    /// round-3 architecture review.
+    async fn create(&self, entry: NewHistoryEntry) -> Result<i64>;
 
     /// Paginated list, newest first. `limit` is hard-capped to a
     /// reasonable upper bound by the implementation so a misbehaving

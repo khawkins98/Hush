@@ -12,7 +12,9 @@ use async_trait::async_trait;
 
 use crate::db::SqliteDatabase;
 
-use super::{NewReplacementRule, ReplacementRepository, ReplacementRule};
+use crate::repository::Repository;
+
+use super::{NewReplacementRule, ReplacementRule};
 
 /// Concrete repository backed by a [`SqliteDatabase`] pool.
 pub struct SqliteReplacementRepository {
@@ -26,7 +28,7 @@ impl SqliteReplacementRepository {
 }
 
 #[async_trait]
-impl ReplacementRepository for SqliteReplacementRepository {
+impl Repository<ReplacementRule, NewReplacementRule, i64> for SqliteReplacementRepository {
     async fn list(&self) -> Result<Vec<ReplacementRule>> {
         // Sort `(sort_order, id)` so the IPC layer's
         // `apply_replacements` doesn't need to re-sort on every
