@@ -28,11 +28,25 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 - ⚙️ Model picker — Whisper tiny → large-v3, with one-click auto-download (SHA-256 verified, host-restricted to Hugging Face) and hot-load on select (no restart needed when picking a downloaded model)
 - 👋 macOS first-run welcome that explains Microphone + Input Monitoring permissions
 
-### Planned (v1)
+### Planned (v1.x)
 
-- 🔄 Auto-update channel via the Tauri updater plugin (#10)
-- 🎯 Parakeet via ONNX as a second engine (#32)
-- 🔊 System-audio loopback capture (#33)
+The big post-v0.1.0 direction is **Meeting Mode** — passive
+transcription of meetings with system-audio capture, opt-in per
+app, audio never persists. Design memo at
+[`docs/system-audio-meeting-mode-proposal.md`](./docs/system-audio-meeting-mode-proposal.md);
+the PRD's §5b carries the canonical policy text. Phase A1 (audio
+source picker) and the Phase C scaffold (meeting-sessions data
+layer + UI panel placeholder) shipped post-v0.1.0; the runtime
+that fills the panel is the open work.
+
+- 🎤 **Meeting Mode** — system-audio + streaming + sessions
+  (`docs/system-audio-meeting-mode-proposal.md`, tracked under [#33](https://github.com/khawkins98/Hush/issues/33))
+- 🔊 Per-platform system-audio capture: macOS [#105](https://github.com/khawkins98/Hush/issues/105) /
+  Linux [#106](https://github.com/khawkins98/Hush/issues/106) /
+  Windows [#107](https://github.com/khawkins98/Hush/issues/107)
+- ⚡ Streaming transcription via Whisper sliding-window [#108](https://github.com/khawkins98/Hush/issues/108)
+- 🔄 Auto-update channel via the Tauri updater plugin [#10](https://github.com/khawkins98/Hush/issues/10)
+- 🎯 Parakeet via ONNX as a second engine [#32](https://github.com/khawkins98/Hush/issues/32)
 
 ---
 

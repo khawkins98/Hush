@@ -89,15 +89,16 @@
   </header>
 
   <!--
-    Permanent privacy line. Per the design memo, meeting-mode is a
-    real product surface where the privacy stance is the load-bearing
-    differentiator; surface it as a permanent UX line, not a banner
-    that disappears.
+    Permanent privacy line. Round-7 UX reviewer noted the previous
+    framing leaked implementation trivia ("30s ring buffer") into a
+    user-facing line. Lead with the user benefit (text appears
+    instantly), then the promise (nothing stored). The buffer
+    detail moves into the "How it works" disclosure below for users
+    who want it.
   -->
   <p class="privacy-line" role="note">
-    Audio is transcribed live and never saved. Only transcripts and
-    timestamps persist — the audio itself stays in memory for ~30 s
-    during inference, then is discarded.
+    Hush transcribes meeting audio live and never saves the audio
+    itself — only the transcript and timestamps persist.
   </p>
 
   <p class="hint-prose">
@@ -106,6 +107,19 @@
     streams the transcript here. Sessions are searchable and editable
     after the meeting ends.
   </p>
+
+  <details class="how-it-works">
+    <summary>How it works</summary>
+    <p>
+      Audio enters a small in-memory buffer (about 30 seconds at a
+      time) where Hush's local Whisper model transcribes it. Once a
+      window is transcribed, those audio samples are overwritten by
+      the next window — the bytes never reach disk. The transcript
+      and per-utterance timestamps are what gets persisted, plus
+      the meeting-app name and an optional note you can add after
+      the meeting ends.
+    </p>
+  </details>
 
   {#if sessionsError}
     <p class="error scoped-error" role="alert">
@@ -118,19 +132,24 @@
     <p class="empty-meetings">Loading sessions…</p>
   {:else if sessions.length === 0}
     <!--
-      No-sessions placeholder. Spelled out explicitly because Meeting
-      Mode is in active development — a user landing here without
-      this context would otherwise wonder if their meeting was
-      captured. Surface what's pending and where to follow along.
+      No-sessions placeholder. Round-7 UX reviewer noted the previous
+      framing read as a GitHub-ticket summary, not product copy.
+      Lead with the user-facing message ("coming soon"), bury the
+      developer-facing tracking-issue list under a disclosure for
+      readers who want to follow along.
     -->
     <div class="meetings-placeholder">
-      <p class="placeholder-headline">No meeting sessions yet.</p>
-      <p>
-        Meeting Mode is rolling out in phases. The data layer for
-        sessions and per-utterance transcripts is shipped (the panel
-        you're reading is real), but the runtime that detects
-        meetings and creates sessions is still in flight:
+      <p class="placeholder-headline">
+        Live meeting transcripts are coming soon.
       </p>
+      <p>
+        Hush will automatically detect when you're on Zoom, Teams,
+        Meet, or similar apps and start capturing the conversation —
+        with the same privacy stance: audio in memory only, transcript
+        on disk. Rolling out in phases over the coming weeks.
+      </p>
+      <details class="dev-notes">
+        <summary>Developer notes — what's pending and where to follow along</summary>
       <ul class="placeholder-list">
         <li>
           <strong>Session manager + app classifier</strong> — detects
@@ -189,6 +208,7 @@
           rel="noopener noreferrer">docs/system-audio-meeting-mode-proposal.md</a
         >.
       </p>
+      </details>
     </div>
   {:else}
     <ul class="sessions-list">
@@ -287,6 +307,40 @@
   margin: 0 0 1rem;
   font-size: 0.9rem;
   line-height: 1.5;
+  color: #555;
+}
+
+.how-it-works,
+.dev-notes {
+  margin: 0.5rem 0 0.75rem;
+}
+
+.how-it-works summary,
+.dev-notes summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #666;
+  user-select: none;
+  padding: 0.25rem 0;
+}
+
+.how-it-works summary:hover,
+.dev-notes summary:hover {
+  color: #1a1a1a;
+}
+
+.how-it-works[open] summary,
+.dev-notes[open] summary {
+  margin-bottom: 0.5rem;
+}
+
+.how-it-works > p {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background-color: rgba(0, 0, 0, 0.02);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  line-height: 1.55;
   color: #555;
 }
 

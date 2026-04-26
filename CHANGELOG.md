@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This block covers the post-v0.1.0 meeting-mode pivot work. Grouped
+by PR so a reader can scan which features shipped in which change —
+the unreleased queue grew long enough during the pivot scaffold that
+a single flat list was hard to navigate.
+
 ### Added
+
+#### Phase C scaffold: meeting sessions data layer + UI panel (#113)
 
 - Meeting Mode scaffold (Phase C foundation; refs #33 / #109).
   Lands the data layer + UI shell for the meeting-transcript
@@ -34,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     list, idempotent close_session, atomic append_utterance with
     count bump, ordered list_utterances, set_notes round-trip,
     and FK cascade on delete.
+#### Phase B foundation: streaming-transcription scaffold
+
 - `stop_dictation` now invokes inference through the streaming
   entry point (`Transcribe::transcribe_chunks`) rather than the
   one-shot `transcribe_with_prompt`. Default-impl behaviour is
@@ -68,6 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Six new unit tests pin the default behaviour (single final
   utterance, prompt forwarding, stereo duration arithmetic, empty-
   chunks safety, capability default, serde wire shape).
+#### Phase A1: audio source picker (#98, #101)
+
 - Audio source picker — first user-visible step of the system-audio +
   meeting-mode pivot (Phase A1, refs #33; design memo at
   `docs/system-audio-meeting-mode-proposal.md`). The mic dropdown is
@@ -84,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is kept as a transitional alias for one release. Three new Rust
   tests pin the listing default impl, the override path, and the
   camelCase wire shape.
+#### Phase A foundation (#96)
+
 - `AudioSource` enum (`Microphone(Option<String>)` / `SystemAudio`)
   and `AudioCapture::start_with_source` trait method on the audio
   backend boundary (#96, foundation for #33). No behaviour change
@@ -95,6 +108,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors usefully, capability check defaults correct, serde wire
   shape round-trips). Refs the meeting-mode design memo at
   `docs/system-audio-meeting-mode-proposal.md`.
+
+### Fixed
+
+#### Round-7 review consolidation
+
+- **Defensive guard against silent empty-clipboard.** `stop_dictation`
+  filters utterances on `is_final`, then writes the concatenated text
+  to the clipboard. Round-7 technical-quality reviewer caught a real
+  failure mode: a future streaming backend that emits only partial
+  utterances (and never a final) would slip through the filter as an
+  empty string, and the user would get a clipboard with nothing in it
+  with no error surfaced. Now we explicitly check for "utterances
+  returned but none final" and surface it as
+  `IpcError::Transcription` with a clear message. The default impl
+  one-shot path always emits exactly one final, so this branch is
+  only reachable for misbehaving overrides.
+- **`app_kind_from_str` fails loud on unknown values** instead of
+  silently defaulting to `Other`. Round-7 reviewer flagged the
+  silent-default as data-corruption-masking — a rogue write of
+  `"video-call"` would render as a generic "Other" session with no
+  signal that anything was wrong. Now `FromRow` returns
+  `sqlx::Error::Decode` with a descriptive message. A future variant
+  added to `MeetingAppKind` is a deliberate code change that updates
+  the match arm; the database is never expected to hold values the
+  match doesn't cover.
+- **`IpcError::MeetingSessions` variant added.** Meeting commands
+  previously mapped errors to `IpcError::Settings` with a string
+  prefix, drifting from the per-domain pattern (`History`,
+  `Replacements`). Now the four meeting-session commands return their
+  own kind (`meeting-sessions`) so the frontend can switch on the
+  variant for tailored recovery copy when the streaming pump (#110)
+  starts driving real writes.
+- **First-run welcome modal pulled ahead of `Promise.all`.**
+  Round-7 UX reviewer noted a real timing bug: when the first-run
+  flag fetch raced against the parallel data fetches, a fresh-install
+  user could see the no-model setup banner before the welcome modal
+  landed — the modal explaining permissions appeared after the user
+  had already started clicking around looking for the record button.
+  Awaiting the flag synchronously makes the modal beat the rest of
+  the UI to first paint. Cost: one extra IPC round-trip (cheap, a
+  single SQLite read of a boolean).
+- **Meeting panel placeholder reframed as product copy.** The earlier
+  placeholder read like a GitHub-ticket summary ("Session manager —
+  tracked in #110"). Round-7 UX reviewer caught the developer-y
+  framing. Now the headline reads "Live meeting transcripts are
+  coming soon" with a one-paragraph user-facing summary; the
+  developer-facing tracking-issue list is preserved verbatim under a
+  "Developer notes" `<details>` disclosure for readers who want to
+  follow along.
+- **Privacy line tightened.** The earlier framing leaked
+  implementation trivia (the "30s ring buffer" detail) into a
+  user-facing line. Now it leads with the user benefit ("Hush
+  transcribes meeting audio live and never saves the audio itself")
+  and moves the buffer detail into a "How it works" `<details>`
+  disclosure for users who want the full mechanism.
+- **PRD §5b "Meeting Mode (v1.x)" added.** The design memo from
+  #93 had proposed adding this section; the pivot was actively
+  shipping but the policy doc still described Hush as
+  dictation-only. Documentation reviewer flagged. The PRD now
+  carries the canonical "Meeting Mode v1.x" text, with §3 and §10
+  tightened in lockstep.
+- **Design memo status line updated.** The memo at
+  `docs/system-audio-meeting-mode-proposal.md` still said "Draft for
+  discussion. Not approved; not in the PRD yet." even after Phases
+  A1, B foundation, and C scaffold had landed. Now reads "Approved
+  direction; actively shipping" with the concrete phase status.
 
 ### Changed
 

@@ -137,14 +137,27 @@
   });
 
   onMount(async () => {
-    // Check the first-run flag before anything else — if this is a
-    // fresh install, we want the welcome modal up before the user
-    // tries to use the app and runs into a permission prompt with
-    // no context. The fetch is independent of the others so it can
-    // race in parallel.
-    void invoke<boolean>("get_first_run_completed").then((done) => {
+    // Check the first-run flag BEFORE the Promise.all — round-7 UX
+    // reviewer caught a real timing bug: when the flag fetch raced
+    // against `Promise.all`, a fresh-install user could see the
+    // no-model setup banner (which depends on the model-list fetch
+    // that's part of Promise.all) BEFORE the welcome modal landed.
+    // That meant the modal explaining permissions and the dictation
+    // flow would appear after the user had already started clicking
+    // around looking for the record button. Awaiting the flag
+    // synchronously makes the modal beat the rest of the UI to first
+    // paint — the cost is one extra IPC round-trip (cheap; this is a
+    // single SQLite read of a boolean).
+    try {
+      const done = await invoke<boolean>("get_first_run_completed");
       if (!done) showFirstRun = true;
-    });
+    } catch (e) {
+      // Don't block the rest of the page on a settings-fetch failure.
+      // The welcome modal is a one-time UX nicety; if SQLite can't
+      // even answer, the user has bigger problems and the model
+      // banner / error chips will surface them anyway.
+      console.error("get_first_run_completed failed:", e);
+    }
 
     // Fire all five fetches concurrently rather than sequentially —
     // the user-visible time-to-paint is bounded by the slowest single
