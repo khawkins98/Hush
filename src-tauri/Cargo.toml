@@ -77,6 +77,17 @@ rdev = "0.5"
 zip = "2"
 
 [features]
+# `whisper` is a default feature so a vanilla `cargo run` / `npm run
+# tauri dev` builds the actual transcription path. UI-only
+# contributors (no cmake on the machine) can opt out with
+# `--no-default-features` — `cargo tauri dev --no-default-features`
+# launches the app shell without the Whisper backend; transcription
+# returns `IpcError::TranscriptionUnavailable` and the frontend
+# surfaces the no-model banner. Pre-2026-04-26 the default was empty
+# and developers had to remember to pass `--features whisper`; the
+# user hit this in hands-on testing because the model was on disk
+# but the binary literally didn't include the loader code.
+default = ["whisper"]
 # Enable the whisper transcription backend (requires cmake).
 whisper = ["dep:whisper-rs"]
 
