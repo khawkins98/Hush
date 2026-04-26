@@ -387,25 +387,7 @@ fn stop_session(session: Session) -> Result<CapturedAudio> {
     let _ = session.stream.pause();
     drop(session.stream);
 
-    // Take the buffer contents via a brief lock rather than requiring sole
-    // Arc ownership. Earlier versions called `Arc::try_unwrap`, but on some
-    // platforms cpal's stream cleanup is asynchronous — the closure clone
-    // of the Arc may live a beat longer than the `drop(session.stream)`
-    // call above, and `try_unwrap` then errors with "audio buffer still
-    // shared after stream drop" even though the recording was successful
-    // and the buffer is in a valid state. Locking is correct regardless of
-    // how many Arc clones are still alive: if a final callback is mid-write
-    // we wait the milliseconds it takes to finish; otherwise the lock is
-    // uncontended. The leftover Arc clone(s) drop on their own as cpal
-    // finishes cleanup. `mem::take` swaps the Vec out of the mutex so we
-    // own the samples and the mutex's interior goes back to an empty Vec.
-    let samples = {
-        let mut guard = session
-            .buffer
-            .lock()
-            .map_err(|_| anyhow!("audio buffer mutex poisoned"))?;
-        std::mem::take(&mut *guard)
-    };
+    let samples = drain_buffer(&session.buffer)?;
 
     Ok(CapturedAudio {
         samples,
@@ -502,6 +484,30 @@ fn append_samples<T: Copy>(
         // alongside the level.
         level.store(rms.to_bits(), Ordering::Relaxed);
     }
+}
+
+/// Take the captured samples out of the shared buffer, leaving the
+/// mutex's inner `Vec` empty. Pulled out as its own free function so
+/// the regression that surfaced in PR #77 — `Arc::try_unwrap` fails
+/// when cpal's stream cleanup is asynchronous and the callback's
+/// Arc clone outlives `drop(stream)` — has unit-test coverage. The
+/// real cpal stream is impossible to construct in a unit test (it
+/// needs a real audio device), but the load-bearing piece is just
+/// "can we get the samples out when other Arc clones are alive?",
+/// which `lock + mem::take` answers correctly regardless of clone
+/// count.
+///
+/// Locking is correct under all the timings we care about:
+/// - Uncontended (the common case post-`stream.pause()`): immediate.
+/// - Contended by a final in-flight callback: the lock waits the
+///   few-ms append to finish, then we take.
+/// - Multiple Arc clones outstanding: irrelevant — the lock doesn't
+///   care about Arc strong count, only mutex ownership.
+fn drain_buffer(buffer: &Arc<Mutex<Vec<f32>>>) -> Result<Vec<f32>> {
+    let mut guard = buffer
+        .lock()
+        .map_err(|_| anyhow!("audio buffer mutex poisoned"))?;
+    Ok(std::mem::take(&mut *guard))
 }
 
 /// RMS from a pre-computed sum-of-squares plus the sample count.
@@ -618,5 +624,63 @@ mod tests {
             }
         }
         assert_eq!(Stub.current_level(), 0.0);
+    }
+
+    // -- drain_buffer regression tests -----------------------------------
+    //
+    // PR #77 fixed a real bug surfaced in hands-on testing: stop_session
+    // used Arc::try_unwrap to take the buffer Vec, requiring sole Arc
+    // ownership. On macOS 26 (and apparently other platforms), cpal's
+    // stream cleanup is asynchronous — the callback closure's Arc clone
+    // can outlive drop(session.stream) by a beat — so try_unwrap
+    // sporadically failed on perfectly-good recordings with "audio buffer
+    // still shared after stream drop." The fix swapped to lock + mem::take.
+    //
+    // These tests pin the new behaviour: drain_buffer must succeed
+    // regardless of how many Arc clones are still alive at call time.
+    // The unit-test coverage matters because the cpal stream itself is
+    // impossible to construct without a real audio device, so the
+    // race-prone bit lives entirely in the buffer-take path now. A
+    // future regression that puts try_unwrap (or any
+    // strong-count-sensitive operation) back fails these tests.
+
+    #[test]
+    fn drain_buffer_takes_contents_when_arc_is_unique() {
+        let buffer = Arc::new(Mutex::new(vec![1.0_f32, 2.0, 3.0]));
+        let samples = drain_buffer(&buffer).expect("drain succeeds with unique Arc");
+        assert_eq!(samples, vec![1.0_f32, 2.0, 3.0]);
+        // Mutex's interior is now an empty Vec; the Arc itself is still
+        // valid for any other holders that haven't dropped yet.
+        assert!(buffer.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn drain_buffer_succeeds_with_outstanding_arc_clones() {
+        // Simulates the cpal-cleanup-still-in-flight case that broke
+        // try_unwrap. Multiple Arc clones outstanding; drain must still
+        // produce the recording's samples, not error.
+        let buffer = Arc::new(Mutex::new(vec![1.0_f32, 2.0, 3.0]));
+        let cpal_closure_clone = Arc::clone(&buffer);
+        let another_clone = Arc::clone(&buffer);
+
+        let samples = drain_buffer(&buffer).expect("drain succeeds despite extra Arc clones");
+        assert_eq!(samples, vec![1.0_f32, 2.0, 3.0]);
+
+        // The other clones still see the (now-empty) buffer through their
+        // shared Arc — proving lock-and-take did not require sole Arc
+        // ownership. These would have errored under the pre-PR-#77
+        // try_unwrap implementation.
+        assert!(cpal_closure_clone.lock().unwrap().is_empty());
+        assert!(another_clone.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn drain_buffer_returns_empty_for_empty_buffer() {
+        // The "user pressed Stop almost immediately" path. Drain returns
+        // an empty Vec rather than erroring; the transcription stack will
+        // surface a more useful error downstream if the silence matters.
+        let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let samples = drain_buffer(&buffer).expect("drain succeeds on empty buffer");
+        assert!(samples.is_empty());
     }
 }

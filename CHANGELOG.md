@@ -404,6 +404,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- **`drain_buffer` regression tests** for the audio-stop fix in PR #77.
+  The cpal stream itself can't be unit-tested (no audio device in CI),
+  but the load-bearing race-prone bit — "take the captured samples
+  out of the shared `Arc<Mutex<Vec<f32>>>` regardless of how many Arc
+  clones cpal hasn't dropped yet" — is now extracted as a free
+  function `drain_buffer` and unit-tested. Three cases pinned: take
+  from a unique Arc, take while two extra Arc clones are alive
+  (simulating the cpal-cleanup-still-in-flight case the user hit on
+  macOS 26), and empty-buffer no-op. A future regression that
+  reintroduces `Arc::try_unwrap` (or any strong-count-sensitive
+  operation) on this path fails the second test.
 - **Frontend e2e via Playwright + mocked Tauri IPC.** New
   `tests/e2e/` suite drives the SvelteKit dev server in
   `HUSH_E2E=1` mode — `vite.config.js` swaps
