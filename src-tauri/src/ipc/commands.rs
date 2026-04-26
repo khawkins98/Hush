@@ -125,6 +125,17 @@ pub enum IpcError {
     #[error("replacements: {0}")]
     Replacements(String),
 
+    /// Meeting-session repository (SQLite) error — failed CRUD on
+    /// `meeting_sessions` or `utterances` (Phase C scaffold tables).
+    /// Surfaced separately from `Settings` so the frontend's panel
+    /// can switch on `meeting-sessions` for tailored recovery copy
+    /// when the streaming pump (#110) starts driving real writes.
+    /// Pre-#110 the repo is read-only; this variant is reachable
+    /// today only via list/get/delete on an existing-but-corrupt
+    /// table.
+    #[error("meeting-sessions: {0}")]
+    MeetingSessions(String),
+
     /// In-process state guard panicked while a lock was held. Should not
     /// happen in practice — only the IPC commands lock our internal
     /// mutexes and they don't panic — but a poisoned lock surfacing here
@@ -324,12 +335,29 @@ pub async fn stop_dictation(
     // Skip non-final utterances — those are partial revisions
     // intended for live UI updates, not the dictation hot path's
     // single clipboard write.
+    let final_count = utterances.iter().filter(|u| u.is_final).count();
     let raw_text = utterances
         .iter()
         .filter(|u| u.is_final)
         .map(|u| u.text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
+    // Defensive guard against a streaming backend that emits ONLY
+    // partial utterances (no finals) — without this check, the
+    // filter above silently produces an empty string and the user
+    // gets a clipboard with nothing in it, no error surfaced.
+    // Round-7 technical-quality reviewer caught the silent-empty
+    // failure mode on the future-streaming-backend path. The
+    // default-impl one-shot path always emits exactly one final, so
+    // this branch is only reachable for misbehaving overrides — we
+    // surface the misbehaviour as a Transcription error rather than
+    // letting it look like the user's audio was empty.
+    if final_count == 0 && !utterances.is_empty() {
+        return Err(IpcError::Transcription(
+            "transcription backend emitted only partial utterances; no final transcript available"
+                .to_owned(),
+        ));
+    }
     let rules = load_replacement_rules(&state).await;
     let text = apply_replacements(raw_text.trim(), &rules);
 
@@ -962,7 +990,7 @@ pub async fn meeting_sessions_list(
         .meetings
         .list()
         .await
-        .map_err(|e| IpcError::Settings(format!("meeting sessions list: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("sessions list: {e}")))
 }
 
 /// Full detail for one session: the row plus all its persisted
@@ -988,16 +1016,16 @@ pub async fn meeting_session_get(
         .meetings
         .list()
         .await
-        .map_err(|e| IpcError::Settings(format!("meeting session get: {e}")))?;
+        .map_err(|e| IpcError::MeetingSessions(format!("session get: {e}")))?;
     let session = sessions
         .into_iter()
         .find(|s| s.id == id)
-        .ok_or_else(|| IpcError::Settings(format!("meeting session {id} not found")))?;
+        .ok_or_else(|| IpcError::MeetingSessions(format!("session {id} not found")))?;
     let utterances = state
         .meetings
         .list_utterances(id)
         .await
-        .map_err(|e| IpcError::Settings(format!("meeting session utterances: {e}")))?;
+        .map_err(|e| IpcError::MeetingSessions(format!("session utterances: {e}")))?;
     Ok(MeetingSessionDetail {
         session,
         utterances,
@@ -1011,7 +1039,7 @@ pub async fn meeting_session_delete(state: State<'_, AppState>, id: i64) -> IpcR
         .meetings
         .delete(id)
         .await
-        .map_err(|e| IpcError::Settings(format!("meeting session delete: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("session delete: {e}")))
 }
 
 /// Update a session's freeform notes. The panel calls this on blur
@@ -1026,7 +1054,7 @@ pub async fn meeting_session_set_notes(
         .meetings
         .set_notes(id, notes)
         .await
-        .map_err(|e| IpcError::Settings(format!("meeting session set_notes: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("session set_notes: {e}")))
 }
 
 // -- First-run / onboarding ----------------------------------------------

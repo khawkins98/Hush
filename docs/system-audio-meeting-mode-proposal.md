@@ -1,7 +1,7 @@
 # Proposal: System Audio + Meeting Mode
 
-**Status:** Draft for discussion. Not approved; not in the PRD yet.
-**Authors:** Claude (drafted on Ken's behalf), 2026-04-26.
+**Status:** Approved direction; actively shipping. Phases A1, B foundation, and C scaffold landed post-v0.1.0; the PRD's §5b ("Meeting Mode (v1.x)") is the canonical policy text. Phase A2/A3/A4 (per-platform SystemAudio), B impl (#108 streaming), C runtime (#110 session manager), D (#111 diarization), and E (#112 classifier policy) are the open phases.
+**Authors:** Claude (drafted on Ken's behalf), 2026-04-26. Status updated 2026-04-26 post Phase C scaffold.
 **Supersedes:** Original framing of [#33](https://github.com/khawkins98/Hush/issues/33) (system-audio capture only). This document widens the scope to include passive meeting transcription with session detection, streaming inference, and a privacy-first "audio never persists" stance.
 
 ---

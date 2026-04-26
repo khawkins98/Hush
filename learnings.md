@@ -531,3 +531,42 @@ rdev::macos::listen::raw_callback
 **Lesson worth keeping.** When a third-party crate calls into platform UI APIs from non-main threads, look for `dispatch_assert_queue` in the stack on the next macOS major. Apple's been progressively tightening these checks for a decade, and the result is always "code that worked on N now hard-aborts on N+1". The defence is either: (a) a thin platform-specific wrapper you control, or (b) the affordance to disable the third-party code that broke. Hush has both available now — env-var disable today, native wrapper later.
 
 **Why I didn't notice this in CI.** CI doesn't run a real Tauri runtime — same blind spot called out in the dev-launch-smoke entry above. Even the dev-launch smoke I run as part of the new convention only boots the app and waits ~20s; it doesn't simulate key events, so it would miss this. The user hit it in actual hands-on testing, which is exactly what hands-on testing is *for*. Worth remembering: there are bug classes that no automation reaches; for those, the human at the keyboard is the test.
+
+
+## 2026-04-26 — `AudioSource` enum vs overloading `device_id`
+
+When Phase A1 of the meeting-mode pivot needed system-audio capture alongside the existing mic path, the trait method `AudioCapture::start(device_id: Option<&str>)` had two obvious extensions:
+
+1. **Overload the string** — pick a sentinel like `"system"` (or `"system-audio"`) that the cpal backend recognises and dispatches to a different platform primitive (ScreenCaptureKit / WASAPI loopback / PulseAudio monitor).
+2. **Discriminated union** — replace `device_id: Option<&str>` with `source: AudioSource` where `AudioSource` is `Microphone(Option<String>) | SystemAudio`.
+
+Picked (2). The string-sentinel approach was tempting because it kept the trait surface unchanged and would have shipped in one PR rather than two, but it has a real cost: it pushes the dispatch into prose ("`'system'` is the magic value") rather than the type system. A frontend caller, a future test mock, or a contributor adding a third source kind would have to remember the sentinel. Worse, a real device named `"system"` (vanishingly unlikely but possible on Linux) would silently collide with the system-audio path with no compiler help.
+
+**The discriminated-union approach makes each dispatch arm visible in the type.** `start_with_source(AudioSource::SystemAudio)` is unambiguous; the frontend's serde wire shape becomes `{ kind: "system-audio" }` instead of an opaque string; future variants (`AppAudio(BundleId)` for per-app capture) extend the enum and get an exhaustive-match prompt at every call site.
+
+The trade-off: trait surface grows. We carry `start(device_id)` AND `start_with_source(source)` both for one transitional release, with `start_with_source` defaulting to dispatch on the `Microphone` arm and erroring on `SystemAudio` for backends that haven't shipped support yet. Cost is one extra method on the trait — paid back the moment the second platform's SystemAudio impl lands.
+
+**Lesson worth keeping.** When a method's parameter is "kind plus details", reach for an enum, not a sentinel string. Even if the enum has only two variants today and a string would cover both. The compile-time exhaustiveness is what makes the third variant safe to add later.
+
+## 2026-04-26 — `Transcribe::transcribe_chunks` as default impl, not separate trait
+
+Phase B foundation needed a streaming entry point on the transcription layer — somewhere a future Whisper-sliding-window or Parakeet backend could emit `Vec<Utterance>` instead of a single `String`. Two shapes:
+
+1. **Separate trait** — `pub trait StreamingTranscribe { ... }`, held alongside `dyn Transcribe` in `AppState`.
+2. **Add the methods to `Transcribe`** with a default impl that calls the existing one-shot `transcribe_with_prompt`.
+
+Picked (2). The IPC layer already holds `Mutex<Option<Arc<dyn Transcribe>>>`. A separate trait would force a choice between holding two parallel object types (and keeping them in sync at every swap point) or downcasting at every dispatch. Default impl on the existing trait keeps the IPC surface unchanged: every backend, including test mocks and the future "no model loaded" stub, continues to satisfy `Transcribe` with no per-impl boilerplate.
+
+**The default-impl is observably equivalent to the legacy one-shot path.** It concatenates the chunks into a single `CapturedAudio`, calls `transcribe_with_prompt`, and emits exactly one `is_final = true` utterance whose end timestamp is computed from total frames. So the dictation hot path's behaviour is unchanged through the refactor — we verified by leaving the existing tests (135 of them) green through both #103 (foundation) and #104 (call-site refactor).
+
+The cost is that the streaming-aware backends need a capability flag to disambiguate "I support real partials" from "I'm using the fallback." That's `supports_streaming() -> bool`, default `false`. The IPC layer reads this when deciding whether to forward partial-utterance Tauri events to the frontend.
+
+**Lesson worth keeping.** Trait surfaces for "this is how the engine emits results" should accept the most expressive shape (a sequence of utterances with timestamps), with a default impl that degrades gracefully for backends still operating in the simpler one-shot world. The bridge — capability-flag-plus-default — costs less than two parallel traits, both at the type-system level and at the dispatch level. Where the dictionary repos diverge from this pattern (markers + extension trait, see #113 review notes) is a design tension we'll resolve before the streaming pump in #110 starts driving real writes.
+
+## 2026-04-26 — Round-7 reviewer cycle: the "byte-identical" trap
+
+A pattern surfaced in #103 + #104 that's worth pinning. The PR descriptions claimed the refactor was "byte-identical" to the prior behaviour — meaning the default `transcribe_chunks` impl produces the same final transcript text the legacy `transcribe_with_prompt` did. Round-7 technical-writing reviewer correctly flagged that "byte-identical" is precise CPU-cache-line vocabulary, not a description of transcription text equivalence.
+
+**The accurate claim is "observably equivalent" or "semantically unchanged".** Round-7 also caught a real silent-failure-mode that "byte-identical" would have masked: the `is_final` filter at the call site would silently produce empty text if a future streaming backend emitted only partials. That's not byte-identical to anything — it's a new failure mode introduced by the refactor.
+
+**Lesson worth keeping.** Prefer "observably equivalent" or "no behaviour change for users on the default-impl path" when describing refactors that route the same data through a new code path. "Byte-identical" claims more than is actually true and the gap is where the silent-failure modes hide.

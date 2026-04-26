@@ -41,6 +41,7 @@ The following are recognised as valuable but explicitly out of scope for v1. Eac
 - The full Power Mode rule engine (per-app and per-URL profile switching).
 - AI assistant mode (VoiceInk's conversational ChatGPT-style flow).
 - LLM-driven post-processing modes (writing-style transforms).
+- Real-time LLM summarization of meeting transcripts. (Meeting Mode itself ships in v1.x — see §5b. LLM summarization layered on top is a v2 concern; v1.x produces the transcript, the user can pipe it through whatever they like.)
 
 ## 5. Engine roadmap
 
@@ -51,6 +52,36 @@ The following are recognised as valuable but explicitly out of scope for v1. Eac
 What is **explicitly out**: any macOS-specific engine path (FluidAudio, native CoreML bindings) that would require substantial macOS-only Rust to maintain. The cross-platform promise is the constraint we will not relax — if a model can't run via ONNX (or another truly cross-platform runtime), it does not ship.
 
 When Parakeet lands, the model picker grows a second engine card alongside the Whisper variants, and the `Transcribe` trait grows a `transcribe_with_options()` method that engines can use for engine-specific tuning. The settings schema already accommodates this (the `selected_model_id` is engine-prefixed as `whisper-base` / `parakeet-v2-en`).
+
+## 5b. Meeting Mode (v1.x)
+
+Hush v1's core flow is one-shot dictation: the user holds a hotkey, talks, gets a transcript on the clipboard. v1.x adds a passive-transcription surface ("Meeting Mode") that captures system audio + microphone during meetings, transcribes streaming, and persists per-utterance transcripts grouped into sessions. Audio never lands on disk — only transcripts and timestamps.
+
+Meeting Mode is **opt-in per app**. The first time the user runs a meeting (Zoom, Teams, Meet, Discord, Slack-call) Hush prompts: "Audio detected in Zoom — start a transcript session?" The user can answer once or set "always for this app." Media apps (YouTube, Spotify, Apple Music) default to "no" and the user can opt them in.
+
+Streaming transcription depends on either the Whisper.cpp sliding-window pattern or Parakeet (the streaming-friendly second engine — see §5). Whichever ships first is the v1.x default; the other becomes a settable preference.
+
+Diarization (per-speaker labels) starts as a coarse mic-vs-system distinction (Granola-style "Me" / "Them" — different colour bubbles for the two streams, no real voice separation). Real diarization (energy-based then model-based via ONNX) ships later as a swap-in via the existing trait-seam pattern; the v1.x release does not gate on it.
+
+**Privacy guarantee:** audio is buffered in RAM for ~30 s during inference and discarded. No WAV files, no SQLite blobs, no temp files. The Sessions panel surfaces this guarantee permanently, not as a one-time banner.
+
+Out of scope for v1.x:
+
+- Cloud transcription (project identity stays local-only).
+- Direct meeting-platform APIs (Zoom SDK, Teams Graph).
+- Calendar metadata.
+- Real-time LLM summarization (the user can pipe transcripts elsewhere).
+- Cross-session voice fingerprinting / "always recognise Ken's voice."
+
+Phased delivery (each phase independently shippable; tracked under #33):
+
+- **Phase A** — System audio capture per platform. macOS via ScreenCaptureKit (#105), Linux via PulseAudio monitor (#106), Windows via WASAPI loopback (#107).
+- **Phase B** — Streaming transcription (#108). Whisper sliding-window first; Parakeet later.
+- **Phase C** — Sessions + meeting-mode UI (#110). Foundation (data layer + IPC + scaffolded panel) shipped post-v0.1.0.
+- **Phase D** — Diarization (#111). Mic-vs-system bubble UI ships in Phase C; real per-speaker labels here.
+- **Phase E** — Per-app classifier policy refinement (#112).
+
+Design memo at `docs/system-audio-meeting-mode-proposal.md`. The privacy framing draws from Granola's "transcribes, doesn't record" stance; the consent-on-new-voice framing from Limitless's pendant.
 
 ## 6. Architecture overview
 
