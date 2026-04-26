@@ -188,7 +188,7 @@ These are tagged as future work, with a brief note on what each will need when p
 - Transcription accuracy matching the whisper.cpp baseline. The wrapper introduces no measurable error.
 - Hotkey-to-clipboard round-trip under 1.5 seconds for a five-second utterance, `base` model, Apple Silicon.
 - Zero outbound network traffic during normal operation, verified by an offline smoke test.
-- Successful install and full round-trip on macOS 14+, Windows 11, and Ubuntu 24.04.
+- Successful install and full round-trip on macOS 26+ (older macOS explicitly out of scope), Windows 11, and Ubuntu 24.04.
 
 ## 13. Engineering conventions
 
