@@ -55,6 +55,15 @@ use crate::history::{HistoryRepository, SqliteHistoryRepository};
 use crate::settings::{SettingsRepository, SqliteSettingsRepository};
 use crate::transcription::Transcribe;
 
+/// Hot-swappable transcriber slot, shared by reference between
+/// [`AppState`] and [`crate::meeting::SessionManager`]. The inner
+/// `Option` is `None` until a model is loaded; the outer `Arc` lets
+/// the meeting pump observe model hot-swaps via the same mutex
+/// `model_select` writes through. Aliased for type-complexity
+/// hygiene (clippy) and so the type is easy to grep for at every
+/// hand-off point.
+pub type TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>;
+
 // Re-exports kept light: the command functions are referred to by their
 // `commands::` path inside `generate_handler!` (Tauri's macro looks up a
 // hidden `__cmd__<name>` sibling, which a `pub use` does not carry).
@@ -136,7 +145,13 @@ pub struct AppState {
     /// the resulting `Arc` is moved into the lock. See
     /// `swap_transcriber` for the swap path; `stop_dictation` for the
     /// read path.
-    pub transcribe: Mutex<Option<Arc<dyn Transcribe>>>,
+    ///
+    /// Wrapped in `Arc` so the meeting pump (#122 PR2) can hold its
+    /// own clone and read the current transcriber on each chunk
+    /// without going back through `AppState`. Hot-swapping via the
+    /// model picker writes through the shared `Arc`, so the pump
+    /// picks up the new model on its next chunk automatically.
+    pub transcribe: TranscribeSlot,
     pub history: Arc<dyn HistoryRepository>,
     pub replacements: Arc<dyn ReplacementRepository>,
     pub vocabulary: Arc<dyn VocabularyRepository>,
@@ -190,6 +205,13 @@ pub struct AppState {
 pub struct AppStateBuilder {
     audio: Option<Arc<dyn AudioCapture>>,
     transcribe: Option<Arc<dyn Transcribe>>,
+    /// Pre-built `Arc<Mutex<...>>` for the transcribe slot. Set via
+    /// [`AppStateBuilder::transcribe_arc`] when the caller (the
+    /// production wiring in `build_default`) needs to share the same
+    /// Arc with the meeting pump. When unset, `build` wraps
+    /// [`Self::transcribe`] in a fresh Arc — the hot-swap surface
+    /// stays inside `AppState` only.
+    transcribe_arc: Option<TranscribeSlot>,
     history: Option<Arc<dyn HistoryRepository>>,
     replacements: Option<Arc<dyn ReplacementRepository>>,
     vocabulary: Option<Arc<dyn VocabularyRepository>>,
@@ -214,6 +236,15 @@ impl AppStateBuilder {
     /// dictation calls while in this state.
     pub fn transcribe(mut self, transcribe: Option<Arc<dyn Transcribe>>) -> Self {
         self.transcribe = transcribe;
+        self
+    }
+
+    /// Hand the builder the pre-built `Arc<Mutex<...>>` so the meeting
+    /// pump can hold the same Arc and observe model hot-swaps. When
+    /// supplied, the builder uses this directly instead of wrapping
+    /// `transcribe()` in a fresh Arc.
+    pub fn transcribe_arc(mut self, transcribe: TranscribeSlot) -> Self {
+        self.transcribe_arc = Some(transcribe);
         self
     }
 
@@ -259,7 +290,9 @@ impl AppStateBuilder {
             audio: self
                 .audio
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: audio not set"))?,
-            transcribe: Mutex::new(self.transcribe),
+            transcribe: self
+                .transcribe_arc
+                .unwrap_or_else(|| Arc::new(Mutex::new(self.transcribe))),
             history: self
                 .history
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: history not set"))?,
@@ -355,8 +388,6 @@ impl AppState {
             Arc::new(SqliteSettingsRepository::new(Arc::clone(&db)));
         let meetings: Arc<dyn crate::meeting::MeetingSessionRepository> =
             Arc::new(crate::meeting::SqliteMeetingSessionRepository::new(db));
-        let meeting_manager = Arc::new(crate::meeting::SessionManager::new(Arc::clone(&meetings)));
-
         // Resolve which transcriber to load at startup. Order:
         //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
         //   2. legacy `HUSH_MODEL_PATH` env var (M1/M2 dev workflow)
@@ -365,9 +396,22 @@ impl AppState {
         // setup working until a user actually opens the picker once.
         let transcribe = build_transcriber(&settings, &models_dir).await;
 
+        // The session manager needs the live audio + transcribe
+        // handles to drive its own capture pump (#122 PR2). Wrap
+        // transcribe in the same Arc<Mutex<...>> shape AppState uses
+        // so model hot-swap propagates to in-flight meeting sessions
+        // automatically — both AppState and the manager hold clones
+        // of the same Arc.
+        let transcribe_shared = Arc::new(Mutex::new(transcribe));
+        let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
+            Arc::clone(&meetings),
+            Arc::clone(&audio),
+            Arc::clone(&transcribe_shared),
+        ));
+
         AppStateBuilder::new()
             .audio(audio)
-            .transcribe(transcribe)
+            .transcribe_arc(transcribe_shared)
             .history(history)
             .replacements(replacements)
             .vocabulary(vocabulary)
@@ -838,7 +882,7 @@ mod tests {
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
                 m
             })
-            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
                 m
             })))
