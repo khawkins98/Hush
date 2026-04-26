@@ -364,6 +364,131 @@ test.describe("meeting panel — multi-source picker", () => {
     await expect(row.locator("ol.live-transcript")).toHaveCount(0);
   });
 
+  test("historical transcript renders mm:ss offset alongside wall-clock time (#136)", async ({
+    page,
+  }) => {
+    // The expanded historical view must surface a wall-clock time
+    // alongside the session-relative offset — `47:23` on yesterday's
+    // 90-minute call is meaningless without it. Pin the rendered
+    // shape so a future change that drops the clock-time span gets
+    // caught.
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: null }),
+      meeting_sessions_list: () => [
+        {
+          id: 17,
+          appName: "Zoom",
+          appKind: "meeting",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: "2026-04-26T15:30:00Z",
+          speakerCount: null,
+          utteranceCount: 1,
+          notes: null,
+        },
+      ],
+      meeting_session_get: () => ({
+        session: {
+          id: 17,
+          appName: "Zoom",
+          appKind: "meeting",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: "2026-04-26T15:30:00Z",
+          speakerCount: null,
+          utteranceCount: 1,
+          notes: null,
+        },
+        utterances: [
+          {
+            id: 1,
+            sessionId: 17,
+            startedAtMs: 47 * 60_000 + 23_000, // 47:23 offset
+            endedAtMs: 47 * 60_000 + 28_000,
+            speakerLabel: "mic",
+            text: "A point made deep into the meeting.",
+            isFinal: true,
+          },
+        ],
+      }),
+    });
+    await page.goto("/");
+
+    const panel = page.locator("section.panel-meetings");
+    const row = panel.locator("li.session-row").first();
+    await row.getByRole("button", { name: /Show transcript/i }).click();
+    const transcript = row.locator("ol.live-transcript");
+    await expect(transcript).toBeVisible();
+
+    // Offset present.
+    await expect(transcript).toContainText("47:23");
+    // Wall-clock span present (the format depends on locale; just
+    // pin the existence of the .utterance-clock class + a leading
+    // separator dot).
+    const clockSpan = transcript.locator(".utterance-clock").first();
+    await expect(clockSpan).toBeVisible();
+    await expect(clockSpan).toContainText("·");
+  });
+
+  test("live transcript pill stays hidden on initial mount even with many utterances (#135)", async ({
+    page,
+  }) => {
+    // The auto-scroll affordance defaults to "following" — the
+    // pill that appears once the user scrolls up should NOT render
+    // on initial load even when there are enough utterances to
+    // make the transcript scrollable. Pin that default so a
+    // regression that flips `liveTranscriptFollowing` to false on
+    // mount is caught.
+    //
+    // Inlining the utterances inside the mock function: the e2e
+    // bridge serialises functions via `toString()` and rebuilds
+    // them on the page side, so closure capture from the test
+    // scope doesn't survive — any data the mock returns has to be
+    // literal in its body. (Same constraint as
+    // `historical session row expands…` above.)
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: 99 }),
+      meeting_sessions_list: () => [
+        {
+          id: 99,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 5,
+          notes: null,
+        },
+      ],
+      meeting_session_get: () => ({
+        session: {
+          id: 99,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 5,
+          notes: null,
+        },
+        utterances: [
+          { id: 1, sessionId: 99, startedAtMs: 0, endedAtMs: 10_000, speakerLabel: "mic", text: "First utterance.", isFinal: true },
+          { id: 2, sessionId: 99, startedAtMs: 10_000, endedAtMs: 20_000, speakerLabel: "system", text: "Second utterance.", isFinal: true },
+          { id: 3, sessionId: 99, startedAtMs: 20_000, endedAtMs: 30_000, speakerLabel: "mic", text: "Third utterance.", isFinal: true },
+          { id: 4, sessionId: 99, startedAtMs: 30_000, endedAtMs: 40_000, speakerLabel: "system", text: "Fourth utterance.", isFinal: true },
+          { id: 5, sessionId: 99, startedAtMs: 40_000, endedAtMs: 50_000, speakerLabel: "mic", text: "Fifth utterance.", isFinal: true },
+        ],
+      }),
+    });
+    await page.goto("/");
+
+    const panel = page.locator("section.panel-meetings");
+    const transcript = panel.locator("ol.live-transcript");
+    await expect(transcript).toBeVisible();
+
+    // Pill is hidden while the user is following the tail —
+    // initial mount must not trigger the freeze.
+    await expect(panel.locator("button.jump-to-latest")).toHaveCount(0);
+  });
+
   test("active session shows listening placeholder when no utterances yet", async ({
     page,
   }) => {
