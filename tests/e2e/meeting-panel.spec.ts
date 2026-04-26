@@ -277,6 +277,113 @@ test.describe("meeting panel — multi-source picker", () => {
     await expect(sysRow).toContainText("0:10");
   });
 
+  test("active session renders streaming partial utterances with italic / opacity treatment", async ({
+    page,
+  }) => {
+    // PR4 of #108 (streaming pump) surfaces in-flight partial
+    // utterances via the new `currentPartials` field on
+    // `meeting_session_get`. The panel renders them after the
+    // settled finals with a `utterance-partial` class that styles
+    // them italic + reduced-opacity, plus an animated "…"
+    // indicator. Pin the rendered shape so a regression that
+    // collapses partials into the finals list (or drops the
+    // distinguishing styling) surfaces here.
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: 99 }),
+      meeting_sessions_list: () => [
+        {
+          id: 99,
+          appName: "us.zoom.xos",
+          appKind: "meeting",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 1,
+          notes: null,
+        },
+      ],
+      meeting_session_get: () => ({
+        session: {
+          id: 99,
+          appName: "us.zoom.xos",
+          appKind: "meeting",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 1,
+          notes: null,
+        },
+        utterances: [
+          {
+            id: 1,
+            sessionId: 99,
+            startedAtMs: 0,
+            endedAtMs: 5_000,
+            speakerLabel: "mic",
+            text: "Settled final from earlier.",
+            isFinal: true,
+          },
+        ],
+        // Two in-flight partials, one per source — the panel must
+        // render both with the partial styling, alphabetically by
+        // speakerLabel ("mic" before "system" — matches the
+        // backend's sort).
+        currentPartials: [
+          {
+            startedAtMs: 6_000,
+            endedAtMs: 8_500,
+            speakerLabel: "mic",
+            text: "still being refined",
+            isFinal: false,
+          },
+          {
+            startedAtMs: 7_000,
+            endedAtMs: 9_000,
+            speakerLabel: "system",
+            text: "remote tail not yet committed",
+            isFinal: false,
+          },
+        ],
+      }),
+    });
+    await page.goto("/");
+
+    const panel = page.locator("section.panel-meetings");
+    const transcript = panel.locator("ol.live-transcript");
+    await expect(transcript).toBeVisible();
+
+    // 1 final + 2 partials = 3 rows.
+    const items = transcript.locator("li.utterance");
+    await expect(items).toHaveCount(3);
+
+    // The settled final has no `utterance-partial` class.
+    const finals = transcript.locator("li.utterance:not(.utterance-partial)");
+    await expect(finals).toHaveCount(1);
+    await expect(finals.first()).toContainText("Settled final from earlier.");
+
+    // Two partials with the styling.
+    const partials = transcript.locator("li.utterance-partial");
+    await expect(partials).toHaveCount(2);
+
+    // Partial text content present + the "…" indicator visible.
+    await expect(partials.nth(0)).toContainText("still being refined");
+    await expect(partials.nth(0).locator(".partial-indicator")).toContainText(
+      "…",
+    );
+    await expect(partials.nth(1)).toContainText(
+      "remote tail not yet committed",
+    );
+
+    // Italic styling actually applied (computed-style assertion is
+    // the most concrete check; class-name assertions can drift if
+    // CSS is renamed).
+    const italicTextStyle = await partials
+      .nth(0)
+      .locator(".utterance-text")
+      .evaluate((el) => window.getComputedStyle(el).fontStyle);
+    expect(italicTextStyle).toBe("italic");
+  });
+
   test("historical session row expands inline to show its transcript", async ({
     page,
   }) => {
