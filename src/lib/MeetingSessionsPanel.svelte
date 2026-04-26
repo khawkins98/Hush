@@ -1,34 +1,19 @@
 <script lang="ts">
-  // Meeting Mode panel — Phase C scaffold (refs #33 / #109).
+  // Meeting Mode panel.
   //
-  // Surfaces the data layer landed in this PR (meeting_sessions /
-  // utterances tables + Repository + IPC commands). The panel
-  // renders a placeholder state today because the streaming pump
-  // that fills the table (#110) hasn't shipped — every component
-  // of the UI is wired against real types so the panel will start
-  // showing data the moment Phase C's session manager begins
-  // inserting rows, with no further frontend changes needed.
+  // Renders the meeting-mode UX: a multi-source picker (mic +
+  // optional system-audio toggle) with a Start/Stop button, a live
+  // transcript that updates while a session is in flight, and an
+  // expand-on-click affordance for historical sessions.
   //
-  // What's pending and where to look:
-  //
-  //   - Session creation: SessionManager (#110) detects meeting
-  //     apps, opens sessions, writes utterances as the streaming
-  //     transcriber emits them. Until that lands, the sessions
-  //     list is always empty.
-  //
-  //   - Per-platform SystemAudio: Phase A2/A3/A4 (#105 / #106 /
-  //     #107). Without one of those landing the meeting flow
-  //     can't capture meeting audio (only mic audio works) — but
-  //     mic-only single-speaker meeting transcription would work
-  //     once #110 lands, so this isn't a hard prerequisite.
-  //
-  //   - Streaming inference: #108 (Whisper sliding-window). Without
-  //     it, sessions emit one utterance per recording (the default
-  //     impl behaviour). The panel renders fine either way.
-  //
-  //   - Diarization (per-speaker labels): Phase D (#111). Until
-  //     then `speakerLabel` is null and the panel renders all
-  //     utterances as "Unknown speaker."
+  // Speaker badges are source-derived (mic = "You", system =
+  // "Remote") as primitive diarization ahead of the per-speaker
+  // model in #111. Streaming whisper (#108) is still upstream of
+  // this panel; today the live transcript updates roughly every
+  // 10 s — the chunking cadence the SessionManager pump uses for
+  // one-shot whisper inference. Once streaming lands, utterances
+  // will arrive continuously through the same `meeting_session_get`
+  // IPC the panel already polls, with no frontend rewrite needed.
 
   import type {
     AudioSourceListing,
@@ -266,7 +251,7 @@
     <h2 id="meetings-heading">
       <span class="panel-tag panel-tag-meetings" aria-hidden="true">M</span>
       Meeting transcripts
-      <span class="panel-subtitle">live capture, never recorded</span>
+      <span class="panel-subtitle">live capture, never saved</span>
     </h2>
   </header>
 
@@ -305,19 +290,28 @@
   <div class="meeting-controls" role="group" aria-label="Meeting session controls">
     {#if activeSessionId !== null}
       <div class="meeting-active-stack">
+        <!--
+          Live region scoped to "session in progress" only — a
+          screen reader announces it when the session starts and
+          when it ends. The utterance counter sits in a sibling
+          span with `aria-live="off"` so the polling-driven
+          increments don't announce on every chunk; that would
+          be intrusive over a 30-minute meeting.
+        -->
         <span class="meeting-active-indicator" role="status" aria-live="polite">
           <span class="meeting-active-dot" aria-hidden="true"></span>
           Session in progress
-          {#if activeSession}
-            — {activeSession.utteranceCount} utterance{activeSession.utteranceCount === 1
+        </span>
+        {#if activeSession}
+          <span class="meeting-utterance-count" aria-live="off">
+            {activeSession.utteranceCount} utterance{activeSession.utteranceCount === 1
               ? ""
               : "s"} so far
-          {/if}
-        </span>
+          </span>
+        {/if}
         <p class="meeting-dictate-prompt">
-          <strong>Auto-recording</strong> from <code>{activeSourceSummary}</code>.
-          Each chunk transcribes and lands as an utterance every ~10
-          seconds.
+          <strong>Recording</strong> from {activeSourceSummary}. New
+          text appears below about every 10 seconds.
         </p>
       </div>
       <button type="button" class="primary" onclick={onStop} disabled={busy}>
@@ -354,7 +348,17 @@
               Also record system audio
               {#if !systemAudio.isSupported}
                 <span class="coming-soon-hint">
-                  (coming soon on this platform — #33)
+                  (coming soon on this platform — Linux
+                  <a
+                    href="https://github.com/khawkins98/Hush/issues/106"
+                    target="_blank"
+                    rel="noopener noreferrer">#106</a
+                  >, Windows
+                  <a
+                    href="https://github.com/khawkins98/Hush/issues/107"
+                    target="_blank"
+                    rel="noopener noreferrer">#107</a
+                  >)
                 </span>
               {:else}
                 <span class="meeting-source-meta">
@@ -375,9 +379,8 @@
         Start a session
       </button>
       <span class="meeting-controls-hint">
-        Click Start to begin auto-recording. Each chunk transcribes
-        every ~10 seconds and lands as an utterance below. Click Stop
-        when done.
+        Click Start to begin recording. New transcript text appears
+        below about every 10 seconds. Click Stop when you're done.
       </span>
     {/if}
   </div>
@@ -392,9 +395,17 @@
       diarization ahead of #111's per-speaker model.
     -->
     {#if activeDetail && activeDetail.utterances.length > 0}
+      <!--
+        No `aria-live` on the transcript list itself: a meeting can
+        produce dozens of utterances, and a "polite" live region
+        would re-announce every full text on each append while the
+        user is still speaking — a brutal screen-reader experience.
+        The `meeting-active-indicator` above is the only live
+        region; it announces session-state transitions (start /
+        stop / counter), which are the user-relevant signals.
+      -->
       <ol
         class="live-transcript"
-        aria-live="polite"
         aria-label="Live meeting transcript"
       >
         {#each activeDetail.utterances as utt (utt.id)}
@@ -413,8 +424,7 @@
       </ol>
     {:else}
       <p class="live-transcript-empty">
-        Listening… utterances will appear here as the pump finalises
-        each chunk (every ~10 seconds).
+        Listening… new text will appear here every 10 seconds or so.
       </p>
     {/if}
   {/if}
@@ -451,75 +461,29 @@
     -->
     <div class="meetings-placeholder">
       <p class="placeholder-headline">
-        Live meeting transcripts are coming soon.
+        No meeting transcripts yet.
       </p>
       <p>
-        Hush will automatically detect when you're on Zoom, Teams,
-        Meet, or similar apps and start capturing the conversation —
-        with the same privacy stance: audio in memory only, transcript
-        on disk. Rolling out in phases over the coming weeks.
+        Click <strong>Start a session</strong> above when you're on a
+        call to capture one. Audio stays in memory only — transcripts
+        and timestamps are what land on disk.
       </p>
-      <details class="dev-notes">
-        <summary>Developer notes — what's pending and where to follow along</summary>
-      <ul class="placeholder-list">
-        <li>
-          <strong>Session manager + app classifier</strong> — detects
-          when you're in a meeting and opens a session. Tracked in
-          <a
-            href="https://github.com/khawkins98/Hush/issues/110"
-            target="_blank"
-            rel="noopener noreferrer">#110</a
-          >.
-        </li>
-        <li>
-          <strong>System-audio capture per platform</strong> — needed
-          for capturing the other side of a Zoom/Teams call. macOS:
-          <a
-            href="https://github.com/khawkins98/Hush/issues/105"
-            target="_blank"
-            rel="noopener noreferrer">#105</a
-          >. Linux:
-          <a
-            href="https://github.com/khawkins98/Hush/issues/106"
-            target="_blank"
-            rel="noopener noreferrer">#106</a
-          >. Windows:
-          <a
-            href="https://github.com/khawkins98/Hush/issues/107"
-            target="_blank"
-            rel="noopener noreferrer">#107</a
-          >.
-        </li>
-        <li>
-          <strong>Streaming transcription (Whisper sliding-window)</strong>
-          — emits per-utterance partials so the panel updates live.
-          Tracked in
-          <a
-            href="https://github.com/khawkins98/Hush/issues/108"
-            target="_blank"
-            rel="noopener noreferrer">#108</a
-          >. Without it sessions still work, but each emits one
-          utterance per recording instead of a live-updating timeline.
-        </li>
-        <li>
-          <strong>Speaker diarization</strong> — labels per-speaker
-          turns. Tracked in
-          <a
-            href="https://github.com/khawkins98/Hush/issues/111"
-            target="_blank"
-            rel="noopener noreferrer">#111</a
-          >. Until it ships every utterance reads as "Unknown speaker."
-        </li>
-      </ul>
       <p class="placeholder-tail">
-        The architectural shape of all this lives in
+        Streaming transcription (so text appears as soon as you
+        speak rather than every ~10 s) and per-speaker labels
+        beyond mic vs system audio are still upstream — see
         <a
-          href="https://github.com/khawkins98/Hush/blob/main/docs/system-audio-meeting-mode-proposal.md"
+          href="https://github.com/khawkins98/Hush/issues/108"
           target="_blank"
-          rel="noopener noreferrer">docs/system-audio-meeting-mode-proposal.md</a
+          rel="noopener noreferrer">#108</a
+        >
+        and
+        <a
+          href="https://github.com/khawkins98/Hush/issues/111"
+          target="_blank"
+          rel="noopener noreferrer">#111</a
         >.
       </p>
-      </details>
     </div>
   {:else}
     <ul class="sessions-list">
@@ -547,8 +511,8 @@
               <p class="session-detail-loading">Loading transcript…</p>
             {:else if detail && detail.utterances.length === 0}
               <p class="session-detail-empty">
-                This session has no utterances yet — likely a
-                start-and-stop with no audio captured.
+                This session didn't capture any speech — probably
+                stopped before anything was said.
               </p>
             {:else if detail}
               <ol
@@ -763,14 +727,9 @@
   color: #333;
 }
 
-.meeting-dictate-prompt code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.82rem;
-  background-color: rgba(0, 0, 0, 0.05);
-  padding: 0.05em 0.35em;
-  border-radius: 3px;
-  color: #1a1a1a;
-}
+/* `.meeting-dictate-prompt code` removed: the active-session line
+   no longer wraps the source summary in a <code> tag (a UX review
+   flagged it as leaking dev aesthetic into the user-facing copy). */
 
 /*
   Live transcript — appears under the active-session controls
@@ -882,6 +841,12 @@
   font-weight: 500;
 }
 
+.meeting-utterance-count {
+  font-size: 0.85rem;
+  color: #777;
+  margin-left: 1.05rem;
+}
+
 .meeting-active-dot {
   width: 0.6rem;
   height: 0.6rem;
@@ -901,13 +866,11 @@
   }
 }
 
-.how-it-works,
-.dev-notes {
+.how-it-works {
   margin: 0.5rem 0 0.75rem;
 }
 
-.how-it-works summary,
-.dev-notes summary {
+.how-it-works summary {
   cursor: pointer;
   font-size: 0.85rem;
   color: #666;
@@ -915,13 +878,11 @@
   padding: 0.25rem 0;
 }
 
-.how-it-works summary:hover,
-.dev-notes summary:hover {
+.how-it-works summary:hover {
   color: #1a1a1a;
 }
 
-.how-it-works[open] summary,
-.dev-notes[open] summary {
+.how-it-works[open] summary {
   margin-bottom: 0.5rem;
 }
 
@@ -961,18 +922,9 @@
   color: #1a1a1a;
 }
 
-.placeholder-list {
-  margin: 0.5rem 0 0.75rem 1.2rem;
-  padding: 0;
-}
-
-.placeholder-list li {
-  margin-bottom: 0.4rem;
-}
-
-.placeholder-list a {
-  color: #4a6cd0;
-}
+/* `.placeholder-list` styles removed: the developer-notes
+   `<details>` block they styled was dropped from the empty-state
+   copy in favour of two short inline issue links. */
 
 .placeholder-tail {
   margin: 0.5rem 0 0;
@@ -1146,10 +1098,6 @@ button:disabled {
   .meeting-dictate-prompt {
     color: #ddd;
   }
-  .meeting-dictate-prompt code {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #f0f0f0;
-  }
   .meeting-system-audio-toggle {
     color: #ddd;
   }
@@ -1211,7 +1159,6 @@ button:disabled {
   .placeholder-tail {
     color: #999;
   }
-  .placeholder-list a,
   .placeholder-tail a {
     color: #6a8cf0;
   }
