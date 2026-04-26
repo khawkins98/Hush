@@ -1221,14 +1221,23 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
     {
         Ok(MacosPermissionDiagnostic {
             bundle_id: MACOS_BUNDLE_ID.to_owned(),
-            microphone_hint: "Click Start recording to verify. macOS prompts the first time; \
-                 if no prompt appears and the meter never moves, Microphone is denied. \
-                 Use Reset below to re-prompt cleanly."
+            microphone_hint: "Click Start recording to verify. macOS prompts the first \
+                 time Hush opens an audio stream; if no prompt appears and the meter \
+                 never moves, Microphone access is denied. Use Reset below to re-prompt \
+                 cleanly. Hush will appear in the Microphone list under \
+                 \"com.khawkins.hush\" the first time you click Start (or under the \
+                 launching binary for unsigned dev builds)."
                 .to_owned(),
             input_monitoring_hint:
-                "Required for push-to-talk via the rdev hook. Disabled by default on \
-                 macOS 26+ to avoid a TSM crash (#69); set HUSH_PTT_ENABLE=1 to opt in \
-                 on older macOS. Use Reset to re-prompt if you previously denied."
+                "Required for push-to-talk. PTT is disabled by default on macOS 26+ \
+                 (rdev's CGEventTap callback hits a TSM dispatch-queue assertion that \
+                 hard-aborts the process — see #69), so Hush does NOT request Input \
+                 Monitoring on first launch. That means Hush will not appear in the \
+                 Input Monitoring list at all by default — that's expected on \
+                 macOS 26+, not a bundle-id mismatch. Set HUSH_PTT_ENABLE=1 to opt in \
+                 on older macOS — Hush will then prompt and appear in the list. The \
+                 toggle hotkey (⌃⌥H) does not need Input Monitoring; that's why it \
+                 keeps working without this permission."
                     .to_owned(),
             can_reset: true,
         })
