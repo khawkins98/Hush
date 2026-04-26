@@ -202,11 +202,16 @@ pub async fn stop_dictation(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> IpcResult<DictationResult> {
-    let transcriber = state
-        .transcribe
-        .as_ref()
-        .ok_or(IpcError::TranscriptionUnavailable)?
-        .clone();
+    let transcriber = {
+        // Lock briefly, clone the Arc, drop the lock. The dictation
+        // hot path only needs a snapshot of "what's loaded right now".
+        // Hot-swap from `model_select` will land for the *next* call.
+        let guard = state.transcribe.lock().map_err(poisoned)?;
+        guard
+            .as_ref()
+            .ok_or(IpcError::TranscriptionUnavailable)?
+            .clone()
+    };
 
     // The user pressed Stop; the HUD should hide whether or not the
     // backend stop succeeds. Errors from the audio backend are
@@ -574,11 +579,27 @@ pub async fn model_list(state: State<'_, AppState>) -> IpcResult<Vec<ModelCard>>
     Ok(cards)
 }
 
-/// Persist the user's choice. The new transcriber is loaded on the
-/// next app start (no hot-swap yet — see the `learnings.md` note on
-/// model-picker scope).
+/// Result returned to the frontend by [`model_select`]. The frontend
+/// uses `loaded` to decide whether to show "Loaded — ready to record"
+/// (true) or "Saved as default — Download this model to use it"
+/// (false).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSelectResult {
+    /// Whether the transcriber was successfully hot-swapped to the
+    /// newly-selected model. `false` when the model file isn't on
+    /// disk yet (user picked an undownloaded model — selection still
+    /// persists, but they'll need to Download before they can record).
+    pub loaded: bool,
+}
+
+/// Persist the user's choice and hot-load the new model if its file
+/// is on disk. Hot-load is best-effort: if the file isn't there yet,
+/// the selection still persists (so the picker remembers it across
+/// restarts and the eventual Download lands on the right model). The
+/// frontend reads `loaded` to know which message to show.
 #[tauri::command]
-pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<()> {
+pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<ModelSelectResult> {
     if catalog::find_by_id(&id).is_none() {
         return Err(IpcError::Settings(format!(
             "unknown model id: {id} (not in the Whisper catalog)"
@@ -588,7 +609,44 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<(
         .settings
         .set(settings_keys::SELECTED_MODEL_ID, &id)
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+
+    // Try to hot-load. The GGUF parse can take ~50–500 ms depending on
+    // model size; do it on a blocking task so the IPC handler doesn't
+    // hold the tokio runtime. If the file isn't on disk yet this
+    // returns Ok(None) and we report `loaded: false` — selection has
+    // already persisted, so the picker remembers across restarts.
+    let models_dir = state.models_dir.clone();
+    let id_for_load = id.clone();
+    let load_result = tauri::async_runtime::spawn_blocking(move || {
+        crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir)
+    })
+    .await
+    .map_err(|e| IpcError::Internal(format!("blocking task panicked: {e}")))?;
+
+    match load_result {
+        Ok(Some(new_transcriber)) => {
+            state
+                .swap_transcriber(Some(new_transcriber))
+                .map_err(|e| IpcError::Internal(e.to_string()))?;
+            Ok(ModelSelectResult { loaded: true })
+        }
+        Ok(None) => {
+            // File not yet on disk, or whisper feature off. Selection
+            // still persisted; user just needs to Download (or rebuild
+            // with the whisper feature, but that's a contributor
+            // concern, not an end-user one).
+            Ok(ModelSelectResult { loaded: false })
+        }
+        Err(e) => {
+            // File was on disk but failed to load (corrupted GGUF,
+            // wrong format). Surface as a clear error so the user
+            // knows to redownload.
+            Err(IpcError::Transcription(format!(
+                "failed to load {id}: {e:#}"
+            )))
+        }
+    }
 }
 
 // -- Model auto-download -------------------------------------------------

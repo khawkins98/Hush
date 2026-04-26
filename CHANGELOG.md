@@ -151,6 +151,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Hot-load on model select + honest "needs-download" notice.** The
+  picker used to show "Saved. Restart Hush to use the new model"
+  after every selection — including selections of undownloaded
+  models, where restart wouldn't help (the file isn't there). New
+  flow: `model_select` returns `{ loaded: bool }`. If the file is on
+  disk, the backend hot-swaps the loaded transcriber via
+  `AppState::swap_transcriber` (no restart) and the notice reads
+  "✓ Loaded. Ready to record." If not, the notice reads "Saved as
+  default — but this model isn't downloaded yet. Click Download on
+  the card below to fetch it." Selection persists either way, so a
+  user can pre-select Whisper Large v3, click Download, restart,
+  and have it picked up. The `transcribe` field on `AppState` moved
+  from `Option<Arc<dyn Transcribe>>` to `Mutex<Option<...>>` to
+  support the swap; the dictation hot path acquires the lock briefly
+  only to clone the inner Arc. Whisper GGUF parsing happens on a
+  `spawn_blocking` task so the IPC handler doesn't hold the tokio
+  runtime for the 50–500 ms load. Model cards in the picker are now
+  uniformly clickable (previously only downloaded cards were); the
+  markup branches were unified into a single `<button>` element.
 - **README + PRD honesty pass on PTT and platform support.** README's
   Shipped list now separates toggle-record (works everywhere) from
   push-to-talk (Linux + Windows only by default; macOS opt-in, with
