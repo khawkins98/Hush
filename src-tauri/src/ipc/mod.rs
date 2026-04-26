@@ -761,7 +761,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::meeting::MeetingSessionRepositoryExt for NoopMeetings {
+    impl crate::meeting::MeetingSessionRepository for NoopMeetings {
         async fn close_session(&self, _: i64) -> anyhow::Result<()> {
             Ok(())
         }
