@@ -10,8 +10,8 @@ import { installMocks } from "./_mock";
 //    `section.panel-meetings`.
 //  - Defaults the system-audio toggle to ON when the backend reports
 //    the entry as `isSupported: true`, OFF otherwise.
-//  - Active-session view replaces the picker with an "Auto-recording
-//    from <sources>" line + live utterance counter.
+//  - Active-session view replaces the picker with a "Recording
+//    from <sources>" line + a separate live utterance counter.
 
 test.describe("meeting panel — multi-source picker", () => {
   test("idle panel renders mic dropdown + system-audio checkbox", async ({
@@ -41,8 +41,9 @@ test.describe("meeting panel — multi-source picker", () => {
     await expect(sysCheckbox).toBeDisabled();
     await expect(panel).toContainText(/coming soon/i);
 
-    // Phase 3 hint copy: explains auto-recording, not hotkey-driven.
-    await expect(panel).toContainText(/Click Start to begin auto-recording/i);
+    // Hint copy primes the user that the session records on Start
+    // (not hotkey-driven) and produces text every ~10 s.
+    await expect(panel).toContainText(/Click Start to begin recording/i);
   });
 
   test("system-audio toggle becomes enabled and default-on when backend reports support", async ({
@@ -182,8 +183,8 @@ test.describe("meeting panel — multi-source picker", () => {
 
     // Live utterance counter reads from the active session row.
     await expect(panel).toContainText(/3 utterances so far/i);
-    // Phase 3 active-session copy — auto-recording, not hotkey-driven.
-    await expect(panel).toContainText(/Auto-recording/i);
+    // Active-session copy — recording, not hotkey-driven.
+    await expect(panel).toContainText(/Recording from/i);
     // Picker is hidden once the session is active.
     await expect(panel.locator("select")).toHaveCount(0);
     await expect(panel.locator('input[type="checkbox"]')).toHaveCount(0);
