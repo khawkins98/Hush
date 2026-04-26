@@ -39,8 +39,10 @@
 //! the input shape — there's no way to insert a `Vec<f32>` through
 //! the data layer's API surface.
 
+pub mod manager;
 pub mod sqlite;
 
+pub use manager::{AppClassifier, SessionManager};
 pub use sqlite::SqliteMeetingSessionRepository;
 
 use anyhow::Result;

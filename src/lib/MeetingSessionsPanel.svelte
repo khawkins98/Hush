@@ -36,10 +36,27 @@
     sessions: MeetingSession[];
     sessionsLoaded: boolean;
     sessionsError: string | null;
+    /// Active session id from the backend's `meeting_active_session`
+    /// command. `null` means no session is in flight; renders Start
+    /// button. Non-null means a session is open; renders Stop button
+    /// + a live status indicator.
+    activeSessionId: number | null;
+    busy: boolean;
     onDelete: (session: MeetingSession) => void | Promise<void>;
+    onStart: () => void | Promise<void>;
+    onStop: () => void | Promise<void>;
   };
 
-  let { sessions, sessionsLoaded, sessionsError, onDelete }: Props = $props();
+  let {
+    sessions,
+    sessionsLoaded,
+    sessionsError,
+    activeSessionId,
+    busy,
+    onDelete,
+    onStart,
+    onStop,
+  }: Props = $props();
 
   function formatDuration(start: string, end: string | null): string {
     if (!end) return "in progress";
@@ -107,6 +124,31 @@
     streams the transcript here. Sessions are searchable and editable
     after the meeting ends.
   </p>
+
+  <!--
+    Manual session lifecycle controls (#110 MVP). Auto-detect from
+    foreground app is a follow-up; today the user clicks Start, dictates
+    as usual, each transcript lands as an utterance under the active
+    session, then they click Stop.
+  -->
+  <div class="meeting-controls" role="group" aria-label="Meeting session controls">
+    {#if activeSessionId !== null}
+      <span class="meeting-active-indicator" role="status" aria-live="polite">
+        <span class="meeting-active-dot" aria-hidden="true"></span>
+        Session in progress — each transcription is appended below.
+      </span>
+      <button type="button" class="primary" onclick={onStop} disabled={busy}>
+        Stop session
+      </button>
+    {:else}
+      <button type="button" class="primary" onclick={onStart} disabled={busy}>
+        Start a session
+      </button>
+      <span class="meeting-controls-hint">
+        Click before your meeting; dictate as usual; click Stop when done.
+      </span>
+    {/if}
+  </div>
 
   <details class="how-it-works">
     <summary>How it works</summary>
@@ -310,6 +352,47 @@
   color: #555;
 }
 
+.meeting-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.5rem 0 1rem;
+}
+
+.meeting-controls-hint {
+  font-size: 0.85rem;
+  color: #777;
+}
+
+.meeting-active-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+  color: #4a6cd0;
+  font-weight: 500;
+}
+
+.meeting-active-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background-color: #d83a3a;
+  animation: meeting-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes meeting-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meeting-active-dot {
+    animation: none;
+  }
+}
+
 .how-it-works,
 .dev-notes {
   margin: 0.5rem 0 0.75rem;
@@ -470,6 +553,20 @@ button {
   color: #0f0f0f;
   background-color: #ffffff;
   cursor: pointer;
+}
+
+button.primary {
+  background-color: #6a8cf0;
+  color: white;
+  border-color: #6a8cf0;
+  font-weight: 600;
+  padding: 0.5em 1em;
+  font-size: 0.9rem;
+}
+
+button.primary:hover:not(:disabled) {
+  background-color: #4a6cd0;
+  border-color: #4a6cd0;
 }
 
 button.ghost {

@@ -103,6 +103,14 @@ export type MeetingSessionDetail = {
   utterances: PersistedUtterance[];
 };
 
+// Snapshot of which meeting session (if any) is currently active.
+// `active === null` means no session is in flight; the panel renders
+// the Start button. A non-null id means a session is open; the panel
+// renders the Stop button + a live "session in progress" line.
+export type ActiveMeetingSession = {
+  active: number | null;
+};
+
 // Mirrors `ModelCard` on the Rust side. `metadata` is flattened by
 // serde so all the catalog fields land at the top level.
 export type ModelCard = {

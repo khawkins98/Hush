@@ -14,6 +14,51 @@ a single flat list was hard to navigate.
 
 ### Added
 
+#### Phase C runtime: manual-start meeting sessions (#110)
+
+- Meeting Mode goes live in manual-start mode. The user clicks
+  "Start a session" in the panel; the backend opens a session row
+  via the new `SessionManager`. They dictate with the existing
+  hotkey / button flow; each `stop_dictation` transcript lands as
+  an utterance under the active session in addition to the existing
+  history insert. They click "Stop session"; the manager writes
+  `ended_at` and clears the active-session pointer. The panel
+  renders a live-status indicator with a pulsing dot while a
+  session is in progress.
+- New `crate::meeting::SessionManager` owns the in-memory
+  `Mutex<Option<i64>>` for the active-session id. Manual-start
+  only — auto-detect from foreground app is a follow-up. The
+  manager's `append_if_active` returns `Ok(false)` when no session
+  is active, so the dictation hot path's behaviour is observably
+  unchanged when meeting mode isn't being used.
+- New `crate::meeting::AppClassifier` with hardcoded defaults
+  (Zoom, Teams, Meet, Discord, Slack-call → Meeting; YouTube,
+  Spotify, Apple Music → Media; everything else → Other). Used to
+  stamp `app_kind` on new sessions for the panel's coloured tag.
+  Per-user overrides are deferred to #112.
+- Three new IPC commands: `meeting_active_session` (read),
+  `meeting_start_manual` (write), `meeting_stop_manual` (write).
+- `MeetingSessionsPanel.svelte` grows Start / Stop buttons + an
+  active-session indicator. The page refreshes the panel after
+  each successful `stop_dictation` so newly-appended utterances
+  appear in the timeline.
+- 9 new Rust unit tests cover the manager's lifecycle (start
+  rejects concurrent starts, stop errors when no session, append
+  computes cumulative timestamps correctly) plus the classifier's
+  default-table behaviour. Total: 169 unit tests.
+
+What's deliberately **not** here yet (tracked in #110):
+
+- Auto-detect from foreground app — manual-start is the safer
+  first step because it never records a meeting the user didn't
+  intend to record.
+- Streaming partial utterances — each session captures one final
+  utterance per `stop_dictation` call. Streaming partials wait on
+  #108.
+- System-audio capture per platform — without #105 / #106 / #107
+  shipped, meeting mode captures via mic only (a single-speaker
+  "personal meeting transcript" experience).
+
 #### Phase C scaffold: meeting sessions data layer + UI panel (#113)
 
 - Meeting Mode scaffold (Phase C foundation; refs #33 / #109).

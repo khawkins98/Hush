@@ -155,6 +155,18 @@ export async function installMocks(
       },
       meeting_session_delete: () => undefined,
       meeting_session_set_notes: () => undefined,
+      meeting_active_session: () => ({ active: null }),
+      meeting_start_manual: () => ({
+        id: 1,
+        appName: "manual",
+        appKind: "other",
+        startedAt: "2026-04-26T15:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+      }),
+      meeting_stop_manual: () => undefined,
     };
 
     // Rebuild override functions from their stringified source. The

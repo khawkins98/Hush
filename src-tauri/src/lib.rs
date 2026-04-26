@@ -177,6 +177,9 @@ pub fn run() {
             ipc::commands::meeting_session_get,
             ipc::commands::meeting_session_delete,
             ipc::commands::meeting_session_set_notes,
+            ipc::commands::meeting_active_session,
+            ipc::commands::meeting_start_manual,
+            ipc::commands::meeting_stop_manual,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");

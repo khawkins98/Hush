@@ -378,6 +378,29 @@ pub async fn stop_dictation(
         },
     );
 
+    // Meeting Mode (#110): if a session is active, also append this
+    // transcript as a final utterance under that session. Fire-and-
+    // forget on a tokio task so a meeting-repo failure doesn't block
+    // the user's clipboard — same model as the history insert above.
+    // Cumulative-ms timestamps come from the manager's
+    // last-utterance-end logic; we hand it the duration of the
+    // utterance text (computed from the recording's total frames).
+    let utterance_duration_ms = utterances
+        .iter()
+        .filter(|u| u.is_final)
+        .map(|u| (u.ended_at_ms.saturating_sub(u.started_at_ms)) as i64)
+        .sum::<i64>();
+    let manager_handle = Arc::clone(&state.meeting_manager);
+    let meeting_text = text.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = manager_handle
+            .append_if_active(&meeting_text, utterance_duration_ms)
+            .await
+        {
+            tracing::error!(error = ?e, "failed to append utterance to active meeting session");
+        }
+    });
+
     Ok(DictationResult { text, foreground })
 }
 
@@ -1057,6 +1080,63 @@ pub async fn meeting_session_set_notes(
         .map_err(|e| IpcError::MeetingSessions(format!("session set_notes: {e}")))
 }
 
+/// Snapshot of the active meeting session. Empty (`active: None`)
+/// means no session is in flight; the panel renders the start
+/// button. `Some(id)` means a session is active; the panel renders
+/// the stop button + a live status line.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveMeetingSession {
+    pub active: Option<i64>,
+}
+
+/// Read the active session id (if any). The panel polls this on
+/// mount + after every state change so it can render the right
+/// affordances.
+#[tauri::command]
+pub fn meeting_active_session(state: State<'_, AppState>) -> ActiveMeetingSession {
+    ActiveMeetingSession {
+        active: state.meeting_manager.active_session_id(),
+    }
+}
+
+/// Open a meeting session manually (button-driven).
+///
+/// `app_name` is the bundle id / process name the session should be
+/// attributed to. Frontend captures this from the foreground app
+/// via `active-win-pos-rs` at the moment of click; if the user
+/// declines or the call fails, `None` falls through to a "manual"
+/// label.
+///
+/// Errors with `IpcError::MeetingSessions` if a session is already
+/// active — the user must close the existing one first.
+#[tauri::command]
+pub async fn meeting_start_manual(
+    state: State<'_, AppState>,
+    app_name: Option<String>,
+) -> IpcResult<crate::meeting::MeetingSession> {
+    state
+        .meeting_manager
+        .start_manual(app_name)
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))
+}
+
+/// Close the active meeting session.
+///
+/// Errors with `IpcError::MeetingSessions` if no session is active.
+/// The panel disables the Stop button when nothing's running, but a
+/// stale double-click reaches here as a recoverable error rather
+/// than a panic.
+#[tauri::command]
+pub async fn meeting_stop_manual(state: State<'_, AppState>) -> IpcResult<()> {
+    state
+        .meeting_manager
+        .stop_manual()
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e}")))
+}
+
 // -- First-run / onboarding ----------------------------------------------
 //
 // Two thin commands wrapping the existing `SettingsRepository` for the
@@ -1445,7 +1525,16 @@ mod tests {
             .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
-            .meetings(Arc::new(crate::ipc::tests::NoopMeetings))
+            .meetings({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("test state: builder fields complete");
@@ -1490,7 +1579,16 @@ mod tests {
             .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
-            .meetings(Arc::new(crate::ipc::tests::NoopMeetings))
+            .meetings({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("test state: builder fields complete");
@@ -1634,7 +1732,16 @@ mod tests {
             .settings(Arc::new(crate::ipc::tests::MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
-            .meetings(Arc::new(crate::ipc::tests::NoopMeetings))
+            .meetings({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("test state: builder fields complete")
