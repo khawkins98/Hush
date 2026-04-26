@@ -159,24 +159,97 @@ pub struct AppState {
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
 }
 
-impl AppState {
-    pub fn new(
-        audio: Arc<dyn AudioCapture>,
-        transcribe: Option<Arc<dyn Transcribe>>,
-        history: Arc<dyn HistoryRepository>,
-        replacements: Arc<dyn ReplacementRepository>,
-        vocabulary: Arc<dyn VocabularyRepository>,
-        settings: Arc<dyn SettingsRepository>,
-        models_dir: PathBuf,
-    ) -> Self {
-        Self {
-            audio,
-            transcribe: Mutex::new(transcribe),
-            history,
-            replacements,
-            vocabulary,
-            settings,
-            models_dir,
+/// Builder for [`AppState`].
+///
+/// Replaces a 7-positional-arg constructor whose call sites read like an
+/// unlabelled tuple. Each `.field(value)` call is self-documenting at the
+/// call site, and adding a future required field (e.g. a download-state
+/// service or a system-audio source) becomes a one-method addition rather
+/// than a breaking-arg-list change at every caller.
+///
+/// `transcribe` is `Option<Arc<dyn Transcribe>>` rather than required
+/// because the production backend is gated behind the `whisper` feature
+/// AND a loaded model — both legitimately absent on a fresh install. The
+/// rest are required; [`AppStateBuilder::build`] returns an error naming
+/// the missing field if any of them are unset, which is more useful than
+/// a panic when (e.g.) a future test refactor accidentally forgets one.
+#[derive(Default)]
+pub struct AppStateBuilder {
+    audio: Option<Arc<dyn AudioCapture>>,
+    transcribe: Option<Arc<dyn Transcribe>>,
+    history: Option<Arc<dyn HistoryRepository>>,
+    replacements: Option<Arc<dyn ReplacementRepository>>,
+    vocabulary: Option<Arc<dyn VocabularyRepository>>,
+    settings: Option<Arc<dyn SettingsRepository>>,
+    models_dir: Option<PathBuf>,
+}
+
+impl AppStateBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn audio(mut self, audio: Arc<dyn AudioCapture>) -> Self {
+        self.audio = Some(audio);
+        self
+    }
+
+    /// Optional. `None` means "no transcriber loaded yet"; the IPC layer
+    /// surfaces [`commands::IpcError::TranscriptionUnavailable`] for
+    /// dictation calls while in this state.
+    pub fn transcribe(mut self, transcribe: Option<Arc<dyn Transcribe>>) -> Self {
+        self.transcribe = transcribe;
+        self
+    }
+
+    pub fn history(mut self, history: Arc<dyn HistoryRepository>) -> Self {
+        self.history = Some(history);
+        self
+    }
+
+    pub fn replacements(mut self, replacements: Arc<dyn ReplacementRepository>) -> Self {
+        self.replacements = Some(replacements);
+        self
+    }
+
+    pub fn vocabulary(mut self, vocabulary: Arc<dyn VocabularyRepository>) -> Self {
+        self.vocabulary = Some(vocabulary);
+        self
+    }
+
+    pub fn settings(mut self, settings: Arc<dyn SettingsRepository>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    pub fn models_dir(mut self, models_dir: PathBuf) -> Self {
+        self.models_dir = Some(models_dir);
+        self
+    }
+
+    /// Construct the [`AppState`], or return a descriptive error naming
+    /// the first required field that wasn't set.
+    pub fn build(self) -> Result<AppState> {
+        Ok(AppState {
+            audio: self
+                .audio
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: audio not set"))?,
+            transcribe: Mutex::new(self.transcribe),
+            history: self
+                .history
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: history not set"))?,
+            replacements: self
+                .replacements
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: replacements not set"))?,
+            vocabulary: self
+                .vocabulary
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: vocabulary not set"))?,
+            settings: self
+                .settings
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: settings not set"))?,
+            models_dir: self
+                .models_dir
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: models_dir not set"))?,
             http: reqwest::Client::builder()
                 // Whisper-large-v3 is ~3 GB; ten-minute timeout is on
                 // the optimistic side of "any reasonable home
@@ -212,9 +285,11 @@ impl AppState {
                 .expect("reqwest client should always build with default config"),
             downloads: Mutex::new(HashMap::new()),
             pending_foreground: Mutex::new(None),
-        }
+        })
     }
+}
 
+impl AppState {
     /// Build the state used in production: the cpal audio backend, the
     /// SQLite-backed history repository at `db_path`, plus (when the
     /// `whisper` feature is enabled and `HUSH_MODEL_PATH` points at a
@@ -255,15 +330,15 @@ impl AppState {
         // setup working until a user actually opens the picker once.
         let transcribe = build_transcriber(&settings, &models_dir).await;
 
-        Ok(Self::new(
-            audio,
-            transcribe,
-            history,
-            replacements,
-            vocabulary,
-            settings,
-            models_dir,
-        ))
+        AppStateBuilder::new()
+            .audio(audio)
+            .transcribe(transcribe)
+            .history(history)
+            .replacements(replacements)
+            .vocabulary(vocabulary)
+            .settings(settings)
+            .models_dir(models_dir)
+            .build()
     }
 }
 
@@ -649,22 +724,17 @@ mod tests {
     }
 
     pub(crate) fn mock_state() -> AppState {
-        let audio: Arc<dyn AudioCapture> = Arc::new(MockAudio::new(fake_audio()));
-        let history: Arc<dyn HistoryRepository> = Arc::new(NoopHistory);
-        let replacements: Arc<dyn ReplacementRepository> = Arc::new(NoopReplacements);
-        let vocabulary: Arc<dyn VocabularyRepository> = Arc::new(NoopVocabulary);
-        let settings: Arc<dyn SettingsRepository> = Arc::new(MemSettings {
-            map: std::sync::Mutex::new(std::collections::HashMap::new()),
-        });
-        AppState::new(
-            audio,
-            None,
-            history,
-            replacements,
-            vocabulary,
-            settings,
-            std::path::PathBuf::from("/tmp/hush-test-models"),
-        )
+        AppStateBuilder::new()
+            .audio(Arc::new(MockAudio::new(fake_audio())))
+            .history(Arc::new(NoopHistory))
+            .replacements(Arc::new(NoopReplacements))
+            .vocabulary(Arc::new(NoopVocabulary))
+            .settings(Arc::new(MemSettings {
+                map: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }))
+            .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+            .build()
+            .expect("mock_state: builder fields complete")
     }
 
     #[test]

@@ -160,6 +160,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Refactor: `AppStateBuilder` replaces 7-arg constructor (#37).**
+  `AppState::new(audio, transcribe, history, replacements,
+  vocabulary, settings, models_dir)` was at the readable threshold
+  and the next features (auto-download state, system-audio source,
+  HUD service) would each add another positional parameter.
+  Replaced with a builder: `AppStateBuilder::new().audio(…).…build()?`.
+  `build()` returns a descriptive error naming the first missing
+  required field, so a future test that forgets one fails loudly
+  instead of by silent panic. `transcribe` stays optional. Pure
+  refactor — same `AppState`, same fields, same call paths.
 - **Refactor: split monolithic `+page.svelte` into per-section
   components (#40).** No behavior change; e2e suite stayed green
   through the move. The 2351-line page is now a 1080-line layout
