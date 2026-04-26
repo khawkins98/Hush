@@ -126,8 +126,7 @@ fn streaming_fixture_emits_partials_and_finals() {
     // pump tick we'll ship in PR3.
     let chunk_samples = (format.sample_rate as usize / 4) * format.channels as usize;
     let mut all_emitted: Vec<Utterance> = Vec::new();
-    let mut tick_index = 0;
-    for chunk in captured.samples.chunks(chunk_samples) {
+    for (tick_index, chunk) in captured.samples.chunks(chunk_samples).enumerate() {
         session.feed(chunk).expect("feed");
         let drained = session.drain().expect("drain");
         if !drained.is_empty() {
@@ -143,7 +142,6 @@ fn streaming_fixture_emits_partials_and_finals() {
             }
             all_emitted.extend(drained);
         }
-        tick_index += 1;
         // No actual sleep — the test runs as fast as whisper does.
         // A real pump would await audio between feeds; we substitute
         // a tiny pause so the per-tick log lines are visually

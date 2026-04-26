@@ -322,9 +322,9 @@ impl Transcribe for WhisperTranscription {
 /// blocking pool via `tokio::task::spawn_blocking`.
 pub struct WhisperStreamingSession {
     ctx: Arc<Mutex<WhisperContext>>,
-    /// Capture format the pump is feeding samples in. `feed` downmixes
-    /// + resamples to 16 kHz mono before pushing into the policy
-    /// machine.
+    /// Capture format the pump is feeding samples in. `feed`
+    /// downmixes and resamples to 16 kHz mono before pushing into
+    /// the policy machine.
     capture_format: CaptureFormat,
     /// Initial prompt for vocabulary biasing. Empty string = no
     /// prompt. Same semantics as `transcribe_with_prompt`.
