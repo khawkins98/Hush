@@ -161,6 +161,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Split monolithic `+page.svelte` into per-section components (#40).**
+  The 2351-line page is now a 1080-line layout that imports seven
+  focused components from `src/lib/`: `ControlsSection`, `ResultBlock`,
+  `HistoryPanel`, `ReplacementsPanel`, `VocabularyPanel`,
+  `ModelPickerPanel`, `MacosDiagnosticPanel`. Cross-cutting state
+  (`recording`, `busy`, `Promise.all` mount, download-progress
+  listeners) stays in the parent; each child takes data and callback
+  props. Shared TypeScript types live in `src/lib/types.ts`. Per-panel
+  styles moved into each component's own `<style>` block (Svelte
+  scopes by default). No behavior change; e2e suite green.
 - **Hot-load on model select + honest "needs-download" notice.** The
   picker used to show "Saved. Restart Hush to use the new model"
   after every selection — including selections of undownloaded
