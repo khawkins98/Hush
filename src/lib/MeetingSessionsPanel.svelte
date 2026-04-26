@@ -166,6 +166,25 @@
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }
 
+  /**
+   * Format a wall-clock time of day for an utterance, computed
+   * from the session's `startedAt` plus the utterance's
+   * `startedAtMs` offset. Used in the historical/expanded view
+   * (#136) so a 47:23 offset on yesterday's 90-minute call also
+   * shows "2:47 PM" — the offset alone is meaningless without
+   * scrolling back to find the session start.
+   */
+  function formatClockTime(sessionStartIso: string, offsetMs: number): string {
+    const startMs = Date.parse(sessionStartIso);
+    if (isNaN(startMs)) return "";
+    const utteranceMs = startMs + offsetMs;
+    const d = new Date(utteranceMs);
+    return d.toLocaleString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
   let mics = $derived(sources.filter((s) => s.kind === "microphone"));
   let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
   let pickableCount = $derived(mics.length + (systemAudio ? 1 : 0));
@@ -206,6 +225,85 @@
   let canStart = $derived(
     (meetingMicId !== null && mics.length > 0) ||
       (meetingIncludeSystemAudio && (systemAudio?.isSupported ?? false)),
+  );
+
+  /**
+   * Live transcript auto-scroll (#135). The Slack-style behaviour:
+   * keep new utterances in view by auto-scrolling to the bottom on
+   * each append, *unless* the user has manually scrolled up — in
+   * which case freeze auto-scroll until they jump back. The "jump
+   * back" affordance is a "↓ N new" pill rendered when frozen;
+   * clicking it re-engages auto-scroll.
+   */
+  let liveTranscriptEl: HTMLOListElement | null = $state(null);
+  /**
+   * `true` when the user is following the live tail (default).
+   * `false` once they manually scroll up; back to `true` when
+   * they click the jump-to-latest pill. Drives both the
+   * auto-scroll behaviour and whether the pill renders.
+   */
+  let liveTranscriptFollowing = $state(true);
+  /**
+   * Count of utterances at the time the user scrolled up. The
+   * pill shows `total - frozenAt` new since they paused —
+   * matches Slack's "N new messages" framing.
+   */
+  let liveTranscriptFrozenAt = $state(0);
+
+  /**
+   * Detect manual user scroll-up to freeze auto-scroll. Browsers
+   * fire `scroll` events for both programmatic and user-driven
+   * scrolls, so we have to discriminate: if the bottom is in view
+   * (within a small tolerance), follow; otherwise freeze.
+   */
+  function onLiveTranscriptScroll() {
+    const el = liveTranscriptEl;
+    if (!el) return;
+    // 32 px tolerance: a user nudging the scrollbar a tiny bit
+    // shouldn't lose the auto-tail. Anything beyond that is an
+    // intentional scroll-up.
+    const distanceFromBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom <= 32) {
+      liveTranscriptFollowing = true;
+    } else if (liveTranscriptFollowing) {
+      liveTranscriptFollowing = false;
+      liveTranscriptFrozenAt = activeDetail?.utterances.length ?? 0;
+    }
+  }
+
+  function jumpToLiveTranscriptBottom() {
+    const el = liveTranscriptEl;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    liveTranscriptFollowing = true;
+  }
+
+  // Auto-scroll on each utterance-count increment, but only while
+  // the user is following the tail. Reads the count via $derived so
+  // this re-runs exactly when new utterances land.
+  let liveUtteranceCount = $derived(activeDetail?.utterances.length ?? 0);
+  $effect(() => {
+    // Touch the count so $effect tracks it as a dep.
+    void liveUtteranceCount;
+    if (!liveTranscriptFollowing) return;
+    const el = liveTranscriptEl;
+    if (!el) return;
+    // requestAnimationFrame so the new <li> is in the DOM before
+    // we measure scrollHeight. Without it, the scroll lands at
+    // the OLD bottom on the first new utterance.
+    requestAnimationFrame(() => {
+      if (liveTranscriptEl) {
+        liveTranscriptEl.scrollTop = liveTranscriptEl.scrollHeight;
+      }
+    });
+  });
+
+  // "N new since you scrolled up" — only meaningful while frozen.
+  let liveTranscriptNewCount = $derived(
+    liveTranscriptFollowing
+      ? 0
+      : Math.max(0, liveUtteranceCount - liveTranscriptFrozenAt),
   );
 
   function formatDuration(start: string, end: string | null): string {
@@ -403,8 +501,15 @@
         The `meeting-active-indicator` above is the only live
         region; it announces session-state transitions (start /
         stop / counter), which are the user-relevant signals.
+
+        Slack-style auto-scroll: `bind:this` exposes the element to
+        the auto-scroll effect; `onscroll` watches for user-driven
+        scroll-up to freeze the tail. The "↓ N new" pill below
+        (rendered only while frozen) lets them jump back.
       -->
       <ol
+        bind:this={liveTranscriptEl}
+        onscroll={onLiveTranscriptScroll}
         class="live-transcript"
         aria-label="Live meeting transcript"
       >
@@ -422,6 +527,16 @@
           </li>
         {/each}
       </ol>
+      {#if !liveTranscriptFollowing && liveTranscriptNewCount > 0}
+        <button
+          type="button"
+          class="jump-to-latest"
+          onclick={jumpToLiveTranscriptBottom}
+          aria-label="Jump to latest transcript text"
+        >
+          ↓ {liveTranscriptNewCount} new
+        </button>
+      {/if}
     {:else}
       <p class="live-transcript-empty">
         Listening… new text will appear here every 10 seconds or so.
@@ -531,6 +646,18 @@
                       </span>
                       <span class="utterance-time">
                         {formatOffset(utt.startedAtMs)}
+                      </span>
+                      <!--
+                        Wall-clock time alongside the offset for
+                        historical sessions (#136) — `47:23` is
+                        meaningless on yesterday's 90-minute
+                        meeting without scrolling back to find the
+                        start. The live view skips this since the
+                        user knows when they hit Start a moment
+                        ago.
+                      -->
+                      <span class="utterance-clock">
+                        · {formatClockTime(session.startedAt, utt.startedAtMs)}
                       </span>
                     </div>
                     <p class="utterance-text">{utt.text}</p>
@@ -823,6 +950,36 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #888;
   font-size: 0.74rem;
+}
+
+.utterance-clock {
+  font-size: 0.74rem;
+  color: #888;
+}
+
+/*
+  "↓ N new" pill rendered only while auto-scroll is frozen — the
+  user manually scrolled up and we paused the tail. Click jumps
+  to the bottom and re-engages auto-scroll. Anchored top-right of
+  the transcript shell so it doesn't cover the visible utterances.
+*/
+.jump-to-latest {
+  display: inline-block;
+  margin: 0.4rem 0 0.6rem auto;
+  padding: 0.3em 0.7em;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background-color: #6a8cf0;
+  color: #ffffff;
+  border: 1px solid #6a8cf0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.jump-to-latest:hover {
+  background-color: #4a6cd0;
+  border-color: #4a6cd0;
 }
 
 .utterance-text {
@@ -1137,11 +1294,17 @@ button:disabled {
     background-color: rgba(255, 255, 255, 0.1);
     color: #aaa;
   }
-  .utterance-time {
+  .utterance-time,
+  .utterance-clock {
     color: #888;
   }
   .utterance-text {
     color: #f0f0f0;
+  }
+  .jump-to-latest {
+    background-color: #6a8cf0;
+    border-color: #6a8cf0;
+    color: #ffffff;
   }
   .empty-meetings {
     background-color: #3a2e10;
