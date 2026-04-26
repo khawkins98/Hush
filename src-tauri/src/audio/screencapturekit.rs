@@ -11,11 +11,15 @@
 //! ## Why ScreenCaptureKit
 //!
 //! Apple deprecated CoreAudio's HAL plug-in path for application audio
-//! capture in macOS 14, and the new Tap APIs (`AudioHardwareCreateProcessTap`)
+//! capture in macOS 14, and the Tap APIs (`AudioHardwareCreateProcessTap`)
 //! require entitlements only available to MAS-distributed apps. SCK is
 //! the only sanctioned, non-entitled route to system-audio on consumer
-//! macOS as of 2026, and the `screencapturekit` crate exposes the
-//! Swift-side API through stable FFI so we can stay in pure Rust.
+//! macOS, and the `screencapturekit` crate exposes the Swift-side API
+//! through stable FFI so we can stay in pure Rust.
+//!
+//! Hush targets macOS 26+ only — older macOS is out of scope (see
+//! `learnings.md` and the README's platform-support table). No version
+//! guards or older-macOS fallbacks live in this module.
 //!
 //! ## Permission model
 //!
