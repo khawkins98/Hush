@@ -181,6 +181,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **HUD window is actually transparent on macOS (closes #62).** The
+  HUD's `transparent: true` window flag was a no-op on macOS without
+  Tauri's `macos-private-api` Cargo feature + the matching
+  `macOSPrivateApi: true` app-config flag. Without those, the dark
+  translucent pill the HUD CSS draws was sitting inside a solid
+  default window — defeating the design. Both flags are now wired
+  on; the dev startup warning ("The window is set to be transparent
+  but the `macos-private-api` is not enabled") is gone. Tauri docs
+  flag a possible App Store implication; not relevant to Hush's v1
+  distribution plan, captured in `learnings.md` for future
+  reference.
 - **Updater plugin no longer panics on app launch.**
   `tauri-plugin-updater::Builder::new().build()` was registered in
   `lib.rs` without a corresponding `plugins.updater` block in
