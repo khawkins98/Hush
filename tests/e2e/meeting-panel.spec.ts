@@ -175,6 +175,7 @@ test.describe("meeting panel — multi-source picker", () => {
           notes: null,
         },
         utterances: [],
+        currentPartials: [],
       }),
     });
     await page.goto("/");
@@ -248,6 +249,7 @@ test.describe("meeting panel — multi-source picker", () => {
             isFinal: true,
           },
         ],
+        currentPartials: [],
       }),
     });
     await page.goto("/");
@@ -336,6 +338,7 @@ test.describe("meeting panel — multi-source picker", () => {
               isFinal: true,
             },
           ],
+          currentPartials: [],
         };
       },
     });
@@ -408,6 +411,7 @@ test.describe("meeting panel — multi-source picker", () => {
             isFinal: true,
           },
         ],
+        currentPartials: [],
       }),
     });
     await page.goto("/");
@@ -476,6 +480,7 @@ test.describe("meeting panel — multi-source picker", () => {
           { id: 4, sessionId: 99, startedAtMs: 30_000, endedAtMs: 40_000, speakerLabel: "system", text: "Fourth utterance.", isFinal: true },
           { id: 5, sessionId: 99, startedAtMs: 40_000, endedAtMs: 50_000, speakerLabel: "mic", text: "Fifth utterance.", isFinal: true },
         ],
+        currentPartials: [],
       }),
     });
     await page.goto("/");
@@ -523,6 +528,7 @@ test.describe("meeting panel — multi-source picker", () => {
           notes: null,
         },
         utterances: [],
+        currentPartials: [],
       }),
     });
     await page.goto("/");

@@ -101,6 +101,29 @@ export type PersistedUtterance = {
 export type MeetingSessionDetail = {
   session: MeetingSession;
   utterances: PersistedUtterance[];
+  /// In-flight partial utterances from the streaming pump (#108
+  /// PR3+). Empty for closed sessions and for sessions whose
+  /// pump hasn't produced a partial yet. The frontend renders
+  /// these alongside `utterances` with an italic / reduced-opacity
+  /// treatment to distinguish in-flight revisions from settled
+  /// finals (#108 PR4). Wire shape is `transcription::Utterance`
+  /// from the Rust side — same fields as `PersistedUtterance`
+  /// minus `id` / `sessionId`.
+  currentPartials: StreamingUtterance[];
+};
+
+/// In-flight (non-final) utterance the streaming pump produces.
+/// Mirrors `crate::transcription::Utterance` on the Rust side. No
+/// DB id — partials live in memory only and never get persisted.
+/// `isFinal` is always `false` on the partials surfaced through
+/// `MeetingSessionDetail.currentPartials`; the frontend can rely
+/// on that without a runtime check.
+export type StreamingUtterance = {
+  text: string;
+  startedAtMs: number;
+  endedAtMs: number;
+  isFinal: boolean;
+  speakerLabel: string | null;
 };
 
 // Snapshot of which meeting session (if any) is currently active.

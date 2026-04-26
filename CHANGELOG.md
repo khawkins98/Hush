@@ -14,6 +14,62 @@ a single flat list was hard to navigate.
 
 ### Added
 
+#### Streaming meeting pump — partials in IPC (#108 PR3)
+
+- The meeting pump no longer chunks-and-restarts. It opens one
+  `StreamingTranscribeSession` per audio source at session start
+  (PR1), drains each `AudioSession` on a 500 ms tick (PR2), feeds
+  the drained samples into the corresponding streaming session, and
+  dispatches returned utterances: **finals** to the database (the
+  existing `MeetingSessionRepository::append_utterance` path),
+  **partials** to a new in-memory partials store keyed by
+  `(session_id, speaker_label)`. The previous 10 s `CHUNK_DURATION`
+  constant is gone; new `PUMP_TICK` of 500 ms is the only timing
+  knob the pump owns. Whisper inference cadence (the ~3 s "when
+  does a partial revise" interval) is internal to the streaming
+  session.
+- `meeting_session_get` IPC response gains `currentPartials:
+  Vec<Utterance>` — the in-flight partials for the active session,
+  sorted alphabetically by `speakerLabel` so render order is stable
+  across polls. Closed sessions always return an empty
+  `currentPartials` array. PR4 adds the visual treatment that
+  distinguishes partials from finals.
+- `SessionManager` gains a `partials: Arc<RwLock<HashMap<i64,
+  HashMap<String, Utterance>>>>` field plus a `current_partials_for(
+  session_id) -> Vec<Utterance>` reader. `RwLock` because the IPC
+  poll path (~1/s) reads while the pump tick (~2/s) writes —
+  readers shouldn't block each other. `stop_manual` clears the
+  partials map for the closing session belt-and-braces; the pump's
+  `finish()` path also clears entries as it commits final tail
+  utterances.
+- `dispatch_utterances` is the new per-tick routing helper: a final
+  for source S clears the matching partial entry **before** the DB
+  append (so a concurrent poll between clear-and-append sees neither
+  rather than both, avoiding a brief duplicate render). Partials
+  for source S **replace** the prior entry — at most one partial
+  per source at any time. Cross-source isolation (mic final does
+  not clear system partial) is pinned by tests.
+- Streaming inference runs on `tokio::task::spawn_blocking` so
+  whisper.cpp doesn't block the tokio worker thread. The streaming
+  session round-trips through the spawn (taken out → moved in →
+  returned with utterances) so the pump retains ownership across
+  ticks. A panic in the spawned closure leaves the slot `None` for
+  the rest of the session — that source goes dark until the next
+  start, but the others continue.
+- 8 new meeting-manager tests cover the partials store + dispatch
+  contract: empty-on-new-session, partial replaces partial,
+  per-source independence, final clears matching partial AND
+  persists row, final does not clear other source's partial,
+  empty-final filtering, stop_manual clears partials. Total: 27
+  meeting-mode tests; 204 lib tests with `--features whisper`.
+- 6 e2e mocks updated to include `currentPartials: []` on the
+  `meeting_session_get` shape. Frontend type-check passes.
+- What's deliberately not here yet (tracked in #108 PR4): visual
+  rendering of partials in the panel — they arrive in the poll
+  response but aren't yet rendered with italic / opacity. A
+  consumer that ignored `currentPartials` would observably behave
+  the same as today (modulo the lower latency on finals).
+
 #### Audio drain-into for streaming-pump capture (#108 PR2)
 
 - `AudioSession::drain_into(sink, ...) -> Result<CaptureFormat>` lets
