@@ -284,6 +284,13 @@
       // INSERT has a chance to commit; on a slow disk this could miss
       // the new row, but the next interaction will catch it.
       setTimeout(() => void refreshHistory(), 150);
+      // If a meeting session is active, the backend just appended
+      // this transcript as an utterance under it (fire-and-forget
+      // path in stop_dictation). Refresh the panel after a similar
+      // delay so the new utterance appears in the list.
+      if (meetingActiveId !== null) {
+        setTimeout(() => void refreshMeetingSessions(), 200);
+      }
     } catch (e) {
       error = formatError(e);
       // Even if transcription failed, the recording itself stopped on the
@@ -639,10 +646,23 @@
   let meetingSessions = $state<MeetingSession[]>([]);
   let meetingSessionsLoaded = $state(false);
   let meetingSessionsError = $state<string | null>(null);
+  // Active session id from `meeting_active_session`. `null` means no
+  // session in flight; non-null means the panel renders the Stop
+  // button + a live status line.
+  let meetingActiveId = $state<number | null>(null);
+  // Disables the Start/Stop buttons during in-flight IPC calls so
+  // a stale double-click can't race against itself. Same rationale
+  // as the dictation flow's `busy` flag.
+  let meetingBusy = $state(false);
 
   async function refreshMeetingSessions() {
     try {
-      meetingSessions = await invoke<MeetingSession[]>("meeting_sessions_list");
+      const [sessions, active] = await Promise.all([
+        invoke<MeetingSession[]>("meeting_sessions_list"),
+        invoke<{ active: number | null }>("meeting_active_session"),
+      ]);
+      meetingSessions = sessions;
+      meetingActiveId = active.active;
       meetingSessionsError = null;
     } catch (e) {
       meetingSessionsError = e instanceof Error ? e.message : "Failed to load meeting sessions.";
@@ -657,6 +677,34 @@
       meetingSessions = meetingSessions.filter((s) => s.id !== session.id);
     } catch (e) {
       meetingSessionsError = e instanceof Error ? e.message : "Failed to delete session.";
+    }
+  }
+
+  async function startMeetingSession() {
+    meetingBusy = true;
+    try {
+      // Without a per-platform foreground-app fetch wired up yet
+      // (#105 et al), passing `null` falls through to the manager's
+      // "manual" label. A future iteration captures the active
+      // foreground app via active-win-pos-rs at click time.
+      await invoke("meeting_start_manual", { appName: null });
+      await refreshMeetingSessions();
+    } catch (e) {
+      meetingSessionsError = e instanceof Error ? e.message : "Failed to start session.";
+    } finally {
+      meetingBusy = false;
+    }
+  }
+
+  async function stopMeetingSession() {
+    meetingBusy = true;
+    try {
+      await invoke("meeting_stop_manual");
+      await refreshMeetingSessions();
+    } catch (e) {
+      meetingSessionsError = e instanceof Error ? e.message : "Failed to stop session.";
+    } finally {
+      meetingBusy = false;
     }
   }
 
@@ -904,7 +952,11 @@
     sessions={meetingSessions}
     sessionsLoaded={meetingSessionsLoaded}
     sessionsError={meetingSessionsError}
+    activeSessionId={meetingActiveId}
+    busy={meetingBusy}
     onDelete={deleteMeetingSession}
+    onStart={startMeetingSession}
+    onStop={stopMeetingSession}
   />
 </main>
 

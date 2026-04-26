@@ -142,11 +142,18 @@ pub struct AppState {
     pub vocabulary: Arc<dyn VocabularyRepository>,
     pub settings: Arc<dyn SettingsRepository>,
     /// Meeting Mode session storage (Phase C foundation, refs #33 / #109).
-    /// Today the repo is wired in but no caller writes to it — the
-    /// streaming pump that fills it lands in #110. The IPC commands
-    /// for browsing / deleting sessions read from it via the trait
-    /// object so a future test mock can plug in cleanly.
+    /// Read-side handle — browsing / deleting sessions reads from
+    /// this. The write-side ([`Self::meeting_manager`]) is the
+    /// stateful owner that opens / closes sessions and appends
+    /// utterances.
     pub meetings: Arc<dyn crate::meeting::MeetingSessionRepository>,
+    /// Meeting Mode session lifecycle owner (#110 manual-start MVP).
+    /// Holds an in-memory pointer to the active session id so the
+    /// IPC layer's `stop_dictation` path can route transcripts into
+    /// the active session as utterances. `Arc` because the manager
+    /// outlives any single command call and is shared across the
+    /// `meeting_*` handlers and `stop_dictation`.
+    pub meeting_manager: Arc<crate::meeting::SessionManager>,
     /// Directory the model picker scans for downloaded GGUF files
     /// (`<app_data>/models/`). Stored on AppState rather than
     /// re-resolving it on every IPC call so the picker has a single
@@ -188,6 +195,7 @@ pub struct AppStateBuilder {
     vocabulary: Option<Arc<dyn VocabularyRepository>>,
     settings: Option<Arc<dyn SettingsRepository>>,
     meetings: Option<Arc<dyn crate::meeting::MeetingSessionRepository>>,
+    meeting_manager: Option<Arc<crate::meeting::SessionManager>>,
     models_dir: Option<PathBuf>,
 }
 
@@ -229,6 +237,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn meeting_manager(mut self, mgr: Arc<crate::meeting::SessionManager>) -> Self {
+        self.meeting_manager = Some(mgr);
+        self
+    }
+
     pub fn meetings(mut self, meetings: Arc<dyn crate::meeting::MeetingSessionRepository>) -> Self {
         self.meetings = Some(meetings);
         self
@@ -262,6 +275,9 @@ impl AppStateBuilder {
             meetings: self
                 .meetings
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meetings not set"))?,
+            meeting_manager: self
+                .meeting_manager
+                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meeting_manager not set"))?,
             models_dir: self
                 .models_dir
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: models_dir not set"))?,
@@ -339,6 +355,7 @@ impl AppState {
             Arc::new(SqliteSettingsRepository::new(Arc::clone(&db)));
         let meetings: Arc<dyn crate::meeting::MeetingSessionRepository> =
             Arc::new(crate::meeting::SqliteMeetingSessionRepository::new(db));
+        let meeting_manager = Arc::new(crate::meeting::SessionManager::new(Arc::clone(&meetings)));
 
         // Resolve which transcriber to load at startup. Order:
         //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
@@ -356,6 +373,7 @@ impl AppState {
             .vocabulary(vocabulary)
             .settings(settings)
             .meetings(meetings)
+            .meeting_manager(meeting_manager)
             .models_dir(models_dir)
             .build()
     }
@@ -816,7 +834,14 @@ mod tests {
             .settings(Arc::new(MemSettings {
                 map: std::sync::Mutex::new(std::collections::HashMap::new()),
             }))
-            .meetings(Arc::new(NoopMeetings))
+            .meetings({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
+                m
+            })
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
+                m
+            })))
             .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
             .build()
             .expect("mock_state: builder fields complete")
