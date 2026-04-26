@@ -1,6 +1,6 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-04-26, late
+**Snapshot:** 2026-04-26, late (post-v0.1.0 tag, picker shipped)
 **Author:** Claude (working async on Ken's behalf)
 
 A working hand-off doc; not the canonical CHANGELOG or PRD. The goal:
@@ -12,41 +12,52 @@ pickup, don't try to keep it incrementally up-to-date.
 
 ## Where the project stands
 
-The dictation loop is **end-to-end functional on macOS 26 for the
-maintainer**: hotkey or button → record → transcribe → clipboard →
+**v0.1.0 is tagged** (`git tag v0.1.0`, also pushed to origin).
+Captures the M3-complete state: dictation loop end-to-end functional
+on macOS 26 — hotkey or button → record → transcribe → clipboard →
 notification → searchable history. Older macOS versions, Linux, and
 Windows are not hands-on tested.
 
-This session (post-2026-04-25) landed eight PRs that close the
-M3-era polish punchlist and tighten internal architecture:
+After v0.1.0 the project pivoted toward a **system-audio + meeting-mode
+extension** (design memo at `docs/system-audio-meeting-mode-proposal.md`).
+The dictation flow stays — meeting-mode is a second product surface
+inside the same app, not a replacement.
 
-- **#83** — In-app macOS permission diagnostic + `tccutil reset`
-  recovery panel (closes #67).
-- **#84** — Split monolithic `+page.svelte` (2351 → 1080 lines) into
-  seven per-section components under `src/lib/` (closes #40).
-- **#85** — Round-6 reviewer consolidation: scoped CSS for the new
-  diagnostic panel, CTA wording, type docstrings, CHANGELOG and
-  docs grammar.
-- **#86** — Split `dictionary/` into `replacements/` and
-  `vocabulary/` submodules (closes #39).
-- **#87** — `AppStateBuilder` replaces the 7-arg `AppState::new`
-  constructor (closes #37).
-- **#88** — Generic `Repository<T, NewT, Id>` trait for
-  replacements + vocabulary; history's `insert` renamed to
-  `create` for naming consistency (closes #36).
-- **#89** — Bundled JFK audio fixture (~344 KB) so the
-  `audio_fixture.rs` integration test runs from a single env var
-  (closes #34 part-a).
-- **#29** — Closed by audit: round-2 polish was substantially
-  complete across earlier rounds (UNIQUE-update test, `aria-live`,
-  focus management, sticky hint, dark-mode contrast all already
-  done).
+What's landed since v0.1.0:
 
-Test count: **135** Rust unit tests; **7** Playwright frontend
-smoke tests (mocked-Tauri); 1 ignored audio-fixture integration
-test that now defaults to the bundled JFK clip when
-`HUSH_TEST_MODEL` is set. Frontend type-check 0 errors / 0 warnings.
-Clippy + rustfmt clean.
+- **#96** — `AudioSource` enum (`Microphone(Option<String>)` /
+  `SystemAudio`) + `AudioCapture::start_with_source` trait method.
+  Foundation for #33; no behaviour change yet.
+- **#98** — Phase A1 of #33: source picker UI + `audio_list_sources`
+  IPC command + `start_dictation` taking discriminated `AudioSource`.
+  The mic dropdown is now grouped (`<optgroup>` "Microphone" + "System
+  audio"); the system-audio entry renders disabled with a "(coming
+  soon — #33)" affordance until per-platform backends ship.
+- Dependency hygiene: `zip` (unused) dropped, `sha2` 0.10 → 0.11,
+  `active-win-pos-rs` 0.8 → 0.10. Held: `reqwest`, `whisper-rs`,
+  `cpal`, frontend (vite/typescript/svelte) — those need user
+  sign-off because of risk surface.
+
+What ships next (per the phased plan in the design memo):
+
+- **Phase A2/A3/A4**: per-platform `SystemAudio` impls. Linux
+  PulseAudio monitor source, Windows WASAPI loopback, macOS
+  ScreenCaptureKit. Each its own PR — needs hands-on testing on
+  the target platform; not safe to do autonomously.
+- **Phase B**: streaming transcription. Whisper sliding-window
+  for the interim path; Parakeet (#32) for the eventual default.
+  Also benefits the existing dictation hot-path latency.
+- **Phase C**: sessions + meeting-mode UI surface (new tables,
+  per-utterance transcripts, per-app classifier).
+- **Phase D**: speaker diarization.
+- **Phase E**: app-aware policy refinement.
+
+Test count: **143** Rust unit tests (was 135 pre-pivot — +8 for
+the AudioSource trait surface and listing default impl); **7**
+Playwright frontend smoke tests (mocked-Tauri); 1 ignored
+audio-fixture integration test that defaults to the bundled JFK
+clip when `HUSH_TEST_MODEL` is set. Frontend type-check 0 errors /
+0 warnings. Clippy + rustfmt clean.
 
 For the prose record of what shipped and why, see
 [`CHANGELOG.md`](./CHANGELOG.md) (`[Unreleased]` section) and
@@ -58,7 +69,7 @@ For the prose record of what shipped and why, see
 
 | Module | Status | Tests |
 |---|---|---|
-| `audio` (cpal + RMS level meter + drain_buffer) | shipped | 16 |
+| `audio` (cpal + RMS level meter + AudioSource trait, post-#96/#98) | shipped (mic only; SystemAudio per-OS pending) | 24 |
 | `transcription::resample` | shipped | 9 |
 | `transcription::whisper` (default-feature) | shipped | stub-tested + manual smoke |
 | `transcription::catalog` (SHAs filled in) | shipped | 6 |
@@ -69,7 +80,7 @@ For the prose record of what shipped and why, see
 | `dictionary::vocabulary` (own submodule post-#86) | shipped | 9 + 8 sqlite |
 | `repository` (generic CRUD trait, new in #88) | shipped | — |
 | `settings` (K/V) | shipped | 6 |
-| `ipc` (~24 Tauri commands; `AppStateBuilder` post-#87) | shipped | 17+ |
+| `ipc` (~25 Tauri commands; `audio_list_sources` added in #98) | shipped | 17+ |
 | `hotkey` (toggle ⌃⌥H; PTT macOS-disabled) | shipped | 12 (incl. enablement matrix) |
 | `hud` (transparent on macOS via macos-private-api) | shipped | — (manual smoke) |
 | `updater` | stub (registration deferred to #10) | — |
@@ -189,22 +200,58 @@ npm run test:e2e                             # 7 Playwright specs (mocked Tauri)
 
 ## Open issues, by priority
 
-### Substantial / needs design or decision
+### Pivot work — Phase A2/3/4 (per-platform `SystemAudio`)
 
-1. **#33** System-audio loopback. Substantial; would benefit from a
-   design pass first.
-2. **#32** Parakeet via ONNX — second engine.
-3. **#10** Updater (signed channel) — needs the signing key + endpoint
-   setup.
-4. **#70** Native CGEventTap to bring back default-on PTT on macOS.
+Each needs hands-on testing on the target platform; not safe to do
+autonomously. Order is by user-value-on-macOS-26-first:
+
+- **macOS** ScreenCaptureKit. Needs either a Swift shim or a Rust
+  wrapper crate (`screencapturekit-rs` etc.). Largest of the three
+  per-platform PRs and the highest user value.
+- **Linux** PulseAudio / PipeWire monitor source. Discoverable via
+  cpal's existing input-device list (monitor sources show up as
+  `Monitor of <Sink>`); the picker filters by name pattern.
+- **Windows** WASAPI loopback. cpal already exposes loopback via
+  `Device::loopback()` on the default output; mostly free.
+
+### Pivot work — Phases B/C/D/E
+
+- **Phase B** — Streaming transcription (Whisper sliding-window
+  interim, Parakeet eventual default). Refactor + new trait +
+  per-utterance event wiring. Independent of system-audio; benefits
+  the existing dictation hot-path latency.
+- **Phase C** — Sessions + meeting-mode UI. New tables, IPC
+  commands, panel.
+- **Phase D** — Diarization (energy-based first, model-based later).
+- **Phase E** — App-aware policy refinement.
+
+### Substantial / needs decision
+
+- **#32** Parakeet via ONNX — second engine. Approved for
+  Phase B's streaming-friendly path.
+- **#10** Updater (signed channel) — needs the signing key +
+  endpoint setup.
+- **#70** Native CGEventTap to bring back default-on PTT on macOS.
 
 ### Smaller / scoped
 
 - **#55** `rtrb` SPSC ring for cpal callback (replaces
   `Mutex<Vec<f32>>`). Needs hands-on mic smoke; CI can't verify.
+  More important now that the audio path will multiplex mic +
+  system audio in Phase C.
 - **#57** tauri-driver Path B (full-stack E2E). Infra, large lift.
-- **#82** `ipc/commands.rs` sub-module structure (1.4k LOC). Polish-
-  only; explicitly tracked but not actioned.
+- **#82** `ipc/commands.rs` sub-module structure (1.4k LOC).
+  Polish-only; will get worse as meeting-mode adds another ~10
+  commands — worth revisiting if/when that lands.
+
+### Held for user decision (dep upgrades)
+
+`reqwest` 0.12 → 0.13 (security-relevant: redirect policy),
+`whisper-rs` 0.14 → 0.16 (transcription correctness risk),
+`cpal` 0.15 → 0.17 (audio backend risk; Phase A2/3/4 may be a
+better moment to land this since we'll be exercising the audio
+path heavily anyway), `vite` / `typescript` / `svelte` (frontend
+tooling majors).
 
 ---
 
