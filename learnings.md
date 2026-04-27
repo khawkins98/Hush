@@ -671,3 +671,17 @@ Earlier comments (in `ipc/commands.rs` and elsewhere) claimed macOS doesn't expo
 All three are passive reads — calling them does NOT trigger the OS dialog. Implemented in `src-tauri/src/macos_perms/mod.rs` (#166). The frontend uses these to render a green "Permissions OK" pill on the Dictation tab when everything is granted, and a per-permission status list in Settings → Permissions.
 
 **Takeaway:** when a TCC category genuinely matters to the app's UX (Hush leans heavily on Microphone + Screen Recording), check Apple's framework headers before assuming "programmatic read isn't possible." The blanket "TCC is opaque" reputation comes from the buckets where it really is opaque, not from the privacy framework as a whole.
+
+---
+
+## 2026-04-27 — rdev macOS-26 abort: fixed by Narsil/rdev#147 (May 2025)
+
+#69 documented `rdev::listen` hard-aborting on macOS 26+ on the first modifier press: the rdev CGEventTap callback called `TISGetInputSourceProperty` from a non-main thread, and macOS 26's stricter dispatch-queue assertions kill the process via `dispatch_assert_queue_fail` (which is `__builtin_trap`, not a Rust panic — `catch_unwind` cannot save us).
+
+Narsil's upstream landed [rdev#147](https://github.com/Narsil/rdev/pull/147) on 2025-05-20 as `MacOS: set_is_main_thread`, routing the TSM call to the main thread. RustDesk has been carrying the same fix in its [fufesou/rdev](https://github.com/fufesou/rdev) fork for longer.
+
+The latest crates.io release (0.5.3, 2023-06-26) predates the fix. We pin to a git rev (`c14f2dc5c...` as of this entry) on the `Narsil/rdev` `main` branch (which is at the unpublished 0.6.0). Bump-to-published as soon as upstream ships 0.6.x — our API surface (`listen`, `Event`, `EventType::{KeyPress, KeyRelease}`, `Key`) is unchanged on `main`.
+
+PTT stays opt-in via `HUSH_PTT_ENABLE=1` even with the abort fixed: enabling triggers the Input Monitoring permission prompt, which is a privacy surprise for users who don't realise a dictation app would be reading every keystroke. The env gate keeps the prompt to power users who deliberately turn PTT on. A future settings-window toggle will replace the env gate.
+
+**Takeaway for future Apple-framework FFI bugs:** before assuming a hand-roll is needed, check upstream `main` for the fix. Maintained crates often have the patch; the gap is just between merge and a published release.

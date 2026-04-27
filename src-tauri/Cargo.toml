@@ -70,8 +70,20 @@ async-trait = "0.1"
 # Foreground app detection
 active-win-pos-rs = "0.10"
 
-# Push-to-talk key events (key-down / key-up)
-rdev = "0.5"
+# Push-to-talk key events (key-down / key-up).
+#
+# Pinned to a git rev rather than the published 0.5.3 because the
+# latest crates.io release predates Narsil/rdev#147 (May 2025), the
+# fix for the macOS-26 hard-abort: the rdev callback was calling
+# `TISGetInputSourceProperty` from a non-main thread and macOS 26's
+# stricter dispatch-queue assertions kill the process on the first
+# modifier press. PR #147 routes that call to the main thread and
+# the abort goes away.
+#
+# Bump-to-published as soon as upstream ships 0.6.x — the API
+# surface we use (`listen`, `Event`, `EventType::{KeyPress,
+# KeyRelease}`, `Key`) is unchanged on `main`. See #70 / #69.
+rdev = { git = "https://github.com/Narsil/rdev", rev = "c14f2dc5c8100a96c5d7e3013de59d6aa0b9eae2" }
 
 [features]
 # `whisper` is a default feature so a vanilla `cargo run` / `npm run
