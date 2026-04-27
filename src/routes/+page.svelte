@@ -937,7 +937,7 @@
             "and verify it, then prompt you to restart."
           );
         case "audio":
-          return `Microphone error: ${ipc.message ?? "unknown"}. Try selecting a different input device.`;
+          return `Audio capture error: ${ipc.message ?? "unknown"}. Check your microphone and Screen Recording permissions, or try a different input device.`;
         case "transcription":
           return `Transcription failed: ${ipc.message ?? "unknown"}. The model may be incompatible — try a different one.`;
         case "clipboard":
