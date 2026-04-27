@@ -56,6 +56,12 @@
     /// reports `is_supported`, `false` otherwise. Surfaced as a
     /// checkbox.
     meetingIncludeSystemAudio: boolean;
+    /// Source kinds (`"microphone"` / `"system-audio"`) that have
+    /// failed mid-session. Populated by the parent's
+    /// `meeting:source-failed` event listener; the panel renders
+    /// each entry as a struck-through chip in the active-session
+    /// source line so the user knows that side stopped capturing.
+    droppedSources: Set<string>;
     onDelete: (session: MeetingSession) => void | Promise<void>;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
@@ -76,6 +82,7 @@
     busy,
     sources,
     sourcesLoaded,
+    droppedSources,
     meetingMicId = $bindable(),
     meetingIncludeSystemAudio = $bindable(),
     onDelete,
@@ -222,23 +229,42 @@
   let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
   let pickableCount = $derived(mics.length + (systemAudio ? 1 : 0));
 
-  // Effective source-list summary for the active-session line.
-  // Phase 3 makes this multi-source: typically "Microphone +
-  // System audio" by default. Computed off the panel's own state
-  // so the line accurately reflects what the pump is currently
-  // recording (the active session locked in these settings at
-  // start time; mid-session toggles don't take effect until next
-  // start, by design).
-  let activeSourceSummary = $derived.by(() => {
-    const labels: string[] = [];
+  /**
+   * Effective source list for the active-session line. Phase 3 made
+   * this multi-source (typically "Microphone + System audio"); the
+   * `dropped` flag (true when the parent's
+   * `meeting:source-failed` listener has tagged that source kind)
+   * drives a struck-through render so the user sees which side has
+   * stopped capturing without needing to read the tracing logs.
+   *
+   * `kind` mirrors the `AudioSource.kind` discriminator
+   * (`"microphone"` / `"system-audio"`), so the dropped-set
+   * lookup is a direct match against the same string the backend
+   * emits.
+   */
+  type ActiveSourceChip = {
+    label: string;
+    kind: "microphone" | "system-audio";
+    dropped: boolean;
+  };
+  let activeSources = $derived.by<ActiveSourceChip[]>(() => {
+    const out: ActiveSourceChip[] = [];
     if (meetingMicId !== null) {
       const mic = mics.find((m) => m.id === meetingMicId);
-      labels.push(mic?.name ?? meetingMicId);
+      out.push({
+        label: mic?.name ?? meetingMicId,
+        kind: "microphone",
+        dropped: droppedSources.has("microphone"),
+      });
     }
     if (meetingIncludeSystemAudio && systemAudio?.isSupported) {
-      labels.push(systemAudio.name);
+      out.push({
+        label: systemAudio.name,
+        kind: "system-audio",
+        dropped: droppedSources.has("system-audio"),
+      });
     }
-    return labels.length === 0 ? "no source picked" : labels.join(" + ");
+    return out;
   });
 
   // Active session row for live-status reads (utterance counter,
@@ -466,9 +492,21 @@
           </span>
         {/if}
         <p class="meeting-dictate-prompt">
-          <strong>Recording</strong> from {activeSourceSummary}. New
-          text streams in as you speak — italicised lines are still
-          firming up.
+          <strong>Recording</strong> from
+          {#each activeSources as src, i (src.kind)}
+            {#if i > 0}<span aria-hidden="true"> + </span>{/if}
+            <span
+              class="active-source-chip"
+              class:active-source-chip-dropped={src.dropped}
+              aria-label={src.dropped
+                ? `${src.label} — capture stopped`
+                : src.label}
+            >{src.label}{#if src.dropped}<span class="source-dropped-tag" aria-hidden="true">
+                stopped capturing</span
+              >{/if}</span>
+          {/each}{#if activeSources.length === 0}<em>no source picked</em>{/if}.
+          New text streams in as you speak — italicised lines are
+          still firming up.
         </p>
       </div>
       <button type="button" class="primary" onclick={onStop} disabled={busy}>
@@ -951,6 +989,35 @@
   color: #333;
 }
 
+/*
+  Active-session source chip. Renders in-line inside the "Recording
+  from …" prompt, one per source the pump is capturing. Dropped
+  sources (the `meeting:source-failed` event fired) get a strike-
+  through + a small "stopped capturing" tag so the user notices
+  rather than thinking both sides are still live.
+*/
+.active-source-chip {
+  font-weight: 500;
+}
+.active-source-chip-dropped {
+  text-decoration: line-through;
+  text-decoration-color: rgba(216, 58, 58, 0.7);
+  color: #777;
+}
+.source-dropped-tag {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05em 0.4em;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background-color: rgba(216, 58, 58, 0.16);
+  color: #8a0000;
+  border-radius: 3px;
+  text-decoration: none;
+}
+
 /* `.meeting-dictate-prompt code` removed: the active-session line
    no longer wraps the source summary in a <code> tag (a UX review
    flagged it as leaking dev aesthetic into the user-facing copy). */
@@ -1413,6 +1480,14 @@ button:disabled {
   }
   .meeting-dictate-prompt {
     color: #ddd;
+  }
+  .active-source-chip-dropped {
+    color: #888;
+    text-decoration-color: rgba(216, 58, 58, 0.85);
+  }
+  .source-dropped-tag {
+    background-color: rgba(216, 58, 58, 0.22);
+    color: #f8b8b8;
   }
   .meeting-system-audio-toggle {
     color: #ddd;

@@ -419,6 +419,35 @@ impl SlidingWindowState {
     }
 }
 
+impl Drop for SlidingWindowState {
+    fn drop(&mut self) {
+        // Zeroise the rolling PCM window before its allocation is
+        // returned to the allocator. The privacy claim — "raw audio
+        // bytes never reach disk" — survives macOS swap-out only if
+        // the in-memory window doesn't outlive its session: if the
+        // process is paged out mid-session and a forensic tool
+        // reads the swap file, those samples are still on disk
+        // unless we overwrite them.
+        //
+        // Cost is O(n) over the window contents (≤ ~30 s of 16 kHz
+        // mono = 480 000 floats), once per session end. Negligible
+        // alongside whisper inference. The slide-forward path that
+        // drops the window head over the session lifetime relies on
+        // `Vec::drain` — those bytes get overwritten by subsequent
+        // samples or compact under shrink_to_fit; the bigger window
+        // of exposure is here, at session end, where the full
+        // window sits live until Drop.
+        for sample in self.window.iter_mut() {
+            *sample = 0.0;
+        }
+        // Drop the last-partial text too — it's not raw audio, but
+        // it's the most recent transcript fragment for this
+        // session, and a future change adding partial-PII handling
+        // would expect this to be cleared by the same discipline.
+        self.last_partial_text = None;
+    }
+}
+
 /// Streaming transcription session — the trait the meeting pump
 /// holds, one instance per audio source.
 ///
