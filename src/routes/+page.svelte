@@ -2,6 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
+  import AppSidebar from "$lib/AppSidebar.svelte";
+  import type { AppSection } from "$lib/types";
   import ControlsSection from "$lib/ControlsSection.svelte";
   import ResultBlock from "$lib/ResultBlock.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
@@ -31,6 +33,13 @@
   // 25 is plenty per page for a dictation history that grows linearly
   // with the user's actual usage (handful per day).
   const HISTORY_PAGE_SIZE = 25;
+
+  // Sidebar nav state (Phase 1 of the IA redesign). Drives which
+  // content block renders in the main pane; the hot-path Dictation
+  // section is the default landing tab. Stays page-local for v1 —
+  // a Phase 4 follow-up may persist the last-active section in
+  // settings so the window reopens to wherever the user was.
+  let activeSection = $state<AppSection>("dictation");
 
   let sources = $state<AudioSourceListing[]>([]);
   let sourcesLoaded = $state(false);
@@ -1037,116 +1046,167 @@
   </div>
 {/if}
 
-<main class="container">
-  <h1>Hush</h1>
-  <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
-
-  <!--
-    Hotkey hint card. Defaults are baked here for M2; once the settings
-    panel lands (M3) this becomes a fetched value and the env-var
-    override notes go away.
-  -->
-  <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
-    <strong>Shortcuts:</strong>
-    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle{#if !isMacOS},
-    or hold <kbd>Right Ctrl</kbd> to push-to-talk{/if}.
-  </aside>
-
-  <ControlsSection
-    {sources}
-    {sourcesLoaded}
-    bind:selected
-    {recording}
-    {busy}
-    {transcribing}
-    {noModelInstalled}
-    {error}
-    onStart={start}
-    onStop={stop}
-    onScrollToModelPicker={scrollToModelPicker}
+<div class="app-shell">
+  <AppSidebar
+    active={activeSection}
+    onSelect={(s) => (activeSection = s)}
+    historyCount={historyEntries.length}
+    meetingsCount={meetingSessions.length}
+    activeMeetingInProgress={meetingActiveId !== null}
   />
 
-  {#if result}
-    <ResultBlock {result} />
-  {/if}
+  <main class="app-main" data-active-section={activeSection}>
+    {#if activeSection === "dictation"}
+      <header class="section-header">
+        <h1>Dictation</h1>
+        <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
+      </header>
 
-  <HistoryPanel
-    {historyEntries}
-    {historyLoaded}
-    {historyQuery}
-    {historySearching}
-    {historyError}
-    {historyVersion}
-    {formatTimestamp}
-    {onSearchInput}
-    onCopy={copyHistoryEntry}
-    onDelete={deleteHistoryEntry}
-  />
+      <!--
+        Hotkey hint card. Stays sticky inside the Dictation pane so
+        the shortcut stays visible as the result block grows. PTT
+        clause hides on macOS where it's disabled by default (#161).
+      -->
+      <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
+        <strong>Shortcuts:</strong>
+        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle{#if !isMacOS},
+        or hold <kbd>Right Ctrl</kbd> to push-to-talk{/if}.
+      </aside>
 
-  <ReplacementsPanel
-    {replacements}
-    {replacementsLoaded}
-    {replacementsError}
-    bind:newFind
-    bind:newReplace
-    bind:inputEl={findInputEl}
-    onSubmit={addReplacement}
-    onDelete={deleteReplacement}
-  />
+      <ControlsSection
+        {sources}
+        {sourcesLoaded}
+        bind:selected
+        {recording}
+        {busy}
+        {transcribing}
+        {noModelInstalled}
+        {error}
+        onStart={start}
+        onStop={stop}
+        onScrollToModelPicker={scrollToModelPicker}
+      />
 
-  <ModelPickerPanel
-    {models}
-    {modelsLoaded}
-    {modelsError}
-    {modelsRestartNotice}
-    {downloading}
-    {downloadFailed}
-    {formatMb}
-    onSelect={selectModel}
-    onDownload={downloadModel}
-    onCancel={cancelDownload}
-    onRemove={removeModel}
-  />
+      {#if result}
+        <ResultBlock {result} />
+      {/if}
 
-  <VocabularyPanel
-    {vocabulary}
-    {vocabularyLoaded}
-    {vocabularyError}
-    bind:newVocab
-    bind:inputEl={vocabInputEl}
-    onSubmit={addVocabulary}
-    onDelete={deleteVocabulary}
-  />
+      {#if macosDiagnostic?.canReset}
+        <!--
+          Watch-out from the IA redesign brief: "don't make the
+          Permissions diagnostic a buried settings pane." This inline
+          link surfaces it on the Dictation surface so a user hitting
+          a permission failure isn't hunting for it. Phase 3 will
+          re-target this to deep-link into the Settings window.
+        -->
+        <p class="permissions-hint">
+          On macOS, dictation needs Microphone access (and Screen
+          Recording for system-audio capture in meetings). Trouble?
+          <button
+            type="button"
+            class="link-button"
+            onclick={() => (activeSection = "configuration")}
+          >Open the Permissions diagnostic</button>.
+        </p>
+      {/if}
+    {:else if activeSection === "meetings"}
+      <header class="section-header">
+        <h1>Meetings</h1>
+        <p class="tagline">
+          Long-running multi-source capture with searchable transcripts.
+        </p>
+      </header>
+      <MeetingSessionsPanel
+        sessions={meetingSessions}
+        sessionsLoaded={meetingSessionsLoaded}
+        sessionsError={meetingSessionsError}
+        activeSessionId={meetingActiveId}
+        activeDetail={meetingActiveDetail}
+        busy={meetingBusy}
+        {sources}
+        {sourcesLoaded}
+        droppedSources={meetingDroppedSources}
+        bind:meetingMicId
+        bind:meetingIncludeSystemAudio
+        onDelete={deleteMeetingSession}
+        onStart={startMeetingSession}
+        onStop={stopMeetingSession}
+        onLoadDetail={loadMeetingSessionDetail}
+      />
+    {:else if activeSection === "history"}
+      <header class="section-header">
+        <h1>History</h1>
+        <p class="tagline">Every dictation transcript, searchable.</p>
+      </header>
+      <HistoryPanel
+        {historyEntries}
+        {historyLoaded}
+        {historyQuery}
+        {historySearching}
+        {historyError}
+        {historyVersion}
+        {formatTimestamp}
+        {onSearchInput}
+        onCopy={copyHistoryEntry}
+        onDelete={deleteHistoryEntry}
+      />
+    {:else if activeSection === "configuration"}
+      <header class="section-header">
+        <h1>Configuration</h1>
+        <p class="tagline">
+          Temporary home for these panels — they'll move to the
+          standalone Settings window in a follow-up PR.
+        </p>
+      </header>
 
-  {#if macosDiagnostic?.canReset}
-    <MacosDiagnosticPanel
-      {macosDiagnostic}
-      bind:macosDiagnosticOpen
-      {macosResetMessage}
-      {macosResetting}
-      onOpenPrivacyPane={openPrivacyPane}
-      onReset={runMacosReset}
-    />
-  {/if}
+      <ModelPickerPanel
+        {models}
+        {modelsLoaded}
+        {modelsError}
+        {modelsRestartNotice}
+        {downloading}
+        {downloadFailed}
+        {formatMb}
+        onSelect={selectModel}
+        onDownload={downloadModel}
+        onCancel={cancelDownload}
+        onRemove={removeModel}
+      />
 
-  <MeetingSessionsPanel
-    sessions={meetingSessions}
-    sessionsLoaded={meetingSessionsLoaded}
-    sessionsError={meetingSessionsError}
-    activeSessionId={meetingActiveId}
-    activeDetail={meetingActiveDetail}
-    busy={meetingBusy}
-    {sources}
-    {sourcesLoaded}
-    droppedSources={meetingDroppedSources}
-    bind:meetingMicId
-    bind:meetingIncludeSystemAudio
-    onDelete={deleteMeetingSession}
-    onStart={startMeetingSession}
-    onStop={stopMeetingSession}
-    onLoadDetail={loadMeetingSessionDetail}
-  />
-</main>
+      <VocabularyPanel
+        {vocabulary}
+        {vocabularyLoaded}
+        {vocabularyError}
+        bind:newVocab
+        bind:inputEl={vocabInputEl}
+        onSubmit={addVocabulary}
+        onDelete={deleteVocabulary}
+      />
+
+      <ReplacementsPanel
+        {replacements}
+        {replacementsLoaded}
+        {replacementsError}
+        bind:newFind
+        bind:newReplace
+        bind:inputEl={findInputEl}
+        onSubmit={addReplacement}
+        onDelete={deleteReplacement}
+      />
+
+      {#if macosDiagnostic?.canReset}
+        <MacosDiagnosticPanel
+          {macosDiagnostic}
+          bind:macosDiagnosticOpen
+          {macosResetMessage}
+          {macosResetting}
+          onOpenPrivacyPane={openPrivacyPane}
+          onReset={runMacosReset}
+        />
+      {/if}
+    {/if}
+  </main>
+</div>
 
 <style>
 :root {
@@ -1161,11 +1221,71 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-.container {
+/* Phase 1 IA redesign: app shell is a flex row of sidebar +
+   content. The container's centred-with-max-width treatment moves
+   to .app-main so each section reads at the same comfortable
+   measure. */
+.app-shell {
+  display: flex;
+  align-items: stretch;
+  min-height: 100vh;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  padding: 3vh 2rem 4vh;
+  text-align: left;
+}
+
+.section-header {
   max-width: 36rem;
-  margin: 0 auto;
-  padding: 4vh 1.5rem;
-  text-align: center;
+  margin: 0 auto 1.5rem;
+}
+.section-header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.6rem;
+  letter-spacing: -0.01em;
+}
+
+/* Centred content column inside the main pane. Each section's
+   children inherit this measure via the existing per-component
+   styles (HistoryPanel etc. use width:auto inside a max-width
+   parent). */
+.app-main > :not(.section-header) {
+  max-width: 36rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.permissions-hint {
+  margin: 1.25rem auto 0;
+  padding: 0.75rem 1rem;
+  background-color: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 8px;
+  color: #8a5a00;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link-button:hover {
+  text-decoration: none;
+}
+@media (prefers-color-scheme: dark) {
+  .permissions-hint {
+    background-color: #3a2c00;
+    border-color: #6b5300;
+    color: #ffd591;
+  }
 }
 
 h1 {

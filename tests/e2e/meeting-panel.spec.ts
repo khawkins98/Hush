@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { gotoSection, installMocks } from "./_mock";
 
 // Meeting panel UX specs spanning Phase 1–3 of the meeting-mode
 // roadmap (#122). The panel:
@@ -19,6 +19,7 @@ test.describe("meeting panel — multi-source picker", () => {
   }) => {
     await installMocks(page);
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     await expect(panel).toBeVisible();
@@ -68,6 +69,7 @@ test.describe("meeting panel — multi-source picker", () => {
       ],
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     const sysCheckbox = panel.locator('input[type="checkbox"]');
@@ -132,6 +134,7 @@ test.describe("meeting panel — multi-source picker", () => {
       },
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     await panel.getByRole("button", { name: "Start a session" }).click();
@@ -211,6 +214,7 @@ test.describe("meeting panel — multi-source picker", () => {
       }),
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
 
@@ -287,6 +291,7 @@ test.describe("meeting panel — multi-source picker", () => {
       }),
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     const transcript = panel.locator("ol.live-transcript");
@@ -381,6 +386,7 @@ test.describe("meeting panel — multi-source picker", () => {
       }),
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     const transcript = panel.locator("ol.live-transcript");
@@ -484,6 +490,7 @@ test.describe("meeting panel — multi-source picker", () => {
       },
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     const row = panel.locator("li.session-row").first();
@@ -556,6 +563,7 @@ test.describe("meeting panel — multi-source picker", () => {
       }),
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     const row = panel.locator("li.session-row").first();
@@ -625,6 +633,7 @@ test.describe("meeting panel — multi-source picker", () => {
       }),
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     const transcript = panel.locator("ol.live-transcript");
@@ -690,6 +699,7 @@ test.describe("meeting panel — multi-source picker", () => {
       },
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     const stopButton = panel.getByRole("button", { name: "Stop session" });
@@ -755,6 +765,7 @@ test.describe("meeting panel — multi-source picker", () => {
       }),
     });
     await page.goto("/");
+    await gotoSection(page, "meetings");
 
     const panel = page.locator("section.panel-meetings");
     await expect(panel).toContainText(/Listening/i);

@@ -179,3 +179,15 @@ export type MacosPermissionResetResult = {
 // parallel `Map<id, …>`s keep per-row status independent of the
 // catalog array's order.
 export type DownloadProgress = { received: number; total: number | null };
+
+// Main-window left-sidebar section identifier (Phase 1 of the IA
+// redesign). "configuration" is the temporary tab that holds the
+// model / vocabulary / replacements panels until Phase 3 lifts
+// them into the standalone Settings window — at which point this
+// union narrows to the remaining three sections and the temp tab
+// goes away.
+export type AppSection =
+  | "dictation"
+  | "meetings"
+  | "history"
+  | "configuration";
