@@ -330,17 +330,13 @@ pub async fn stop_dictation(
     // Compute recording duration before transcribe_chunks consumes the
     // sample buffer. `samples.len()` is the interleaved frame count
     // (channels * sample_rate * seconds), so wall-clock duration is
-    // frames / (sample_rate * channels). Saturating arithmetic against
-    // the (impossible) zero-format case so a corrupt format can't
-    // panic the dictation hot path.
-    let duration_ms: Option<i64> = {
-        let denom = format.sample_rate as u64 * format.channels.max(1) as u64;
-        if denom == 0 {
-            None
-        } else {
-            Some(((captured.samples.len() as u64 * 1000) / denom) as i64)
-        }
-    };
+    // frames / (sample_rate * channels). `checked_div` guards the
+    // (impossible) zero-format case so a corrupt format can't panic
+    // the dictation hot path.
+    let duration_ms: Option<i64> = (captured.samples.len() as u64)
+        .saturating_mul(1000)
+        .checked_div(format.sample_rate as u64 * format.channels.max(1) as u64)
+        .map(|ms| ms as i64);
     let utterances = transcriber
         .transcribe_chunks(&[captured.samples], format, &prompt)
         .map_err(|e| IpcError::Transcription(e.to_string()))?;
