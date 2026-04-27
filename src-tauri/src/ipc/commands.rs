@@ -167,6 +167,17 @@ pub fn audio_list_sources(state: State<'_, AppState>) -> IpcResult<Vec<AudioSour
         .map_err(|e| IpcError::Audio(e.to_string()))
 }
 
+/// Open (or focus, if already visible) the standalone Settings
+/// window. Frontend invokes this from the main window's "Open
+/// Settings" affordances; the macOS menu bar's `Hush → Settings…`
+/// entry (⌘,) calls this directly from the menu-event handler in
+/// [`crate::lib`].
+#[tauri::command]
+pub fn open_settings(app: AppHandle) -> IpcResult<()> {
+    crate::settings_window::show(&app)
+        .map_err(|e| IpcError::Internal(format!("open settings window: {e:#}")))
+}
+
 /// Begin capturing from `source` (microphone or system audio).
 ///
 /// Captures the foreground app *before* opening the input stream so the

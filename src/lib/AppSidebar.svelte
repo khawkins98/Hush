@@ -13,6 +13,7 @@
   one-line diff in this file.
 -->
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import type { AppSection } from "./types";
 
   type Props = {
@@ -30,6 +31,17 @@
     meetingsCount,
     activeMeetingInProgress,
   }: Props = $props();
+
+  async function openSettings() {
+    try {
+      await invoke("open_settings");
+    } catch (e) {
+      // Best-effort — settings window failing to open is rare and
+      // logged backend-side; surface a console warning rather than
+      // a noisy banner so the rest of the app stays usable.
+      console.warn("[hush] open_settings invoke failed", e);
+    }
+  }
 
   // Section definitions. Order matches the brief's recommendation
   // (hot path first). Keys are stable test ids; labels are
@@ -57,7 +69,15 @@
 
 <nav class="app-sidebar" aria-label="Main navigation">
   <div class="brand">
-    <span class="brand-mark" aria-hidden="true">H</span>
+    <img
+      class="brand-icon"
+      src="/app-icon.png"
+      srcset="/app-icon.png 1x, /app-icon@2x.png 2x"
+      alt=""
+      aria-hidden="true"
+      width="22"
+      height="22"
+    />
     <span class="brand-name">Hush</span>
   </div>
 
@@ -87,6 +107,19 @@
       </li>
     {/each}
   </ul>
+
+  <div class="sidebar-footer">
+    <button
+      type="button"
+      class="nav-item nav-item-secondary"
+      data-testid="nav-open-settings"
+      onclick={openSettings}
+      title="Settings (⌘,)"
+    >
+      <span class="nav-label">Settings</span>
+      <span class="nav-shortcut" aria-hidden="true">⌘,</span>
+    </button>
+  </div>
 </nav>
 
 <style>
@@ -112,17 +145,12 @@
     padding: 0 0.5rem 0.5rem;
     border-bottom: 1px solid #e1e1e1;
   }
-  .brand-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.6rem;
-    height: 1.6rem;
-    border-radius: 6px;
-    background-color: #2c3e8f;
-    color: white;
-    font-weight: 700;
-    font-size: 0.85rem;
+  .brand-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    image-rendering: -webkit-optimize-contrast;
+    flex-shrink: 0;
   }
   .brand-name {
     font-weight: 600;
@@ -193,6 +221,20 @@
     color: white;
     animation: live-pulse 1.4s ease-in-out infinite;
   }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding-top: 0.75rem;
+    border-top: 1px solid #e1e1e1;
+  }
+  .nav-item-secondary {
+    color: #666;
+  }
+  .nav-shortcut {
+    font-size: 0.72rem;
+    color: #888;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  }
   @keyframes live-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.55; }
@@ -224,5 +266,10 @@
       background-color: rgba(150, 170, 240, 0.25);
       color: #d8e0ff;
     }
+    .sidebar-footer {
+      border-top-color: #2f2f33;
+    }
+    .nav-item-secondary { color: #a8a8a8; }
+    .nav-shortcut { color: #888; }
   }
 </style>
