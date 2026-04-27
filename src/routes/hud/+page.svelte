@@ -117,7 +117,9 @@
     background-color: transparent;
     overflow: hidden;
     color: white;
-    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+      Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
 
