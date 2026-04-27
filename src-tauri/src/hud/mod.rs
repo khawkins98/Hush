@@ -64,7 +64,7 @@ pub const HUD_LABEL: &str = "hud";
 /// HUD logical width in CSS pixels. Mirrors `tauri.conf.json` so the
 /// position math has a single source of truth — if the window is
 /// resized, the corner offset stays accurate.
-const HUD_LOGICAL_WIDTH: f64 = 220.0;
+const HUD_LOGICAL_WIDTH: f64 = 250.0;
 
 /// Top + right margin from the screen edge. Matches the visual
 /// breathing room every other system HUD uses (Zoom, Discord, the

@@ -20,6 +20,7 @@
 -->
 <script lang="ts">
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { onMount } from "svelte";
 
   // Latest RMS from the backend pump, in roughly [0, 1]. We hold
@@ -66,14 +67,44 @@
   // sits in 0.05–0.2; we boost ×4 so casual talking lights the bar
   // about half-way and shouting saturates it. Capped at 100 %.
   let barWidth = $derived(Math.min(100, Math.max(0, displayLevel * 400)));
+
+  // Dismiss the HUD without affecting the in-flight recording. The
+  // backend's `hud::show` is the only thing that re-shows it, so
+  // dismiss is a one-session opt-out: the next dictation/meeting
+  // start will re-show the HUD on its own.
+  async function dismiss() {
+    try {
+      await getCurrentWebviewWindow().hide();
+    } catch {
+      // Hide failure is non-fatal — recording continues regardless.
+    }
+  }
 </script>
 
-<div class="hud-root" aria-hidden="true">
+<!--
+  `data-tauri-drag-region` on the root makes the whole pill act as a
+  window-drag handle (Tauri 2 idiom; replaces the older
+  `-webkit-app-region: drag` CSS that had macOS quirks). The dismiss
+  button opts out via `data-tauri-drag-region="false"` so a click
+  hides instead of starting a drag.
+-->
+<div class="hud-root" data-tauri-drag-region aria-hidden="true">
   <span class="hud-dot"></span>
   <span class="hud-label">Recording</span>
   <div class="hud-meter" role="presentation">
     <div class="hud-meter-fill" style="width: {barWidth}%"></div>
   </div>
+  <button
+    type="button"
+    class="hud-dismiss"
+    aria-label="Hide recording overlay (recording continues)"
+    title="Hide overlay"
+    onclick={dismiss}
+  >
+    <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+      <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+    </svg>
+  </button>
 </div>
 
 <style>
@@ -112,7 +143,40 @@
        transparent window's edges aren't rectangular-shadow'd). */
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     user-select: none;
-    -webkit-app-region: drag; /* allow click-drag on macOS */
+    /* Drag handling is via `data-tauri-drag-region` on the markup —
+       Tauri 2's preferred path. The cursor hint here makes the
+       drag affordance discoverable. */
+    cursor: grab;
+  }
+  .hud-root:active {
+    cursor: grabbing;
+  }
+
+  /* Dismiss button. Sits flush to the right edge of the pill;
+     ghosted by default and lit on hover so it doesn't compete with
+     the recording dot for attention. */
+  .hud-dismiss {
+    margin-left: auto;
+    padding: 0;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color 0.12s, color 0.12s;
+  }
+  .hud-dismiss:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+    color: rgba(255, 255, 255, 0.95);
+  }
+  .hud-dismiss:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.6);
+    outline-offset: 1px;
   }
 
   .hud-dot {
