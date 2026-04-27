@@ -86,9 +86,9 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .select_all()
         .build()?;
 
-    // View submenu: section navigation. ⌘1..⌘4 mirrors the sidebar
-    // order. The "Configuration" entry goes away when Phase 3 lifts
-    // those panels into the Settings window.
+    // View submenu: section navigation. ⌘1..⌘3 mirror the sidebar
+    // order. Configuration was a Phase 1 placeholder; Phase 3 moved
+    // its panels into the Settings window (⌘, on the App menu).
     let view_submenu = SubmenuBuilder::new(app, "View")
         .item(
             &MenuItemBuilder::with_id("goto-dictation", "Dictation")
@@ -103,11 +103,6 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .item(
             &MenuItemBuilder::with_id("goto-history", "History")
                 .accelerator("CmdOrCtrl+3")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("goto-configuration", "Configuration")
-                .accelerator("CmdOrCtrl+4")
                 .build(app)?,
         )
         .build()?;
