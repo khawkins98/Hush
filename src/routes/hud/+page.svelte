@@ -88,7 +88,21 @@
   button opts out via `data-tauri-drag-region="false"` so a click
   hides instead of starting a drag.
 -->
-<div class="hud-root" data-tauri-drag-region aria-hidden="true">
+<!--
+  `role="status"` + `aria-live="polite"` so a screen reader hears
+  "Recording" when the HUD appears, without re-announcing on every
+  level-meter tick. The dismiss button inside is a real focusable
+  control with its own aria-label; the previous `aria-hidden="true"`
+  on the root masked everything (including the dismiss button) from
+  AT, which we never wanted.
+-->
+<div
+  class="hud-root"
+  data-tauri-drag-region
+  role="status"
+  aria-live="polite"
+  aria-label="Recording in progress"
+>
   <span class="hud-dot"></span>
   <span class="hud-label">Recording</span>
   <div class="hud-meter" role="presentation">

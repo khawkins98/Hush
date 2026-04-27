@@ -39,6 +39,12 @@
   // dedup) and commit on the first all-released event.
   let capturing = $state(false);
   let captured = $state<Set<string>>(new Set());
+  // Transient cue: flips true for ~1.8 s when the user presses
+  // an ignored key (letter, digit, arrow) during capture mode.
+  // Without it the capture surface feels broken on unsupported
+  // input. The auto-clear timer prevents a stuck hint.
+  let ignoredKeyHint = $state(false);
+  let ignoredKeyTimer: ReturnType<typeof setTimeout> | undefined;
   // Snapshot of `captured` at the moment of commit, used by the
   // "Save" button and for the "Press X to clear" affordance.
   let captureBuffer = $state<string[]>([]);
@@ -171,9 +177,17 @@
     }
     const ptt = ptKeyForCode(e.code);
     if (ptt === null) {
-      // Letter / digit / arrow / etc — ignore. Don't preventDefault;
-      // we don't want to swallow normal typing (the user might be
-      // about to Tab away to cancel).
+      // Letter / digit / arrow / etc — ignored, but surface a
+      // transient cue so the user knows the press registered and
+      // *why* nothing happened. Without this, capture mode
+      // feels broken when the user presses an unsupported key.
+      // Not intercepting the keystroke (no preventDefault) so the
+      // user can still Tab away to cancel if they want.
+      ignoredKeyHint = true;
+      if (ignoredKeyTimer !== undefined) clearTimeout(ignoredKeyTimer);
+      ignoredKeyTimer = setTimeout(() => {
+        ignoredKeyHint = false;
+      }, 1800);
       return;
     }
     e.preventDefault();
@@ -348,10 +362,15 @@
     </div>
 
     {#if capturing}
-      <p class="settings-hint">
-        Hold the keys you want to use, then release them. Esc cancels.
-        Letters / digits / arrows are ignored — combos must be made
-        of modifiers, function keys, or Caps Lock.
+      <p class="settings-hint" class:settings-hint-flash={ignoredKeyHint}>
+        {#if ignoredKeyHint}
+          That key isn't usable as a PTT trigger. Combos must be
+          made of modifiers, function keys, or Caps Lock.
+        {:else}
+          Hold the keys you want to use, then release them. Esc
+          cancels. Letters / digits / arrows are ignored — combos
+          must be made of modifiers, function keys, or Caps Lock.
+        {/if}
       </p>
     {/if}
 
@@ -456,6 +475,13 @@
     border: 1px solid #ffd591;
     border-radius: 6px;
     padding: 0.55rem 0.75rem;
+  }
+  /* Brief flash when the user presses an ignored key — drops back
+     to the neutral hint after the 1.8 s timer in
+     `onCaptureKeyDown`. */
+  .settings-hint-flash {
+    color: #8a1f1f;
+    transition: color 0.18s ease-out;
   }
   .settings-error {
     margin: 0.4rem 0 0;
