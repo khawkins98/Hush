@@ -87,7 +87,6 @@ rdev = "0.5"
 default = ["whisper"]
 # Enable the whisper transcription backend (requires cmake).
 whisper = ["dep:whisper-rs"]
-screencapturekit = ["dep:screencapturekit"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -106,5 +105,14 @@ wiremock = "0.6"
 hound = "3.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-screencapturekit = { version = "1.5.4", optional = true }
+# ScreenCaptureKit is the only sanctioned non-entitled path for
+# system-audio capture on consumer macOS — see #105 and §13.8 of the
+# PRD. Hush targets macOS 26+ only (memory: macos_support_window),
+# so we link unconditionally on macOS rather than gating behind a
+# feature flag. Pre-2026-04-27 the dep was opt-in via a
+# `screencapturekit` feature; that meant a default `npm run tauri
+# dev` shipped without SCK and the meeting panel's "Also record
+# system audio" checkbox stayed disabled, which the user (Ken) hit
+# in hands-on testing.
+screencapturekit = "1.5.4"
 
