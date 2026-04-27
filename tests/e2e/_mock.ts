@@ -187,6 +187,20 @@ export async function installMocks(
 }
 
 /**
+ * Click into one of the main-window sidebar sections (Phase 1 IA
+ * redesign). Specs targeting Meetings / History / Configuration
+ * panels should call this after `page.goto("/")` so the panel is
+ * actually rendered before locating it. Dictation is the default
+ * landing tab — specs hitting it can skip this helper.
+ */
+export async function gotoSection(
+  page: Page,
+  section: "dictation" | "meetings" | "history" | "configuration",
+): Promise<void> {
+  await page.locator(`[data-testid="nav-${section}"]`).click();
+}
+
+/**
  * Fire a Tauri event from the test side. Use to simulate
  * backend-emitted events like `audio:level`,
  * `model:download-progress`, `hotkey:toggle`.
