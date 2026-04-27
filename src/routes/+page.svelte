@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
   import AppSidebar from "$lib/AppSidebar.svelte";
   import type { AppSection } from "$lib/types";
@@ -727,6 +727,27 @@
   /// Map a tagged IPC error to a user-facing string. Recovery hints are
   /// embedded here rather than in the Rust enum's Display because the
   /// hint copy is product-shaped (what the user *does next*), not
+  // Open the Settings window and (best-effort) deep-link to a
+  // specific tab. The settings page listens for
+  // `settings:goto-tab` after mount; emitting before invoke risks
+  // racing the listener registration, so we order
+  // open → small tick → emit. Tauri events are broadcast to every
+  // window, so the settings window picks this up regardless of
+  // whether it was already open.
+  async function openSettingsTab(tab: string) {
+    try {
+      await invoke("open_settings");
+      // Two animation frames: enough time for the settings window
+      // to mount + register its listener on the bus, well under
+      // human perception (~32 ms). Cheaper than polling for a
+      // ready signal and good enough for this UI affordance.
+      await new Promise((r) => setTimeout(r, 50));
+      await emit("settings:goto-tab", tab);
+    } catch (e) {
+      console.warn("[hush] open settings tab failed", e);
+    }
+  }
+
   /// engineering-shaped (what went wrong technically).
   function formatError(e: unknown): string {
     if (typeof e === "object" && e !== null && "kind" in e) {
@@ -891,7 +912,7 @@
             <button
               type="button"
               class="link-button"
-              onclick={() => void invoke("open_settings")}
+              onclick={() => void openSettingsTab("permissions")}
             >View</button>
           </p>
         {:else}
@@ -908,7 +929,7 @@
             <button
               type="button"
               class="link-button"
-              onclick={() => void invoke("open_settings")}
+              onclick={() => void openSettingsTab("permissions")}
             >Open the Permissions diagnostic</button>.
           </p>
         {/if}

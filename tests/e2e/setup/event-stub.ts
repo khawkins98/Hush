@@ -57,4 +57,13 @@ export async function listen<T>(
   };
 }
 
+// `emit` matches the real Tauri API shape — fires the event to
+// every attached listener. In e2e mode we don't have a backend to
+// route through, so this is just a synchronous fan-out across the
+// in-page bus. Tests that need to assert on emit calls can spy on
+// `window.__hush_e2e_event_bus.fire`.
+export async function emit<T>(name: string, payload?: T): Promise<void> {
+  bus().fire(name, payload as T);
+}
+
 export type { UnlistenFn };

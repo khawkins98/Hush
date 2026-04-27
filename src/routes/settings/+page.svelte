@@ -56,7 +56,10 @@
     | "permissions"
     | "about";
 
-  let active = $state<SettingsTab>("model");
+  // Default landing tab. "general" matches the macOS Settings
+  // convention; deep-links from the main window override via the
+  // `settings:goto-tab` listener registered in `onMount`.
+  let active = $state<SettingsTab>("general");
 
   const tabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
     { key: "general", label: "General", testId: "settings-tab-general" },
@@ -78,6 +81,7 @@
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenDownloadFailed: UnlistenFn | null = null;
+  let unlistenGotoTab: UnlistenFn | null = null;
 
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
@@ -328,6 +332,24 @@
       downloading = next;
     });
 
+    // Deep-link from the main window's "Open the Permissions
+    // diagnostic" link / future menu items. Payload is the tab key
+    // — silently ignored if it isn't one we know, so future tabs
+    // added on the main window don't crash a stale settings build.
+    unlistenGotoTab = await listen<string>("settings:goto-tab", (e) => {
+      const target = e.payload;
+      if (
+        target === "general" ||
+        target === "model" ||
+        target === "vocabulary" ||
+        target === "replacements" ||
+        target === "permissions" ||
+        target === "about"
+      ) {
+        active = target;
+      }
+    });
+
     await Promise.all([
       loadModels(),
       loadVocabulary(),
@@ -340,6 +362,7 @@
     unlistenDownloadProgress?.();
     unlistenDownloadDone?.();
     unlistenDownloadFailed?.();
+    unlistenGotoTab?.();
   });
 </script>
 
