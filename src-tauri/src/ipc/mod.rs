@@ -383,12 +383,9 @@ impl AppStateBuilder {
                 .expect("reqwest client should always build with default config"),
             downloads: Mutex::new(HashMap::new()),
             pending_foreground: Mutex::new(None),
-            ptt_combo: Arc::new(std::sync::RwLock::new(
-                self.ptt_combo
-                    .unwrap_or_else(|| crate::hotkey::ptt::PttCombo::single(
-                        crate::hotkey::ptt::DEFAULT_PTT_KEY,
-                    )),
-            )),
+            ptt_combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(
+                || crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
+            ))),
             ptt_active: Arc::new(std::sync::atomic::AtomicBool::new(
                 self.ptt_active.unwrap_or(false),
             )),

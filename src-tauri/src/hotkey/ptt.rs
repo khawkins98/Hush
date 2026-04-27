@@ -697,10 +697,19 @@ mod tests {
     fn combo_single_key_press_release_round_trip() {
         let combo = PttCombo::single(PttKey::RightMeta);
         let mut m = ComboMatcher::default();
-        assert_eq!(m.observe(&mk_press(Key::MetaRight), &combo), ComboTransition::Pressed);
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::Pressed
+        );
         // Repeat KeyPress events shouldn't double-fire (active stays true).
-        assert_eq!(m.observe(&mk_press(Key::MetaRight), &combo), ComboTransition::None);
-        assert_eq!(m.observe(&mk_release(Key::MetaRight), &combo), ComboTransition::Released);
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::None
+        );
+        assert_eq!(
+            m.observe(&mk_release(Key::MetaRight), &combo),
+            ComboTransition::Released
+        );
     }
 
     #[test]
@@ -708,13 +717,25 @@ mod tests {
         let combo = PttCombo::try_from_keys([PttKey::RightMeta, PttKey::RightShift]).unwrap();
         let mut m = ComboMatcher::default();
         // First key alone — not active yet.
-        assert_eq!(m.observe(&mk_press(Key::MetaRight), &combo), ComboTransition::None);
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::None
+        );
         // Second key — both held now, fires Pressed.
-        assert_eq!(m.observe(&mk_press(Key::ShiftRight), &combo), ComboTransition::Pressed);
+        assert_eq!(
+            m.observe(&mk_press(Key::ShiftRight), &combo),
+            ComboTransition::Pressed
+        );
         // Release one — fires Released even though the other is still held.
-        assert_eq!(m.observe(&mk_release(Key::ShiftRight), &combo), ComboTransition::Released);
+        assert_eq!(
+            m.observe(&mk_release(Key::ShiftRight), &combo),
+            ComboTransition::Released
+        );
         // Release the other — no-op (already inactive).
-        assert_eq!(m.observe(&mk_release(Key::MetaRight), &combo), ComboTransition::None);
+        assert_eq!(
+            m.observe(&mk_release(Key::MetaRight), &combo),
+            ComboTransition::None
+        );
     }
 
     #[test]
@@ -723,8 +744,14 @@ mod tests {
         let mut m = ComboMatcher::default();
         // A letter key event is delivered by rdev but isn't in our
         // curated PttKey set — must not change matcher state.
-        assert_eq!(m.observe(&mk_press(Key::KeyA), &combo), ComboTransition::None);
-        assert_eq!(m.observe(&mk_press(Key::MetaRight), &combo), ComboTransition::Pressed);
+        assert_eq!(
+            m.observe(&mk_press(Key::KeyA), &combo),
+            ComboTransition::None
+        );
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::Pressed
+        );
     }
 
     #[test]

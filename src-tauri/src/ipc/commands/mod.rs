@@ -1092,9 +1092,7 @@ pub fn ptt_get_config(state: State<'_, AppState>) -> IpcResult<PttConfig> {
         .iter()
         .map(|k| k.as_str().to_string())
         .collect();
-    let enabled = state
-        .ptt_active
-        .load(std::sync::atomic::Ordering::SeqCst);
+    let enabled = state.ptt_active.load(std::sync::atomic::Ordering::SeqCst);
     Ok(PttConfig {
         combo,
         enabled,
