@@ -827,13 +827,12 @@
       <section class="first-run-section">
         <h3>Input Monitoring (macOS — push-to-talk only)</h3>
         <p>
-          The push-to-talk hotkey is <strong>disabled by default on
-          macOS</strong> because the underlying low-level keyboard
-          library aborts on macOS 26+. The toggle hotkey
-          (<kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>) works
-          fine. Power users who want push-to-talk back can re-enable
-          it by launching Hush with <code>HUSH_PTT_ENABLE=1</code>;
-          macOS will then prompt for Input Monitoring on first use.
+          Push-to-talk (hold <kbd>Right ⌘</kbd> while you speak) is
+          <strong>opt-in</strong>: launching Hush with
+          <code>HUSH_PTT_ENABLE=1</code> turns it on and macOS will
+          prompt for Input Monitoring on first use. The toggle hotkey
+          (<kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>) and the
+          on-screen Start button work without it.
         </p>
         <button class="ghost" onclick={() => openPrivacyPane("input-monitoring")}>
           Open Input Monitoring settings
@@ -875,8 +874,10 @@
       -->
       <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
         <strong>Shortcuts:</strong>
-        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle{#if !isMacOS},
-        or hold <kbd>Right Ctrl</kbd> to push-to-talk{/if}.
+        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
+        or hold
+        {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
+        to push-to-talk.
       </aside>
 
       <ControlsSection

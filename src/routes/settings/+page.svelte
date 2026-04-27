@@ -66,6 +66,12 @@
   // `settings:goto-tab` listener registered in `onMount`.
   let active = $state<SettingsTab>("general");
 
+  // Same heuristic the main window uses — drives Right ⌘ vs Right
+  // Ctrl in the PTT hotkey display, since the backend default
+  // varies by platform (see `hotkey/ptt.rs::DEFAULT_PTT_KEY`).
+  const isMacOS = typeof navigator !== "undefined"
+    && /Mac|iPhone|iPad/i.test(navigator.platform);
+
   const tabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
     { key: "general", label: "General", testId: "settings-tab-general" },
     { key: "model", label: "Model", testId: "settings-tab-model" },
@@ -489,10 +495,11 @@
         <p class="settings-row">
           <span class="row-label">Push-to-talk</span>
           <span class="row-value">
-            <kbd>Right Ctrl</kbd>
+            {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
             <span class="row-note">
-              Disabled by default on macOS; set
-              <code>HUSH_PTT_ENABLE=1</code> to opt in.
+              Opt-in: launch Hush with
+              <code>HUSH_PTT_ENABLE=1</code>. macOS prompts for
+              Input Monitoring on first use.
             </span>
           </span>
         </p>
@@ -631,6 +638,14 @@
     border-bottom: 1px solid #d8d8dc;
     overflow-x: auto;
     flex-shrink: 0;
+    /* Sticky inside the scrolling page so the tabs stay reachable
+       once a tab body grows past the viewport. The settings window
+       is the canonical case — General + Hotkeys + First-run reach
+       beyond the default 520 px height — but the toolbar is also
+       useful as an anchor on every tab. */
+    position: sticky;
+    top: 0;
+    z-index: 1;
   }
 
   .tab-button {

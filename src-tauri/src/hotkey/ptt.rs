@@ -74,13 +74,25 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 /// Default PTT key.
 ///
-/// `RightControl` is the conventional choice for hold-to-talk in voice
-/// apps (Discord, OBS, Mumble): it's reachable by the right hand, doesn't
-/// conflict with normal typing on either side of the keyboard, and is
-/// rarely bound by other applications. Modifier-only keys also avoid the
-/// "press a letter to start recording, but now you've typed that letter
-/// into the focused app" footgun that letter-keys would create. The user
-/// can override via `HUSH_PTT_HOTKEY`.
+/// On macOS, `RightMeta` (the Right Cmd key) is the default: every Apple
+/// keyboard has a Right Cmd, but not every Apple keyboard has a Right
+/// Ctrl (Magic Keyboards / many MacBooks ship Ctrl on the left only).
+/// Right Cmd is reachable by the right hand, doesn't conflict with
+/// normal typing, and is rarely bound by other applications. The full
+/// command shortcuts that *do* use Cmd are press-and-release chords
+/// (⌘C, ⌘V) — holding Right Cmd alone is a no-op in macOS' default
+/// bindings.
+///
+/// On other platforms `RightControl` stays the default — the
+/// conventional choice for hold-to-talk in voice apps (Discord, OBS,
+/// Mumble). The user can override either default via `HUSH_PTT_HOTKEY`.
+///
+/// Modifier-only keys also avoid the "press a letter to start
+/// recording, but now you've typed that letter into the focused app"
+/// footgun that letter-keys would create.
+#[cfg(target_os = "macos")]
+pub const DEFAULT_PTT_KEY: PttKey = PttKey::RightMeta;
+#[cfg(not(target_os = "macos"))]
 pub const DEFAULT_PTT_KEY: PttKey = PttKey::RightControl;
 
 /// Environment variable consulted at startup to override the default.
