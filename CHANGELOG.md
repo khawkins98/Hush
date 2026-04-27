@@ -7,10 +7,357 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This block covers the post-v0.1.0 meeting-mode pivot work. Grouped
-by PR so a reader can scan which features shipped in which change —
-the unreleased queue grew long enough during the pivot scaffold that
-a single flat list was hard to navigate.
+This block covers the post-v0.1.0 meeting-mode pivot work plus the
+post-#143 IA redesign and platform-polish stretch. Grouped by PR so
+a reader can scan which features shipped in which change — the
+unreleased queue grew long enough during the pivot scaffold that a
+single flat list was hard to navigate.
+
+### Added
+
+#### IA redesign — sidebar + ⌘, Settings window + native macOS menu (#163, #164, #165, #167, #176)
+
+The main window grew a left sidebar (Dictation / Meetings / History)
+and a standalone Settings window (`⌘,` on macOS, "Settings" footer
+button on the sidebar). The Settings window hosts the model picker,
+vocabulary terms, replacement rules, macOS permissions diagnostic,
+and a real General tab (autostart toggle via
+`@tauri-apps/plugin-autostart`, hotkey display, "Show welcome on
+next launch" first-run reset).
+
+- **Phase 1 (#163):** sidebar nav inside the main window. New
+  `AppSidebar.svelte` with brand mark, three section buttons +
+  badges (history count, meetings count, animated red dot when a
+  meeting is active), plus a temporary "Configuration" tab that
+  Phase 3 emptied.
+- **Phase 2 (#164):** Settings window scaffolding. New `settings`
+  Tauri window, capability file, route, and `crate::settings_window`
+  module (`show()`/`hide()` symmetric with the HUD module). Native
+  macOS menu bar via new `app_menu` module: `Hush → Settings…`
+  bound to `⌘,`, `View → Dictation/Meetings/History` bound to
+  `⌘1/⌘2/⌘3`. Sidebar app-icon swapped from the "H" letter mark
+  to the actual product icon.
+- **Phase 3 (#165):** lifted the four config panels out of the
+  main window into the Settings window. Cross-window invalidation
+  is event-driven where it matters (`model:download-done` is
+  broadcast; replacements/vocab changes pick up at the next
+  dictation invocation). +page.svelte dropped ~158 LOC.
+- **Phase 4-equivalent (#167):** real General tab — startup,
+  hotkeys, first-run reset.
+- **Deep-link from main window:** clicking "Open the Permissions
+  diagnostic" on the Dictation tab fires a `settings:goto-tab`
+  Tauri event so the Settings window opens directly to the
+  Permissions tab.
+- **E2E coverage (#176):** new `tests/e2e/settings-window.spec.ts`
+  covering toolbar nav, the deep-link event, autostart toggle
+  state, first-run reset confirmation, and PTT editor mount.
+  9 new specs; full suite now 30 passing.
+
+#### Live macOS TCC permission detection — green pill when granted (#166)
+
+`diagnose_macos_permissions` now reads the actual grant state for
+Microphone, Screen Recording, and Input Monitoring without
+triggering OS prompts:
+
+- New `crate::macos_perms` module uses
+  `+[AVCaptureDevice authorizationStatusForMediaType:]` (mic),
+  `CGPreflightScreenCaptureAccess()` (screen recording), and
+  `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)` (input
+  monitoring). All three are passive reads — calling them does NOT
+  trigger the prompt.
+- The earlier "TCC isn't programmatically readable" claim was
+  overly broad; it's true for some buckets (Accessibility, Full
+  Disk Access) but **false for the three Hush actually touches**.
+- Frontend renders a compact green "macOS permissions OK" pill on
+  the Dictation tab when mic + screen recording are granted (and
+  input monitoring isn't denied — `not-determined` is acceptable
+  since PTT is opt-in). Otherwise the existing yellow recovery
+  hint stays.
+- Settings → Permissions tab leads with three per-permission
+  status rows (granted / denied / not-determined) + the existing
+  collapsible diagnostic for recovery actions.
+- Direct dependency on `objc2` (already transitive via
+  `screencapturekit`) for the AV class-method call. CoreGraphics
+  + IOKit reached via raw `extern "C"` since the function shapes
+  are simple.
+
+#### Configurable push-to-talk combo + in-app Enabled toggle (#170, #174)
+
+PTT becomes a real settings UI rather than an env-var-only feature:
+
+- New `PttCombo` type — sorted, deduplicated set of `PttKey`s.
+  Single-key combos (the common case) work the same as the
+  previous `PttKey`; multi-key combos like `Right ⌘ + Right Shift`
+  fire when all keys are held simultaneously and release when any
+  one releases.
+- New `ComboMatcher` state machine — tracks held keys, emits
+  `Pressed`/`Released` transitions on edges only (repeat
+  `KeyPress` events from key-repeat don't double-fire). 8 new
+  unit tests pin the matcher's edge semantics.
+- `AppState` gains `ptt_combo: Arc<RwLock<PttCombo>>` and
+  `ptt_active: Arc<AtomicBool>`. Listener thread reads both per
+  event so a Settings UI edit takes effect on the next keystroke
+  without restarting the rdev thread.
+- Two new settings keys: `ptt_combo`, `ptt_enabled`. Env vars
+  (`HUSH_PTT_ENABLE` / `HUSH_PTT_DISABLE` / `HUSH_PTT_HOTKEY`)
+  still work as overrides.
+- IPC: `ptt_get_config` / `ptt_set_config`. The latter
+  hot-swaps the shared lock + atomic.
+- New `PttHotkeyEditor.svelte` lives in Settings → General →
+  Hotkeys. Three pieces: Enable checkbox, capture surface
+  ("Record new combo…") that records held keys until release,
+  and Reset-to-default. Letters / digits / arrows are silently
+  ignored to prevent foot-gun bindings.
+- Mac-friendly chip rendering (`⌘ ⌥ ⇧ ⌃`) on macOS, plain names
+  elsewhere.
+- **#174: listener-on-demand.** Toggling Enabled in Settings
+  spawns the rdev thread immediately rather than requiring an app
+  restart. The spawn is idempotent via a new
+  `ptt_listener_spawned: Arc<AtomicBool>` latch. On macOS this is
+  also when the Input Monitoring permission prompt fires — but
+  after a deliberate user click, not at app boot.
+
+#### HUD: drag handle + dismiss button (#162)
+
+The recording overlay pill becomes movable + dismissible without
+stopping the recording:
+
+- Drag via Tauri 2's `data-tauri-drag-region` attribute on the
+  pill root (replaces the older `-webkit-app-region: drag` CSS
+  with known macOS quirks). Cursor switches to grab/grabbing.
+- Dismiss via a small ghosted X button on the right edge. Click
+  hides the HUD window without affecting the in-flight recording;
+  the next dictation/meeting start re-shows it.
+- Window width bumped 220 → 250 px to fit the X.
+
+#### Layer 1 native UI — `color-scheme` + `accent-color` (#171, #172)
+
+Two CSS primitives that cost nothing but pick up real native
+behaviour from the user agent:
+
+- **System font stack (#171)**: `-apple-system, BlinkMacSystemFont,
+  "Segoe UI", Roboto, …` so each OS picks its native UI face
+  (San Francisco on macOS, Segoe UI on Windows, distro default on
+  Linux). Replaced the old `Inter, Avenir, Helvetica, Arial`
+  cascade which fell through to Helvetica on macOS — noticeably
+  off against the modern macOS UI.
+- **`color-scheme: light dark`** + **`accent-color: auto`** on
+  the main and settings windows (#172). User agent uses native
+  dark scrollbars / form chrome instead of the light-mode default,
+  and OS accent (Mac Highlight blue, Windows accent, GNOME
+  accent) drives checkboxes / radios / range sliders. The HUD
+  intentionally keeps its hand-rolled dark pill.
+- Layer 2 (per-OS class on `<html>` + targeted overrides) tracked
+  separately under #173 — deferred until macOS-only hands-on
+  coverage stops being a liability for sight-unseen
+  Windows/Linux work.
+
+#### History entries: populate `duration_ms` + render in panel (#159)
+
+The schema field had been `null` for every row since launch. Now
+populated from the captured sample buffer's
+`frames / (sample_rate × channels)` at `stop_dictation` time, with
+saturating arithmetic against the impossible zero-format case.
+HistoryPanel renders the duration after the timestamp using a
+compact format: `0.4s` / `12s` / `m:ss`. Sub-second resolution
+distinguishes a 0.4 s mis-press from a 4 s real clip.
+
+#### Misc tooling and dev experience
+
+- **`npm run tauri:bundle` (#152):** new macOS-only helper that
+  builds a debug `.app` and opens it. Required for SCK / Screen
+  Recording / system-audio TCC testing because the bare
+  `cargo tauri dev` binary is attributed to the parent Terminal /
+  iTerm, not Hush itself.
+- **`Info.plist` TCC usage descriptions (#149)** + `CFBundleIdentifier`
+  + `CFBundlePackageType` (#151). Without these, macOS 14+
+  silently fails the gated API call instead of prompting, and the
+  app never appears in System Settings → Privacy & Security under
+  its own name. Embedded into the dev binary's `__info_plist`
+  Mach-O section via `tauri::embed_plist::embed_info_plist!`.
+
+### Changed
+
+#### IPC commands.rs split into per-domain submodules (closes #82, via #168, #179, #180)
+
+`src-tauri/src/ipc/commands.rs` had grown to ~1.9k LOC. Three
+focused extractions reduced the parent file to 1341 LOC and
+established the per-domain submodule pattern:
+
+- **#168 — `commands/meeting.rs`** (~245 LOC): 7 commands, 3
+  result types, the `MAX_MEETING_SOURCES` cap +
+  `sanitise_meeting_sources` validator + its 6 unit tests.
+- **#179 — `commands/models.rs`** (~330 LOC): 5 commands,
+  `ModelCard` / `ModelSelectResult` / `DownloadProgress` /
+  `DownloadStatus` types, the auto-download orchestration that
+  wraps `transcription::download::download_with_progress`.
+- **#180 — `commands/macos.rs`** (~245 LOC): 3 commands
+  (`open_macos_privacy_pane`, `diagnose_macos_permissions`,
+  `reset_macos_permissions`) + 2 result types + bundle-id const.
+  Already cfg-gated by platform so the move was self-contained.
+
+`lib.rs` now references commands by their full
+`ipc::commands::<domain>::<cmd>` path because Tauri's
+`generate_handler!` macro is path-sensitive — it generates a
+hidden `__cmd__<name>` symbol as a sibling of each command, and
+`pub use` re-exports do not carry that symbol with them. See
+`learnings.md` 2026-04-25 for the original lesson; the new module
+header in `commands/mod.rs` cites it so future contributors don't
+re-discover the trap. The remaining domains (history, replacements,
+vocabulary, first-run, ptt-config) stay inline — they're below
+the standalone-file threshold the issue body itself flagged.
+
+#### rdev pinned to fufesou's fork — PTT works on macOS 26+ (#169)
+
+The macOS-26 hard-abort in PTT (rdev's CGEventTap callback calling
+`TISGetInputSourceProperty` from a non-main thread, hitting
+`dispatch_assert_queue_fail` on the first modifier press) is fixed
+by pinning rdev to [fufesou's fork](https://github.com/fufesou/rdev)
+— the one RustDesk ships in production. fufesou attaches the
+CGEventTap to `CFRunLoopGetMain()` so the callback runs on the
+main thread and TSM is happy.
+
+- **First attempt that didn't work:** pinned to Narsil's upstream
+  `main` past PR #147 (May 2025, "MacOS: set_is_main_thread").
+  Hands-on test: instant crash on the first modifier press.
+  Reading the patch: PR #147 only fixes the *send* path's TSM
+  call site, not the *listen* path. `listen()` itself still
+  attaches the tap to the calling thread's run loop.
+- **Lesson** (in `learnings.md` 2026-04-27): "PR merged" ≠
+  "your bug is fixed." Read the diff. Production users
+  (RustDesk in this case) often patch around upstream's
+  incompleteness for years before upstream catches up.
+- Default PTT key on macOS becomes `RightMeta` (Right ⌘) —
+  every Apple keyboard has it, but not every Apple keyboard has
+  a Right Ctrl. Other platforms keep `RightControl`.
+- The settings toolbar in the Settings window becomes
+  `position: sticky` so it doesn't scroll out of view as the
+  General tab grows past the window height.
+
+#### Meeting-mode polish: SCK on by default, HUD on session, auto-expand on stop (#144, #146)
+
+- ScreenCaptureKit is now an unconditional macOS dependency
+  (no Cargo feature flag). Pre-2026-04-27 the dep was opt-in via
+  a `screencapturekit` feature; the default `npm run tauri dev`
+  shipped without SCK and the meeting panel's "Also record
+  system audio" checkbox stayed disabled.
+- Meeting session start shows the recording HUD; stop hides it.
+  Same UX cue the dictation hot path provides.
+- Just-stopped session row auto-expands its transcript so the
+  user lands directly in the recording they just made.
+- Stop-session button uses destructive red styling and requires
+  an inline "End session? N utterances captured" confirmation
+  before firing the IPC (closes #131). Two-step pattern with
+  Cancel returning cleanly to unconfirmed Stop.
+
+#### IPC error messages use full anyhow chain (#150)
+
+`format!("...: {e}")` only renders the outermost anyhow context;
+errors deep in the chain were truncated to "open audio session
+for system-audio source" with no SCK detail. Switched to
+`format!("...: {e:#}")` for the full chain at every IPC error
+site. The audio-failure copy on the frontend's `formatError`
+also became source-agnostic so SCK failures don't render
+"Microphone error: try selecting a different input device" (#158).
+
+### Fixed
+
+#### macOS Info.plist regressions (#147, #148, #149, #151)
+
+When ScreenCaptureKit dropped its feature flag (#144), the
+crate's build-script-baked `cargo:rustc-link-arg` rpaths for
+`libSwift_Concurrency.dylib` no longer propagated transitively
+to the dev binary. `npm run tauri dev` SIGABRT'd with
+`Library not loaded: @rpath/libswift_Concurrency.dylib`. Fixed
+by baking the rpaths into the root crate via
+`src-tauri/.cargo/config.toml` (#147) and capturing the hazard
+in `learnings.md` (#148): "transitive deps don't propagate their
+build-script rpaths through to the binary; the root crate has to
+declare them itself."
+
+CFBundleIdentifier was missing from the embedded `Info.plist`,
+so macOS TCC had no per-app key to track the dev binary by — Hush
+never appeared in System Settings → Privacy & Security under its
+own name. Added in #151. Even with this, macOS attributes some
+TCC requests from unsigned bare binaries to the parent process
+(see "macOS TCC dev-binary quirk" in `CLAUDE.md`); for SCK and
+Screen Recording specifically, prefer testing against
+`npm run tauri:bundle`'s output `.app`.
+
+#### PTT hint on macOS, live utterance counter, source-failure events, hotkey row layout
+
+- **PTT shortcut hint hidden on macOS by default (#161):** the
+  "hold Right Ctrl to push-to-talk" copy was misleading on macOS
+  where PTT was disabled. Now omits the PTT clause on macOS and
+  honestly explains the opt-in path in the welcome modal.
+- **Live utterance counter (#157):** the meeting panel showed
+  "0 utterances so far" while the transcript rendered finals.
+  Counter was reading the stale `meetingSessions[].utteranceCount`
+  (refreshed only at session start/stop) instead of the polled
+  `activeDetail.utterances.length`.
+- **Streaming PCM zeroed on drop + pump source-failure events
+  (#145):** `SlidingWindowState`'s `Drop` impl overwrites the
+  rolling f32 PCM Vec with zeros + clears `last_partial_text`
+  before allocator return. The pump's `feed/drain` failure path
+  emits a `meeting:source-failed` Tauri event with `{sessionId,
+  sourceKind, reason}` and drops the source from the active
+  session; the frontend renders dropped sources as struck-through
+  chips with a "STOPPED CAPTURING" tag.
+- **Settings → General Hotkeys row layout (#177):** the chord
+  for "Toggle recording" was rendering each `<kbd>` chip on its
+  own line because `.row-value` is a column-flex container and
+  the bare `+` separators were treated as separate flex items.
+  Wrap the chord in a `<span class="chord">` with its own
+  `inline-flex` so the chord is one flex item and the
+  `row-note` still flows below.
+
+### Removed
+
+#### Legacy `list_input_devices` IPC command (closes #155, via #160)
+
+The picker migration to `audio_list_sources` had soaked across
+multiple releases. Drops:
+
+- The `#[tauri::command]` handler in `commands.rs`
+- The registration in `lib.rs`
+- The e2e mock entry
+- Stale comments referencing the legacy command
+
+The `AudioCapture::list_input_devices` trait method stays — it's
+still the building block the default `list_audio_sources` impl
+uses to enumerate mic devices.
+
+#### "Configuration" tab on the main window (via #165)
+
+The Phase 1 placeholder that held Model picker / Vocabulary /
+Replacements / macOS Diagnostic until Phase 3 lifted them into
+the standalone Settings window. `AppSection` union narrowed from
+4 entries to 3 (Dictation / Meetings / History); sidebar and
+View menu drop the entry; main page sheds the corresponding state
+and CRUD handlers.
+
+### Documentation
+
+- **`CLAUDE.md` refresh (#175):** three Tauri windows documented
+  (main + settings + hud), four-place IPC sync rule updated for
+  the submodule paths, dev-launch smoke trigger list adds
+  `app_menu/` and `settings_window/`, "Where things live"
+  rewritten to cover the new modules.
+- **`README.md` refresh (#178):** Meeting Mode + macOS
+  system-audio + streaming Whisper move from Planned to Shipped;
+  three-window IA + native macOS menu + configurable PTT + live
+  permission detection + autostart toggle + HUD niceties added to
+  Shipped; platform table updated to drop the "PTT disabled by
+  default" caveat.
+- **`learnings.md` 2026-04-27 entries:**
+  - rpath / CI-green-dev-broken hazard (rpaths don't propagate
+    from transitive deps)
+  - macOS TCC dev-binary quirk (parent-process attribution for
+    unsigned binaries)
+  - macOS TCC status IS readable for the three categories Hush
+    touches via AVFoundation / CoreGraphics / IOKit
+  - rdev macOS-26 abort: Narsil's PR #147 was incomplete; fixed
+    via fufesou's fork
 
 ### Fixed
 
