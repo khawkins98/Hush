@@ -615,6 +615,11 @@
       Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif,
       "Apple Color Emoji", "Segoe UI Emoji";
     -webkit-font-smoothing: antialiased;
+    /* Native scrollbars + form-control rendering follow the OS
+       light/dark mode; OS accent drives checkboxes / radios /
+       range sliders. See main page for the full rationale. */
+    color-scheme: light dark;
+    accent-color: auto;
   }
 
   .settings-window {
