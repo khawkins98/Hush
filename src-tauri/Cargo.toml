@@ -70,8 +70,30 @@ async-trait = "0.1"
 # Foreground app detection
 active-win-pos-rs = "0.10"
 
-# Push-to-talk key events (key-down / key-up)
-rdev = "0.5"
+# Push-to-talk key events (key-down / key-up). We pin to fufesou's
+# rdev fork because Narsil's upstream is incomplete on macOS 26+:
+#
+# Narsil/rdev#147 (May 2025) added a `set_is_main_thread` opt-in for
+# the *send* path's TSM call, but `listen()` itself still attaches
+# the CGEventTap to the *calling* thread's run loop. When that
+# thread isn't main, the callback fires on a non-main thread, the
+# `convert()` helper invokes TSM (`TISCopyCurrentKeyboardLayoutInputSource`
+# + friends), macOS 26's `dispatch_assert_queue_fail` kills the
+# process. We confirmed this hands-on: `cargo update` to Narsil's
+# `main` HEAD, launch with `HUSH_PTT_ENABLE=1`, instant crash on
+# the first modifier event.
+#
+# fufesou/rdev (the fork RustDesk ships in production) attaches the
+# tap to `CFRunLoopGetMain()` instead, so the callback runs on main
+# and TSM is happy. The API we use (`listen`, `Event`,
+# `EventType::{KeyPress, KeyRelease}`, `Key`) is identical between
+# the two forks.
+#
+# Bump-to-published when EITHER:
+#   - Narsil ships a release that completes the listen-path fix, OR
+#   - fufesou publishes their fork to crates.io.
+# See learnings.md 2026-04-27 entry for full context. Refs #69, #70.
+rdev = { git = "https://github.com/fufesou/rdev", rev = "a90dbe1172f8832f54c97c62e823c5a34af5fdfe" }
 
 [features]
 # `whisper` is a default feature so a vanilla `cargo run` / `npm run

@@ -74,13 +74,25 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 /// Default PTT key.
 ///
-/// `RightControl` is the conventional choice for hold-to-talk in voice
-/// apps (Discord, OBS, Mumble): it's reachable by the right hand, doesn't
-/// conflict with normal typing on either side of the keyboard, and is
-/// rarely bound by other applications. Modifier-only keys also avoid the
-/// "press a letter to start recording, but now you've typed that letter
-/// into the focused app" footgun that letter-keys would create. The user
-/// can override via `HUSH_PTT_HOTKEY`.
+/// On macOS, `RightMeta` (the Right Cmd key) is the default: every Apple
+/// keyboard has a Right Cmd, but not every Apple keyboard has a Right
+/// Ctrl (Magic Keyboards / many MacBooks ship Ctrl on the left only).
+/// Right Cmd is reachable by the right hand, doesn't conflict with
+/// normal typing, and is rarely bound by other applications. The full
+/// command shortcuts that *do* use Cmd are press-and-release chords
+/// (⌘C, ⌘V) — holding Right Cmd alone is a no-op in macOS' default
+/// bindings.
+///
+/// On other platforms `RightControl` stays the default — the
+/// conventional choice for hold-to-talk in voice apps (Discord, OBS,
+/// Mumble). The user can override either default via `HUSH_PTT_HOTKEY`.
+///
+/// Modifier-only keys also avoid the "press a letter to start
+/// recording, but now you've typed that letter into the focused app"
+/// footgun that letter-keys would create.
+#[cfg(target_os = "macos")]
+pub const DEFAULT_PTT_KEY: PttKey = PttKey::RightMeta;
+#[cfg(not(target_os = "macos"))]
 pub const DEFAULT_PTT_KEY: PttKey = PttKey::RightControl;
 
 /// Environment variable consulted at startup to override the default.
@@ -94,9 +106,11 @@ pub const ENV_PTT_DISABLE: &str = "HUSH_PTT_DISABLE";
 
 /// Force-enable the rdev PTT listener on platforms where it would
 /// otherwise auto-disable. Set `HUSH_PTT_ENABLE=1`. Currently only
-/// meaningful on macOS, where #69 disables PTT by default to avoid a
-/// hard abort in rdev's TSM call on macOS 26+. Users on older macOS
-/// (13/14/15) where rdev still works can opt-in this way.
+/// meaningful on macOS, where PTT stays opt-in: the macOS-26 abort
+/// (#69) is fixed by pinning rdev to fufesou's fork (see Cargo.toml),
+/// but enabling PTT triggers the Input Monitoring permission
+/// prompt — a privacy surprise some users won't want without first
+/// opting in.
 pub const ENV_PTT_ENABLE: &str = "HUSH_PTT_ENABLE";
 
 /// Event emitted to the frontend on PTT key-down.
@@ -280,30 +294,32 @@ pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
             return Ok(());
         }
         PttEnablement::DisabledMacosDefault => {
-            // Default-disable on macOS, opt-in via env var. The
-            // alternative paths considered (and rejected, for the
-            // record so a future contributor doesn't re-explore them):
+            // Default-disable on macOS, opt-in via env var.
             //
-            //   - Patch rdev upstream: no public patch exists, the
-            //     fix would have to land + release + we'd track it.
-            //   - Wrap the TSM call in dispatch_async to the main
-            //     queue: requires forking rdev anyway, since the call
-            //     site is inside its CGEventTap callback.
-            //   - Switch to a different event-tap library: nothing
-            //     mature enough to replace rdev today; that's #70.
-            //   - Catch the abort: dispatch_assert_queue_fail is a
-            //     hard __builtin_trap, not a Rust panic. catch_unwind
-            //     can't save us.
+            // The macOS-26 hard-abort that originally drove the
+            // default-off behaviour (rdev calling
+            // `TISGetInputSourceProperty` from a non-main thread,
+            // hitting `dispatch_assert_queue_fail` — see #69) is
+            // fixed by pinning to fufesou/rdev's fork (the one
+            // RustDesk ships in production), which attaches the
+            // CGEventTap to `CFRunLoopGetMain()` so the callback
+            // runs on the main thread and TSM is happy. Narsil's
+            // upstream PR #147 was incomplete — it only fixed the
+            // `send` path, not `listen`. See Cargo.toml comment.
             //
-            // So: env-var disable is zero-cost, ships today, keeps
-            // toggle hotkey + button dictation working, and gates a
-            // hard crash. Worth the loss of PTT-by-default on macOS.
+            // We *could* flip the default to on, but PTT is still
+            // worth opting into deliberately: it triggers the Input
+            // Monitoring permission prompt on first install, and a
+            // dictation app silently asking to read every keystroke
+            // is a privacy surprise some users won't want. Once
+            // #70 ships a settings-window toggle, the gate moves
+            // there.
             tracing::warn!(
-                "PTT listener skipped on macOS by default: rdev calls TSMGetInputSourceProperty \
-                 from a non-main thread, which dispatch_assert_queue_fail's on macOS 26+ and \
-                 crashes the process on the first modifier press (see #69). Override with \
-                 {ENV_PTT_ENABLE}=1 if you are on older macOS where rdev still works. Toggle \
-                 hotkey and button-driven dictation are unaffected."
+                "PTT listener skipped on macOS by default. The macOS-26 abort that previously \
+                 made this unsafe is fixed by pinning rdev to fufesou's fork (see Cargo.toml), \
+                 so {ENV_PTT_ENABLE}=1 is now safe. PTT stays opt-in because enabling it \
+                 triggers the Input Monitoring permission prompt — toggle hotkey and \
+                 button-driven dictation work without it."
             );
             return Ok(());
         }
