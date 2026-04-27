@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      TCC usage description strings. macOS reads these from the
+      app's Info.plist (or the binary's embedded `__info_plist`
+      Mach-O section in dev mode) and shows them as the prompt
+      copy when the user is asked to grant the corresponding
+      permission. Without these, macOS 14+ silently fails the
+      gated API call instead of prompting — the app never
+      appears in System Settings → Privacy & Security at all.
+
+      Tauri's codegen merges the keys here into the auto-
+      generated CFBundleName / CFBundleVersion entries before
+      embedding via `tauri::embed_plist::embed_info_plist!`.
+      See `tauri-codegen-2.5.5/src/context.rs` for the merge
+      logic; the dev path uses this file as-is, the production
+      bundle path (when wired via `bundle.macOS.infoPlist`) does
+      the same.
+    -->
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Hush captures audio from your microphone to transcribe it locally with Whisper. Audio never leaves your device.</string>
+
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Hush captures system audio (the other side of Zoom / Teams / Meet calls) via ScreenCaptureKit. macOS bundles audio-from-display under the Screen Recording permission, even though Hush captures no pixels — only audio. Audio never leaves your device.</string>
+
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Hush watches for the push-to-talk hotkey (Right Control by default) so you can hold-to-record without focusing the Hush window.</string>
+</dict>
+</plist>

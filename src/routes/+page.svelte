@@ -729,7 +729,7 @@
       meetingActiveId = active.active;
       meetingSessionsError = null;
     } catch (e) {
-      meetingSessionsError = e instanceof Error ? e.message : "Failed to load meeting sessions.";
+      meetingSessionsError = formatError(e);
     } finally {
       meetingSessionsLoaded = true;
     }
@@ -750,7 +750,7 @@
     } catch (e) {
       // Don't blow away the existing detail on a single failed poll;
       // the panel keeps showing whatever we last successfully read.
-      meetingSessionsError = e instanceof Error ? e.message : String(e);
+      meetingSessionsError = formatError(e);
     }
   }
 
@@ -789,7 +789,7 @@
       await invoke("meeting_session_delete", { id: session.id });
       meetingSessions = meetingSessions.filter((s) => s.id !== session.id);
     } catch (e) {
-      meetingSessionsError = e instanceof Error ? e.message : "Failed to delete session.";
+      meetingSessionsError = formatError(e);
     }
   }
 
@@ -810,8 +810,7 @@
       meetingSessionsError = null;
       return detail;
     } catch (e) {
-      meetingSessionsError =
-        e instanceof Error ? e.message : "Failed to load session transcript.";
+      meetingSessionsError = formatError(e);
       throw e;
     }
   }
@@ -849,7 +848,12 @@
       await invoke("meeting_start_manual", { sources, appName: null });
       await refreshMeetingSessions();
     } catch (e) {
-      meetingSessionsError = e instanceof Error ? e.message : "Failed to start session.";
+      // Use the shared formatError so the actual `IpcError::MeetingSessions`
+      // message (which already names the permission gap or the conflicting
+      // session) reaches the user — `e instanceof Error` is false for
+      // tagged IPC errors, so a plain `e.message` check would silently
+      // mask the helpful copy.
+      meetingSessionsError = formatError(e);
     } finally {
       meetingBusy = false;
     }
@@ -870,7 +874,7 @@
       await invoke("meeting_stop_manual");
       await refreshMeetingSessions();
     } catch (e) {
-      meetingSessionsError = e instanceof Error ? e.message : "Failed to stop session.";
+      meetingSessionsError = formatError(e);
     } finally {
       meetingBusy = false;
     }
