@@ -1093,14 +1093,17 @@ pub fn ptt_get_config(state: State<'_, AppState>) -> IpcResult<PttConfig> {
         .map(|k| k.as_str().to_string())
         .collect();
     let enabled = state.ptt_active.load(std::sync::atomic::Ordering::SeqCst);
+    let listener_running = state
+        .ptt_listener_spawned
+        .load(std::sync::atomic::Ordering::SeqCst);
     Ok(PttConfig {
         combo,
         enabled,
-        // The listener thread is started at boot if the persisted
-        // value (or env-var override) is enabled. A first-time
-        // Enable in this session can't retroactively start it; the
-        // frontend uses this flag to suggest a restart.
-        listener_running: enabled,
+        // True once the rdev thread is actually up. `ptt_set_config`
+        // spawns it on demand the first time the user enables PTT,
+        // so this transitions from false → true on first opt-in
+        // without an app restart.
+        listener_running,
     })
 }
 
@@ -1115,8 +1118,15 @@ pub fn ptt_get_config(state: State<'_, AppState>) -> IpcResult<PttConfig> {
 /// Validates the combo before persisting — an empty combo or
 /// unparseable key name returns `IpcError::Settings` and the
 /// existing config is unchanged.
+///
+/// First-time opt-in: when `enabled` flips from false to true and
+/// the rdev listener wasn't spawned at boot, this command starts
+/// it on demand via `register_ptt_listener`. On macOS that's the
+/// moment the Input Monitoring permission prompt fires — the user
+/// has clicked Enable, so the prompt is no longer a surprise.
 #[tauri::command]
 pub async fn ptt_set_config(
+    app: AppHandle,
     state: State<'_, AppState>,
     combo: Vec<String>,
     enabled: bool,
@@ -1165,6 +1175,29 @@ pub async fn ptt_set_config(
     state
         .ptt_active
         .store(enabled, std::sync::atomic::Ordering::SeqCst);
+
+    // Spawn the rdev listener on demand if this is the first time
+    // PTT is being enabled this session. The call is idempotent —
+    // a second invocation with the spawned latch already true
+    // returns Ok without touching the thread. On macOS, this is
+    // the line that triggers the Input Monitoring permission
+    // prompt; on the success path the user clicks Enable, sees
+    // the prompt, grants, and PTT works without a restart.
+    if enabled {
+        if let Err(e) = crate::hotkey::ptt::register_ptt_listener(
+            &app,
+            std::sync::Arc::clone(&state.ptt_combo),
+            std::sync::Arc::clone(&state.ptt_active),
+            std::sync::Arc::clone(&state.ptt_listener_spawned),
+        ) {
+            // Best-effort: spawn failure is logged but shouldn't
+            // un-persist the user's preference. They can try again
+            // (or restart) and the listener will spin up on next
+            // launch via lib.rs::setup since `ptt_enabled=true` is
+            // already in the DB.
+            tracing::error!(error = ?e, "failed to spawn PTT listener on demand");
+        }
+    }
     Ok(())
 }
 

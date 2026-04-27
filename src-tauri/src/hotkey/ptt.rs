@@ -462,8 +462,20 @@ pub fn register_ptt_listener<R: Runtime>(
     app: &AppHandle<R>,
     combo: std::sync::Arc<std::sync::RwLock<PttCombo>>,
     active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    spawned: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     let _ = app; // touched only on the platform branches below
+
+    // Idempotent: if the listener thread has already been spawned
+    // (e.g. by lib.rs::setup, or by a prior `ptt_set_config` toggle
+    // in this session), return without spawning a second one.
+    // rdev::listen has no clean stop API, so a second thread would
+    // double-emit press/release. The runtime `active` flag is the
+    // primary on/off signal once spawned.
+    if spawned.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+
     match ptt_enablement(active.load(std::sync::atomic::Ordering::SeqCst)) {
         PttEnablement::Enabled => { /* fall through to register */ }
         PttEnablement::DisabledByEnv => {
@@ -590,6 +602,11 @@ pub fn register_ptt_listener<R: Runtime>(
             }
         })
         .context("failed to spawn PTT listener thread")?;
+
+    // Mark spawned only after the thread::spawn succeeds. A failure
+    // above (extremely unusual — would mean `pthread_create` itself
+    // failed) leaves the flag false so a future call can retry.
+    spawned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     Ok(())
 }
