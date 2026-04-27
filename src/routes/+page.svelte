@@ -19,6 +19,7 @@
     ModelCard,
     MeetingSession,
     MeetingSessionDetail,
+    PermissionStatuses,
   } from "$lib/types";
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
@@ -487,12 +488,29 @@
   // ---- macOS permission diagnostic surface ----
   //
   // The macOS Permissions diagnostic + reset UI lives in the
-  // Settings window (Phase 3). Here we keep just a boolean so the
-  // Dictation-tab permissions hint can show/hide based on
-  // `canReset: true` from `diagnose_macos_permissions`. The hint's
-  // button delegates to `open_settings`; the actual diagnostic is
-  // rendered there.
+  // Settings window (Phase 3). Here we keep just enough to drive
+  // the Dictation-tab status hint:
+  //  - `macosCapable`: are we on a host where macOS perm
+  //    diagnostics apply at all (ie. `canReset === true`)?
+  //  - `permStatuses`: live grant state from
+  //    `diagnose_macos_permissions` — drives green pill vs yellow
+  //    hint vs missing-list when something is denied.
   let macosCapable = $state(false);
+  let permStatuses = $state<PermissionStatuses | null>(null);
+  // True iff all three perms (mic, screen recording, input
+  // monitoring) report `granted`. When true, the hint becomes a
+  // small green "Permissions OK" pill instead of the longer
+  // yellow recovery card.
+  let allPermsGranted = $derived(
+    !!permStatuses
+      && permStatuses.microphone === "granted"
+      && permStatuses.screenRecording === "granted"
+      // PTT is opt-in on macOS 26+ and most users won't grant
+      // Input Monitoring; treat its `not-determined` state as
+      // acceptable. Only `denied` for mic / screen recording or a
+      // sticky `denied` for input monitoring downgrades the pill.
+      && permStatuses.inputMonitoring !== "denied",
+  );
 
   // Meeting Mode (Phase C scaffold; refs #33 / #109). The repo is
   // empty until the streaming pump (#110) starts inserting sessions,
@@ -691,14 +709,16 @@
     }
   }
 
-  // Just enough of `diagnose_macos_permissions` to drive the
-  // "show the Permissions hint" decision on the Dictation tab. The
-  // full diagnostic (with reset action) renders in the Settings
-  // window now.
+  // Drives the Dictation-tab permissions hint:
+  //  - `macosCapable` decides whether to show the hint at all
+  //  - `permStatuses` decides green vs yellow rendering
+  // The full diagnostic (with reset action) renders in the
+  // Settings window's Permissions tab.
   async function loadMacosCapabilityFlag() {
     try {
       const res = await invoke<MacosPermissionDiagnostic>("diagnose_macos_permissions");
       macosCapable = res.canReset;
+      permStatuses = res.statuses;
     } catch (e) {
       console.error("diagnose_macos_permissions failed:", e);
     }
@@ -857,24 +877,41 @@
       {/if}
 
       {#if macosCapable}
-        <!--
-          Watch-out from the IA redesign brief: "don't make the
-          Permissions diagnostic a buried settings pane." This inline
-          link deep-links into the standalone Settings window so a
-          user hitting a permission failure isn't hunting for it.
-          Phase 4 may add a `settings:goto-tab` event so this opens
-          straight to the Permissions tab; for now it opens Settings
-          and the user clicks Permissions.
-        -->
-        <p class="permissions-hint">
-          On macOS, dictation needs Microphone access (and Screen
-          Recording for system-audio capture in meetings). Trouble?
-          <button
-            type="button"
-            class="link-button"
-            onclick={() => void invoke("open_settings")}
-          >Open the Permissions diagnostic</button>.
-        </p>
+        {#if allPermsGranted}
+          <!--
+            Green pill: AVFoundation / CoreGraphics / IOKit all
+            report `granted`. Stays compact so it doesn't crowd
+            the Dictation surface; click-through still leads into
+            the Settings window for users who want to verify or
+            adjust.
+          -->
+          <p class="permissions-pill permissions-pill-ok" data-testid="perms-pill-ok">
+            <span class="dot" aria-hidden="true"></span>
+            macOS permissions OK.
+            <button
+              type="button"
+              class="link-button"
+              onclick={() => void invoke("open_settings")}
+            >View</button>
+          </p>
+        {:else}
+          <!--
+            Yellow hint: at least one permission is denied or not
+            yet determined. Watch-out from the IA redesign brief:
+            "don't make the Permissions diagnostic a buried
+            settings pane." This deep-links into the Settings
+            window's Permissions tab.
+          -->
+          <p class="permissions-hint" data-testid="perms-hint-yellow">
+            On macOS, dictation needs Microphone access (and Screen
+            Recording for system-audio capture in meetings). Trouble?
+            <button
+              type="button"
+              class="link-button"
+              onclick={() => void invoke("open_settings")}
+            >Open the Permissions diagnostic</button>.
+          </p>
+        {/if}
       {/if}
     {:else if activeSection === "meetings"}
       <header class="section-header">
@@ -981,6 +1018,32 @@
   font-size: 0.85rem;
   line-height: 1.5;
 }
+.permissions-pill {
+  margin: 1.25rem auto 0;
+  padding: 0.5rem 0.85rem;
+  background-color: #e7f8ec;
+  border: 1px solid #b6e5c5;
+  border-radius: 999px;
+  color: #2a6b3c;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* Override the .app-main centring fallback so the pill renders
+     compact on the left rather than full-width. */
+  max-width: max-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+.permissions-pill .dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background-color: #2eaa53;
+  box-shadow: 0 0 0 2px rgba(46, 170, 83, 0.18);
+  display: inline-block;
+}
 .link-button {
   background: none;
   border: none;
@@ -998,6 +1061,15 @@
     background-color: #3a2c00;
     border-color: #6b5300;
     color: #ffd591;
+  }
+  .permissions-pill {
+    background-color: #1a3a23;
+    border-color: #2a6b3c;
+    color: #b6e5c5;
+  }
+  .permissions-pill .dot {
+    background-color: #4ad07a;
+    box-shadow: 0 0 0 2px rgba(74, 208, 122, 0.2);
   }
 }
 

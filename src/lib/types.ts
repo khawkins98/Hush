@@ -152,18 +152,31 @@ export type ModelCard = {
 //   - null             : no notice currently visible.
 export type ModelSelectNotice = "loaded" | "needs-download" | "needs-restart" | null;
 
-// Best-effort diagnostic snapshot. macOS does not expose programmatic
-// read access to the TCC permission state, so the backend can't
-// truthfully say "microphone is granted / denied" — instead it returns
-// the bundle id (so the user can find Hush in System Settings) and
-// hint copy that points them at the right pane. `canReset` is the
-// platform gate: true on macOS, false elsewhere, so the frontend can
-// hide the section entirely on non-macOS builds.
+// Live grant state for one TCC permission. The backend reads these
+// programmatically (AVFoundation, CoreGraphics, IOKit) without
+// triggering OS prompts. `not-applicable` is the non-macOS sentinel.
+export type PermissionStatus =
+  | "granted"
+  | "denied"
+  | "not-determined"
+  | "not-applicable";
+
+export type PermissionStatuses = {
+  microphone: PermissionStatus;
+  screenRecording: PermissionStatus;
+  inputMonitoring: PermissionStatus;
+};
+
+// Diagnostic snapshot. `statuses` is the live grant state; the hint
+// copy stays even when everything is granted so the user has the
+// recovery copy if permissions later get revoked. `canReset` gates
+// the in-app reset button — true on macOS only.
 export type MacosPermissionDiagnostic = {
   bundleId: string;
   microphoneHint: string;
   inputMonitoringHint: string;
   canReset: boolean;
+  statuses: PermissionStatuses;
 };
 
 // Outcome of running `tccutil reset` across the three TCC categories
