@@ -100,20 +100,22 @@ pub fn read_all() -> PermissionStatuses {
 mod macos {
     use super::PermissionStatus;
     use objc2::msg_send;
-    use objc2::runtime::AnyClass;
-    use std::ffi::c_void;
+    use objc2::runtime::{AnyClass, AnyObject};
 
     // ---- Microphone ---------------------------------------------------
     //
     // `AVAuthorizationStatus` from AVFoundation:
     //   0 = NotDetermined, 1 = Restricted, 2 = Denied, 3 = Authorized.
     //
-    // `AVMediaTypeAudio` is an exported NSString constant from the
-    // framework; we link against it as an extern static.
+    // `AVMediaTypeAudio` is an exported `NSString *` constant from the
+    // framework. Type it as `*const AnyObject` so the signature matches
+    // Apple's header (`NSString * const`) — reviewer-flagged that
+    // `*const c_void` worked by accident on AArch64/x86_64 but lied
+    // about the wire shape.
 
     #[link(name = "AVFoundation", kind = "framework")]
     extern "C" {
-        static AVMediaTypeAudio: *const c_void;
+        static AVMediaTypeAudio: *const AnyObject;
     }
 
     pub fn microphone_status() -> PermissionStatus {
@@ -143,9 +145,12 @@ mod macos {
 
     // ---- Screen Recording ---------------------------------------------
     //
-    // `CGPreflightScreenCaptureAccess()` returns a `bool` indicating
-    // whether the calling process currently has Screen Recording
-    // access. Side-effect-free; does not trigger the prompt.
+    // `CGPreflightScreenCaptureAccess()` returns Apple's `Boolean`
+    // typedef — `unsigned char` on macOS, with only the low bit
+    // meaningful. Declaring the return as Rust `bool` is technically
+    // UB if the OS ever returns a value outside {0, 1}; in practice
+    // it always returns 0 or 1, but the type-correct form is `u8`
+    // with an explicit `!= 0` comparison.
     //
     // There is no "NotDetermined" variant exposed by this API — the
     // OS returns false in both the "never asked" and "explicitly
@@ -158,12 +163,12 @@ mod macos {
 
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
-        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGPreflightScreenCaptureAccess() -> u8;
     }
 
     pub fn screen_recording_status() -> PermissionStatus {
         unsafe {
-            if CGPreflightScreenCaptureAccess() {
+            if CGPreflightScreenCaptureAccess() != 0 {
                 PermissionStatus::Granted
             } else {
                 PermissionStatus::NotDetermined

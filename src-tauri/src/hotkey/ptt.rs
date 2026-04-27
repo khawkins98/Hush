@@ -472,9 +472,28 @@ pub fn register_ptt_listener<R: Runtime>(
     // rdev::listen has no clean stop API, so a second thread would
     // double-emit press/release. The runtime `active` flag is the
     // primary on/off signal once spawned.
-    if spawned.load(std::sync::atomic::Ordering::SeqCst) {
+    //
+    // Atomic claim: a load + late store would let two concurrent
+    // callers (e.g. two near-simultaneous `ptt_set_config` calls
+    // racing the boot path) both pass the early-return check. We
+    // flip the latch up front via `compare_exchange`; the loser
+    // bails. If we win and any subsequent step fails, we roll back
+    // to `false` so a future caller can retry.
+    if spawned
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
         return Ok(());
     }
+    // Helper to roll the latch back on any error path below.
+    let rollback_spawned = || {
+        spawned.store(false, std::sync::atomic::Ordering::SeqCst);
+    };
 
     match ptt_enablement(active.load(std::sync::atomic::Ordering::SeqCst)) {
         PttEnablement::Enabled => { /* fall through to register */ }
@@ -483,6 +502,7 @@ pub fn register_ptt_listener<R: Runtime>(
                 "PTT listener skipped: {ENV_PTT_DISABLE}=1 set. Toggle hotkey and \
                  button-driven dictation continue to work."
             );
+            rollback_spawned();
             return Ok(());
         }
         PttEnablement::DisabledMacosDefault => {
@@ -513,6 +533,7 @@ pub fn register_ptt_listener<R: Runtime>(
                  triggers the Input Monitoring permission prompt — toggle hotkey and \
                  button-driven dictation work without it."
             );
+            rollback_spawned();
             return Ok(());
         }
     }
@@ -601,12 +622,13 @@ pub fn register_ptt_listener<R: Runtime>(
                 );
             }
         })
-        .context("failed to spawn PTT listener thread")?;
-
-    // Mark spawned only after the thread::spawn succeeds. A failure
-    // above (extremely unusual — would mean `pthread_create` itself
-    // failed) leaves the flag false so a future call can retry.
-    spawned.store(true, std::sync::atomic::Ordering::SeqCst);
+        .map_err(|e| {
+            // Spawn failed (extremely unusual — would mean
+            // `pthread_create` itself returned non-zero). Roll the
+            // latch back so a retry can claim it.
+            rollback_spawned();
+            anyhow::Error::from(e).context("failed to spawn PTT listener thread")
+        })?;
 
     Ok(())
 }
