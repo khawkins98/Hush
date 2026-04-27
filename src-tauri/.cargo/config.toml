@@ -1,0 +1,44 @@
+# Per-target build flags. Today this exists for one reason:
+# `libswift_Concurrency.dylib` is the only Swift runtime dylib the
+# `screencapturekit` crate links via `@rpath/...` (everything else
+# uses absolute `/usr/lib/swift/...` paths that resolve via the
+# dyld shared cache). The screencapturekit crate's build script
+# emits `cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift` (and a
+# couple of CommandLineTools paths) — but those directives don't
+# propagate from a transitive dep to the final binary's link
+# line in stable cargo, so a default `cargo build` of Hush
+# produces a binary with **zero** LC_RPATH entries. Ken hit this
+# at `npm run tauri dev` time: `dyld[…]: Library not loaded:
+# @rpath/libswift_Concurrency.dylib`.
+#
+# We re-add the rpaths from our own (root) crate where cargo
+# does honour `link-arg`. Two paths, in order:
+#
+# 1. `/usr/lib/swift` — resolved via the dyld shared cache on
+#    every macOS 12+ system. This is what production app bundles
+#    use; matching it here avoids loading two copies of the
+#    Concurrency dylib (system + Xcode fallback) which would
+#    trigger Apple's `objc[…]: Class _Tt… is implemented in both`
+#    duplicate-class warnings.
+# 2. The Xcode toolchain's `swift-5.5/macosx` directory — fallback
+#    for dev machines where the shared cache lookup somehow
+#    misses (rare; the Concurrency dylib's back-compat shim is
+#    cached on every modern macOS, but we keep the fallback
+#    rather than bet on it).
+#
+# Hardcoded to Apple's default Xcode location. Contributors with
+# Xcode elsewhere can override via `~/.cargo/config.toml` or set
+# `DYLD_FALLBACK_LIBRARY_PATH` before invoking cargo. CI's
+# `macos-latest` runner has Xcode at this exact path too.
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+    "-C", "link-arg=-Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+    "-C", "link-arg=-Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx",
+]
