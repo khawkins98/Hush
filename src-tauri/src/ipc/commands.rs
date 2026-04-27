@@ -327,6 +327,20 @@ pub async fn stop_dictation(
     // `docs/system-audio-meeting-mode-proposal.md` for the Phase C
     // event-forwarding shape.
     let format = captured.format;
+    // Compute recording duration before transcribe_chunks consumes the
+    // sample buffer. `samples.len()` is the interleaved frame count
+    // (channels * sample_rate * seconds), so wall-clock duration is
+    // frames / (sample_rate * channels). Saturating arithmetic against
+    // the (impossible) zero-format case so a corrupt format can't
+    // panic the dictation hot path.
+    let duration_ms: Option<i64> = {
+        let denom = format.sample_rate as u64 * format.channels.max(1) as u64;
+        if denom == 0 {
+            None
+        } else {
+            Some(((captured.samples.len() as u64 * 1000) / denom) as i64)
+        }
+    };
     let utterances = transcriber
         .transcribe_chunks(&[captured.samples], format, &prompt)
         .map_err(|e| IpcError::Transcription(e.to_string()))?;
@@ -372,9 +386,7 @@ pub async fn stop_dictation(
             app_name: foreground.as_ref().map(|f| f.app_name.clone()),
             window_title: foreground.as_ref().map(|f| f.window_title.clone()),
             model: transcriber.model_label(),
-            // Recording duration tracking lands with the HUD level-meter
-            // (#21); for now history rows have None here.
-            duration_ms: None,
+            duration_ms,
         },
     );
 
