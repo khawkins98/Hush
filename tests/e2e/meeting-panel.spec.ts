@@ -601,6 +601,78 @@ test.describe("meeting panel — multi-source picker", () => {
     await expect(panel.locator("button.jump-to-latest")).toHaveCount(0);
   });
 
+  test("Stop session requires confirmation (closes #131)", async ({ page }) => {
+    // The first click should NOT call meeting_stop_manual — it
+    // reveals an inline confirmation. Only the explicit "Yes, end
+    // session" click commits. Pin the two-step shape so a future
+    // change that drops the confirmation regresses the foot-gun
+    // the round-8 reviewer surfaced.
+    let stopCallCount = 0;
+    await page.exposeFunction("__hush_record_stop", () => {
+      stopCallCount += 1;
+    });
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: 42 }),
+      meeting_sessions_list: () => [
+        {
+          id: 42,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 5,
+          notes: null,
+        },
+      ],
+      meeting_session_get: () => ({
+        session: {
+          id: 42,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-04-26T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 5,
+          notes: null,
+        },
+        utterances: [],
+      }),
+      meeting_stop_manual: () => {
+        (
+          window as unknown as { __hush_record_stop: () => void }
+        ).__hush_record_stop();
+        return undefined;
+      },
+    });
+    await page.goto("/");
+
+    const panel = page.locator("section.panel-meetings");
+    const stopButton = panel.getByRole("button", { name: "Stop session" });
+    await expect(stopButton).toBeVisible();
+
+    // First click — reveals the confirmation prompt, doesn't fire
+    // the IPC.
+    await stopButton.click();
+    await expect(stopButton).toHaveCount(0);
+    await expect(panel).toContainText(/End session\?/);
+    await expect(panel).toContainText(/5 utterances captured/);
+    expect(stopCallCount).toBe(0);
+
+    // Cancel returns to the unconfirmed Stop state without firing
+    // the IPC.
+    await panel.getByRole("button", { name: "Cancel" }).click();
+    await expect(
+      panel.getByRole("button", { name: "Stop session" }),
+    ).toBeVisible();
+    expect(stopCallCount).toBe(0);
+
+    // Re-click + confirm fires the IPC exactly once.
+    await panel.getByRole("button", { name: "Stop session" }).click();
+    await panel.getByRole("button", { name: "Yes, end session" }).click();
+    await expect.poll(() => stopCallCount).toBe(1);
+  });
+
   test("active session shows listening placeholder when no utterances yet", async ({
     page,
   }) => {
