@@ -38,6 +38,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 **Platform polish (macOS)**
 - 🪟 Three-window architecture: main app + standalone Settings (⌘,) + transparent HUD
 - ⌨️ Native macOS menu bar — Hush → Settings…, View → Dictation/Meetings/History (⌘1/⌘2/⌘3)
+- 📍 Status-bar icon (Windows system tray / Linux notification area too) — Show Hush / Toggle Recording / Quit
 - 🟢 Live TCC permission detection (Microphone, Screen Recording, Input Monitoring) without triggering OS prompts; green "Permissions OK" pill on the Dictation surface when everything is granted
 - ⚙️ Autostart toggle (Launch Hush at login)
 - 👋 First-run welcome that explains Microphone + Input Monitoring permissions, with a "Show welcome on next launch" reset button
@@ -88,10 +89,8 @@ npm run tauri dev
 # UI-only path (no cmake needed, no transcription) for frontend
 # work. The Models picker still renders but Start surfaces the
 # "no transcription compiled in" error if you click it.
-npm run tauri:ui-only
+cd src-tauri && cargo tauri dev --no-default-features
 ```
-
-For full setup including model placement, see the testing guide in [`STATUS.md`](./STATUS.md) §b.
 
 ---
 
@@ -100,11 +99,10 @@ For full setup including model placement, see the testing guide in [`STATUS.md`]
 Hush has multiple test layers covering different regression classes:
 
 ```bash
-# Rust unit tests (fast, no whisper feature needed)
+# Rust unit tests — `whisper` is a default feature so this includes
+# the whisper-gated paths. Use `--no-default-features` for the
+# UI-only path on machines without cmake.
 cd src-tauri && cargo test --lib
-
-# Same plus the whisper-gated paths (needs cmake)
-cargo test --lib --features whisper
 
 # Frontend type check
 npm run check

@@ -64,7 +64,6 @@ npm run dev-cleanup
 
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
-cd src-tauri && cargo clippy --features screencapturekit --all-targets -- -D warnings
 cd src-tauri && cargo fmt --all
 ```
 
@@ -163,6 +162,7 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 - `hud/` — borderless transparent always-on-top recording HUD with drag (`data-tauri-drag-region`) + dismiss button + level meter pump.
 - `settings_window/` — `show()` / `hide()` helpers for the standalone Settings window. Symmetric with `hud/`. Window itself is declared in `tauri.conf.json`.
 - `app_menu/` — native macOS menu bar. No-op on non-macOS. Menu events emit `menu:goto-section` to the main window or call `settings_window::show` directly.
+- `tray/` — status-bar / system-tray icon (macOS menu-bar extra, Windows system tray, Linux notification area). Menu: Show Hush / Toggle Recording / Quit. "Toggle Recording" emits the existing `hotkey:toggle` Tauri event the frontend listens for; one source of truth for start/stop semantics. Behind the `tauri = { features = ["tray-icon"] }` Cargo feature.
 - `macos_perms/` — programmatic TCC permission status reads via AVFoundation / CoreGraphics / IOKit. Used by `diagnose_macos_permissions` to surface granted/denied/not-determined per permission without triggering OS prompts.
 
 ### Frontend (`src/`)

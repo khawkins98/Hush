@@ -96,8 +96,10 @@ pub const DEFAULT_PTT_KEY: PttKey = PttKey::RightMeta;
 pub const DEFAULT_PTT_KEY: PttKey = PttKey::RightControl;
 
 /// Environment variable consulted at startup to override the default.
-/// Mirrors `HUSH_TOGGLE_HOTKEY`. Once the settings UI lands (M3) this
-/// becomes a development override rather than the primary mechanism.
+/// Mirrors `HUSH_TOGGLE_HOTKEY`. The Settings UI is now the primary
+/// mechanism (Settings → General → Hotkeys); this env var is the
+/// power-user / CI override for the same combo. Setting it at boot
+/// supersedes the persisted DB value for that session.
 pub const ENV_PTT_HOTKEY: &str = "HUSH_PTT_HOTKEY";
 
 /// Force-disable the rdev PTT listener even on platforms where it would
