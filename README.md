@@ -10,7 +10,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 ## Status
 
-🚧 **Active development — usable on macOS 26 for early testers.** M3 persistence shipped: history search, settings, model picker with auto-download, replacements, vocabulary, first-run welcome, recording HUD with live level meter. Auto-update and direct-text-insertion are deferred. Older macOS versions, Linux, and Windows are not hands-on tested by the maintainer; see the platform table below. See [STATUS.md](./STATUS.md) for the latest snapshot.
+🚧 **Active development — usable on macOS 26 for early testers.** Dictation hot path, Meeting Mode, sidebar nav with Dictation/Meetings/History, standalone Settings window (⌘,) with model picker + vocabulary + replacements + macOS permissions diagnostic + autostart toggle, configurable PTT combo with on-demand listener, recording HUD with drag + dismiss + live level meter, history with FTS5 search. Auto-update and direct-text-insertion are deferred. Older macOS versions, Linux, and Windows are not hands-on tested by the maintainer; see the platform table below. See [STATUS.md](./STATUS.md) for the latest snapshot.
 
 ---
 
@@ -18,35 +18,37 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 ### Shipped
 
+**Dictation**
 - 🎙️ Toggle-record global hotkey (`Ctrl+⌥/Alt+H` by default; works on every platform)
-- 🎙️ Push-to-talk (`RightControl` by default) — Linux + Windows only for now. Disabled by default on macOS because rdev 0.5 hard-aborts on macOS 26+ ([#69](https://github.com/khawkins98/Hush/issues/69)); a native CGEventTap reimplementation is tracked under [#70](https://github.com/khawkins98/Hush/issues/70) but parked until production demand justifies it. Toggle covers most dictation use cases — see issue #70 for the tradeoff.
-- 🤫 100 % local transcription — whisper.cpp on your machine; no audio ever leaves the device
+- 🎙️ **Configurable push-to-talk** — pick any combination of modifier / function / Caps Lock keys held simultaneously. Default is `Right ⌘` on macOS, `Right Ctrl` elsewhere. Edit in Settings → General → Hotkeys; combo + Enabled persist across launches.
+- 🤫 100% local transcription — whisper.cpp on your machine; no audio ever leaves the device
 - 📋 Transcription written to clipboard with a "Ready to paste" notification
-- 🔴 Recording HUD overlay — borderless transparent always-on-top window with a pulsing dot and a live RMS-driven level meter
-- 📝 SQLite-backed history with FTS5 full-text search, copy, delete
+- 🔴 Recording HUD overlay — transparent always-on-top pill with pulsing dot + live RMS level meter, draggable, with a dismiss button that hides without stopping the recording
+
+**Meeting Mode**
+- 🎤 Long-running multi-source capture (mic + macOS system-audio in parallel via ScreenCaptureKit) with You/Remote-tagged transcripts
+- ⚡ Streaming Whisper sliding-window transcription with live partials + final utterances
+- 📜 Searchable session history; in-app diagnostic for revoked permissions
+
+**Library**
+- 📝 SQLite-backed history with FTS5 full-text search, copy, delete, recording duration
 - 📖 Personal Dictionary: vocabulary terms (Whisper prompt-bias) + literal find/replace rules
-- ⚙️ Model picker — Whisper tiny → large-v3, with one-click auto-download (SHA-256 verified, host-restricted to Hugging Face) and hot-load on select (no restart needed when picking a downloaded model)
-- 👋 macOS first-run welcome that explains Microphone + Input Monitoring permissions
+- ⚙️ Model picker — Whisper tiny → large-v3, with one-click auto-download (SHA-256 verified, host-restricted to Hugging Face) and hot-load on select
+
+**Platform polish (macOS)**
+- 🪟 Three-window architecture: main app + standalone Settings (⌘,) + transparent HUD
+- ⌨️ Native macOS menu bar — Hush → Settings…, View → Dictation/Meetings/History (⌘1/⌘2/⌘3)
+- 🟢 Live TCC permission detection (Microphone, Screen Recording, Input Monitoring) without triggering OS prompts; green "Permissions OK" pill on the Dictation surface when everything is granted
+- ⚙️ Autostart toggle (Launch Hush at login)
+- 👋 First-run welcome that explains Microphone + Input Monitoring permissions, with a "Show welcome on next launch" reset button
 
 ### Planned (v1.x)
 
-The big post-v0.1.0 direction is **Meeting Mode** — passive
-transcription of meetings with system-audio capture, opt-in per
-app, audio never persists. Design memo at
-[`docs/system-audio-meeting-mode-proposal.md`](./docs/system-audio-meeting-mode-proposal.md);
-the PRD's §5b carries the canonical policy text. Phase A1 (audio
-source picker) and the Phase C scaffold (meeting-sessions data
-layer + UI panel placeholder) shipped post-v0.1.0; the runtime
-that fills the panel is the open work.
-
-- 🎤 **Meeting Mode** — system-audio + streaming + sessions
-  (`docs/system-audio-meeting-mode-proposal.md`, tracked under [#33](https://github.com/khawkins98/Hush/issues/33))
-- 🔊 Per-platform system-audio capture: macOS [#105](https://github.com/khawkins98/Hush/issues/105) /
-  Linux [#106](https://github.com/khawkins98/Hush/issues/106) /
-  Windows [#107](https://github.com/khawkins98/Hush/issues/107)
-- ⚡ Streaming transcription via Whisper sliding-window [#108](https://github.com/khawkins98/Hush/issues/108)
-- 🔄 Auto-update channel via the Tauri updater plugin [#10](https://github.com/khawkins98/Hush/issues/10)
-- 🎯 Parakeet via ONNX as a second engine [#32](https://github.com/khawkins98/Hush/issues/32)
+- 🔊 Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)) system-audio capture (macOS shipped via ScreenCaptureKit)
+- 🗣️ Speaker diarization for meetings ([#111](https://github.com/khawkins98/Hush/issues/111))
+- 🤖 Per-app classifier for auto-detecting meeting context ([#112](https://github.com/khawkins98/Hush/issues/112))
+- 🔄 Auto-update channel via the Tauri updater plugin ([#10](https://github.com/khawkins98/Hush/issues/10))
+- 🎯 Parakeet via ONNX as a second engine ([#32](https://github.com/khawkins98/Hush/issues/32))
 
 ---
 
@@ -54,7 +56,7 @@ that fills the panel is the open work.
 
 | Platform | Status | Tested by maintainer |
 |---|---|---|
-| **macOS 26** | Primary target. Daily-driven. PTT disabled by default ([#69](https://github.com/khawkins98/Hush/issues/69) / [#70](https://github.com/khawkins98/Hush/issues/70)). | ✅ Yes |
+| **macOS 26** | Primary target. Daily-driven. PTT is opt-in via Settings → General → Hotkeys (it triggers the OS Input Monitoring permission prompt; we don't fire that on first launch). | ✅ Yes |
 | **macOS ≤ 15** | Not directly supported. Code may compile and run, but the maintainer does not test against older macOS, will not gate features on older-macOS APIs, and bug reports against older versions are best-effort. | ❌ Not supported |
 | **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested |
 | **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ❌ Not hands-on tested |
