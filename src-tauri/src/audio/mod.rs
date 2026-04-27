@@ -36,7 +36,7 @@
 
 mod format;
 
-#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+#[cfg(target_os = "macos")]
 mod screencapturekit;
 
 pub use format::downmix_to_mono;
@@ -505,7 +505,7 @@ pub struct CpalAudioCapture {
     /// its own libdispatch queue — there is no Stream object to babysit
     /// from a !Send-bound thread. Mutex<Option<...>> mirrors the
     /// "either nothing, or one in-flight" shape of the cpal session.
-    #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+    #[cfg(target_os = "macos")]
     sck_session: Mutex<Option<screencapturekit::ScreenCaptureKitSession>>,
 }
 
@@ -550,7 +550,7 @@ impl CpalAudioCapture {
             active_sessions,
             level,
             worker: Some(worker),
-            #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+            #[cfg(target_os = "macos")]
             sck_session: Mutex::new(None),
         }
     }
@@ -609,7 +609,7 @@ impl AudioCapture for CpalAudioCapture {
     fn start_with_source(&self, source: AudioSource) -> Result<()> {
         match source {
             AudioSource::Microphone(device_id) => self.start(device_id.as_deref()),
-            #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+            #[cfg(target_os = "macos")]
             AudioSource::SystemAudio => {
                 let mut guard = self
                     .sck_session
@@ -631,7 +631,7 @@ impl AudioCapture for CpalAudioCapture {
                 self.active_sessions.fetch_add(1, Ordering::Release);
                 Ok(())
             }
-            #[cfg(not(all(target_os = "macos", feature = "screencapturekit")))]
+            #[cfg(not(target_os = "macos"))]
             AudioSource::SystemAudio => Err(anyhow!(
                 "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
             )),
@@ -642,7 +642,7 @@ impl AudioCapture for CpalAudioCapture {
         match source {
             AudioSource::Microphone(_) => true,
             AudioSource::SystemAudio => {
-                cfg!(all(target_os = "macos", feature = "screencapturekit"))
+                cfg!(target_os = "macos")
             }
         }
     }
@@ -654,7 +654,7 @@ impl AudioCapture for CpalAudioCapture {
         // the active-sessions counter, so a concurrent start() call
         // can't see a "not recording" state while the SCK session is
         // still mid-stop.
-        #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+        #[cfg(target_os = "macos")]
         {
             let mut guard = self
                 .sck_session
@@ -726,7 +726,7 @@ impl AudioCapture for CpalAudioCapture {
                     level: Arc::clone(&self.level),
                 }))
             }
-            #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+            #[cfg(target_os = "macos")]
             AudioSource::SystemAudio => {
                 // Independent SCStream owned by the handle. Doesn't
                 // touch `sck_session` (the legacy hot-path slot), so
@@ -747,7 +747,7 @@ impl AudioCapture for CpalAudioCapture {
                     level: Arc::clone(&self.level),
                 }))
             }
-            #[cfg(not(all(target_os = "macos", feature = "screencapturekit")))]
+            #[cfg(not(target_os = "macos"))]
             AudioSource::SystemAudio => Err(anyhow!(
                 "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
             )),
@@ -850,7 +850,7 @@ impl Drop for CpalMicSessionHandle {
 /// system-audio source on macOS. Owns the underlying SCStream session
 /// directly, so dropping the handle ends the capture without any
 /// channel round-trip.
-#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+#[cfg(target_os = "macos")]
 struct SckSessionHandle {
     source: AudioSource,
     /// `Option` so the explicit `stop()` path can take it out, while
@@ -861,7 +861,7 @@ struct SckSessionHandle {
     level: Arc<AtomicU32>,
 }
 
-#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+#[cfg(target_os = "macos")]
 impl AudioSession for SckSessionHandle {
     fn source(&self) -> &AudioSource {
         &self.source
@@ -900,7 +900,7 @@ impl AudioSession for SckSessionHandle {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+#[cfg(target_os = "macos")]
 impl Drop for SckSessionHandle {
     fn drop(&mut self) {
         // If the handle is dropped without an explicit stop (panic in

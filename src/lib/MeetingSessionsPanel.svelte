@@ -97,6 +97,33 @@
   );
 
   /**
+   * Auto-expand the row of a session that just transitioned from
+   * Active to Ended. The user clicked Stop, the panel re-renders
+   * with the just-recorded session in the historical list — they
+   * almost always want to see the transcript they just produced
+   * without an extra click.
+   *
+   * Tracks the previous active id and reacts when it goes
+   * non-null → null. The active session's `id` is what we remember,
+   * not its detail; auto-expand kicks the existing lazy-load path
+   * (`toggleSessionDetail`) which fetches the closed-session
+   * detail just like a manual click would.
+   */
+  let previouslyActiveId = $state<number | null>(null);
+  $effect(() => {
+    const current = activeSessionId;
+    const prev = previouslyActiveId;
+    if (prev !== null && current === null) {
+      // Session just ended — auto-expand its row if it appears in
+      // the sessions list. The list is populated by the parent's
+      // `refreshMeetingSessions`, which fires right after stop, so
+      // a tick of latency is fine.
+      void toggleSessionDetail(prev);
+    }
+    previouslyActiveId = current;
+  });
+
+  /**
    * Toggle a historical session row's transcript view. First open
    * lazy-fetches via the `onLoadDetail` callback the parent owns;
    * subsequent toggles just flip the entry in/out of the map.

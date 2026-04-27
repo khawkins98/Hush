@@ -1,0 +1,126 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project shape
+
+Hush is a Tauri 2 desktop app: Rust backend (`src-tauri/`) + SvelteKit / Svelte 5 frontend (`src/`). It records the microphone, transcribes locally via whisper.cpp (`whisper-rs`), and writes the text to the clipboard. Meeting Mode adds continuous capture from microphone + system audio with You/Remote-tagged transcripts.
+
+Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scope — don't add backwards-compat shims or `@available`-style version guards. Linux and Windows compile cleanly via CI but are not hands-on tested.
+
+## Common commands
+
+```bash
+# Run the full app (whisper feature is default — needs cmake on macOS).
+# ScreenCaptureKit is linked unconditionally on macOS, so system-audio
+# capture works out of the box without an extra feature flag.
+npm run tauri dev
+
+# UI-only path: launches the app shell with no Whisper backend.
+# Transcription returns IpcError::TranscriptionUnavailable.
+cd src-tauri && cargo tauri dev --no-default-features
+
+# Rust unit tests — fast, no real audio device needed.
+cd src-tauri && cargo test --lib
+cd src-tauri && cargo test --lib --features whisper             # plus whisper-gated paths
+
+# Run a single Rust test or module
+cd src-tauri && cargo test --lib audio::tests::name_of_test
+cd src-tauri && cargo test --lib meeting::                       # whole module
+
+# Integration tests (#[ignore]'d by default, need external resources)
+cd src-tauri && HUSH_TEST_AUDIO=/path/to/sample.wav cargo test --features whisper -- --ignored
+
+# Frontend type check (svelte-check) — required clean for every PR
+npm run check
+
+# Frontend e2e (Playwright + Chromium with mocked Tauri IPC)
+npm run test:e2e
+npm run test:e2e:ui                                              # interactive
+
+# Run a single e2e spec
+npx playwright test tests/e2e/meeting-panel.spec.ts
+
+# Reset stale dev servers (kills tauri/vite processes)
+npm run dev-cleanup
+
+# Lint + format
+cd src-tauri && cargo clippy --all-targets -- -D warnings
+cd src-tauri && cargo clippy --features screencapturekit --all-targets -- -D warnings
+cd src-tauri && cargo fmt --all
+```
+
+ScreenCaptureKit is now an unconditional macOS dependency (no feature flag). The crate's build script links libSwift_Concurrency at runtime. On a dev machine where the rpaths the build script bakes in (`/usr/lib/swift`, `/Library/Developer/CommandLineTools/...swift-5.5/macosx`) don't resolve, `cargo test --lib` aborts with a missing-dylib error. Workaround: `DYLD_FALLBACK_LIBRARY_PATH=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx cargo test --lib`. Production app bundles inherit the Swift runtime from the dyld shared cache and need no override; CI on `macos-latest` has the CommandLineTools path populated and doesn't either.
+
+## Architecture: trait-seam pattern
+
+Every OS-touching layer is a trait, with a concrete impl + hand-rolled mocks at the boundary. The IPC layer holds `Arc<dyn Trait>` so tests can substitute deterministic stubs without spinning up real audio / sqlite / network. The traits are the load-bearing seams:
+
+- **`audio::AudioCapture`** (`src-tauri/src/audio/mod.rs`) — capture lifecycle. Cpal-backed `CpalAudioCapture` is the prod impl. Two APIs:
+  - Singleton `start_with_source(source) -> ()` + `stop() -> CapturedAudio` is the dictation hot path.
+  - Handle-based `start_session(source) -> Box<dyn AudioSession>` returns a per-session handle. The meeting pump uses it to capture mic + SCK system-audio in parallel. Each handle's `stop()` consumes `Box<Self>` so a double-stop is a compile error.
+  - `active_sessions: AtomicU32` is a refcount of in-flight captures; `is_recording()` returns `count > 0` so legacy + handle paths coexist. `MAX_BUFFER_FRAMES` defends against runaway buffer growth in callbacks.
+- **`transcription::Transcribe`** (`src-tauri/src/transcription/mod.rs`) — inference. `WhisperTranscribe` is gated behind the `whisper` feature; the trait's `transcribe_chunks` default impl pretends to be streaming (one final utterance per call). #108 (sliding-window streaming) replaces that default for the meeting pump.
+- **`history::HistoryRepository`** / **`meeting::MeetingSessionRepository`** / **`dictionary::*Repository`** / **`settings::SettingsRepository`** — persistence. Each has a `Sqlite*` impl + an in-memory test mock (search for `Noop*` / `Mem*` in `src-tauri/src/ipc/mod.rs` tests).
+
+The IPC layer (`src-tauri/src/ipc/`) wires these into `AppState`, which is `manage`'d by Tauri at startup. `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` is shared between `AppState` and `meeting::SessionManager` so model hot-swap propagates to in-flight pumps.
+
+## Meeting mode (post-#122)
+
+The meeting pump runs continuously from `meeting::SessionManager::start_manual(sources, app_name)`:
+
+1. Open one `Box<dyn AudioSession>` per source (default: mic + SystemAudio when supported).
+2. Spawn a tokio task (`run_pump`) that, every `CHUNK_DURATION` (10 s):
+   - Drains every handle (so siblings don't accumulate while one transcribes).
+   - Runs whisper inference per chunk via `spawn_blocking`.
+   - Appends utterances tagged `speakerLabel = "mic" | "system"` (primitive diarization ahead of #111).
+   - Restarts capture for the next window (or exits on cancel).
+3. `stop_manual` sets the cancel flag, awaits the pump's final-chunk drain, writes `ended_at` on the session row.
+
+State machine: `Mutex<SessionState>` where `SessionState` is `Idle | Opening | Active(...)`. The `Opening` sentinel is held across the async DB / handle-open work so concurrent `meeting_start_manual` IPC calls can't race past the precondition. `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `SckSessionHandle` both have `Drop` impls that release their OS resources.
+
+## The four-place IPC sync rule
+
+A `#[tauri::command]` lives in **four** places that must stay aligned. CI catches Rust-only and TS-only breaks; it cannot catch shape mismatches between them — that's a hands-on responsibility. Any time you add or change a command:
+
+1. **Rust struct + handler** in `src-tauri/src/ipc/commands.rs` with `#[serde(rename_all = "camelCase")]`.
+2. **Register** in `src-tauri/src/lib.rs` inside `tauri::generate_handler![...]` using the **full module path** (`ipc::commands::my_command`) — `pub use` does not carry the macro's hidden `__cmd__<name>` symbol.
+3. **TypeScript type** in `src/lib/types.ts` (or inline in `+page.svelte` if scoped to the page), then `invoke<MyResult>("my_command", ...)`.
+4. **Playwright mock** in `tests/e2e/_mock.ts` with a default handler whose field shape mirrors the Rust struct exactly. Mocks are serialized via `toString()` and rebuilt in the page context, so they can't capture closure variables — any per-test counters must go through `page.exposeFunction`.
+
+A new `IpcError` variant also needs the frontend's `formatError` switch in `+page.svelte` updated.
+
+## Dev-launch smoke (required for startup-touching changes)
+
+CI does not run a real Tauri runtime. A panic at app boot (plugin init, capability misconfig, `AppState::build_default` failure, `tauri.conf.json` issue) is **invisible to CI** and only surfaces when someone pulls the branch. Run `npm run tauri dev` once before opening a PR that touches:
+
+- `src-tauri/src/lib.rs` (especially the `tauri::Builder` chain or `setup` hook)
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml` (adding/removing a Tauri plugin dep)
+- `src-tauri/capabilities/*.json`
+- Anything that adds or removes a `.plugin(...)` call
+
+## Conventions
+
+- **Conventional Commits 1.0.0**: `<type>(<scope>): <subject>`. Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `style`, `perf`, `build`, `ci`, `security`. Scopes: `audio`, `transcription`, `hotkey`, `ui`, `ux`, `dictionary`, `history`, `db`, `ipc`, `tauri`, `updater`, `build`, `e2e`. Subject in imperative mood, no full stop, ≤72 chars.
+- **Branch names**: `<type>/<short-kebab-description>` (e.g. `feat/whisper-streaming`, `fix/hotkey-release-edge`).
+- All changes land via squash-merge PR — `main` is the only long-lived branch.
+- **Untagged TODOs fail CI lint.** Use `// TODO(#NNN):` or `// FIXME(#NNN):`.
+- **Comments explain *why*, not *what*.** Where a module's design was directly inspired by VoiceInk, the module header says so explicitly.
+- **`learnings.md`** at the repo root is the durable design-decision log. Add an entry when a non-obvious architectural call gets made — future sessions read it before re-deriving.
+
+## Black-box reimplementation discipline (legal — read before writing audio / dictation code)
+
+Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/VoiceInk). **VoiceInk's source code must never be read** by anyone working on Hush — before, during, or after writing equivalent functionality. Design comes from VoiceInk's public README and observable runtime behaviour, plus general dictation-app knowledge. See `hush-prd.md` §13.8 for the full reasoning. If the discipline is broken accidentally, declare it; the affected module gets re-implemented by a clean contributor.
+
+## Where things live
+
+- `src-tauri/src/audio/` — cpal mic + SCK system-audio + the `AudioSession` handle trait.
+- `src-tauri/src/transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (host-restricted to huggingface.co, SHA-256 verified), resample helpers, model catalog.
+- `src-tauri/src/meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection.
+- `src-tauri/src/ipc/` — `AppState`, `AppStateBuilder`, `IpcError`, every `#[tauri::command]`. `commands.rs` is large (~1.5k LOC); keep new helpers grouped by concern. Refactor tracked under #82.
+- `src-tauri/src/hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey + `rdev` for push-to-talk. PTT is **disabled by default on macOS** because rdev 0.5 hard-aborts on macOS 26+; enable with `HUSH_PTT_ENABLE=1`.
+- `src-tauri/src/hud/` — borderless transparent always-on-top recording HUD with a level meter pump.
+- `src/lib/*.svelte` — Svelte 5 components (runes-based; `$state`, `$derived`, `$effect`, `$bindable`, `$props()`).
+- `src/routes/+page.svelte` — main page; orchestrates state for every panel. Large (~1k LOC) but cohesive.
+- `tests/e2e/` — Playwright specs against `HUSH_E2E=1` mode (vite swaps `@tauri-apps/api/{core,event}` for in-tree stubs). Helper at `tests/e2e/_mock.ts`.
