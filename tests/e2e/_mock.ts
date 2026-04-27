@@ -43,6 +43,12 @@ export async function installMocks(
       get_first_run_completed: () => true,
       mark_first_run_completed: () => undefined,
       reset_first_run: () => undefined,
+      ptt_get_config: () => ({
+        combo: ["RightMeta"],
+        enabled: false,
+        listenerRunning: false,
+      }),
+      ptt_set_config: () => undefined,
       // Autostart plugin commands. The plugin's JS layer routes
       // through `plugin:autostart|<verb>` commands. The settings
       // window's General tab calls these on mount + toggle.

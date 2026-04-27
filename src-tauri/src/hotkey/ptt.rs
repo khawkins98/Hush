@@ -126,7 +126,7 @@ pub const EVENT_PTT_RELEASE: &str = "hotkey:ptt-release";
 /// `Function` (the Fn key) is not delivered consistently across platforms.
 /// Restricting to a curated set means the parse step doubles as
 /// validation, and the user can't shoot their foot off binding PTT to "a".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PttKey {
     RightControl,
     LeftControl,
@@ -266,6 +266,182 @@ pub fn resolve_ptt_key(env_value: Option<&str>) -> Result<PttKey> {
     }
 }
 
+/// A push-to-talk key combination — one or more [`PttKey`]s that must all
+/// be held simultaneously for PTT to fire.
+///
+/// "Combination" here means the AND of held keys, not a sequence: holding
+/// `RightMeta + RightShift` together is the trigger; pressing them in any
+/// order is fine, releasing any one of them releases PTT.
+///
+/// Single-key combos (the common case) work the same way: a one-element
+/// combo of `RightMeta` is exactly the previous "PTT key = RightMeta"
+/// behaviour.
+///
+/// Stored canonically: keys deduplicated, sorted by `as_str()` so two
+/// equivalent combos compare equal regardless of insertion order. Empty
+/// combos are rejected at construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PttCombo {
+    keys: Vec<PttKey>,
+}
+
+impl PttCombo {
+    /// Build a combo from a non-empty iterator of keys. Returns an error
+    /// for an empty input (an empty combo can never fire — it's almost
+    /// certainly a bug at the call site).
+    pub fn try_from_keys(keys: impl IntoIterator<Item = PttKey>) -> Result<Self> {
+        let mut canon: Vec<PttKey> = keys.into_iter().collect();
+        canon.sort_by_key(|k| k.as_str());
+        canon.dedup();
+        if canon.is_empty() {
+            anyhow::bail!("PTT combo must contain at least one key");
+        }
+        Ok(Self { keys: canon })
+    }
+
+    /// Convenience for the single-key case (the historical default).
+    pub fn single(key: PttKey) -> Self {
+        Self { keys: vec![key] }
+    }
+
+    pub fn keys(&self) -> &[PttKey] {
+        &self.keys
+    }
+
+    /// Render as a `+`-separated string for env-var / settings-DB
+    /// storage, e.g. `RightMeta` or `RightMeta+RightShift`. Round-trips
+    /// through [`parse_ptt_combo`].
+    pub fn to_storage_string(&self) -> String {
+        self.keys
+            .iter()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+}
+
+/// Parse a combo from the storage / env-var format: one or more
+/// [`PttKey`] names joined by `+`. Whitespace tolerated. Single-key
+/// strings (no separator) parse cleanly to a 1-key combo, so any
+/// existing single-key configuration round-trips.
+pub fn parse_ptt_combo(raw: &str) -> Result<PttCombo> {
+    let parts: Vec<&str> = raw
+        .split('+')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        anyhow::bail!("empty PTT combo");
+    }
+    let mut keys = Vec::with_capacity(parts.len());
+    for part in parts {
+        keys.push(parse_ptt_key(part)?);
+    }
+    PttCombo::try_from_keys(keys)
+}
+
+/// State for matching a [`PttCombo`] against a stream of `rdev::Event`s.
+///
+/// Tracks which combo keys are currently held; the combo is active when
+/// every key in it is held. Edge transitions (inactive → active and
+/// active → inactive) are what the listener emits as press / release
+/// events.
+///
+/// Lives separately from the listener thread so unit tests can drive it
+/// with synthetic events.
+#[derive(Debug, Default)]
+pub struct ComboMatcher {
+    held: std::collections::HashSet<PttKey>,
+    active: bool,
+}
+
+/// What [`ComboMatcher::observe`] returns for a single event.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ComboTransition {
+    /// Combo just became fully held — emit PTT-press.
+    Pressed,
+    /// Combo just stopped being fully held — emit PTT-release.
+    Released,
+    /// No edge transition. Most events fall here (most keys aren't in
+    /// the combo, or the held set didn't change the active bit).
+    None,
+}
+
+impl ComboMatcher {
+    /// Update the matcher with one event. Returns the transition (if
+    /// any) so the caller can fire the corresponding Tauri event.
+    pub fn observe(&mut self, event: &Event, combo: &PttCombo) -> ComboTransition {
+        // Map the rdev key back to our PttKey, if it's one of the keys
+        // we recognise. Events for keys outside the combo (most of
+        // them) flow through without changing state.
+        let (key, pressed) = match event.event_type {
+            EventType::KeyPress(k) => match ptt_key_for(k) {
+                Some(p) => (p, true),
+                None => return ComboTransition::None,
+            },
+            EventType::KeyRelease(k) => match ptt_key_for(k) {
+                Some(p) => (p, false),
+                None => return ComboTransition::None,
+            },
+            _ => return ComboTransition::None,
+        };
+
+        // Only mutate held-set on combo-relevant keys. If the user
+        // presses some random F-key we know about but it's not in
+        // their combo, we don't need to track it — but tracking is
+        // cheap (small HashSet) and lets us avoid recomputing
+        // membership on every event.
+        if pressed {
+            self.held.insert(key);
+        } else {
+            self.held.remove(&key);
+        }
+
+        let now_active = combo.keys().iter().all(|k| self.held.contains(k));
+        match (self.active, now_active) {
+            (false, true) => {
+                self.active = true;
+                ComboTransition::Pressed
+            }
+            (true, false) => {
+                self.active = false;
+                ComboTransition::Released
+            }
+            _ => ComboTransition::None,
+        }
+    }
+}
+
+/// Reverse map from `rdev::Key` to our [`PttKey`] enum. Returns `None`
+/// for any key outside the curated PTT set (letters, digits, arrows,
+/// etc.) so the matcher cleanly ignores them.
+fn ptt_key_for(key: Key) -> Option<PttKey> {
+    Some(match key {
+        Key::ControlRight => PttKey::RightControl,
+        Key::ControlLeft => PttKey::LeftControl,
+        Key::AltGr => PttKey::RightAlt,
+        Key::Alt => PttKey::LeftAlt,
+        Key::ShiftRight => PttKey::RightShift,
+        Key::ShiftLeft => PttKey::LeftShift,
+        Key::MetaRight => PttKey::RightMeta,
+        Key::MetaLeft => PttKey::LeftMeta,
+        Key::F1 => PttKey::F1,
+        Key::F2 => PttKey::F2,
+        Key::F3 => PttKey::F3,
+        Key::F4 => PttKey::F4,
+        Key::F5 => PttKey::F5,
+        Key::F6 => PttKey::F6,
+        Key::F7 => PttKey::F7,
+        Key::F8 => PttKey::F8,
+        Key::F9 => PttKey::F9,
+        Key::F10 => PttKey::F10,
+        Key::F11 => PttKey::F11,
+        Key::F12 => PttKey::F12,
+        Key::CapsLock => PttKey::CapsLock,
+        _ => return None,
+    })
+}
+
 /// Spawn the rdev listener thread.
 ///
 /// Returns once the thread is launched; the thread itself runs forever.
@@ -282,9 +458,13 @@ pub fn resolve_ptt_key(env_value: Option<&str>) -> Result<PttKey> {
 /// the environment. Runtime listener failures are logged from the worker
 /// thread, not bubbled here, because by the time `rdev::listen` blocks we
 /// have no caller to return to.
-pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
+pub fn register_ptt_listener<R: Runtime>(
+    app: &AppHandle<R>,
+    combo: std::sync::Arc<std::sync::RwLock<PttCombo>>,
+    active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
     let _ = app; // touched only on the platform branches below
-    match ptt_enablement() {
+    match ptt_enablement(active.load(std::sync::atomic::Ordering::SeqCst)) {
         PttEnablement::Enabled => { /* fall through to register */ }
         PttEnablement::DisabledByEnv => {
             tracing::info!(
@@ -325,8 +505,32 @@ pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         }
     }
 
-    let env_value = std::env::var(ENV_PTT_HOTKEY).ok();
-    let key = resolve_ptt_key(env_value.as_deref())?;
+    // The settings DB is the source of truth for the active combo —
+    // `combo` was populated by `build_default` from settings, with
+    // env/default fallbacks. The env var stays available as a last-
+    // resort override for power users / CI: if `HUSH_PTT_HOTKEY` is
+    // set, we override the in-memory combo at startup. Settings
+    // edits via the IPC continue to win after that.
+    if let Ok(raw) = std::env::var(ENV_PTT_HOTKEY) {
+        match parse_ptt_combo(&raw) {
+            Ok(env_combo) => {
+                if let Ok(mut guard) = combo.write() {
+                    *guard = env_combo;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "{ENV_PTT_HOTKEY} value rejected; using settings/default combo"
+                );
+            }
+        }
+    }
+
+    let initial_label = combo
+        .read()
+        .map(|c| c.to_storage_string())
+        .unwrap_or_else(|_| "<poisoned>".to_owned());
 
     // Capture by clone-and-move into the listener thread. `AppHandle` is
     // `Clone + Send` and is intended to be cheap to clone (it's an Arc
@@ -334,19 +538,43 @@ pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     // boundaries. The clone outlives the original because the thread is
     // detached and lives for the rest of the process.
     let app_handle = app.clone();
-    let key_label = key.as_str();
+    let combo_for_thread = std::sync::Arc::clone(&combo);
+    let active_for_thread = std::sync::Arc::clone(&active);
 
     thread::Builder::new()
         .name("hush-ptt".into())
         .spawn(move || {
-            tracing::info!(ptt_key = %key_label, "starting PTT rdev listener");
+            tracing::info!(ptt_combo = %initial_label, "starting PTT rdev listener");
 
-            // `rdev::listen` blocks; the closure runs once per OS event.
-            // We only forward the events that match the configured key —
-            // the rest are dropped, which is what we want from a sniffer
-            // (we are not consuming or modifying input, just observing).
+            // Per-thread matcher state — tracks held keys + active
+            // bit. The closure is `FnMut` so we can carry mutable
+            // state across calls. Combo itself is read through the
+            // shared `RwLock` on every event so a Settings UI edit
+            // takes effect on the next keystroke without bouncing
+            // the rdev thread.
+            let mut matcher = ComboMatcher::default();
+
             let result = listen(move |event: Event| {
-                handle_event(&app_handle, key, &event);
+                // Runtime gating. The Settings UI flips this flag
+                // when the user toggles Enabled — events are still
+                // delivered to us by the OS, but we drop them
+                // silently when off. The matcher state stays
+                // updated either way so toggling back on doesn't
+                // need a clean held-set (rare edge: combo keys
+                // physically held during a toggle just re-engage
+                // on the next press).
+                if !active_for_thread.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let combo = match combo_for_thread.read() {
+                    Ok(c) => c.clone(),
+                    Err(_) => return,
+                };
+                match matcher.observe(&event, &combo) {
+                    ComboTransition::Pressed => emit(&app_handle, EVENT_PTT_PRESS),
+                    ComboTransition::Released => emit(&app_handle, EVENT_PTT_RELEASE),
+                    ComboTransition::None => {}
+                }
             });
 
             // Reaching this point means `listen` returned an error
@@ -381,14 +609,19 @@ enum PttEnablement {
     DisabledMacosDefault,
 }
 
-/// Resolve PTT enablement from the environment + platform default.
+/// Resolve PTT enablement from the environment + persisted state +
+/// platform default.
 ///
 /// Pure function: pulled out of `register_ptt_listener` so unit tests can
 /// drive the decision without spawning a Tauri runtime or touching the
-/// real environment.
+/// real environment. `persisted_active` is the in-memory mirror of the
+/// settings DB value, which already incorporates the platform default
+/// (`build_default` falls back to `!cfg!(target_os = "macos")` when the
+/// DB row is absent).
 fn resolve_enablement(
     disable: Option<&str>,
     enable: Option<&str>,
+    persisted_active: bool,
     is_macos: bool,
 ) -> PttEnablement {
     let truthy = |v: Option<&str>| {
@@ -400,7 +633,16 @@ fn resolve_enablement(
     if truthy(disable) {
         return PttEnablement::DisabledByEnv;
     }
-    if is_macos && !truthy(enable) {
+    if truthy(enable) {
+        return PttEnablement::Enabled;
+    }
+    if persisted_active {
+        return PttEnablement::Enabled;
+    }
+    if is_macos {
+        // macOS without env enable AND without persisted-true: stay
+        // off so the Input Monitoring permission prompt doesn't fire
+        // on first launch.
         return PttEnablement::DisabledMacosDefault;
     }
     PttEnablement::Enabled
@@ -408,28 +650,15 @@ fn resolve_enablement(
 
 /// Production wrapper around [`resolve_enablement`] that reads the real
 /// environment + the build-time `cfg(target_os)`.
-fn ptt_enablement() -> PttEnablement {
+fn ptt_enablement(persisted_active: bool) -> PttEnablement {
     let disable = std::env::var(ENV_PTT_DISABLE).ok();
     let enable = std::env::var(ENV_PTT_ENABLE).ok();
     resolve_enablement(
         disable.as_deref(),
         enable.as_deref(),
+        persisted_active,
         cfg!(target_os = "macos"),
     )
-}
-
-/// Forward a single `rdev` event to the frontend if it matches the
-/// configured PTT key.
-///
-/// Split out from the spawn closure so it can be tested without invoking
-/// `rdev::listen` (which would block the test binary). Tests construct
-/// `rdev::Event` values directly.
-fn handle_event<R: Runtime>(app: &AppHandle<R>, key: PttKey, event: &Event) {
-    match event.event_type {
-        EventType::KeyPress(k) if key.matches(k) => emit(app, EVENT_PTT_PRESS),
-        EventType::KeyRelease(k) if key.matches(k) => emit(app, EVENT_PTT_RELEASE),
-        _ => {}
-    }
 }
 
 /// Emit a Tauri event, swallowing failures with a warning. Same posture
@@ -444,6 +673,122 @@ fn emit<R: Runtime>(app: &AppHandle<R>, name: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
+
+    fn mk_event(event_type: EventType) -> Event {
+        // `extra_data` is only present on macOS / Windows in the
+        // fufesou/rdev fork — Linux Event has no such field. Gate
+        // the literal so the test compiles on every CI target.
+        Event {
+            time: SystemTime::now(),
+            unicode: None,
+            event_type,
+            platform_code: 0,
+            position_code: 0,
+            usb_hid: 0,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            extra_data: 0,
+        }
+    }
+    fn mk_press(key: Key) -> Event {
+        mk_event(EventType::KeyPress(key))
+    }
+    fn mk_release(key: Key) -> Event {
+        mk_event(EventType::KeyRelease(key))
+    }
+
+    #[test]
+    fn combo_single_key_press_release_round_trip() {
+        let combo = PttCombo::single(PttKey::RightMeta);
+        let mut m = ComboMatcher::default();
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::Pressed
+        );
+        // Repeat KeyPress events shouldn't double-fire (active stays true).
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::None
+        );
+        assert_eq!(
+            m.observe(&mk_release(Key::MetaRight), &combo),
+            ComboTransition::Released
+        );
+    }
+
+    #[test]
+    fn combo_two_key_requires_both_held() {
+        let combo = PttCombo::try_from_keys([PttKey::RightMeta, PttKey::RightShift]).unwrap();
+        let mut m = ComboMatcher::default();
+        // First key alone — not active yet.
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::None
+        );
+        // Second key — both held now, fires Pressed.
+        assert_eq!(
+            m.observe(&mk_press(Key::ShiftRight), &combo),
+            ComboTransition::Pressed
+        );
+        // Release one — fires Released even though the other is still held.
+        assert_eq!(
+            m.observe(&mk_release(Key::ShiftRight), &combo),
+            ComboTransition::Released
+        );
+        // Release the other — no-op (already inactive).
+        assert_eq!(
+            m.observe(&mk_release(Key::MetaRight), &combo),
+            ComboTransition::None
+        );
+    }
+
+    #[test]
+    fn combo_ignores_keys_outside_curated_set() {
+        let combo = PttCombo::single(PttKey::RightMeta);
+        let mut m = ComboMatcher::default();
+        // A letter key event is delivered by rdev but isn't in our
+        // curated PttKey set — must not change matcher state.
+        assert_eq!(
+            m.observe(&mk_press(Key::KeyA), &combo),
+            ComboTransition::None
+        );
+        assert_eq!(
+            m.observe(&mk_press(Key::MetaRight), &combo),
+            ComboTransition::Pressed
+        );
+    }
+
+    #[test]
+    fn combo_storage_round_trip() {
+        let combo = PttCombo::try_from_keys([PttKey::RightMeta, PttKey::F1]).unwrap();
+        let s = combo.to_storage_string();
+        let parsed = parse_ptt_combo(&s).unwrap();
+        assert_eq!(parsed, combo);
+    }
+
+    #[test]
+    fn parse_combo_accepts_single_key_for_back_compat() {
+        let parsed = parse_ptt_combo("RightControl").unwrap();
+        assert_eq!(parsed, PttCombo::single(PttKey::RightControl));
+    }
+
+    #[test]
+    fn parse_combo_rejects_empty() {
+        assert!(parse_ptt_combo("").is_err());
+        assert!(parse_ptt_combo("+++").is_err());
+    }
+
+    #[test]
+    fn combo_dedups_and_sorts() {
+        let a = PttCombo::try_from_keys([
+            PttKey::RightShift,
+            PttKey::RightMeta,
+            PttKey::RightShift, // duplicate
+        ])
+        .unwrap();
+        let b = PttCombo::try_from_keys([PttKey::RightMeta, PttKey::RightShift]).unwrap();
+        assert_eq!(a, b, "canonical form makes equivalent combos compare equal");
+    }
 
     #[test]
     fn parses_canonical_names() {
@@ -536,8 +881,10 @@ mod tests {
 
     #[test]
     fn enablement_macos_disabled_by_default() {
+        // No env, no persisted-active, on macOS → off (privacy
+        // default — don't trigger Input Monitoring on first launch).
         assert_eq!(
-            resolve_enablement(None, None, true),
+            resolve_enablement(None, None, false, true),
             PttEnablement::DisabledMacosDefault
         );
     }
@@ -545,25 +892,36 @@ mod tests {
     #[test]
     fn enablement_macos_opt_in_via_env() {
         assert_eq!(
-            resolve_enablement(None, Some("1"), true),
+            resolve_enablement(None, Some("1"), false, true),
             PttEnablement::Enabled
         );
         assert_eq!(
-            resolve_enablement(None, Some("true"), true),
+            resolve_enablement(None, Some("true"), false, true),
             PttEnablement::Enabled
         );
     }
 
     #[test]
-    fn enablement_disable_wins_over_enable() {
-        // If the user sets both, disable takes priority — least surprise
-        // when the user is trying to stop a crash.
+    fn enablement_macos_opt_in_via_persisted_state() {
+        // Settings UI flipped enabled to true; should boot the
+        // listener even without HUSH_PTT_ENABLE.
         assert_eq!(
-            resolve_enablement(Some("1"), Some("1"), true),
+            resolve_enablement(None, None, true, true),
+            PttEnablement::Enabled
+        );
+    }
+
+    #[test]
+    fn enablement_disable_wins_over_enable_and_persisted() {
+        // If the user sets HUSH_PTT_DISABLE=1, it overrides every
+        // other signal — surprise-prevention when the user is
+        // trying to stop a misbehaving listener.
+        assert_eq!(
+            resolve_enablement(Some("1"), Some("1"), true, true),
             PttEnablement::DisabledByEnv
         );
         assert_eq!(
-            resolve_enablement(Some("1"), Some("1"), false),
+            resolve_enablement(Some("1"), None, true, false),
             PttEnablement::DisabledByEnv
         );
     }
@@ -571,7 +929,7 @@ mod tests {
     #[test]
     fn enablement_non_macos_enabled_by_default() {
         assert_eq!(
-            resolve_enablement(None, None, false),
+            resolve_enablement(None, None, false, false),
             PttEnablement::Enabled
         );
     }
@@ -579,7 +937,7 @@ mod tests {
     #[test]
     fn enablement_non_macos_disable_via_env() {
         assert_eq!(
-            resolve_enablement(Some("1"), None, false),
+            resolve_enablement(Some("1"), None, false, false),
             PttEnablement::DisabledByEnv
         );
     }
@@ -588,21 +946,21 @@ mod tests {
     fn enablement_truthy_values_are_normalised() {
         // Be forgiving about HUSH_PTT_ENABLE=YES vs =yes vs ="1 " etc.
         assert_eq!(
-            resolve_enablement(None, Some("YES"), true),
+            resolve_enablement(None, Some("YES"), false, true),
             PttEnablement::Enabled
         );
         assert_eq!(
-            resolve_enablement(None, Some(" on "), true),
+            resolve_enablement(None, Some(" on "), false, true),
             PttEnablement::Enabled
         );
-        // Anything else stays disabled — we don't accept "0" or "false"
-        // as enable signals.
+        // Anything else stays disabled (and we fall through to the
+        // persisted/default check, which is also off here).
         assert_eq!(
-            resolve_enablement(None, Some("0"), true),
+            resolve_enablement(None, Some("0"), false, true),
             PttEnablement::DisabledMacosDefault
         );
         assert_eq!(
-            resolve_enablement(None, Some(""), true),
+            resolve_enablement(None, Some(""), false, true),
             PttEnablement::DisabledMacosDefault
         );
     }
