@@ -20,6 +20,14 @@ npm run tauri dev
 # Transcription returns IpcError::TranscriptionUnavailable.
 cd src-tauri && cargo tauri dev --no-default-features
 
+# macOS-only: build a debug .app bundle and open it. Use this for
+# smoke-testing anything that depends on macOS treating Hush as a
+# proper app — Screen Recording / Microphone TCC prompts in
+# particular. The bare `cargo tauri dev` binary has no .app wrapper
+# and doesn't register reliably with TCC (see "macOS TCC dev-binary
+# quirk" below). Slow: 30 s – 2 min, not a hot-iteration tool.
+npm run tauri:bundle
+
 # Rust unit tests — fast, no real audio device needed.
 cd src-tauri && cargo test --lib
 cd src-tauri && cargo test --lib --features whisper             # plus whisper-gated paths
@@ -100,6 +108,18 @@ CI does not run a real Tauri runtime. A panic at app boot (plugin init, capabili
 - `src-tauri/.cargo/config.toml` (link-arg / rpath changes)
 - `src-tauri/capabilities/*.json`
 - Anything that adds or removes a `.plugin(...)` call
+
+## macOS TCC dev-binary quirk
+
+`cargo tauri dev` produces a bare unsigned binary at `target/debug/hush`, not a `.app` bundle. macOS TCC (the privacy-permission system gating Microphone, Screen Recording, Input Monitoring) attributes requests from such binaries to the **parent process** — usually the iTerm / Terminal that launched `npm run tauri dev`. Hush never appears in System Settings → Privacy & Security under its own name; iTerm does, and any grant the user hands iTerm covers Hush's mic access too.
+
+Mic and Input Monitoring fall through this parent-attribution path and work fine. **Screen Recording is stricter** — SCK requires the calling binary to be its own TCC entry, not a child of one. The dev binary effectively can't access SCK no matter how many bits we add to its embedded Info.plist (CFBundleIdentifier, NSScreenCaptureUsageDescription, etc. — all helpful, none sufficient).
+
+For SCK / Screen Recording / system-audio testing, use:
+
+    npm run tauri:bundle
+
+That builds a real `.app` at `src-tauri/target/debug/bundle/macos/Hush.app` and opens it. macOS treats it as a proper app, prompts cleanly with the description from `src-tauri/Info.plist`, and persists the grant across re-bundles of the same path. See `learnings.md` 2026-04-27 entry for the full background.
 
 ## Conventions
 
