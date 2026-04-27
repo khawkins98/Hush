@@ -992,6 +992,20 @@
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif,
     "Apple Color Emoji", "Segoe UI Emoji";
+
+  /* Layer 1 of "feel native". Two CSS primitives, no per-OS code:
+     - `color-scheme` opts into the user agent's native dark-mode
+       rendering for form controls, scrollbars, and the document
+       background. Without this, scrollbars on macOS render as the
+       light-mode style even when the rest of the app is dark.
+     - `accent-color: auto` makes checkboxes / radios / range
+       sliders / progress bars pick up the user's OS accent (the
+       Mac highlight blue, the Windows accent, the GNOME accent)
+       instead of the browser default cobalt. One line, real
+       impact on perceived nativeness. */
+  color-scheme: light dark;
+  accent-color: auto;
+
   font-size: 16px;
   line-height: 24px;
   color: #0f0f0f;
