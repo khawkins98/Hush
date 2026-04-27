@@ -49,6 +49,11 @@ export async function installMocks(
         microphoneHint: "Mocked microphone hint.",
         inputMonitoringHint: "Mocked input monitoring hint.",
         canReset: false,
+        statuses: {
+          microphone: "not-applicable",
+          screenRecording: "not-applicable",
+          inputMonitoring: "not-applicable",
+        },
       }),
       reset_macos_permissions: () => ({
         anyReset: false,

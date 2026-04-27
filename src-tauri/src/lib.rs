@@ -8,6 +8,7 @@ pub mod history;
 pub mod hotkey;
 pub mod hud;
 pub mod ipc;
+pub mod macos_perms;
 pub mod meeting;
 pub mod repository;
 pub mod settings;
