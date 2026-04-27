@@ -104,6 +104,28 @@
   );
 
   /**
+   * Stop-button confirmation state (#131). The Stop button used to
+   * fire `onStop` immediately on click, which the round-8 UX
+   * reviewer flagged as a real foot-gun: a stray mid-meeting click
+   * ended the session with no undo. Now the first click flips
+   * `confirmingStop = true` and the panel renders a "Yes / Cancel"
+   * pair; only the explicit "Yes" commits. Reset whenever the
+   * active session ends so a new session starts with a clean
+   * confirmation state.
+   */
+  let confirmingStop = $state(false);
+  function requestStop() {
+    confirmingStop = true;
+  }
+  function cancelStop() {
+    confirmingStop = false;
+  }
+  async function confirmStop() {
+    confirmingStop = false;
+    await onStop();
+  }
+
+  /**
    * Auto-expand the row of a session that just transitioned from
    * Active to Ended. The user clicked Stop, the panel re-renders
    * with the just-recorded session in the historical list — they
@@ -126,6 +148,10 @@
       // `refreshMeetingSessions`, which fires right after stop, so
       // a tick of latency is fine.
       void toggleSessionDetail(prev);
+      // And clear any in-flight stop confirmation so the next
+      // session starts fresh — the prompt is meaningless against
+      // the no-active-session state.
+      confirmingStop = false;
     }
     previouslyActiveId = current;
   });
@@ -509,9 +535,61 @@
           still firming up.
         </p>
       </div>
-      <button type="button" class="primary" onclick={onStop} disabled={busy}>
-        Stop session
-      </button>
+      <!--
+        Stop confirmation (closes #131). The Stop button used the
+        same blue / weight as Start, and a stray click mid-meeting
+        ended the session with no undo. The first click now asks
+        for confirmation inline (no modal) so the user has a
+        deliberate moment to back out; the second click commits.
+        Visual differentiation also lands here — `class="stop"`
+        gives the same red treatment the dictation Stop button
+        already uses, so the destructive action stops looking like
+        a primary CTA.
+      -->
+      {#if confirmingStop}
+        <div class="meeting-stop-confirm" role="group" aria-label="Confirm stop session">
+          <span class="meeting-stop-confirm-prompt">
+            End session?
+            {#if activeSession}
+              {activeSession.utteranceCount} utterance{activeSession.utteranceCount === 1
+                ? ""
+                : "s"} captured.
+            {/if}
+          </span>
+          <!--
+            Auto-focus the confirm action: the user just clicked
+            Stop, so their focus was on a button that's now gone;
+            landing focus on "Yes, end session" (the natural
+            continuation) avoids stranding them mid-air. Suppressing
+            the svelte-check a11y warning because the "don't move
+            focus on mount" rule it enforces doesn't apply here —
+            this *is* a focus continuation following an explicit
+            user action.
+          -->
+          <!-- svelte-ignore a11y_autofocus -->
+          <button
+            type="button"
+            class="stop"
+            onclick={confirmStop}
+            disabled={busy}
+            autofocus
+          >
+            Yes, end session
+          </button>
+          <button
+            type="button"
+            class="ghost"
+            onclick={cancelStop}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+        </div>
+      {:else}
+        <button type="button" class="stop" onclick={requestStop} disabled={busy}>
+          Stop session
+        </button>
+      {/if}
     {:else}
       <div class="meeting-source-stack">
         <label class="meeting-source-label">
@@ -1433,6 +1511,44 @@ button.primary:hover:not(:disabled) {
   border-color: #4a6cd0;
 }
 
+/*
+  Stop-session destructive button. Mirrors the dictation hot path's
+  red Stop in `ControlsSection.svelte` — explicit visual signal that
+  this action ends the session, distinct from the blue Start CTA.
+*/
+button.stop {
+  background-color: #d83a3a;
+  color: white;
+  border-color: #d83a3a;
+  font-weight: 600;
+  padding: 0.5em 1em;
+  font-size: 0.9rem;
+}
+
+button.stop:hover:not(:disabled) {
+  background-color: #b22e2e;
+  border-color: #b22e2e;
+}
+
+/*
+  Inline stop-session confirmation (closes #131). Replaces the bare
+  Stop button with a prompt + Yes/Cancel pair. Renders inline rather
+  than as a modal so the user's eye stays on the running transcript;
+  a modal would be heavier than the foot-gun warrants.
+*/
+.meeting-stop-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.meeting-stop-confirm-prompt {
+  font-size: 0.9rem;
+  color: #555;
+  flex-basis: 100%;
+}
+
 button.ghost {
   background-color: transparent;
 }
@@ -1488,6 +1604,9 @@ button:disabled {
   .source-dropped-tag {
     background-color: rgba(216, 58, 58, 0.22);
     color: #f8b8b8;
+  }
+  .meeting-stop-confirm-prompt {
+    color: #aaa;
   }
   .meeting-system-audio-toggle {
     color: #ddd;
