@@ -43,6 +43,7 @@ export async function installMocks(
       get_first_run_completed: () => true,
       mark_first_run_completed: () => undefined,
       open_macos_privacy_pane: () => undefined,
+      open_settings: () => undefined,
       diagnose_macos_permissions: () => ({
         bundleId: "com.khawkins.hush",
         microphoneHint: "Mocked microphone hint.",

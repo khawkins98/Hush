@@ -164,6 +164,7 @@
   let unlistenToggle: UnlistenFn | null = null;
   let unlistenPttPress: UnlistenFn | null = null;
   let unlistenPttRelease: UnlistenFn | null = null;
+  let unlistenMenuGoto: UnlistenFn | null = null;
 
   // Keep the document title in sync with recording state. Helps users who
   // have the window in the background — at-a-glance signal that the mic
@@ -218,6 +219,23 @@
       if (busy) return; // ignore presses while a transcription is in flight
       if (recording) void stop();
       else void start();
+    });
+
+    // Native menu bar dispatches View → Section selections through
+    // this event (#164 Phase 2). Payload is a string matching the
+    // `AppSection` union; an unknown value is ignored so the
+    // frontend stays robust to a future menu entry the page
+    // doesn't yet know about.
+    unlistenMenuGoto = await listen<string>("menu:goto-section", (e) => {
+      const payload = e.payload;
+      if (
+        payload === "dictation" ||
+        payload === "meetings" ||
+        payload === "history" ||
+        payload === "configuration"
+      ) {
+        activeSection = payload;
+      }
     });
 
     // Model-download events from the backend. The progress event
@@ -295,6 +313,7 @@
 
   onDestroy(() => {
     unlistenToggle?.();
+    unlistenMenuGoto?.();
     unlistenPttPress?.();
     unlistenPttRelease?.();
     unlistenDownloadProgress?.();

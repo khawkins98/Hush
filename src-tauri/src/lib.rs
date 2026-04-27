@@ -1,5 +1,6 @@
 // Domain modules. Exposed at the crate root so integration tests and the
 // IPC layer can address them by their public surface.
+pub mod app_menu;
 pub mod audio;
 pub mod db;
 pub mod dictionary;
@@ -10,6 +11,7 @@ pub mod ipc;
 pub mod meeting;
 pub mod repository;
 pub mod settings;
+pub mod settings_window;
 pub mod transcription;
 pub mod updater;
 
@@ -131,6 +133,13 @@ pub fn run() {
                 }
             });
 
+            // Native macOS menu bar (no-op on other platforms).
+            // Replaces Tauri's auto-generated minimal menu with one
+            // that names the app "Hush", binds Settings… to ⌘,, and
+            // surfaces the sidebar sections under View. See
+            // `app_menu/mod.rs` for the wire shape.
+            app_menu::apply(app.handle());
+
             // Hotkey registration is best-effort: if the OS refuses the
             // shortcut (already in use, missing permission, Wayland
             // compositor without support) we log and continue so the rest
@@ -152,6 +161,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ipc::commands::audio_list_sources,
+            ipc::commands::open_settings,
             ipc::commands::start_dictation,
             ipc::commands::stop_dictation,
             ipc::commands::history_list,
