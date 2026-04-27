@@ -240,8 +240,7 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
             }
         }
         let summary = if any_reset {
-            "Reset complete. Quit and reopen Hush to re-prompt for permissions."
-                .to_owned()
+            "Reset complete. Quit and reopen Hush to re-prompt for permissions.".to_owned()
         } else {
             "No TCC entries to reset (the bundle id may not be registered, common on \
              unsigned dev builds). If permissions still feel stuck, build a signed \
