@@ -171,10 +171,42 @@ test.describe("meeting panel — multi-source picker", () => {
           startedAt: "2026-04-26T15:00:00Z",
           endedAt: null,
           speakerCount: null,
-          utteranceCount: 0,
+          utteranceCount: 3,
           notes: null,
         },
-        utterances: [],
+        // Live counter now reads from `activeDetail.utterances.length`
+        // rather than the session list's `utteranceCount` (which only
+        // refreshes on session start/stop). Mock three finals so the
+        // counter assertion below can verify the live read.
+        utterances: [
+          {
+            id: 1,
+            sessionId: 42,
+            startedAtMs: 0,
+            endedAtMs: 5_000,
+            speakerLabel: "mic",
+            text: "First.",
+            isFinal: true,
+          },
+          {
+            id: 2,
+            sessionId: 42,
+            startedAtMs: 5_000,
+            endedAtMs: 10_000,
+            speakerLabel: "system",
+            text: "Second.",
+            isFinal: true,
+          },
+          {
+            id: 3,
+            sessionId: 42,
+            startedAtMs: 10_000,
+            endedAtMs: 15_000,
+            speakerLabel: "mic",
+            text: "Third.",
+            isFinal: true,
+          },
+        ],
         currentPartials: [],
       }),
     });
@@ -182,7 +214,9 @@ test.describe("meeting panel — multi-source picker", () => {
 
     const panel = page.locator("section.panel-meetings");
 
-    // Live utterance counter reads from the active session row.
+    // Live utterance counter reads from `activeDetail.utterances.length`,
+    // which is polled every ~3 s and reflects what the pump has
+    // committed since session start.
     await expect(panel).toContainText(/3 utterances so far/i);
     // Active-session copy — recording, not hotkey-driven.
     await expect(panel).toContainText(/Recording from/i);
@@ -636,7 +670,17 @@ test.describe("meeting panel — multi-source picker", () => {
           utteranceCount: 5,
           notes: null,
         },
-        utterances: [],
+        // Live counter reads `activeDetail.utterances.length`, so
+        // we mock five finals to match the "5 utterances captured"
+        // assertion the Stop-confirmation prompt exercises below.
+        utterances: [
+          { id: 1, sessionId: 42, startedAtMs: 0, endedAtMs: 5000, speakerLabel: "mic", text: "1", isFinal: true },
+          { id: 2, sessionId: 42, startedAtMs: 5000, endedAtMs: 10000, speakerLabel: "mic", text: "2", isFinal: true },
+          { id: 3, sessionId: 42, startedAtMs: 10000, endedAtMs: 15000, speakerLabel: "mic", text: "3", isFinal: true },
+          { id: 4, sessionId: 42, startedAtMs: 15000, endedAtMs: 20000, speakerLabel: "mic", text: "4", isFinal: true },
+          { id: 5, sessionId: 42, startedAtMs: 20000, endedAtMs: 25000, speakerLabel: "mic", text: "5", isFinal: true },
+        ],
+        currentPartials: [],
       }),
       meeting_stop_manual: () => {
         (
