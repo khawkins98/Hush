@@ -14,11 +14,10 @@
 //! As the surface has grown past a dozen commands, a quick map for
 //! contributors landing here cold:
 //!
-//! - **Core dictation pipeline.** [`audio_list_sources`] (the picker-
-//!   shaped enumeration; supersedes the legacy [`list_input_devices`]
-//!   which is kept for one transitional release), [`start_dictation`]
-//!   (takes a discriminated [`crate::audio::AudioSource`]),
-//!   [`stop_dictation`].
+//! - **Core dictation pipeline.** [`audio_list_sources`] (picker-
+//!   shaped enumeration of mics + system-audio entry with capability
+//!   flags), [`start_dictation`] (takes a discriminated
+//!   [`crate::audio::AudioSource`]), [`stop_dictation`].
 //! - **History (read-only browse + delete).** [`history_list`],
 //!   [`history_search`], [`history_delete`], [`history_count`].
 //! - **Replacements (post-transcription find/replace CRUD).**
@@ -46,7 +45,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
-use crate::audio::{AudioDevice, AudioSource, AudioSourceListing};
+use crate::audio::{AudioSource, AudioSourceListing};
 use crate::dictionary::{
     apply_replacements, format_vocabulary_prompt, NewReplacementRule, NewVocabularyTerm,
     ReplacementRule, VocabularyTerm,
@@ -154,30 +153,12 @@ fn poisoned<T>(_: PoisonError<T>) -> IpcError {
     IpcError::Internal("internal state lock poisoned".to_owned())
 }
 
-/// Enumerate the host's input devices.
-///
-/// **Superseded** by [`audio_list_sources`], which returns mic devices
-/// AND the system-audio entry with capability flags. Kept as a Tauri
-/// command for one transitional release so any frontend still binding
-/// to the old name keeps working — slated for removal once the picker
-/// migration is verified across all hands-on smoke surfaces.
-///
-/// Tauri marshals errors via the `Serialize` impl on [`IpcError`].
-#[tauri::command]
-pub fn list_input_devices(state: State<'_, AppState>) -> IpcResult<Vec<AudioDevice>> {
-    state
-        .audio
-        .list_input_devices()
-        .map_err(|e| IpcError::Audio(e.to_string()))
-}
-
 /// Enumerate every audio source the user can pick from in the source
 /// picker — every input device plus the system-audio entry, with
 /// `is_supported` flags per source so the frontend can render
 /// not-yet-shipped options as disabled.
 ///
-/// Replaces [`list_input_devices`] for the source-picker UI; see
-/// [`crate::audio::AudioSourceListing`] for the wire shape.
+/// See [`crate::audio::AudioSourceListing`] for the wire shape.
 #[tauri::command]
 pub fn audio_list_sources(state: State<'_, AppState>) -> IpcResult<Vec<AudioSourceListing>> {
     state

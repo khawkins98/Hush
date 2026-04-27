@@ -5,7 +5,7 @@
 // Why a single shared default rather than per-test wholesale mocks:
 // the dictation page calls a half-dozen `invoke`s on mount alone
 // (history list, replacements list, vocabulary list, model list,
-// settings get, list_input_devices, get_first_run_completed). If
+// settings get, audio_list_sources, get_first_run_completed). If
 // every test redeclared all of them the fixtures would drift; the
 // shared default gives every spec a working app baseline and lets
 // each spec override only the commands its assertions care about.
@@ -55,13 +55,9 @@ export async function installMocks(
       }),
 
       // ---- audio sources ----
-      // `list_input_devices` is the legacy command; `audio_list_sources`
-      // is the picker-shaped one that includes the system-audio entry.
-      // Both stay mocked for one transitional release while the picker
-      // migration soaks.
-      list_input_devices: () => [
-        { id: "Built-in Microphone", name: "Built-in Microphone", isDefault: true },
-      ],
+      // `audio_list_sources` is the picker-shaped enumeration: every
+      // mic plus the system-audio entry, with capability flags for
+      // disabled rendering on platforms that don't support an entry.
       audio_list_sources: () => [
         {
           kind: "microphone",
