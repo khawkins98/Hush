@@ -490,7 +490,7 @@
         <p class="settings-row">
           <span class="row-label">Toggle recording</span>
           <span class="row-value">
-            <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>
+            <span class="chord"><kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd></span>
             <span class="row-note">Customisable hotkey UI is future work.</span>
           </span>
         </p>
@@ -794,6 +794,18 @@
     align-items: flex-end;
     gap: 0.2rem;
     color: #555;
+  }
+  /* Inline-flex chord wrapper keeps `<kbd> + <kbd> + <kbd>` on one
+     line as a single flex item inside the column-flex `.row-value`,
+     so the chord doesn't stack vertically next to the `.row-note`
+     beneath it. Without this, each `<kbd>` and the `+` separators
+     were treated as siblings and stacked. */
+  .chord {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .row-note {
     display: block;
