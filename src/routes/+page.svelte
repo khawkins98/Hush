@@ -136,6 +136,14 @@
     modelsLoaded && models.length > 0 && !models.some((m) => m.isDownloaded),
   );
 
+  // Push-to-talk is disabled by default on macOS — rdev 0.5 hard-aborts
+  // on macOS 26+ (see `src-tauri/src/hotkey/ptt.rs` module header).
+  // Power users can re-enable with `HUSH_PTT_ENABLE=1`, but the
+  // default surface should not advertise the Right-Ctrl hold or the
+  // shortcut card reads as broken to most macOS users.
+  let isMacOS = typeof navigator !== "undefined"
+    && /Mac|iPhone|iPad/i.test(navigator.platform);
+
   // Scroll the model picker section into view. Used by the "Set up
   // your first model" banner and the click-through on the
   // transcription-unavailable error chip.
@@ -1002,14 +1010,15 @@
       </section>
 
       <section class="first-run-section">
-        <h3>Input Monitoring (macOS)</h3>
+        <h3>Input Monitoring (macOS — push-to-talk only)</h3>
         <p>
-          Hush's push-to-talk hotkey uses a low-level keyboard hook so
-          it works while another app is focused. macOS calls this
-          "Input Monitoring" and asks once. If you missed the prompt
-          or declined, push-to-talk will silently do nothing until you
-          grant the permission in System Settings. The toggle hotkey
-          uses a different API and works without it.
+          The push-to-talk hotkey is <strong>disabled by default on
+          macOS</strong> because the underlying low-level keyboard
+          library aborts on macOS 26+. The toggle hotkey
+          (<kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>) works
+          fine. Power users who want push-to-talk back can re-enable
+          it by launching Hush with <code>HUSH_PTT_ENABLE=1</code>;
+          macOS will then prompt for Input Monitoring on first use.
         </p>
         <button class="ghost" onclick={() => openPrivacyPane("input-monitoring")}>
           Open Input Monitoring settings
@@ -1039,8 +1048,8 @@
   -->
   <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
     <strong>Shortcuts:</strong>
-    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
-    or hold <kbd>Right Ctrl</kbd> to push-to-talk.
+    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle{#if !isMacOS},
+    or hold <kbd>Right Ctrl</kbd> to push-to-talk{/if}.
   </aside>
 
   <ControlsSection
