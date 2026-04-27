@@ -107,6 +107,7 @@ pub fn run() {
             // effect without restarting the rdev thread.
             let ptt_combo_for_listener = std::sync::Arc::clone(&state.ptt_combo);
             let ptt_active_for_listener = std::sync::Arc::clone(&state.ptt_active);
+            let ptt_spawned_for_listener = std::sync::Arc::clone(&state.ptt_listener_spawned);
             app.manage(state);
 
             // HUD level-meter pump (#21). Reads the latest RMS from the
@@ -165,6 +166,7 @@ pub fn run() {
                 app.handle(),
                 ptt_combo_for_listener,
                 ptt_active_for_listener,
+                ptt_spawned_for_listener,
             ) {
                 tracing::error!(error = ?e, "failed to start PTT listener");
             }

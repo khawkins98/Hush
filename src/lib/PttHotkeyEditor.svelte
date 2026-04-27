@@ -110,9 +110,15 @@
       });
       combo = nextCombo;
       enabled = nextEnabled;
+      // Re-read after persist so `listenerRunning` reflects the
+      // outcome of the on-demand spawn. On macOS, the OS prompt
+      // for Input Monitoring may still be visible; the listener
+      // will start delivering events the moment it's granted, but
+      // listenerRunning flips to true now (the thread is up; the
+      // permission grant just gates whether events flow).
+      await load();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
-      // Re-load to recover from any partial state.
       await load();
     } finally {
       saving = false;
@@ -283,9 +289,8 @@
 
     {#if enabled && !listenerRunning}
       <p class="settings-hint warn">
-        PTT was off when Hush started, so the listener isn't running
-        yet. <strong>Restart Hush</strong> for this change to take
-        effect (macOS will then prompt for Input Monitoring).
+        Couldn't start the keyboard listener. Try toggling off and
+        back on; if that doesn't help, restart Hush.
       </p>
     {/if}
 

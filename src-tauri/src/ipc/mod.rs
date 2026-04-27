@@ -200,13 +200,20 @@ pub struct AppState {
     /// needed). At boot, this mirrors the persisted value and the
     /// env-var override.
     ///
-    /// **Caveat:** if the listener wasn't registered at boot (e.g.
-    /// macOS with `ptt_enabled=false`), flipping this to true at
-    /// runtime is a no-op — the rdev thread isn't running, so no
-    /// events to gate. The frontend surfaces a "restart Hush" hint
-    /// when this happens. Once the listener is running, toggle is
-    /// instant.
+    /// First-time opt-in: when the user enables PTT in a session
+    /// that started with it off, `ptt_set_config` calls
+    /// `register_ptt_listener` to spawn the listener thread on
+    /// demand (which fires the macOS Input Monitoring prompt). The
+    /// `ptt_listener_spawned` latch makes that idempotent.
     pub ptt_active: Arc<std::sync::atomic::AtomicBool>,
+    /// Latch tracking whether the rdev listener thread has been
+    /// spawned in this session. The spawn is idempotent — re-calling
+    /// `register_ptt_listener` after the thread is up returns
+    /// without spawning a second one. Used by `ptt_set_config` to
+    /// start the listener on demand when the user toggles Enabled
+    /// for the first time, so first-time opt-in doesn't require an
+    /// app restart.
+    pub ptt_listener_spawned: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Builder for [`AppState`].
@@ -389,6 +396,7 @@ impl AppStateBuilder {
             ptt_active: Arc::new(std::sync::atomic::AtomicBool::new(
                 self.ptt_active.unwrap_or(false),
             )),
+            ptt_listener_spawned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 }
