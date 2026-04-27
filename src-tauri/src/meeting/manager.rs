@@ -173,6 +173,35 @@ impl AudioSession for NoOpSession {
 /// `Arc<dyn MeetingSessionRepository>` is held internally so the
 /// manager owns the persistence handle without forcing every call
 /// site to thread it through. Cheap to clone (`Arc`).
+/// Notifies the frontend when the meeting pump's per-source state
+/// changes mid-session — specifically when a previously-running
+/// source fails (TCC revoke, device unplug, inference panic) and is
+/// dropped from the rest of the session. Without this signal the
+/// panel keeps showing "recording from mic + system audio" while
+/// one of those sources has silently gone dead.
+///
+/// Trait rather than a direct `tauri::AppHandle` dep so the
+/// `SessionManager` stays unit-testable without spinning up a
+/// Tauri runtime. The production impl in `crate::ipc::commands`
+/// wraps an `AppHandle::emit`; tests pass a no-op or a recording
+/// stub that captures emit-call args.
+pub trait MeetingEventEmitter: Send + Sync {
+    /// Fires when a per-source capture or inference path failed and
+    /// the pump dropped that source for the rest of the session.
+    /// `source_kind` is the same `kind_label` (`"microphone"` /
+    /// `"system-audio"`) the pump uses elsewhere.
+    fn source_failed(&self, session_id: i64, source_kind: &str, reason: &str);
+}
+
+/// No-op emitter for unit tests + the `new_for_test` constructor.
+/// Production code constructs an `AppHandle`-backed emitter; the
+/// `Noop` variant means "I don't care about pump events here".
+pub struct NoopMeetingEventEmitter;
+
+impl MeetingEventEmitter for NoopMeetingEventEmitter {
+    fn source_failed(&self, _session_id: i64, _source_kind: &str, _reason: &str) {}
+}
+
 pub struct SessionManager {
     repo: Arc<dyn MeetingSessionRepository>,
     classifier: AppClassifier,
@@ -208,6 +237,10 @@ pub struct SessionManager {
     /// `&'static str` so a future per-speaker diarization (#111)
     /// can drop in without changing this map's shape.
     partials: Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
+    /// Surface pump-side events (per-source failure mid-session) to
+    /// the frontend. Production wires this to a `tauri::AppHandle`
+    /// emitter; tests use [`NoopMeetingEventEmitter`].
+    event_emitter: Arc<dyn MeetingEventEmitter>,
 }
 
 /// Lifecycle state for the manager's session slot. Three-valued
@@ -248,6 +281,7 @@ impl SessionManager {
         repo: Arc<dyn MeetingSessionRepository>,
         audio: Arc<dyn AudioCapture>,
         transcribe: crate::ipc::TranscribeSlot,
+        event_emitter: Arc<dyn MeetingEventEmitter>,
     ) -> Self {
         Self {
             repo,
@@ -256,6 +290,7 @@ impl SessionManager {
             transcribe,
             state: Mutex::new(SessionState::Idle),
             partials: Arc::new(RwLock::new(HashMap::new())),
+            event_emitter,
         }
     }
 
@@ -297,7 +332,8 @@ impl SessionManager {
     pub fn new_for_test(repo: Arc<dyn MeetingSessionRepository>) -> Self {
         let audio: Arc<dyn AudioCapture> = Arc::new(NoOpAudio);
         let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
-        Self::new(repo, audio, transcribe)
+        let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
+        Self::new(repo, audio, transcribe, emitter)
     }
 
     /// Start a meeting session manually (button-driven).
@@ -504,6 +540,7 @@ impl SessionManager {
             streaming_sessions,
             partials: Arc::clone(&self.partials),
             cancel: Arc::clone(&cancel),
+            event_emitter: Arc::clone(&self.event_emitter),
         }));
 
         // Commit Active. The slot has been Opening since the start
@@ -746,6 +783,11 @@ struct PumpContext {
     /// inference returns the matching final.
     partials: Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
     cancel: Arc<AtomicBool>,
+    /// Notify the frontend when a per-source path drops out
+    /// mid-session. The pump fires this on the inference panic
+    /// path and the streaming-feed/drain failure path that today
+    /// only emit `tracing::warn!` lines the user never sees.
+    event_emitter: Arc<dyn MeetingEventEmitter>,
 }
 
 /// Pump task body. Loops on a `PUMP_TICK` cadence: drain each audio
@@ -865,7 +907,14 @@ async fn run_pump(mut ctx: PumpContext) {
                     );
                     // Session is gone (panicked closure dropped it).
                     // Leave the slot None so subsequent ticks skip
-                    // this source.
+                    // this source. Notify the frontend so the panel
+                    // can surface "this source dropped" rather than
+                    // silently rendering "still recording".
+                    ctx.event_emitter.source_failed(
+                        session_id,
+                        &source_label,
+                        "transcription task panicked",
+                    );
                     continue;
                 }
             };
@@ -877,12 +926,20 @@ async fn run_pump(mut ctx: PumpContext) {
             let utterances = match drain_result {
                 Ok(u) => u,
                 Err(e) => {
+                    let reason = format!("{e}");
                     tracing::warn!(
                         error = ?e,
                         session_id,
                         source_kind = source_label,
                         "meeting pump: streaming feed/drain failed for tick"
                     );
+                    // Drop the session so subsequent ticks skip this
+                    // source — keeping a wedged session in the slot
+                    // would loop the same warning every 500 ms for
+                    // the rest of the meeting.
+                    ctx.streaming_sessions[i] = None;
+                    ctx.event_emitter
+                        .source_failed(session_id, &source_label, &reason);
                     continue;
                 }
             };
@@ -1146,7 +1203,8 @@ mod tests {
             Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
         let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
         let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
-        SessionManager::new(repo, audio, transcribe)
+        let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
+        SessionManager::new(repo, audio, transcribe, emitter)
     }
 
     #[tokio::test]

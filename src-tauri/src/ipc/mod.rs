@@ -353,6 +353,51 @@ impl AppStateBuilder {
     }
 }
 
+/// Production [`crate::meeting::MeetingEventEmitter`] that wraps a
+/// `tauri::AppHandle` and forwards `source_failed` calls as the
+/// `meeting:source-failed` Tauri event. The frontend listens via
+/// `@tauri-apps/api/event::listen`. Wire shape is `{ sessionId,
+/// sourceKind, reason }` (camelCase) so JS consumers don't have to
+/// guess at the field convention.
+///
+/// Lives in `ipc/mod.rs` rather than `meeting/manager.rs` so the
+/// meeting module stays Tauri-agnostic — that module's tests can
+/// construct a `SessionManager` without importing `tauri::*`.
+struct AppHandleMeetingEventEmitter {
+    app: tauri::AppHandle,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeetingSourceFailedPayload<'a> {
+    session_id: i64,
+    source_kind: &'a str,
+    reason: &'a str,
+}
+
+impl crate::meeting::MeetingEventEmitter for AppHandleMeetingEventEmitter {
+    fn source_failed(&self, session_id: i64, source_kind: &str, reason: &str) {
+        use tauri::Emitter;
+        let payload = MeetingSourceFailedPayload {
+            session_id,
+            source_kind,
+            reason,
+        };
+        if let Err(e) = self.app.emit("meeting:source-failed", &payload) {
+            // Best-effort: a failed emit shouldn't crash the pump
+            // (caller is on the pump's tokio task). The listener
+            // not yet being attached is the most likely cause and
+            // is not actionable here.
+            tracing::warn!(
+                error = ?e,
+                session_id,
+                source_kind,
+                "failed to emit meeting:source-failed event"
+            );
+        }
+    }
+}
+
 impl AppState {
     /// Build the state used in production: the cpal audio backend, the
     /// SQLite-backed history repository at `db_path`, plus (when the
@@ -370,7 +415,11 @@ impl AppState {
     /// spike unblocked without committing to a settings schema we'd have
     /// to migrate later. The eventual replacement is `settings.json` in
     /// the platform app-data directory, populated by the in-app picker.
-    pub async fn build_default(db_path: &Path, models_dir: PathBuf) -> Result<Self> {
+    pub async fn build_default(
+        app: tauri::AppHandle,
+        db_path: &Path,
+        models_dir: PathBuf,
+    ) -> Result<Self> {
         let audio: Arc<dyn AudioCapture> = Arc::new(CpalAudioCapture::new());
 
         let db = SqliteDatabase::open(db_path)
@@ -403,10 +452,13 @@ impl AppState {
         // automatically — both AppState and the manager hold clones
         // of the same Arc.
         let transcribe_shared = Arc::new(Mutex::new(transcribe));
+        let event_emitter: Arc<dyn crate::meeting::MeetingEventEmitter> =
+            Arc::new(AppHandleMeetingEventEmitter { app: app.clone() });
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
             Arc::clone(&transcribe_shared),
+            event_emitter,
         ));
 
         AppStateBuilder::new()
