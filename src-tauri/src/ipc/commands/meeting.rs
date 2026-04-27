@@ -28,8 +28,9 @@ use crate::ipc::AppState;
 
 use super::{IpcError, IpcResult};
 
-/// List all meeting sessions, newest-first. Empty list while #110
-/// hasn't shipped yet (no streaming pump → no sessions).
+/// List all meeting sessions, newest-first. Returns whatever the
+/// streaming pump (#122 Phase 2 / #141) has persisted — empty for
+/// a fresh install, populated after the user has run a meeting.
 #[tauri::command]
 pub async fn meeting_sessions_list(
     state: State<'_, AppState>,
