@@ -293,15 +293,24 @@
     return out;
   });
 
-  // Active session row for live-status reads (utterance counter,
-  // source label). The page re-fetches `sessions` after each
-  // utterance lands, so this row's `utteranceCount` is the live
-  // count without any extra wiring.
+  // Active session row, used for non-counter metadata (the row
+  // exists to stay parallel to historical session rendering — no
+  // counter reads here).
   let activeSession = $derived(
     activeSessionId === null
       ? null
       : sessions.find((s) => s.id === activeSessionId) ?? null,
   );
+
+  // The existing `liveUtteranceCount` $derived (further down,
+  // alongside the auto-scroll effect) is the load-bearing counter
+  // for the in-session UI: reads `activeDetail.utterances.length`
+  // every poll tick. The user-facing counter render gates on
+  // `activeDetail !== null` to avoid flashing "0 utterances so
+  // far" before the first poll lands. Pre-this-fix the counter
+  // read `activeSession.utteranceCount` which only refreshed on
+  // session start/stop; the pump's mid-session writes were
+  // visible in the live transcript but invisible to the counter.
 
   // Validation for the Start button: at least one source must
   // resolve to something the backend can capture. Mic-with-no-mic
@@ -510,9 +519,9 @@
           <span class="meeting-active-dot" aria-hidden="true"></span>
           Session in progress
         </span>
-        {#if activeSession}
+        {#if activeDetail}
           <span class="meeting-utterance-count" aria-live="off">
-            {activeSession.utteranceCount} utterance{activeSession.utteranceCount === 1
+            {liveUtteranceCount} utterance{liveUtteranceCount === 1
               ? ""
               : "s"} so far
           </span>
@@ -550,8 +559,8 @@
         <div class="meeting-stop-confirm" role="group" aria-label="Confirm stop session">
           <span class="meeting-stop-confirm-prompt">
             End session?
-            {#if activeSession}
-              {activeSession.utteranceCount} utterance{activeSession.utteranceCount === 1
+            {#if activeDetail}
+              {liveUtteranceCount} utterance{liveUtteranceCount === 1
                 ? ""
                 : "s"} captured.
             {/if}
