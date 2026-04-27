@@ -499,8 +499,8 @@
   let permStatuses = $state<PermissionStatuses | null>(null);
   // True iff all three perms (mic, screen recording, input
   // monitoring) report `granted`. When true, the hint becomes a
-  // small green "Permissions OK" pill instead of the longer
-  // yellow recovery card.
+  // small green "Permissions OK" pill instead of the yellow
+  // recovery card.
   let allPermsGranted = $derived(
     !!permStatuses
       && permStatuses.microphone === "granted"
@@ -510,6 +510,19 @@
       // acceptable. Only `denied` for mic / screen recording or a
       // sticky `denied` for input monitoring downgrades the pill.
       && permStatuses.inputMonitoring !== "denied",
+  );
+
+  // True iff something is *actually* wrong (any perm flagged
+  // `denied`). On a fresh install nothing is `denied` yet —
+  // everything's `not-determined` — so showing a yellow "Trouble?"
+  // hint pre-emptively reads as "something is broken" when nothing
+  // is. The Dictation hint should only appear when there's
+  // something the user can act on.
+  let anyPermsDenied = $derived(
+    !!permStatuses
+      && (permStatuses.microphone === "denied"
+        || permStatuses.screenRecording === "denied"
+        || permStatuses.inputMonitoring === "denied"),
   );
 
   // Meeting Mode (Phase C scaffold; refs #33 / #109). The repo is
@@ -916,13 +929,14 @@
               onclick={() => void openSettingsTab("permissions")}
             >View</button>
           </p>
-        {:else}
+        {:else if anyPermsDenied}
           <!--
-            Yellow hint: at least one permission is denied or not
-            yet determined. Watch-out from the IA redesign brief:
-            "don't make the Permissions diagnostic a buried
-            settings pane." This deep-links into the Settings
-            window's Permissions tab.
+            Yellow hint: at least one permission is *denied* (a
+            real, actionable problem). On a fresh install where
+            mic / screen-recording are still `not-determined`
+            because the user hasn't tried recording yet, the hint
+            stays hidden — pre-emptively asking "Trouble?" reads
+            as "something is broken" when nothing actually is.
           -->
           <p class="permissions-hint" data-testid="perms-hint-yellow">
             On macOS, dictation needs Microphone access (and Screen
