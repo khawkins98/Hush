@@ -86,6 +86,30 @@ jobs:
           echo "CFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
 
+      # ScreenCaptureKit links libSwift_Concurrency at runtime. The
+      # screencapturekit crate's build script bakes rpaths pointing at
+      # `/Library/Developer/CommandLineTools/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx`,
+      # but the GH Actions macos-latest runner has Xcode at
+      # `/Applications/Xcode.app/...` and the CommandLineTools path
+      # isn't populated with the Swift dylibs there. Test binaries
+      # SIGABRT at startup with `Library not loaded:
+      # @rpath/libswift_Concurrency.dylib` unless we point dyld at
+      # the Xcode toolchain explicitly.
+      #
+      # Production app bundles inherit the Swift runtime from the
+      # macOS dyld shared cache and are unaffected — this is purely
+      # a `cargo test` quirk specific to the GH runner image.
+      - name: Set Swift runtime dylib path (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          SWIFT_PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx"
+          if [ -d "$SWIFT_PATH" ]; then
+            echo "DYLD_FALLBACK_LIBRARY_PATH=$SWIFT_PATH" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Swift runtime path not found at $SWIFT_PATH; SCK-linked test binaries may fail to load"
+          fi
+
       # Clippy on the default feature set first — fast and covers the bulk of
       # the code. The `whisper` feature is exercised separately below; both
       # invocations run with the macOS arch flags set above so whisper.cpp's

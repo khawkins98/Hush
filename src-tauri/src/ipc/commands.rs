@@ -1137,17 +1137,26 @@ pub fn meeting_active_session(state: State<'_, AppState>) -> ActiveMeetingSessio
 /// active — the user must close the existing one first.
 #[tauri::command]
 pub async fn meeting_start_manual(
+    app: AppHandle,
     state: State<'_, AppState>,
     sources: Vec<AudioSource>,
     app_name: Option<String>,
 ) -> IpcResult<crate::meeting::MeetingSession> {
     let sources = sanitise_meeting_sources(sources)
         .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))?;
-    state
+    let session = state
         .meeting_manager
         .start_manual(sources, app_name)
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))?;
+    // Show the recording HUD so the user has the same at-a-glance
+    // "audio is being captured" cue meeting mode that the dictation
+    // hot path already provides — best-effort, a HUD-show failure
+    // shouldn't fail the start of an otherwise-running session.
+    if let Err(e) = crate::hud::show(&app) {
+        tracing::error!(error = ?e, "failed to show recording HUD on meeting start");
+    }
+    Ok(session)
 }
 
 /// Maximum number of capture sources a single meeting may declare.
@@ -1215,7 +1224,15 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 /// stale double-click reaches here as a recoverable error rather
 /// than a panic.
 #[tauri::command]
-pub async fn meeting_stop_manual(state: State<'_, AppState>) -> IpcResult<()> {
+pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
+    // Hide the HUD up front — the user clicked Stop and expects the
+    // overlay gone now, not after the pump's final-chunk drain
+    // (which can take several seconds while whisper finishes the
+    // tail of the session). Hiding before the await also matches
+    // the dictation hot path's order of effects.
+    if let Err(e) = crate::hud::hide(&app) {
+        tracing::error!(error = ?e, "failed to hide recording HUD on meeting stop");
+    }
     state
         .meeting_manager
         .stop_manual()
