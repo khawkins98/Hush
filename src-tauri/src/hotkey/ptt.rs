@@ -676,6 +676,9 @@ mod tests {
     use std::time::SystemTime;
 
     fn mk_event(event_type: EventType) -> Event {
+        // `extra_data` is only present on macOS / Windows in the
+        // fufesou/rdev fork — Linux Event has no such field. Gate
+        // the literal so the test compiles on every CI target.
         Event {
             time: SystemTime::now(),
             unicode: None,
@@ -683,6 +686,7 @@ mod tests {
             platform_code: 0,
             position_code: 0,
             usb_hid: 0,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             extra_data: 0,
         }
     }
