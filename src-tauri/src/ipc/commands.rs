@@ -1354,14 +1354,15 @@ const MACOS_BUNDLE_ID: &str = "com.khawkins.hush";
 
 /// What [`diagnose_macos_permissions`] returns to the frontend.
 ///
-/// Best-effort diagnostic snapshot. macOS deliberately does not expose
-/// programmatic read access to TCC grant state, so this struct cannot
-/// say "Microphone is granted" with certainty without actually opening
-/// a stream and observing whether samples flow — which would trigger
-/// the OS prompt as a side effect, defeating the diagnostic purpose.
-/// Instead the struct tells the user what bundle id is in play (so they
-/// can confirm the right entry in System Settings) and surfaces the
-/// reset path as an actionable next step.
+/// Snapshot of the bundle id, human-readable recovery hints, and (as
+/// of #166) the live grant state of each TCC permission Hush touches.
+/// The grant state comes from
+/// [`crate::macos_perms::read_all`], which uses
+/// `AVCaptureDevice.authorizationStatusForMediaType:` (mic),
+/// `CGPreflightScreenCaptureAccess()` (screen recording), and
+/// `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)` (input
+/// monitoring). All three are side-effect-free reads — calling them
+/// does NOT trigger the OS prompt.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MacosPermissionDiagnostic {
@@ -1372,7 +1373,8 @@ pub struct MacosPermissionDiagnostic {
     /// `docs/macos-permissions.md` for the full picture.
     pub bundle_id: String,
     /// Human-readable hint about how to verify Microphone access.
-    /// Not a probe — see the struct doc for why we don't probe.
+    /// Stays even when `statuses.microphone == Granted` so the user
+    /// has the recovery copy if they later need to reset.
     pub microphone_hint: String,
     /// Human-readable hint about Input Monitoring (PTT). On macOS 26+
     /// PTT is disabled by default (#69) so this hint covers both the
@@ -1383,6 +1385,10 @@ pub struct MacosPermissionDiagnostic {
     /// elsewhere. The frontend uses this to decide whether to show
     /// the Reset button at all.
     pub can_reset: bool,
+    /// Live grant state for each TCC permission. Drives the green /
+    /// yellow indicator pills in the Settings → Permissions tab and
+    /// the Dictation-tab status hint.
+    pub statuses: crate::macos_perms::PermissionStatuses,
 }
 
 /// Best-effort diagnostic snapshot for the macOS permission story.
@@ -1400,6 +1406,8 @@ pub struct MacosPermissionDiagnostic {
 /// in-app surface wraps.
 #[tauri::command]
 pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic> {
+    let statuses = crate::macos_perms::read_all();
+
     #[cfg(target_os = "macos")]
     {
         Ok(MacosPermissionDiagnostic {
@@ -1423,6 +1431,7 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
                  keeps working without this permission."
                     .to_owned(),
             can_reset: true,
+            statuses,
         })
     }
 
@@ -1437,6 +1446,7 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
             input_monitoring_hint: "Input Monitoring is a macOS concept; not applicable here."
                 .to_owned(),
             can_reset: false,
+            statuses,
         })
     }
 }

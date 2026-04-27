@@ -115,4 +115,11 @@ hound = "3.5"
 # system audio" checkbox stayed disabled, which the user (Ken) hit
 # in hands-on testing.
 screencapturekit = "1.5.4"
+# Direct dep of the same objc2 already pulled in transitively by
+# screencapturekit, used by `macos_perms` to call
+# `+[AVCaptureDevice authorizationStatusForMediaType:]` for the
+# Microphone TCC status read. CoreGraphics (Screen Recording) and
+# IOKit (Input Monitoring) are reached via plain `extern "C"` and
+# don't need a binding crate.
+objc2 = "0.6"
 

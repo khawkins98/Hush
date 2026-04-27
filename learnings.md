@@ -657,3 +657,17 @@ After dropping the `screencapturekit` Cargo feature flag (#144) and adding `NSSc
 2. **Mic ≠ Screen Recording in dev mode.** A workflow that relies on parent-process attribution (mic capture working because iTerm has the grant) gives a misleading "everything works" signal. Test the strict-attribution paths (SCK) against a real `.app` from day one rather than fighting the dev binary.
 
 3. **The dev-binary path is a separate sandbox identity per `target/`.** macOS keys TCC by absolute binary path for unsigned binaries. A `cargo clean` + rebuild keeps the same path, so grants persist. Moving `target/` does invalidate. Worth documenting alongside the `.cargo/config.toml` rpath fix (also from 2026-04-27, see entry above) — both are "how dev binaries are different from production app bundles" caveats.
+
+---
+
+## 2026-04-27 — macOS TCC status IS readable for the three categories Hush touches
+
+Earlier comments (in `ipc/commands.rs` and elsewhere) claimed macOS doesn't expose programmatic read access to TCC grant state, so `diagnose_macos_permissions` could only emit hint copy. That's true for *some* TCC buckets — Accessibility, Full Disk Access, Calendar, etc. — but **false for the three Hush actually cares about**:
+
+- **Microphone** — `+[AVCaptureDevice authorizationStatusForMediaType:]` returns `AVAuthorizationStatus` (NotDetermined/Restricted/Denied/Authorized) without prompting.
+- **Screen Recording** — `CGPreflightScreenCaptureAccess()` (CoreGraphics) returns a Bool without prompting. There's no NotDetermined variant; "false" covers both "never asked" and "explicitly denied", which the UI can normalise.
+- **Input Monitoring** — `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)` (IOKit) returns `IOHIDAccessType` (Granted/Unknown/Denied) without prompting.
+
+All three are passive reads — calling them does NOT trigger the OS dialog. Implemented in `src-tauri/src/macos_perms/mod.rs` (#166). The frontend uses these to render a green "Permissions OK" pill on the Dictation tab when everything is granted, and a per-permission status list in Settings → Permissions.
+
+**Takeaway:** when a TCC category genuinely matters to the app's UX (Hush leans heavily on Microphone + Screen Recording), check Apple's framework headers before assuming "programmatic read isn't possible." The blanket "TCC is opaque" reputation comes from the buckets where it really is opaque, not from the privacy framework as a whole.

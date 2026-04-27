@@ -56,7 +56,10 @@
     | "permissions"
     | "about";
 
-  let active = $state<SettingsTab>("model");
+  // Default landing tab. "general" matches the macOS Settings
+  // convention; deep-links from the main window override via the
+  // `settings:goto-tab` listener registered in `onMount`.
+  let active = $state<SettingsTab>("general");
 
   const tabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
     { key: "general", label: "General", testId: "settings-tab-general" },
@@ -78,6 +81,7 @@
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenDownloadFailed: UnlistenFn | null = null;
+  let unlistenGotoTab: UnlistenFn | null = null;
 
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
@@ -328,6 +332,24 @@
       downloading = next;
     });
 
+    // Deep-link from the main window's "Open the Permissions
+    // diagnostic" link / future menu items. Payload is the tab key
+    // — silently ignored if it isn't one we know, so future tabs
+    // added on the main window don't crash a stale settings build.
+    unlistenGotoTab = await listen<string>("settings:goto-tab", (e) => {
+      const target = e.payload;
+      if (
+        target === "general" ||
+        target === "model" ||
+        target === "vocabulary" ||
+        target === "replacements" ||
+        target === "permissions" ||
+        target === "about"
+      ) {
+        active = target;
+      }
+    });
+
     await Promise.all([
       loadModels(),
       loadVocabulary(),
@@ -340,6 +362,7 @@
     unlistenDownloadProgress?.();
     unlistenDownloadDone?.();
     unlistenDownloadFailed?.();
+    unlistenGotoTab?.();
   });
 </script>
 
@@ -404,6 +427,31 @@
       />
     {:else if active === "permissions"}
       {#if macosDiagnostic}
+        <h1 class="tab-title">Permissions</h1>
+        <ul class="perm-status-list" aria-label="Permission status summary">
+          {#each [
+            { key: "microphone", label: "Microphone", status: macosDiagnostic.statuses.microphone, why: "Required for dictation." },
+            { key: "screenRecording", label: "Screen Recording", status: macosDiagnostic.statuses.screenRecording, why: "Required for system-audio capture in meetings." },
+            { key: "inputMonitoring", label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Optional — only used if you opt into push-to-talk via HUSH_PTT_ENABLE=1." },
+          ] as row (row.key)}
+            <li class="perm-row" data-perm={row.key} data-status={row.status}>
+              <span class="perm-dot" aria-hidden="true"></span>
+              <span class="perm-name">{row.label}</span>
+              <span class="perm-status-label">
+                {#if row.status === "granted"}Granted
+                {:else if row.status === "denied"}Denied
+                {:else if row.status === "not-determined"}Not yet granted
+                {:else}Not applicable
+                {/if}
+              </span>
+              <span class="perm-why">{row.why}</span>
+            </li>
+          {/each}
+        </ul>
+        <p class="perm-recovery-intro">
+          Need to fix something? The diagnostic below has the
+          recovery details and a one-click <code>tccutil reset</code>.
+        </p>
         <MacosDiagnosticPanel
           {macosDiagnostic}
           bind:macosDiagnosticOpen
@@ -525,6 +573,97 @@
     font-size: 0.95rem;
     line-height: 1.5;
     max-width: 36rem;
+  }
+
+  .perm-status-list {
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    max-width: 44rem;
+  }
+  .perm-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "dot name status"
+      "dot why  why";
+    gap: 0.15rem 0.6rem;
+    align-items: center;
+    padding: 0.65rem 0.85rem;
+    background-color: white;
+    border: 1px solid #e1e1e6;
+    border-radius: 8px;
+  }
+  .perm-dot {
+    grid-area: dot;
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+    background-color: #b8b8c0;
+    box-shadow: 0 0 0 2px rgba(184, 184, 192, 0.18);
+  }
+  .perm-row[data-status="granted"] .perm-dot {
+    background-color: #2eaa53;
+    box-shadow: 0 0 0 2px rgba(46, 170, 83, 0.18);
+  }
+  .perm-row[data-status="denied"] .perm-dot {
+    background-color: #d83a3a;
+    box-shadow: 0 0 0 2px rgba(216, 58, 58, 0.18);
+  }
+  .perm-row[data-status="not-determined"] .perm-dot {
+    background-color: #e8a72b;
+    box-shadow: 0 0 0 2px rgba(232, 167, 43, 0.18);
+  }
+  .perm-name {
+    grid-area: name;
+    font-weight: 600;
+    color: #222;
+  }
+  .perm-status-label {
+    grid-area: status;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .perm-row[data-status="granted"] .perm-status-label { color: #2a6b3c; }
+  .perm-row[data-status="denied"] .perm-status-label { color: #8a1f1f; }
+  .perm-row[data-status="not-determined"] .perm-status-label { color: #8a5a00; }
+  .perm-why {
+    grid-area: why;
+    font-size: 0.82rem;
+    color: #666;
+  }
+  .perm-recovery-intro {
+    margin: 0 0 1rem;
+    font-size: 0.85rem;
+    color: #555;
+    max-width: 44rem;
+  }
+  .perm-recovery-intro code {
+    background-color: #f0f0f3;
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    font-size: 0.92em;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .perm-row {
+      background-color: #2a2a2d;
+      border-color: #38383b;
+    }
+    .perm-name { color: #e8e8e8; }
+    .perm-why { color: #a8a8a8; }
+    .perm-recovery-intro { color: #b0b0b0; }
+    .perm-recovery-intro code {
+      background-color: #38383b;
+      color: #d8d8d8;
+    }
   }
 
   kbd {
