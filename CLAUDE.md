@@ -8,6 +8,16 @@ Hush is a Tauri 2 desktop app: Rust backend (`src-tauri/`) + SvelteKit / Svelte 
 
 Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scope — don't add backwards-compat shims or `@available`-style version guards. Linux and Windows compile cleanly via CI but are not hands-on tested.
 
+### Three Tauri windows
+
+Post-IA-redesign (#163–#167), the app runs three windows:
+
+- **`main`** — the primary window. Sidebar nav with Dictation / Meetings / History sections. Loads `/`.
+- **`settings`** — standalone Settings window opened via ⌘, on macOS or the sidebar's "Settings" footer button. Hosts the model picker, vocabulary, replacements, macOS permissions diagnostic, autostart toggle, hotkey display, and the PTT editor. Hidden by default; the only path to show is `crate::settings_window::show()`. Loads `/settings`.
+- **`hud`** — borderless transparent always-on-top pill that shows during recording. No interactivity beyond drag + dismiss. Loads `/hud`.
+
+Each window has its own capability file in `src-tauri/capabilities/` (`default.json` for main, `settings.json`, `hud.json`). On macOS the native menu bar lives in `src-tauri/src/app_menu/` — `Hush → Settings…` (⌘,), `View → Dictation/Meetings/History` (⌘1/⌘2/⌘3). Menu events emit `menu:goto-section` to the main window or call `settings_window::show` directly.
+
 ## Common commands
 
 ```bash
@@ -91,12 +101,17 @@ State machine: `Mutex<SessionState>` where `SessionState` is `Idle | Opening | A
 
 A `#[tauri::command]` lives in **four** places that must stay aligned. CI catches Rust-only and TS-only breaks; it cannot catch shape mismatches between them — that's a hands-on responsibility. Any time you add or change a command:
 
-1. **Rust struct + handler** in `src-tauri/src/ipc/commands.rs` with `#[serde(rename_all = "camelCase")]`.
-2. **Register** in `src-tauri/src/lib.rs` inside `tauri::generate_handler![...]` using the **full module path** (`ipc::commands::my_command`) — `pub use` does not carry the macro's hidden `__cmd__<name>` symbol.
+1. **Rust struct + handler** in `src-tauri/src/ipc/commands/mod.rs` (or a domain submodule like `commands/meeting.rs`) with `#[serde(rename_all = "camelCase")]`.
+2. **Register** in `src-tauri/src/lib.rs` inside `tauri::generate_handler![...]` using the **full module path**:
+   - Top-level commands: `ipc::commands::my_command`.
+   - Submodule commands: `ipc::commands::meeting::meeting_start_manual`.
+   - `pub use` re-exports do **not** carry the macro's hidden `__cmd__<name>` symbol — see `learnings.md` 2026-04-25 for why we ate that lesson once already. The header of `commands/mod.rs` cites this so future contributors don't try.
 3. **TypeScript type** in `src/lib/types.ts` (or inline in `+page.svelte` if scoped to the page), then `invoke<MyResult>("my_command", ...)`.
 4. **Playwright mock** in `tests/e2e/_mock.ts` with a default handler whose field shape mirrors the Rust struct exactly. Mocks are serialized via `toString()` and rebuilt in the page context, so they can't capture closure variables — any per-test counters must go through `page.exposeFunction`.
 
 A new `IpcError` variant also needs the frontend's `formatError` switch in `+page.svelte` updated.
+
+A new IPC the **settings window** needs to invoke isn't automatically allowed by the `default` capability — the settings window has its own `capabilities/settings.json`. Custom `#[tauri::command]` functions don't need permission entries, but Tauri plugin commands (autostart, clipboard, etc.) do. Add explicitly.
 
 ## Dev-launch smoke (required for startup-touching changes)
 
@@ -107,6 +122,8 @@ CI does not run a real Tauri runtime. A panic at app boot (plugin init, capabili
 - `src-tauri/Cargo.toml` — adding/removing a Tauri plugin dep, **or making a transitive dep unconditional** (e.g. dropping a feature flag that gated a crate which links system frameworks; the crate's build-script-baked rpaths don't propagate from a transitive dep, see `learnings.md` 2026-04-27).
 - `src-tauri/.cargo/config.toml` (link-arg / rpath changes)
 - `src-tauri/capabilities/*.json`
+- `src-tauri/src/app_menu/` (native macOS menu — a malformed `MenuBuilder` chain panics during `setup`).
+- `src-tauri/src/settings_window/` (window-show path — referencing a label not in `tauri.conf.json` is a runtime error).
 - Anything that adds or removes a `.plugin(...)` call
 
 ## macOS TCC dev-binary quirk
@@ -136,12 +153,29 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 
 ## Where things live
 
-- `src-tauri/src/audio/` — cpal mic + SCK system-audio + the `AudioSession` handle trait.
-- `src-tauri/src/transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (host-restricted to huggingface.co, SHA-256 verified), resample helpers, model catalog.
-- `src-tauri/src/meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection.
-- `src-tauri/src/ipc/` — `AppState`, `AppStateBuilder`, `IpcError`, every `#[tauri::command]`. `commands.rs` is large (~1.5k LOC); keep new helpers grouped by concern. Refactor tracked under #82.
-- `src-tauri/src/hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey + `rdev` for push-to-talk. PTT is **opt-in on macOS** via `HUSH_PTT_ENABLE=1`. The macOS-26 abort that originally drove the default-off (rdev calling `TISGetInputSourceProperty` from a non-main thread, hitting `dispatch_assert_queue_fail`) is fixed by pinning rdev to [fufesou's fork](https://github.com/fufesou/rdev) — the one RustDesk ships — which attaches the CGEventTap to `CFRunLoopGetMain()` so the callback runs on main and TSM is happy. Narsil's upstream PR #147 was incomplete (it only fixed the `send` path); the env gate stays so Input Monitoring is granted deliberately, not on first launch.
-- `src-tauri/src/hud/` — borderless transparent always-on-top recording HUD with a level meter pump.
-- `src/lib/*.svelte` — Svelte 5 components (runes-based; `$state`, `$derived`, `$effect`, `$bindable`, `$props()`).
-- `src/routes/+page.svelte` — main page; orchestrates state for every panel. Large (~1k LOC) but cohesive.
-- `tests/e2e/` — Playwright specs against `HUSH_E2E=1` mode (vite swaps `@tauri-apps/api/{core,event}` for in-tree stubs). Helper at `tests/e2e/_mock.ts`.
+### Backend (`src-tauri/src/`)
+
+- `audio/` — cpal mic + SCK system-audio + the `AudioSession` handle trait.
+- `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (host-restricted to huggingface.co, SHA-256 verified), resample helpers, model catalog.
+- `meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection.
+- `ipc/` — `AppState`, `AppStateBuilder`, `IpcError`. `commands/` is now a directory: `mod.rs` holds dictation / history / replacements / vocabulary / models / app commands; `commands/meeting.rs` holds the meeting-mode commands + types + sanitiser (extracted under #82). New domain-cohesive command groups should follow the same submodule pattern.
+- `hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey + `rdev` for push-to-talk. PTT exposes a configurable combo (set of keys held simultaneously) via `PttCombo` and a `ComboMatcher` state machine; combo + Enabled persist to settings DB and are editable in Settings → General → Hotkeys. PTT is **opt-in on macOS** — toggling Enabled spawns the listener on demand (which is when the macOS Input Monitoring permission prompt fires). The macOS-26 abort that originally drove the default-off (rdev calling `TISGetInputSourceProperty` from a non-main thread, hitting `dispatch_assert_queue_fail`) is fixed by pinning rdev to [fufesou's fork](https://github.com/fufesou/rdev) — the one RustDesk ships — which attaches the CGEventTap to `CFRunLoopGetMain()`. Narsil's upstream PR #147 was incomplete (it only fixed the `send` path).
+- `hud/` — borderless transparent always-on-top recording HUD with drag (`data-tauri-drag-region`) + dismiss button + level meter pump.
+- `settings_window/` — `show()` / `hide()` helpers for the standalone Settings window. Symmetric with `hud/`. Window itself is declared in `tauri.conf.json`.
+- `app_menu/` — native macOS menu bar. No-op on non-macOS. Menu events emit `menu:goto-section` to the main window or call `settings_window::show` directly.
+- `macos_perms/` — programmatic TCC permission status reads via AVFoundation / CoreGraphics / IOKit. Used by `diagnose_macos_permissions` to surface granted/denied/not-determined per permission without triggering OS prompts.
+
+### Frontend (`src/`)
+
+- `lib/*.svelte` — Svelte 5 components (runes-based; `$state`, `$derived`, `$effect`, `$bindable`, `$props()`). `AppSidebar.svelte`, `PttHotkeyEditor.svelte`, plus the panel components (`HistoryPanel`, `MeetingSessionsPanel`, `ModelPickerPanel`, `VocabularyPanel`, `ReplacementsPanel`, `MacosDiagnosticPanel`, `ControlsSection`, `ResultBlock`).
+- `lib/format.ts`, `lib/types.ts` — shared format helpers and TS types mirroring backend serde shapes (camelCase).
+- `routes/+page.svelte` — main window; orchestrates Dictation / Meetings / History sections. ~1.2k LOC; tracked under #156. Does NOT own model picker, vocabulary, replacements, or macOS-permissions diagnostic state — those moved to the Settings window in Phase 3 of the IA redesign.
+- `routes/settings/+page.svelte` — standalone Settings window. State-owner for the moved panels. Cross-window invalidation is event-driven where it matters (`model:download-done` is broadcast; replacements/vocab changes are picked up at the next `start_dictation`).
+- `routes/hud/+page.svelte` — recording HUD pill. Loaded into the secondary `hud` window.
+- `app.html` — page shell.
+- `static/app-icon.png` / `app-icon@2x.png` — sourced from `src-tauri/icons/` and used by the sidebar brand chip.
+
+### Other
+
+- `tests/e2e/` — Playwright specs against `HUSH_E2E=1` mode (vite swaps `@tauri-apps/api/{core,event}` for in-tree stubs). Helper at `tests/e2e/_mock.ts`. Sidebar nav uses `gotoSection(page, "meetings" | "history")` to switch tabs in tests.
+- `src-tauri/capabilities/` — per-window Tauri capability files: `default.json` (main), `settings.json`, `hud.json`. Adding a new permission to a window is deliberate; every grant widens that window's blast radius.
