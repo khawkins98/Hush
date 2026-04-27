@@ -20,6 +20,31 @@
       the same.
     -->
 
+    <!--
+      `CFBundleIdentifier` matches `tauri.conf.json`'s `identifier`.
+      Tauri's auto-merged keys cover CFBundleName / CFBundleVersion /
+      CFBundleShortVersionString but not the identifier — without it,
+      macOS TCC has no per-app key to track the dev binary by, so the
+      app never registers for prompting and never appears in the
+      Privacy & Security lists. Adding it here puts the dev binary on
+      the same TCC accounting as the production .app bundle would.
+      Even with this in place macOS still attributes some requests to
+      the parent process (iTerm / Terminal) for unsigned bare
+      binaries; the production bundle path doesn't have that quirk.
+      For Screen Recording specifically, prefer testing against
+      `cargo tauri build --debug`'s output `.app` rather than the
+      bare dev binary.
+    -->
+    <key>CFBundleIdentifier</key>
+    <string>com.khawkins.hush</string>
+    <!--
+      `CFBundlePackageType` = APPL signals "this is an application
+      bundle" to macOS. With the identifier above it nudges TCC into
+      treating the binary as a first-class app.
+    -->
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
     <key>NSMicrophoneUsageDescription</key>
     <string>Hush captures audio from your microphone to transcribe it locally with Whisper. Audio never leaves your device.</string>
 
