@@ -180,14 +180,7 @@ export type MacosPermissionResetResult = {
 // catalog array's order.
 export type DownloadProgress = { received: number; total: number | null };
 
-// Main-window left-sidebar section identifier (Phase 1 of the IA
-// redesign). "configuration" is the temporary tab that holds the
-// model / vocabulary / replacements panels until Phase 3 lifts
-// them into the standalone Settings window — at which point this
-// union narrows to the remaining three sections and the temp tab
-// goes away.
-export type AppSection =
-  | "dictation"
-  | "meetings"
-  | "history"
-  | "configuration";
+// Main-window left-sidebar section identifier. The standalone
+// Settings window (opened via ⌘, on macOS) is reached separately
+// via `invoke("open_settings")` and is not in this union.
+export type AppSection = "dictation" | "meetings" | "history";

@@ -7,24 +7,16 @@
   import ControlsSection from "$lib/ControlsSection.svelte";
   import ResultBlock from "$lib/ResultBlock.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
-  import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
-  import VocabularyPanel from "$lib/VocabularyPanel.svelte";
-  import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
-  import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
   import MeetingSessionsPanel from "$lib/MeetingSessionsPanel.svelte";
+  import { formatTimestamp } from "$lib/format";
   import type {
     AudioSource,
     AudioSourceListing,
     DictationResult,
-    DownloadProgress,
     HistoryEntry,
     IpcError,
     MacosPermissionDiagnostic,
-    MacosPermissionResetResult,
     ModelCard,
-    ModelSelectNotice,
-    ReplacementRule,
-    VocabularyTerm,
     MeetingSession,
     MeetingSessionDetail,
   } from "$lib/types";
@@ -80,23 +72,14 @@
   // inserted a new row).
   let historyVersion = $state(0);
 
-  let replacements = $state<ReplacementRule[]>([]);
-  let replacementsLoaded = $state(false);
-  let replacementsError = $state<string | null>(null);
-  let newFind = $state("");
-  let newReplace = $state("");
-  let findInputEl = $state<HTMLInputElement | null>(null);
-
-  let vocabulary = $state<VocabularyTerm[]>([]);
-  let vocabularyLoaded = $state(false);
-  let vocabularyError = $state<string | null>(null);
-  let newVocab = $state("");
-  let vocabInputEl = $state<HTMLInputElement | null>(null);
-
+  // Models state on the main window is read-only and used solely
+  // for the "no model installed" banner on the Dictation tab. The
+  // Settings window owns the full picker (download / select /
+  // remove). We keep just enough state here to drive
+  // `noModelInstalled` and refresh on the broadcast
+  // `model:download-done` event.
   let models = $state<ModelCard[]>([]);
   let modelsLoaded = $state(false);
-  let modelsError = $state<string | null>(null);
-  let modelsRestartNotice = $state<ModelSelectNotice>(null);
 
   // First-run welcome flow. Renders on the first launch (regardless
   // of platform — the welcome explains permissions that exist
@@ -116,19 +99,11 @@
   let firstRunCardEl: HTMLElement | undefined = $state();
   let firstRunPreviousFocus: HTMLElement | null = null;
 
-  // Per-card transient state for the download flow. Two parallel
-  // `Map<id, …>`s keep the per-row status independent of the catalog
-  // array's order, so a `model:download-progress` event for one card
-  // doesn't have to walk the whole list to find its target. The Maps
-  // are intentionally swapped wholesale on each update (`new Map(prev)`)
-  // to trip Svelte's reactivity — Svelte 5 runes don't observe
-  // mutations on built-in Maps.
-  let downloading = $state<Map<string, DownloadProgress>>(new Map());
-  let downloadFailed = $state<Map<string, string>>(new Map());
-
-  let unlistenDownloadProgress: UnlistenFn | null = null;
+  // Listener for the broadcast `model:download-done` event. The
+  // Settings window's picker drives the actual download UX; we only
+  // listen here so the Dictation tab's "no model installed" banner
+  // disappears once a download completes in the other window.
   let unlistenDownloadDone: UnlistenFn | null = null;
-  let unlistenDownloadFailed: UnlistenFn | null = null;
 
   // `recording` is "audio is being captured", `busy` covers both the
   // start handshake AND the post-stop transcription window. Splitting
@@ -204,10 +179,8 @@
     await Promise.all([
       loadSources(),
       refreshHistory(),
-      refreshReplacements(),
-      refreshVocabulary(),
       refreshModels(),
-      loadMacosDiagnostic(),
+      loadMacosCapabilityFlag(),
       refreshMeetingSessions(),
     ]);
 
@@ -231,51 +204,20 @@
       if (
         payload === "dictation" ||
         payload === "meetings" ||
-        payload === "history" ||
-        payload === "configuration"
+        payload === "history"
       ) {
         activeSection = payload;
       }
     });
 
     // Model-download events from the backend. The progress event
-    // fires per-chunk during the download; done / failed are
-    // terminal. The frontend's job is just to mirror these into the
-    // two Maps so the per-card UI can switch between idle / progress /
-    // failed / downloaded states. After `done` we re-fetch the
-    // catalog so the card transitions to "downloaded" without a page
-    // reload.
-    type DownloadProgressEvent = { id: string; bytesReceived: number; bytesTotal: number | null };
-    type DownloadStatusEvent = { id: string; message: string | null };
-
-    unlistenDownloadProgress = await listen<DownloadProgressEvent>(
-      "model:download-progress",
-      (e) => {
-        const next = new Map(downloading);
-        next.set(e.payload.id, {
-          received: e.payload.bytesReceived,
-          total: e.payload.bytesTotal,
-        });
-        downloading = next;
-      }
-    );
-    unlistenDownloadDone = await listen<DownloadStatusEvent>("model:download-done", (e) => {
-      const next = new Map(downloading);
-      next.delete(e.payload.id);
-      downloading = next;
-      // Refresh so the catalog's `isDownloaded` flips for this row.
+    // The Settings window owns the per-card download UI; here we
+    // only listen for `model:download-done` so the Dictation tab's
+    // "no model installed" banner disappears once a download in the
+    // other window completes. Tauri broadcasts events to every
+    // window, so the same backend emit reaches both surfaces.
+    unlistenDownloadDone = await listen<{ id: string }>("model:download-done", () => {
       void refreshModels();
-    });
-    unlistenDownloadFailed = await listen<DownloadStatusEvent>("model:download-failed", (e) => {
-      const nextDownloading = new Map(downloading);
-      nextDownloading.delete(e.payload.id);
-      downloading = nextDownloading;
-      const nextFailed = new Map(downloadFailed);
-      nextFailed.set(
-        e.payload.id,
-        e.payload.message ?? "Download failed for an unspecified reason."
-      );
-      downloadFailed = nextFailed;
     });
 
     // Pump-side per-source failures during a meeting. The backend
@@ -316,9 +258,7 @@
     unlistenMenuGoto?.();
     unlistenPttPress?.();
     unlistenPttRelease?.();
-    unlistenDownloadProgress?.();
     unlistenDownloadDone?.();
-    unlistenDownloadFailed?.();
     unlistenMeetingSourceFailed?.();
   });
 
@@ -450,181 +390,20 @@
     }
   }
 
-  async function refreshReplacements() {
-    replacementsError = null;
-    try {
-      replacements = await invoke<ReplacementRule[]>("replacements_list");
-    } catch (e) {
-      replacementsError = formatError(e);
-    } finally {
-      replacementsLoaded = true;
-    }
-  }
-
-  async function addReplacement(e: Event) {
-    e.preventDefault();
-    if (newFind.trim().length === 0) return; // empty find is a no-op rule
-    try {
-      const created = await invoke<ReplacementRule>("replacement_create", {
-        findText: newFind,
-        replaceText: newReplace,
-        // Default sort_order=0 so the new rule sorts by id (insertion
-        // order). A reorder UI lands when users ask for it.
-        sortOrder: 0,
-      });
-      replacements = [...replacements, created];
-      newFind = "";
-      newReplace = "";
-      // Return focus to the find input so a keyboard-only user can
-      // type the next rule without Tabbing back from the bottom of
-      // the list.
-      findInputEl?.focus();
-    } catch (err) {
-      replacementsError = formatError(err);
-    }
-  }
-
-  async function deleteReplacement(rule: ReplacementRule) {
-    try {
-      await invoke("replacement_delete", { id: rule.id });
-      // Optimistic update; a background refresh would re-align if any
-      // drift, but the trait contract guarantees no-op on missing id so
-      // a re-fetch is unnecessary in the happy path.
-      replacements = replacements.filter((r) => r.id !== rule.id);
-    } catch (err) {
-      replacementsError = formatError(err);
-    }
-  }
-
-  async function refreshVocabulary() {
-    vocabularyError = null;
-    try {
-      vocabulary = await invoke<VocabularyTerm[]>("vocabulary_list");
-    } catch (e) {
-      vocabularyError = formatError(e);
-    } finally {
-      vocabularyLoaded = true;
-    }
-  }
-
-  async function addVocabulary(e: Event) {
-    e.preventDefault();
-    const trimmed = newVocab.trim();
-    if (trimmed.length === 0) return;
-    try {
-      const created = await invoke<VocabularyTerm>("vocabulary_create", {
-        term: trimmed,
-      });
-      vocabulary = [...vocabulary, created];
-      newVocab = "";
-      vocabInputEl?.focus(); // same focus pattern as the replacements form
-    } catch (err) {
-      // Surface unique-constraint violations as a friendlier message
-      // than the raw "UNIQUE constraint failed: dictionary_terms.term"
-      // that bubbles up from sqlx.
-      const formatted = formatError(err);
-      vocabularyError = formatted.toLowerCase().includes("unique")
-        ? `"${trimmed}" is already in your vocabulary.`
-        : formatted;
-    }
-  }
-
-  async function deleteVocabulary(term: VocabularyTerm) {
-    try {
-      await invoke("vocabulary_delete", { id: term.id });
-      vocabulary = vocabulary.filter((t) => t.id !== term.id);
-    } catch (err) {
-      vocabularyError = formatError(err);
-    }
-  }
-
+  // Read-only models refresh — the Settings window owns the picker;
+  // we just need `models` populated enough for the Dictation tab's
+  // "no model installed" banner to derive correctly.
   async function refreshModels() {
-    modelsError = null;
     try {
       models = await invoke<ModelCard[]>("model_list");
     } catch (e) {
-      modelsError = formatError(e);
+      // Silent fail: the banner errs on the side of "show the
+      // Dictation hot path" if the catalog can't load. The user
+      // will hit a real error from `start_dictation` if the
+      // selected model is genuinely missing.
+      console.warn("[hush] model_list failed on main window", e);
     } finally {
       modelsLoaded = true;
-    }
-  }
-
-  async function selectModel(card: ModelCard) {
-    try {
-      const result = await invoke<{ loaded: boolean }>("model_select", { id: card.id });
-      // Local card state moves the Default badge regardless of load
-      // outcome — the selection has persisted either way.
-      models = models.map((m) => ({ ...m, isSelected: m.id === card.id }));
-      // `loaded === true` means the backend hot-swapped to the new
-      // transcriber and the user can record immediately. `false`
-      // means the file isn't on disk yet (or the whisper feature is
-      // off in this build); selection persists, but they need to
-      // Download before they can use it. The notice pill below
-      // branches on this.
-      modelsRestartNotice = result.loaded
-        ? "loaded"
-        : card.isDownloaded
-          ? "needs-restart"
-          : "needs-download";
-    } catch (err) {
-      modelsError = formatError(err);
-    }
-  }
-
-  async function downloadModel(card: ModelCard) {
-    // Clear any previous failure for this card before retrying — keeps
-    // the per-card error chip from sticking around after the user
-    // clicks Try again.
-    if (downloadFailed.has(card.id)) {
-      const next = new Map(downloadFailed);
-      next.delete(card.id);
-      downloadFailed = next;
-    }
-
-    try {
-      await invoke("model_download", { id: card.id });
-      // Only show the optimistic progress chip *after* the backend has
-      // accepted the request (closes the retry-race half of #48).
-      // Pre-invoke optimistic state caused a flash of progress on
-      // synchronous IPC failure (e.g. SHA-256 not configured) — the
-      // chip would appear and disappear in the same tick. Setting it
-      // here means the failure path simply never shows the chip.
-      const next = new Map(downloading);
-      next.set(card.id, { received: 0, total: card.sizeMb * 1024 * 1024 });
-      downloading = next;
-    } catch (err) {
-      // The IpcError::Settings("...SHA-256 not configured...") path
-      // surfaces here. Re-shape into a friendlier per-card message
-      // rather than the raw `settings: ...` from formatError.
-      const formatted = formatError(err);
-      const friendly = formatted.toLowerCase().includes("sha-256")
-        ? `Auto-download is not yet configured for ${card.displayName}. Place ${card.filename} in the models directory manually for now.`
-        : formatted;
-      const fail = new Map(downloadFailed);
-      fail.set(card.id, friendly);
-      downloadFailed = fail;
-    }
-  }
-
-  async function cancelDownload(card: ModelCard) {
-    try {
-      await invoke("model_cancel_download", { id: card.id });
-      // The backend will fire `model:download-failed` with a
-      // "cancelled" message; the existing handler removes the
-      // download chip and shows the error. We do nothing optimistic
-      // here — letting the event flow drive the state keeps a single
-      // source of truth.
-    } catch (err) {
-      modelsError = formatError(err);
-    }
-  }
-
-  async function removeModel(card: ModelCard) {
-    try {
-      await invoke("model_remove", { id: card.id });
-      await refreshModels(); // card flips back to "not downloaded"
-    } catch (err) {
-      modelsError = formatError(err);
     }
   }
 
@@ -707,17 +486,13 @@
 
   // ---- macOS permission diagnostic surface ----
   //
-  // Backend: `diagnose_macos_permissions` returns a snapshot (bundle
-  // id, hint copy, and whether reset is supported); `reset_macos_permissions`
-  // wraps the `tccutil reset` recipe documented in
-  // docs/macos-permissions.md. We only show the UI section when the
-  // diagnostic comes back with `canReset: true`, which is currently
-  // macOS-only — non-macOS platforms get the section hidden entirely
-  // rather than greyed-out, since there's nothing actionable.
-  let macosDiagnostic = $state<MacosPermissionDiagnostic | null>(null);
-  let macosDiagnosticOpen = $state(false);
-  let macosResetMessage = $state<string | null>(null);
-  let macosResetting = $state(false);
+  // The macOS Permissions diagnostic + reset UI lives in the
+  // Settings window (Phase 3). Here we keep just a boolean so the
+  // Dictation-tab permissions hint can show/hide based on
+  // `canReset: true` from `diagnose_macos_permissions`. The hint's
+  // button delegates to `open_settings`; the actual diagnostic is
+  // rendered there.
+  let macosCapable = $state(false);
 
   // Meeting Mode (Phase C scaffold; refs #33 / #109). The repo is
   // empty until the streaming pump (#110) starts inserting sessions,
@@ -916,46 +691,17 @@
     }
   }
 
-  async function loadMacosDiagnostic() {
-    if (macosDiagnostic !== null) return; // cached after first load
+  // Just enough of `diagnose_macos_permissions` to drive the
+  // "show the Permissions hint" decision on the Dictation tab. The
+  // full diagnostic (with reset action) renders in the Settings
+  // window now.
+  async function loadMacosCapabilityFlag() {
     try {
-      macosDiagnostic = await invoke<MacosPermissionDiagnostic>(
-        "diagnose_macos_permissions",
-      );
+      const res = await invoke<MacosPermissionDiagnostic>("diagnose_macos_permissions");
+      macosCapable = res.canReset;
     } catch (e) {
       console.error("diagnose_macos_permissions failed:", e);
     }
-  }
-
-  async function runMacosReset() {
-    macosResetting = true;
-    macosResetMessage = null;
-    try {
-      const result = await invoke<MacosPermissionResetResult>(
-        "reset_macos_permissions",
-      );
-      macosResetMessage = result.summary;
-    } catch (e) {
-      macosResetMessage =
-        e instanceof Error ? e.message : "Reset failed — see logs.";
-    } finally {
-      macosResetting = false;
-    }
-  }
-
-  /// Format a byte count as "12.4 MB" — used for download progress.
-  /// We deliberately don't use units smaller than MB because the
-  /// smallest model is ~75 MB; KB resolution would just be noise.
-  function formatMb(bytes: number): string {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-
-  function formatTimestamp(iso: string): string {
-    // The backend stores `YYYY-MM-DDTHH:MM:SSZ`. JS Date parses ISO-8601
-    // natively; locale formatting follows the user's system.
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return iso;
-    return date.toLocaleString();
   }
 
   /// Map a tagged IPC error to a user-facing string. Recovery hints are
@@ -1110,13 +856,15 @@
         <ResultBlock {result} />
       {/if}
 
-      {#if macosDiagnostic?.canReset}
+      {#if macosCapable}
         <!--
           Watch-out from the IA redesign brief: "don't make the
           Permissions diagnostic a buried settings pane." This inline
-          link surfaces it on the Dictation surface so a user hitting
-          a permission failure isn't hunting for it. Phase 3 will
-          re-target this to deep-link into the Settings window.
+          link deep-links into the standalone Settings window so a
+          user hitting a permission failure isn't hunting for it.
+          Phase 4 may add a `settings:goto-tab` event so this opens
+          straight to the Permissions tab; for now it opens Settings
+          and the user clicks Permissions.
         -->
         <p class="permissions-hint">
           On macOS, dictation needs Microphone access (and Screen
@@ -1124,7 +872,7 @@
           <button
             type="button"
             class="link-button"
-            onclick={() => (activeSection = "configuration")}
+            onclick={() => void invoke("open_settings")}
           >Open the Permissions diagnostic</button>.
         </p>
       {/if}
@@ -1169,60 +917,6 @@
         onCopy={copyHistoryEntry}
         onDelete={deleteHistoryEntry}
       />
-    {:else if activeSection === "configuration"}
-      <header class="section-header">
-        <h1>Configuration</h1>
-        <p class="tagline">
-          Temporary home for these panels — they'll move to the
-          standalone Settings window in a follow-up PR.
-        </p>
-      </header>
-
-      <ModelPickerPanel
-        {models}
-        {modelsLoaded}
-        {modelsError}
-        {modelsRestartNotice}
-        {downloading}
-        {downloadFailed}
-        {formatMb}
-        onSelect={selectModel}
-        onDownload={downloadModel}
-        onCancel={cancelDownload}
-        onRemove={removeModel}
-      />
-
-      <VocabularyPanel
-        {vocabulary}
-        {vocabularyLoaded}
-        {vocabularyError}
-        bind:newVocab
-        bind:inputEl={vocabInputEl}
-        onSubmit={addVocabulary}
-        onDelete={deleteVocabulary}
-      />
-
-      <ReplacementsPanel
-        {replacements}
-        {replacementsLoaded}
-        {replacementsError}
-        bind:newFind
-        bind:newReplace
-        bind:inputEl={findInputEl}
-        onSubmit={addReplacement}
-        onDelete={deleteReplacement}
-      />
-
-      {#if macosDiagnostic?.canReset}
-        <MacosDiagnosticPanel
-          {macosDiagnostic}
-          bind:macosDiagnosticOpen
-          {macosResetMessage}
-          {macosResetting}
-          onOpenPrivacyPane={openPrivacyPane}
-          onReset={runMacosReset}
-        />
-      {/if}
     {/if}
   </main>
 </div>

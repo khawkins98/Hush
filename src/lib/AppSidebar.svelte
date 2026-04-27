@@ -50,7 +50,6 @@
     { key: "dictation", label: "Dictation", testId: "nav-dictation" },
     { key: "meetings", label: "Meetings", testId: "nav-meetings" },
     { key: "history", label: "History", testId: "nav-history" },
-    { key: "configuration", label: "Configuration", testId: "nav-configuration" },
   ];
 
   function badgeFor(key: AppSection): string | null {
