@@ -26,7 +26,13 @@
 
 use serde::Serialize;
 
-use super::{IpcError, IpcResult};
+// `IpcError` is only referenced inside `#[cfg(target_os = "macos")]`
+// blocks; the non-macOS Linux/Windows compilations don't need the
+// name in scope. Gate the import accordingly so clippy's
+// `unused-imports` lint stays clean across CI targets.
+#[cfg(target_os = "macos")]
+use super::IpcError;
+use super::IpcResult;
 
 /// Open the macOS System Settings pane the user needs to grant
 /// the named permission. Tauri's shell plugin can launch arbitrary
