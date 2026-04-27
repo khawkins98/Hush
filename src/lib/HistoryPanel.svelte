@@ -26,6 +26,19 @@
     onCopy,
     onDelete,
   }: Props = $props();
+
+  // Render duration as a compact m:ss / s.s string. Sub-second clips
+  // get one decimal so a 0.4s mis-press is visibly different from a
+  // 4s real recording. Anything ≥1 minute uses m:ss.
+  function formatDuration(ms: number | null): string | null {
+    if (ms === null || ms < 0) return null;
+    if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
+    const totalSeconds = Math.round(ms / 1000);
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
 </script>
 
 <section class="history panel-history" aria-labelledby="history-heading">
@@ -72,6 +85,7 @@
           <p class="history-text">{entry.transcript}</p>
           <p class="history-meta">
             {formatTimestamp(entry.createdAt)}
+            {#if formatDuration(entry.durationMs)}· {formatDuration(entry.durationMs)}{/if}
             {#if entry.appName}· {entry.appName}{/if}
             {#if entry.model}· {entry.model}{/if}
           </p>
