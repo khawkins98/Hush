@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Capability for the standalone Hush Settings window. Phase 2 ships the empty shell — only `core:default` is needed for the toolbar-tab navigation. Phase 3 will widen this to allow the settings IPC commands the moved panels invoke (model_*, vocabulary_*, replacement_*, settings_*, diagnose_macos_permissions, etc.). Add permissions deliberately — every grant widens the settings window's blast radius.",
+  "description": "Capability for the standalone Hush Settings window. Phase 3 widens this from the empty Phase-2 shell to allow the IPC commands the moved panels invoke: Model picker (model_*), Vocabulary, Replacements, and the macOS Permissions diagnostic. Strictly tighter than the main window's capability — no dictation IPC, no clipboard, no notifications. Add permissions deliberately; every grant widens the settings window's blast radius.",
   "windows": ["settings"],
   "permissions": [
     "core:default"
