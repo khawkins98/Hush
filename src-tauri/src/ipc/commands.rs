@@ -1283,6 +1283,20 @@ pub async fn mark_first_run_completed(state: State<'_, AppState>) -> IpcResult<(
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Clear the first-run-completed flag so the welcome modal renders
+/// again on the next app launch. Used by the Settings → General
+/// "Show welcome on next launch" affordance — useful for users
+/// who dismissed the welcome too quickly and want to re-read the
+/// permissions explainer.
+#[tauri::command]
+pub async fn reset_first_run(state: State<'_, AppState>) -> IpcResult<()> {
+    state
+        .settings
+        .set(crate::settings::keys::FIRST_RUN_COMPLETED, "false")
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
 /// Open the macOS System Settings pane the user needs to grant
 /// the named permission. Tauri's shell plugin can launch arbitrary
 /// URLs but its capability config requires us to whitelist URL
