@@ -42,6 +42,13 @@ export async function installMocks(
       // ---- first-run / settings ----
       get_first_run_completed: () => true,
       mark_first_run_completed: () => undefined,
+      reset_first_run: () => undefined,
+      // Autostart plugin commands. The plugin's JS layer routes
+      // through `plugin:autostart|<verb>` commands. The settings
+      // window's General tab calls these on mount + toggle.
+      "plugin:autostart|is_enabled": () => false,
+      "plugin:autostart|enable": () => undefined,
+      "plugin:autostart|disable": () => undefined,
       open_macos_privacy_pane: () => undefined,
       open_settings: () => undefined,
       diagnose_macos_permissions: () => ({
