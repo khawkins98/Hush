@@ -37,11 +37,14 @@ npm install
 # Run in dev mode
 npm run tauri dev
 
-# Run with the whisper feature so transcription actually works
-cd src-tauri && cargo tauri dev --features whisper
+# UI-only path: app launches without the Whisper transcription
+# backend so cmake isn't required on the machine. Useful for
+# frontend-only work; transcription returns
+# `IpcError::TranscriptionUnavailable` if you click Start.
+cd src-tauri && cargo tauri dev --no-default-features
 ```
 
-The `whisper` feature is opt-in so a fresh checkout still builds without cmake — useful for contributors working on the UI layer who don't need the model loaded.
+The `whisper` feature is **default-on** as of 2026-04-26 so a vanilla `npm run tauri dev` ships transcription. Contributors who don't have cmake (or who only need the UI layer) opt out with `--no-default-features`.
 
 ---
 
