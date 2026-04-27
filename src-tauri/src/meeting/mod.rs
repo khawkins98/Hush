@@ -42,7 +42,7 @@
 pub mod manager;
 pub mod sqlite;
 
-pub use manager::{AppClassifier, SessionManager};
+pub use manager::{AppClassifier, MeetingEventEmitter, NoopMeetingEventEmitter, SessionManager};
 pub use sqlite::SqliteMeetingSessionRepository;
 
 use anyhow::Result;

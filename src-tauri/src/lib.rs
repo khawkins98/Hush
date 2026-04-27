@@ -86,9 +86,13 @@ pub fn run() {
                 "starting Hush"
             );
 
-            let state =
-                tauri::async_runtime::block_on(ipc::AppState::build_default(&db_path, models_dir))
-                    .map_err(|e| format!("build app state: {e:#}"))?;
+            let app_handle = app.handle().clone();
+            let state = tauri::async_runtime::block_on(ipc::AppState::build_default(
+                app_handle,
+                &db_path,
+                models_dir,
+            ))
+            .map_err(|e| format!("build app state: {e:#}"))?;
             // Clone the audio Arc out before `manage` takes ownership of
             // `state` — the level-meter pump task below needs a handle
             // it can read from without going through `app.state()` on
