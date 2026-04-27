@@ -75,7 +75,9 @@
       {#if historyQuery.trim().length > 0}
         No matches for "<em>{historyQuery}</em>". Try a shorter query.
       {:else}
-        No transcriptions yet — press the hotkey or click Start above.
+        No transcriptions yet. Switch to the Dictation tab and
+        press the toggle hotkey or the Start button — the
+        transcript will land here.
       {/if}
     </p>
   {:else}
