@@ -608,3 +608,34 @@ The meeting pump pre-#108 stopped capture every 10 s, drained the buffer, ran on
 
 **Lesson worth keeping.** When the policy and the engine can be cleanly separated, do it: `SlidingWindowState` is whisper-agnostic and unit-testable with a scripted `WhisperLikeInferer` mock; the whisper bridge is ~80 lines of FFI translation + a `Vec<StreamSegment>` return. The 15 unit tests pinning the policy ran in 0 ms; the smoke test against real whisper ran in 1.2 s. The split also means a future Parakeet ONNX backend (#32) inherits the same policy state machine — only the inferer adapter changes.
 
+
+## 2026-04-27 — `cargo:rustc-link-arg` from a transitive dep is a CI/dev split hazard
+
+I shipped #144 in the morning, dropping the `screencapturekit` Cargo feature flag so SCK linked unconditionally on macOS. The same PR added a `DYLD_FALLBACK_LIBRARY_PATH` to the macOS CI workflow because `cargo test` started SIGABRTing on `dyld[…]: Library not loaded: @rpath/libswift_Concurrency.dylib`. CI went green. **The actual app launch did not.** Ken hit `npm run tauri dev` later and got the same dyld error in the running binary — by which point CI had been masking the regression for hours.
+
+**Why CI was green and dev wasn't.** The screencapturekit crate's build script emits its rpaths via:
+
+    cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift
+    cargo:rustc-link-arg=-Wl,-rpath,/Library/Developer/CommandLineTools/...
+
+Those directives only propagate to the link line of the **immediate** parent crate. Hush links screencapturekit transitively (it's a dep of our root crate, not a direct compile target). Cargo's transitive-link-arg propagation rules silently drop these flags. Result: `otool -l target/debug/hush | grep LC_RPATH` returns **zero entries**. The `@rpath/libswift_Concurrency.dylib` reference in the binary's link record has nothing to resolve against.
+
+CI test binaries had the same zero-rpath state, but the env-var I'd added (`DYLD_FALLBACK_LIBRARY_PATH=/Applications/Xcode.app/.../swift-5.5/macosx`) gave dyld a fallback search path that resolved the dylib. The actual app launch — `cargo tauri dev` shelling out to `cargo run` — inherited a different env (no env var), so the same binary failed.
+
+**The fix (#147).** A `src-tauri/.cargo/config.toml` adds the rpaths from our root crate (where cargo does honour `link-arg`):
+
+    [target.aarch64-apple-darwin]
+    rustflags = [
+        "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+        "-C", "link-arg=-Wl,-rpath,/Applications/Xcode.app/.../swift-5.5/macosx",
+    ]
+
+Order matters: `/usr/lib/swift` first means dyld resolves `libswift_Concurrency.dylib` from the system shared cache, the same copy all the indirectly-linked Swift dylibs use. Putting the Xcode path first instead caused four `objc[…]: Class _Tt… is implemented in both` duplicate-class warnings because both copies loaded.
+
+**Lessons worth keeping.**
+
+1. **`cargo:rustc-link-arg` from a transitive dep is a footgun.** If a crate's build script needs to add rpaths to the *binary*, and that crate is a transitive dep, the rpath effectively doesn't exist. Cargo has `cargo:rustc-link-arg-bins=...` to propagate, but it's the dep author's call to use that form — and most don't. Defensive posture: when adding any crate that needs runtime-resolved dylibs, verify the rpath landed via `otool -l`. The `cargo build` succeeding is not the same signal as "the binary will run."
+
+2. **Env-var workarounds in CI mask real regressions.** I added `DYLD_FALLBACK_LIBRARY_PATH` to the CI workflow when CI started failing. That made CI go green, but it papered over a real bug — the binary itself was broken; only my env var made it work in the test harness. The right shape would have been to fix the binary (the rpath) and let CI naturally pass without an env-var crutch. The rpath fix in #147 means the env-var addition in #144 is now redundant; leaving it in as belt-and-suspenders, but the binary doesn't need it.
+
+3. **CLAUDE.md's dev-launch-smoke checklist is load-bearing.** It explicitly calls out "CI does not run a real Tauri runtime — every test target is `cargo test --lib` or `cargo clippy` or Playwright with mocked IPC. A panic at app boot is invisible to CI and only surfaces when a contributor pulls the branch." This is exactly the class of bug it warns about. The required-when list mentions `Cargo.toml` adding/removing a Tauri plugin dep — should be expanded to "any change that affects the binary's link record on macOS, including making a transitive dep unconditional." Adding that to the checklist would have caught this in 30 seconds.
