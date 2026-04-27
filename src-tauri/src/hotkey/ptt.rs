@@ -107,9 +107,10 @@ pub const ENV_PTT_DISABLE: &str = "HUSH_PTT_DISABLE";
 /// Force-enable the rdev PTT listener on platforms where it would
 /// otherwise auto-disable. Set `HUSH_PTT_ENABLE=1`. Currently only
 /// meaningful on macOS, where PTT stays opt-in: the macOS-26 abort
-/// (#69) is fixed in the Narsil/rdev#147 git pin, but enabling PTT
-/// triggers the Input Monitoring permission prompt — a privacy
-/// surprise some users won't want without first opting in.
+/// (#69) is fixed by pinning rdev to fufesou's fork (see Cargo.toml),
+/// but enabling PTT triggers the Input Monitoring permission
+/// prompt — a privacy surprise some users won't want without first
+/// opting in.
 pub const ENV_PTT_ENABLE: &str = "HUSH_PTT_ENABLE";
 
 /// Event emitted to the frontend on PTT key-down.
@@ -299,20 +300,23 @@ pub fn register_ptt_listener<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
             // default-off behaviour (rdev calling
             // `TISGetInputSourceProperty` from a non-main thread,
             // hitting `dispatch_assert_queue_fail` — see #69) is
-            // fixed upstream in Narsil/rdev#147 (May 2025). The
-            // Cargo.toml git pin in this repo includes that fix.
+            // fixed by pinning to fufesou/rdev's fork (the one
+            // RustDesk ships in production), which attaches the
+            // CGEventTap to `CFRunLoopGetMain()` so the callback
+            // runs on the main thread and TSM is happy. Narsil's
+            // upstream PR #147 was incomplete — it only fixed the
+            // `send` path, not `listen`. See Cargo.toml comment.
             //
             // We *could* flip the default to on, but PTT is still
             // worth opting into deliberately: it triggers the Input
             // Monitoring permission prompt on first install, and a
             // dictation app silently asking to read every keystroke
-            // is a privacy surprise some users won't want. The env
-            // gate keeps the prompt to power users who explicitly
-            // turn it on. Once #70 ships a settings-window toggle,
-            // the gate moves there.
+            // is a privacy surprise some users won't want. Once
+            // #70 ships a settings-window toggle, the gate moves
+            // there.
             tracing::warn!(
                 "PTT listener skipped on macOS by default. The macOS-26 abort that previously \
-                 made this unsafe is fixed in Narsil/rdev#147 (already pinned in Cargo.toml), \
+                 made this unsafe is fixed by pinning rdev to fufesou's fork (see Cargo.toml), \
                  so {ENV_PTT_ENABLE}=1 is now safe. PTT stays opt-in because enabling it \
                  triggers the Input Monitoring permission prompt — toggle hotkey and \
                  button-driven dictation work without it."

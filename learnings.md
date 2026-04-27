@@ -674,14 +674,16 @@ All three are passive reads — calling them does NOT trigger the OS dialog. Imp
 
 ---
 
-## 2026-04-27 — rdev macOS-26 abort: fixed by Narsil/rdev#147 (May 2025)
+## 2026-04-27 — rdev macOS-26 abort: Narsil's PR #147 was incomplete; fixed via fufesou's fork
 
 #69 documented `rdev::listen` hard-aborting on macOS 26+ on the first modifier press: the rdev CGEventTap callback called `TISGetInputSourceProperty` from a non-main thread, and macOS 26's stricter dispatch-queue assertions kill the process via `dispatch_assert_queue_fail` (which is `__builtin_trap`, not a Rust panic — `catch_unwind` cannot save us).
 
-Narsil's upstream landed [rdev#147](https://github.com/Narsil/rdev/pull/147) on 2025-05-20 as `MacOS: set_is_main_thread`, routing the TSM call to the main thread. RustDesk has been carrying the same fix in its [fufesou/rdev](https://github.com/fufesou/rdev) fork for longer.
+**First attempt (didn't work):** pinned to Narsil's upstream `main` past [rdev#147](https://github.com/Narsil/rdev/pull/147) (May 2025, "MacOS: set_is_main_thread"). Hands-on test on macOS 26 with `HUSH_PTT_ENABLE=1`: instant crash on the first modifier press. Reading the patch: PR #147 only adds a `set_is_main_thread` opt-in on the `Keyboard` struct used by the *send* path. The `listen()` path's `raw_callback` calls `convert(...)` which still invokes TSM, and `listen()` itself never calls `set_is_main_thread(false)` — so the fix never runs for our use case.
 
-The latest crates.io release (0.5.3, 2023-06-26) predates the fix. We pin to a git rev (`c14f2dc5c...` as of this entry) on the `Narsil/rdev` `main` branch (which is at the unpublished 0.6.0). Bump-to-published as soon as upstream ships 0.6.x — our API surface (`listen`, `Event`, `EventType::{KeyPress, KeyRelease}`, `Key`) is unchanged on `main`.
+**Second attempt (works):** pinned to [fufesou/rdev](https://github.com/fufesou/rdev), the fork RustDesk ships in production. Diff against Narsil's `main`: in `listen()`, the tap is attached to `CFRunLoopGetMain()` instead of the calling thread's run loop. The callback runs on main, TSM is happy, no abort.
+
+We pin via git rev (`a90dbe1172f8832f54c97c62e823c5a34af5fdfe` as of this entry). The API surface we use (`listen`, `Event`, `EventType::{KeyPress, KeyRelease}`, `Key`) is identical between forks. Bump-to-published when EITHER Narsil ships a release that completes the listen-path fix, OR fufesou publishes their fork to crates.io.
 
 PTT stays opt-in via `HUSH_PTT_ENABLE=1` even with the abort fixed: enabling triggers the Input Monitoring permission prompt, which is a privacy surprise for users who don't realise a dictation app would be reading every keystroke. The env gate keeps the prompt to power users who deliberately turn PTT on. A future settings-window toggle will replace the env gate.
 
-**Takeaway for future Apple-framework FFI bugs:** before assuming a hand-roll is needed, check upstream `main` for the fix. Maintained crates often have the patch; the gap is just between merge and a published release.
+**Takeaway for future Apple-framework FFI bugs:** "PR merged" ≠ "your bug is fixed." Read the diff. PR #147 was a real fix for *a* TSM call site, but not the one our code path hits. The cheap-path heuristic ("just bump the dep") is right to try first, but verify with the actual error reproduction, not just "did it merge upstream." Production users (RustDesk in this case) often patch around upstream's incompleteness for years before upstream catches up.
