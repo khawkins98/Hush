@@ -92,11 +92,12 @@ A new `IpcError` variant also needs the frontend's `formatError` switch in `+pag
 
 ## Dev-launch smoke (required for startup-touching changes)
 
-CI does not run a real Tauri runtime. A panic at app boot (plugin init, capability misconfig, `AppState::build_default` failure, `tauri.conf.json` issue) is **invisible to CI** and only surfaces when someone pulls the branch. Run `npm run tauri dev` once before opening a PR that touches:
+CI does not run a real Tauri runtime. A panic at app boot (plugin init, capability misconfig, `AppState::build_default` failure, `tauri.conf.json` issue, missing rpath for a transitively-linked dylib) is **invisible to CI** and only surfaces when someone pulls the branch. Run `npm run tauri dev` once before opening a PR that touches:
 
 - `src-tauri/src/lib.rs` (especially the `tauri::Builder` chain or `setup` hook)
 - `src-tauri/tauri.conf.json`
-- `src-tauri/Cargo.toml` (adding/removing a Tauri plugin dep)
+- `src-tauri/Cargo.toml` — adding/removing a Tauri plugin dep, **or making a transitive dep unconditional** (e.g. dropping a feature flag that gated a crate which links system frameworks; the crate's build-script-baked rpaths don't propagate from a transitive dep, see `learnings.md` 2026-04-27).
+- `src-tauri/.cargo/config.toml` (link-arg / rpath changes)
 - `src-tauri/capabilities/*.json`
 - Anything that adds or removes a `.plugin(...)` call
 
