@@ -1013,7 +1013,7 @@ pub async fn meeting_sessions_list(
         .meetings
         .list()
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("sessions list: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("sessions list: {e:#}")))
 }
 
 /// Full detail for one session: the row plus all its persisted
@@ -1053,7 +1053,7 @@ pub async fn meeting_session_get(
         .meetings
         .list()
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("session get: {e}")))?;
+        .map_err(|e| IpcError::MeetingSessions(format!("session get: {e:#}")))?;
     let session = sessions
         .into_iter()
         .find(|s| s.id == id)
@@ -1062,7 +1062,7 @@ pub async fn meeting_session_get(
         .meetings
         .list_utterances(id)
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("session utterances: {e}")))?;
+        .map_err(|e| IpcError::MeetingSessions(format!("session utterances: {e:#}")))?;
     // Read in-flight partials from the manager's in-memory store.
     // The poll path is hot (every ~1 s while a session is active);
     // `current_partials_for` uses an `RwLock::read` and clones a
@@ -1082,7 +1082,7 @@ pub async fn meeting_session_delete(state: State<'_, AppState>, id: i64) -> IpcR
         .meetings
         .delete(id)
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("session delete: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("session delete: {e:#}")))
 }
 
 /// Update a session's freeform notes. The panel calls this on blur
@@ -1097,7 +1097,7 @@ pub async fn meeting_session_set_notes(
         .meetings
         .set_notes(id, notes)
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("session set_notes: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("session set_notes: {e:#}")))
 }
 
 /// Snapshot of the active meeting session. Empty (`active: None`)
@@ -1143,12 +1143,12 @@ pub async fn meeting_start_manual(
     app_name: Option<String>,
 ) -> IpcResult<crate::meeting::MeetingSession> {
     let sources = sanitise_meeting_sources(sources)
-        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))?;
+        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e:#}")))?;
     let session = state
         .meeting_manager
         .start_manual(sources, app_name)
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e}")))?;
+        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e:#}")))?;
     // Show the recording HUD so the user has the same at-a-glance
     // "audio is being captured" cue meeting mode that the dictation
     // hot path already provides — best-effort, a HUD-show failure
@@ -1237,7 +1237,7 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
         .meeting_manager
         .stop_manual()
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e:#}")))
 }
 
 // -- First-run / onboarding ----------------------------------------------
@@ -1487,7 +1487,7 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
                 .arg(category)
                 .arg(MACOS_BUNDLE_ID)
                 .status()
-                .map_err(|e| IpcError::Settings(format!("invoke tccutil: {e}")))?;
+                .map_err(|e| IpcError::Settings(format!("invoke tccutil: {e:#}")))?;
             if status.success() {
                 any_reset = true;
                 tracing::info!(category, "tccutil reset succeeded");
