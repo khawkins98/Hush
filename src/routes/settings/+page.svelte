@@ -620,7 +620,10 @@
     padding: 0;
     background-color: #f3f3f5;
     color: #0f0f0f;
-    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+      Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif,
+      "Apple Color Emoji", "Segoe UI Emoji";
     -webkit-font-smoothing: antialiased;
   }
 

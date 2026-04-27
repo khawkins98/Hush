@@ -982,7 +982,16 @@
 
 <style>
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  /* System font stack — picks San Francisco on macOS, Segoe UI on
+     Windows, the distro default on Linux. Inter / Avenir were
+     close-enough fallbacks but rendered noticeably "off" on macOS,
+     so the app deliberately uses whatever the host considers
+     native instead. The trailing emoji families let macOS render
+     coloured emoji inline; Linux fonts handle the rest. */
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji";
   font-size: 16px;
   line-height: 24px;
   color: #0f0f0f;
