@@ -30,6 +30,11 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import {
+    disable as disableAutostart,
+    enable as enableAutostart,
+    isEnabled as isAutostartEnabled,
+  } from "@tauri-apps/plugin-autostart";
   import { onDestroy, onMount, tick } from "svelte";
 
   import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
@@ -82,6 +87,18 @@
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenDownloadFailed: UnlistenFn | null = null;
   let unlistenGotoTab: UnlistenFn | null = null;
+
+  // ---- General-tab state ------------------------------------------------
+  // Autostart toggle: queried on mount via the autostart plugin and
+  // mirrored locally so the checkbox can show optimistic UI while the
+  // plugin call is in flight.
+  let autostartEnabled = $state(false);
+  let autostartBusy = $state(false);
+  let autostartError = $state<string | null>(null);
+  // First-run reset: brief confirmation message replaces the button
+  // label after a successful reset, then clears on a 3 s timer.
+  let firstRunResetBusy = $state(false);
+  let firstRunResetMessage = $state<string | null>(null);
 
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
@@ -355,8 +372,60 @@
       loadVocabulary(),
       loadReplacements(),
       loadMacosDiagnostic(),
+      loadAutostartState(),
     ]);
   });
+
+  // ---- General-tab handlers --------------------------------------------
+
+  async function loadAutostartState(): Promise<void> {
+    try {
+      autostartEnabled = await isAutostartEnabled();
+      autostartError = null;
+    } catch (e) {
+      // Plugin missing on this build / platform. Treat as disabled
+      // and surface a single-line note rather than the raw error.
+      autostartEnabled = false;
+      autostartError = "Couldn't read autostart state on this platform.";
+      console.warn("[hush] isAutostartEnabled failed", e);
+    }
+  }
+
+  async function onAutostartToggle(e: Event) {
+    const checked = (e.target as HTMLInputElement).checked;
+    autostartBusy = true;
+    autostartError = null;
+    try {
+      if (checked) await enableAutostart();
+      else await disableAutostart();
+      autostartEnabled = checked;
+    } catch (err) {
+      autostartError = formatError(err);
+      // Re-read so the checkbox reverts to truth rather than the
+      // optimistic state that didn't persist.
+      await loadAutostartState();
+    } finally {
+      autostartBusy = false;
+    }
+  }
+
+  async function onResetFirstRun() {
+    firstRunResetBusy = true;
+    try {
+      await invoke("reset_first_run");
+      firstRunResetMessage = "Welcome will show on next launch.";
+      // Clear the confirmation after a moment so the button label
+      // returns to its actionable state (in case the user changes
+      // their mind in this same session).
+      setTimeout(() => {
+        firstRunResetMessage = null;
+      }, 3000);
+    } catch (e) {
+      firstRunResetMessage = formatError(e);
+    } finally {
+      firstRunResetBusy = false;
+    }
+  }
 
   onDestroy(() => {
     unlistenDownloadProgress?.();
@@ -385,11 +454,71 @@
   <section class="tab-body" aria-live="polite">
     {#if active === "general"}
       <h1 class="tab-title">General</h1>
-      <p class="placeholder">
-        Hotkey, autostart, and first-run controls will live here in a
-        future PR. For now Hush uses sensible defaults: toggle hotkey
-        is <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>.
-      </p>
+
+      <section class="settings-group" aria-labelledby="settings-startup-heading">
+        <h2 id="settings-startup-heading" class="group-heading">Startup</h2>
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            data-testid="settings-autostart-toggle"
+            disabled={autostartBusy}
+            checked={autostartEnabled}
+            onchange={onAutostartToggle}
+          />
+          <span class="toggle-label">
+            <span class="toggle-name">Launch Hush at login</span>
+            <span class="toggle-desc">
+              Hush opens automatically when you sign in. The window
+              stays in the background — your hotkey still works.
+            </span>
+          </span>
+        </label>
+        {#if autostartError}
+          <p class="settings-error">{autostartError}</p>
+        {/if}
+      </section>
+
+      <section class="settings-group" aria-labelledby="settings-hotkeys-heading">
+        <h2 id="settings-hotkeys-heading" class="group-heading">Hotkeys</h2>
+        <p class="settings-row">
+          <span class="row-label">Toggle recording</span>
+          <span class="row-value">
+            <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>
+          </span>
+        </p>
+        <p class="settings-row">
+          <span class="row-label">Push-to-talk</span>
+          <span class="row-value">
+            <kbd>Right Ctrl</kbd>
+            <span class="row-note">
+              Disabled by default on macOS; set
+              <code>HUSH_PTT_ENABLE=1</code> to opt in.
+            </span>
+          </span>
+        </p>
+        <p class="settings-note">
+          Customisable hotkeys are tracked under future settings work.
+        </p>
+      </section>
+
+      <section class="settings-group" aria-labelledby="settings-firstrun-heading">
+        <h2 id="settings-firstrun-heading" class="group-heading">First-run welcome</h2>
+        <p class="settings-row settings-row-stack">
+          <button
+            type="button"
+            class="ghost"
+            data-testid="settings-reset-first-run"
+            disabled={firstRunResetBusy}
+            onclick={onResetFirstRun}
+          >
+            {firstRunResetMessage ?? "Show welcome on next launch"}
+          </button>
+          <span class="row-note">
+            Re-shows the permissions explainer the next time you open
+            Hush. Doesn't affect any other state.
+          </span>
+        </p>
+      </section>
     {:else if active === "model"}
       <ModelPickerPanel
         {models}
@@ -575,6 +704,116 @@
     max-width: 36rem;
   }
 
+  .settings-group {
+    margin: 0 0 1.75rem;
+    max-width: 44rem;
+  }
+  .group-heading {
+    margin: 0 0 0.6rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .toggle-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.65rem 0.85rem;
+    background-color: white;
+    border: 1px solid #e1e1e6;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .toggle-row input[type="checkbox"] {
+    margin-top: 0.2rem;
+    flex-shrink: 0;
+  }
+  .toggle-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .toggle-name {
+    font-weight: 600;
+    color: #222;
+  }
+  .toggle-desc {
+    font-size: 0.82rem;
+    color: #666;
+    line-height: 1.4;
+  }
+
+  .settings-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    margin: 0 0 0.5rem;
+    padding: 0.55rem 0.85rem;
+    background-color: white;
+    border: 1px solid #e1e1e6;
+    border-radius: 8px;
+  }
+  .settings-row-stack {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .row-label {
+    font-weight: 500;
+    color: #333;
+  }
+  .row-value {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.2rem;
+    color: #555;
+  }
+  .row-note {
+    display: block;
+    font-size: 0.75rem;
+    color: #888;
+    text-align: right;
+  }
+  .settings-row-stack .row-note {
+    text-align: left;
+  }
+  .settings-row-stack .row-note {
+    text-align: left;
+  }
+  .settings-note {
+    margin: 0.4rem 0 0;
+    font-size: 0.78rem;
+    color: #888;
+  }
+  .settings-error {
+    margin: 0.4rem 0 0;
+    color: #8a1f1f;
+    font-size: 0.85rem;
+  }
+  button.ghost {
+    padding: 0.4em 0.85em;
+    font-size: 0.85rem;
+    font-weight: 500;
+    background-color: white;
+    border: 1px solid #d1d1d8;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #2c3e8f;
+  }
+  button.ghost:hover:not(:disabled) {
+    background-color: #f4f5fa;
+    border-color: #b8c1d8;
+  }
+  button.ghost:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
   .perm-status-list {
     list-style: none;
     margin: 0 0 1.5rem;
@@ -693,6 +932,27 @@
       color: #b8c8ff;
     }
     .placeholder { color: #a8a8a8; }
+    .toggle-row,
+    .settings-row {
+      background-color: #2a2a2d;
+      border-color: #38383b;
+    }
+    .toggle-name { color: #e8e8e8; }
+    .toggle-desc { color: #a8a8a8; }
+    .row-label { color: #d8d8d8; }
+    .row-value { color: #b0b0b0; }
+    .row-note { color: #888; }
+    .settings-note { color: #888; }
+    .group-heading { color: #888; }
+    button.ghost {
+      background-color: #2a2a2d;
+      border-color: #38383b;
+      color: #b8c8ff;
+    }
+    button.ghost:hover:not(:disabled) {
+      background-color: #38383b;
+      border-color: #4a4a4d;
+    }
     kbd {
       background-color: #2a2a2d;
       border-color: #4a4a4d;
