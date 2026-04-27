@@ -185,6 +185,28 @@ pub struct AppState {
     /// own entry on completion.
     pub downloads: Mutex<HashMap<String, CancelHandle>>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
+    /// User's chosen PTT key combo, hot-swappable via
+    /// `ptt_set_combo`. The listener thread reads through this
+    /// `RwLock` on every event so a Settings UI change takes effect
+    /// without restarting the listener (rdev::listen has no clean
+    /// stop API; we don't want to bounce the thread on every edit).
+    /// Initialised from settings DB at boot, falls back to the
+    /// platform default. See `crate::hotkey::ptt::PttCombo`.
+    pub ptt_combo: Arc<std::sync::RwLock<crate::hotkey::ptt::PttCombo>>,
+    /// Whether PTT is currently active. The listener observes
+    /// every keyboard event regardless, but only emits press/release
+    /// to the frontend when this flag is true. The IPC `ptt_set_config`
+    /// command flips it for in-session toggles (no listener restart
+    /// needed). At boot, this mirrors the persisted value and the
+    /// env-var override.
+    ///
+    /// **Caveat:** if the listener wasn't registered at boot (e.g.
+    /// macOS with `ptt_enabled=false`), flipping this to true at
+    /// runtime is a no-op — the rdev thread isn't running, so no
+    /// events to gate. The frontend surfaces a "restart Hush" hint
+    /// when this happens. Once the listener is running, toggle is
+    /// instant.
+    pub ptt_active: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Builder for [`AppState`].
@@ -219,6 +241,8 @@ pub struct AppStateBuilder {
     meetings: Option<Arc<dyn crate::meeting::MeetingSessionRepository>>,
     meeting_manager: Option<Arc<crate::meeting::SessionManager>>,
     models_dir: Option<PathBuf>,
+    ptt_combo: Option<crate::hotkey::ptt::PttCombo>,
+    ptt_active: Option<bool>,
 }
 
 impl AppStateBuilder {
@@ -280,6 +304,16 @@ impl AppStateBuilder {
 
     pub fn models_dir(mut self, models_dir: PathBuf) -> Self {
         self.models_dir = Some(models_dir);
+        self
+    }
+
+    pub fn ptt_combo(mut self, combo: crate::hotkey::ptt::PttCombo) -> Self {
+        self.ptt_combo = Some(combo);
+        self
+    }
+
+    pub fn ptt_active(mut self, active: bool) -> Self {
+        self.ptt_active = Some(active);
         self
     }
 
@@ -349,6 +383,12 @@ impl AppStateBuilder {
                 .expect("reqwest client should always build with default config"),
             downloads: Mutex::new(HashMap::new()),
             pending_foreground: Mutex::new(None),
+            ptt_combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(
+                || crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
+            ))),
+            ptt_active: Arc::new(std::sync::atomic::AtomicBool::new(
+                self.ptt_active.unwrap_or(false),
+            )),
         })
     }
 }
@@ -461,6 +501,34 @@ impl AppState {
             event_emitter,
         ));
 
+        // Restore the user's persisted PTT combo, if any. Falls back
+        // to the platform default single-key (RightMeta on macOS,
+        // RightControl elsewhere) when no value is stored. Parse
+        // failures fall back too — a corrupt settings row shouldn't
+        // brick the listener.
+        let ptt_combo = match settings.get(crate::settings::keys::PTT_COMBO).await {
+            Ok(Some(raw)) => crate::hotkey::ptt::parse_ptt_combo(&raw).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, raw = %raw, "stored PTT combo failed to parse; using default");
+                crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY)
+            }),
+            _ => crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
+        };
+
+        // Persisted PTT-enabled flag. Env vars take precedence so
+        // power users / CI can hard-force the listener regardless of
+        // the persisted value:
+        //   - HUSH_PTT_DISABLE=1 → off
+        //   - HUSH_PTT_ENABLE=1  → on
+        //   - otherwise: settings DB → persisted value
+        //   - otherwise: platform default (false on macOS for
+        //     privacy, true elsewhere — those platforms don't gate
+        //     keyboard observation behind a TCC prompt that would
+        //     surprise a fresh-install user).
+        let ptt_active = match settings.get(crate::settings::keys::PTT_ENABLED).await {
+            Ok(Some(raw)) => raw == "true",
+            _ => !cfg!(target_os = "macos"),
+        };
+
         AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
@@ -471,6 +539,8 @@ impl AppState {
             .meetings(meetings)
             .meeting_manager(meeting_manager)
             .models_dir(models_dir)
+            .ptt_combo(ptt_combo)
+            .ptt_active(ptt_active)
             .build()
     }
 }

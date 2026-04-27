@@ -47,6 +47,21 @@ pub mod keys {
     /// next launch". Per-platform behaviour: only the macOS frontend
     /// reads this — Linux/Windows never check.
     pub const FIRST_RUN_COMPLETED: &str = "first_run_completed";
+
+    /// Whether the PTT listener should run. Stored as `"true"` /
+    /// `"false"`; absent means "platform default" (true on Linux /
+    /// Windows, false on macOS so the Input Monitoring prompt only
+    /// fires when the user opts in). Settings UI flips this; the env
+    /// vars `HUSH_PTT_ENABLE` / `HUSH_PTT_DISABLE` still work as
+    /// hard overrides for power users / dev workflows.
+    pub const PTT_ENABLED: &str = "ptt_enabled";
+
+    /// User's chosen PTT key combination. Stored as a `+`-separated
+    /// list of `PttKey` names (e.g. `RightMeta` or
+    /// `RightMeta+RightShift`). Absent means "platform default
+    /// single key" (RightMeta on macOS, RightControl elsewhere). All
+    /// keys in the combo must be held simultaneously to trigger PTT.
+    pub const PTT_COMBO: &str = "ptt_combo";
 }
 
 /// Repository trait at the storage boundary.

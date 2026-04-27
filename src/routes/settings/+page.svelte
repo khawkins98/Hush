@@ -39,6 +39,7 @@
 
   import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
+  import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
   import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
   import VocabularyPanel from "$lib/VocabularyPanel.svelte";
   import { formatMb } from "$lib/format";
@@ -490,22 +491,11 @@
           <span class="row-label">Toggle recording</span>
           <span class="row-value">
             <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>
+            <span class="row-note">Customisable hotkey UI is future work.</span>
           </span>
         </p>
-        <p class="settings-row">
-          <span class="row-label">Push-to-talk</span>
-          <span class="row-value">
-            {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
-            <span class="row-note">
-              Opt-in: launch Hush with
-              <code>HUSH_PTT_ENABLE=1</code>. macOS prompts for
-              Input Monitoring on first use.
-            </span>
-          </span>
-        </p>
-        <p class="settings-note">
-          Customisable hotkeys are tracked under future settings work.
-        </p>
+        <h3 class="subgroup-heading">Push-to-talk</h3>
+        <PttHotkeyEditor {isMacOS} />
       </section>
 
       <section class="settings-group" aria-labelledby="settings-firstrun-heading">
@@ -734,6 +724,15 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
+  .subgroup-heading {
+    margin: 1rem 0 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #444;
+  }
+  @media (prefers-color-scheme: dark) {
+    .subgroup-heading { color: #d0d0d0; }
+  }
 
   .toggle-row {
     display: flex;
@@ -802,11 +801,6 @@
   }
   .settings-row-stack .row-note {
     text-align: left;
-  }
-  .settings-note {
-    margin: 0.4rem 0 0;
-    font-size: 0.78rem;
-    color: #888;
   }
   .settings-error {
     margin: 0.4rem 0 0;
@@ -960,7 +954,6 @@
     .row-label { color: #d8d8d8; }
     .row-value { color: #b0b0b0; }
     .row-note { color: #888; }
-    .settings-note { color: #888; }
     .group-heading { color: #888; }
     button.ghost {
       background-color: #2a2a2d;

@@ -193,6 +193,20 @@ export type MacosPermissionResetResult = {
 // catalog array's order.
 export type DownloadProgress = { received: number; total: number | null };
 
+// Push-to-talk configuration. `combo` is the canonical key list
+// (e.g. `["RightMeta"]` or `["RightMeta", "RightShift"]`). Each
+// entry is a `PttKey` enum variant name from the backend, in
+// canonical sorted order. `enabled` mirrors the persisted toggle.
+// `listenerRunning` is a runtime signal: when the user toggles
+// Enabled ON in a session that started with PTT off, the rdev
+// listener can't be started mid-session — the UI shows a "restart
+// Hush" hint when listenerRunning is false but enabled is true.
+export type PttConfig = {
+  combo: string[];
+  enabled: boolean;
+  listenerRunning: boolean;
+};
+
 // Main-window left-sidebar section identifier. The standalone
 // Settings window (opened via ⌘, on macOS) is reached separately
 // via `invoke("open_settings")` and is not in this union.

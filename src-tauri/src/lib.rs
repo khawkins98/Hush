@@ -101,6 +101,12 @@ pub fn run() {
             // it can read from without going through `app.state()` on
             // every tick.
             let audio_for_pump = std::sync::Arc::clone(&state.audio);
+            // Clone the shared PTT-combo handle out before `manage`
+            // takes ownership of `state` — the listener thread reads
+            // it on every key event so a Settings UI edit takes
+            // effect without restarting the rdev thread.
+            let ptt_combo_for_listener = std::sync::Arc::clone(&state.ptt_combo);
+            let ptt_active_for_listener = std::sync::Arc::clone(&state.ptt_active);
             app.manage(state);
 
             // HUD level-meter pump (#21). Reads the latest RMS from the
@@ -155,7 +161,11 @@ pub fn run() {
             // On Wayland the listener exits with an error and we proceed
             // without PTT — toggle and button-driven dictation still work.
             // See `hotkey::ptt` module header for the full rationale.
-            if let Err(e) = hotkey::register_ptt_listener(app.handle()) {
+            if let Err(e) = hotkey::register_ptt_listener(
+                app.handle(),
+                ptt_combo_for_listener,
+                ptt_active_for_listener,
+            ) {
                 tracing::error!(error = ?e, "failed to start PTT listener");
             }
             Ok(())
@@ -185,6 +195,8 @@ pub fn run() {
             ipc::commands::get_first_run_completed,
             ipc::commands::mark_first_run_completed,
             ipc::commands::reset_first_run,
+            ipc::commands::ptt_get_config,
+            ipc::commands::ptt_set_config,
             ipc::commands::open_macos_privacy_pane,
             ipc::commands::diagnose_macos_permissions,
             ipc::commands::reset_macos_permissions,

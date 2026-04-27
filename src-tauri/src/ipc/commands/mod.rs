@@ -1065,6 +1065,109 @@ pub async fn reset_first_run(state: State<'_, AppState>) -> IpcResult<()> {
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Configuration the Settings UI reads + writes for push-to-talk.
+///
+/// `combo` is the canonical `+`-separated key list (`RightMeta`,
+/// `RightMeta+RightShift`, etc.). `enabled` mirrors the persisted
+/// `ptt_enabled` settings flag. `listenerRunning` is a runtime
+/// signal: true when the rdev thread is alive and gated by the
+/// `enabled` flag, false when it wasn't started at boot. The UI
+/// uses it to show "Restart Hush for Enable to take effect" when
+/// the user toggles ON in a session that started with PTT off.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PttConfig {
+    pub combo: Vec<String>,
+    pub enabled: bool,
+    pub listener_running: bool,
+}
+
+#[tauri::command]
+pub fn ptt_get_config(state: State<'_, AppState>) -> IpcResult<PttConfig> {
+    let combo = state
+        .ptt_combo
+        .read()
+        .map_err(|_| IpcError::Internal("ptt_combo lock poisoned".into()))?
+        .keys()
+        .iter()
+        .map(|k| k.as_str().to_string())
+        .collect();
+    let enabled = state.ptt_active.load(std::sync::atomic::Ordering::SeqCst);
+    Ok(PttConfig {
+        combo,
+        enabled,
+        // The listener thread is started at boot if the persisted
+        // value (or env-var override) is enabled. A first-time
+        // Enable in this session can't retroactively start it; the
+        // frontend uses this flag to suggest a restart.
+        listener_running: enabled,
+    })
+}
+
+/// Update the user's PTT configuration. Combo is hot-swapped via
+/// the shared `RwLock` (next keystroke uses the new combo). Enabled
+/// is persisted + flipped on the runtime atomic; if the listener
+/// wasn't running at boot, a restart is required for the change to
+/// take effect (the listener can't be started mid-session because
+/// rdev::listen has no clean stop API and starting it now would
+/// trigger the OS permission prompt at a surprising moment).
+///
+/// Validates the combo before persisting — an empty combo or
+/// unparseable key name returns `IpcError::Settings` and the
+/// existing config is unchanged.
+#[tauri::command]
+pub async fn ptt_set_config(
+    state: State<'_, AppState>,
+    combo: Vec<String>,
+    enabled: bool,
+) -> IpcResult<()> {
+    // Build + validate the combo first, BEFORE touching state.
+    // A bad input shouldn't half-apply (combo persisted, atomic
+    // flipped) — validate up front and bail clean.
+    let parsed_keys: Result<Vec<crate::hotkey::ptt::PttKey>, _> = combo
+        .iter()
+        .map(|s| crate::hotkey::ptt::parse_ptt_key(s))
+        .collect();
+    let parsed_keys =
+        parsed_keys.map_err(|e| IpcError::Settings(format!("ptt_set_config: {e:#}")))?;
+    let new_combo = crate::hotkey::ptt::PttCombo::try_from_keys(parsed_keys)
+        .map_err(|e| IpcError::Settings(format!("ptt_set_config: {e:#}")))?;
+
+    // Persist combo first so a crash between steps leaves the user
+    // with their chosen combo on next launch even if the atomic /
+    // enabled flip didn't reach the DB.
+    state
+        .settings
+        .set(
+            crate::settings::keys::PTT_COMBO,
+            &new_combo.to_storage_string(),
+        )
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+    state
+        .settings
+        .set(
+            crate::settings::keys::PTT_ENABLED,
+            if enabled { "true" } else { "false" },
+        )
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+
+    // Hot-swap the in-memory state — listener picks both up on the
+    // next OS event without restarting.
+    {
+        let mut guard = state
+            .ptt_combo
+            .write()
+            .map_err(|_| IpcError::Internal("ptt_combo lock poisoned".into()))?;
+        *guard = new_combo;
+    }
+    state
+        .ptt_active
+        .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
 /// Open the macOS System Settings pane the user needs to grant
 /// the named permission. Tauri's shell plugin can launch arbitrary
 /// URLs but its capability config requires us to whitelist URL
