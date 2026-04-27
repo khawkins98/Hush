@@ -14,6 +14,7 @@ pub mod repository;
 pub mod settings;
 pub mod settings_window;
 pub mod transcription;
+pub mod tray;
 pub mod updater;
 
 use tauri::{Emitter, Manager};
@@ -147,6 +148,13 @@ pub fn run() {
             // surfaces the sidebar sections under View. See
             // `app_menu/mod.rs` for the wire shape.
             app_menu::apply(app.handle());
+
+            // Status-bar / system-tray icon. Cross-platform: macOS
+            // menu-bar extra, Windows system tray, Linux notification
+            // area. Reuses the toggle-hotkey event channel for "Toggle
+            // Recording" so the frontend's existing listener handles
+            // start/stop. See `tray/mod.rs`.
+            tray::install(app.handle());
 
             // Hotkey registration is best-effort: if the OS refuses the
             // shortcut (already in use, missing permission, Wayland
