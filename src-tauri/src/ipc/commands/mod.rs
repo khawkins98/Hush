@@ -918,7 +918,10 @@ pub async fn set_meeting_autostart_mode(
     );
     state
         .settings
-        .set(crate::settings::keys::MEETING_AUTOSTART_MODE, mode.as_setting())
+        .set(
+            crate::settings::keys::MEETING_AUTOSTART_MODE,
+            mode.as_setting(),
+        )
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))
 }

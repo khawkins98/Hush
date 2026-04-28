@@ -293,13 +293,8 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
         let kind = classifier.classify(&app_name);
         let session_active = state.meeting_manager.active_session_id().is_some();
 
-        let decision = meeting::AutostartDecision::decide(
-            last_kind,
-            kind,
-            &app_name,
-            mode,
-            session_active,
-        );
+        let decision =
+            meeting::AutostartDecision::decide(last_kind, kind, &app_name, mode, session_active);
         last_kind = Some(kind);
 
         let meeting::AutostartDecision::Start { app_name } = decision else {
