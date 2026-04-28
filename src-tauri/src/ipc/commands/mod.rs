@@ -677,6 +677,21 @@ pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
         .map_err(|e| IpcError::History(e.to_string()))
 }
 
+/// Delete every history row. The frontend gates this behind a
+/// confirmation prompt — there is no recovery once it lands.
+/// Returns the number of rows that were removed so the UI can
+/// surface "Cleared N transcripts" feedback. Calling against an
+/// empty history is safe and returns `0`.
+#[tauri::command]
+pub async fn history_clear(state: State<'_, AppState>) -> IpcResult<i64> {
+    state
+        .data
+        .history
+        .clear()
+        .await
+        .map_err(|e| IpcError::History(e.to_string()))
+}
+
 // -- Replacement-rule CRUD -----------------------------------------------
 //
 // Settings-shaped commands the frontend's "Replacements" panel binds to.

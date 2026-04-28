@@ -944,6 +944,9 @@ mod tests {
         async fn delete(&self, _: i64) -> anyhow::Result<()> {
             Ok(())
         }
+        async fn clear(&self) -> anyhow::Result<i64> {
+            Ok(0)
+        }
         async fn count(&self) -> anyhow::Result<i64> {
             Ok(0)
         }
