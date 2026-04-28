@@ -1,10 +1,12 @@
 <script lang="ts">
+  import ErrorDisplay from "./ErrorDisplay.svelte";
+  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type { VocabularyTerm } from "./types";
 
   type Props = {
     vocabulary: VocabularyTerm[];
     vocabularyLoaded: boolean;
-    vocabularyError: string | null;
+    vocabularyError: ErrorDisplayShape | null;
     newVocab: string;
     inputEl?: HTMLInputElement | null;
     onSubmit: (e: Event) => void | Promise<void>;
@@ -39,10 +41,7 @@
   </p>
 
   {#if vocabularyError}
-    <p class="error scoped-error" role="alert">
-      <strong>Vocabulary:</strong>
-      {vocabularyError}
-    </p>
+    <ErrorDisplay error={vocabularyError} scope="Vocabulary" />
   {/if}
 
   <form class="replacement-form" onsubmit={onSubmit}>
@@ -187,23 +186,8 @@ button.ghost.danger:hover:not(:disabled) {
   border-color: #d83a3a;
 }
 
-.error {
-  margin-top: 1.5rem;
-  padding: 0.75rem 1rem;
-  background-color: #fee;
-  border: 1px solid #d83a3a;
-  border-radius: 8px;
-  color: #8a0000;
-  text-align: left;
-  line-height: 1.5;
-}
-
-.scoped-error {
-  padding-left: 1rem;
-}
-.scoped-error strong {
-  margin-right: 0.4rem;
-}
+/* Error rendering migrated to the shared ErrorDisplay component
+   (#199 + follow-up). */
 
 .empty-history {
   margin: 0.5rem 0;
@@ -324,11 +308,6 @@ button.ghost.danger:hover:not(:disabled) {
     background-color: #1f1f1f;
     border-color: #3a3a3a;
     color: #999;
-  }
-  .error {
-    background-color: #4a1a1a;
-    border-color: #d83a3a;
-    color: #ffd0d0;
   }
   .hint-prose {
     color: #aaa;
