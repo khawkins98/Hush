@@ -69,18 +69,29 @@ use super::{AppState, ForegroundApp};
 /// What the frontend gets back from `stop_dictation`.
 ///
 /// `text` is what was written to the clipboard (after vocabulary-prompt
-/// biasing during inference and post-transcription replacement rules).
+/// biasing during inference, whisper bracket-sentinel stripping, and
+/// post-transcription replacement rules). When whisper produces only
+/// silence-marker output (`[BLANK_AUDIO]`, `[NOISE]`, `[MUSIC]` —
+/// see [`strip_whisper_brackets`]), `text` is empty so the frontend
+/// can render a friendly "no audio detected" rather than the raw
+/// sentinel.
 /// `foreground` is the app + window title captured *at start* of the
 /// recording — not at stop, because by stop time the user has alt-tabbed
 /// back to Hush and "current foreground" would always be us. The backend
 /// already inserts a history row with this metadata via the
 /// fire-and-forget `spawn_history_create` helper in `stop_dictation`, so
 /// the frontend doesn't need to round-trip it back through `history_*`.
+/// `duration_ms` is the wall-clock length of the audio that was
+/// captured — surfaces in the result block so the user sees "Recorded
+/// for 4.2s" regardless of whether transcription found anything.
+/// `None` only when the format was malformed (impossible in practice,
+/// but `checked_div` returns Option for the zero-format case).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictationResult {
     pub text: String,
     pub foreground: Option<ForegroundApp>,
+    pub duration_ms: Option<i64>,
 }
 
 /// Errors returned across the IPC boundary.
@@ -388,7 +399,15 @@ pub async fn stop_dictation(
         ));
     }
     let rules = load_replacement_rules(&state).await;
-    let text = apply_replacements(raw_text.trim(), &rules);
+    // Strip whisper.cpp's bracket sentinels (`[BLANK_AUDIO]`, `[NOISE]`,
+    // …) before applying replacements + the clipboard write. The
+    // sentinels are useful internal signals but a literal
+    // "[BLANK_AUDIO]" in the user's clipboard is a paste-foot-gun and
+    // a confusing "Transcription" panel readout. After stripping, an
+    // all-sentinel result becomes the empty string — the frontend
+    // renders a friendly "no audio detected" copy in that case.
+    let stripped = strip_whisper_brackets(raw_text.trim());
+    let text = apply_replacements(&stripped, &rules);
 
     write_to_clipboard(&app, &text)?;
     fire_ready_notification(&app);
@@ -428,7 +447,46 @@ pub async fn stop_dictation(
         }
     });
 
-    Ok(DictationResult { text, foreground })
+    Ok(DictationResult {
+        text,
+        foreground,
+        duration_ms,
+    })
+}
+
+/// Remove whisper.cpp's bracketed status sentinels (`[BLANK_AUDIO]`,
+/// `[NOISE]`, `[MUSIC]`, `[INAUDIBLE]`, `[ MUSIC ]`, etc.) from a
+/// transcript. Whisper emits these for silent / non-speech segments;
+/// they're useful as an internal signal that "the model heard
+/// nothing recognisable" but are confusing as user-facing transcript
+/// text and as clipboard content. Returns the cleaned string, with
+/// surrounding whitespace trimmed.
+///
+/// Pulled out as a free function so the regex-free implementation
+/// has unit-test coverage for the cases the user hits most:
+/// pure-blank, whitespace inside brackets, mixed real-text + sentinel
+/// (the user did say something but whisper also marked a leading
+/// silence segment), and case-insensitive variants.
+fn strip_whisper_brackets(input: &str) -> String {
+    // Build the output one char at a time; skip anything inside `[…]`.
+    // The brackets are always single-line in whisper's output, so a
+    // simple bracket-depth counter is enough — no need for a regex
+    // dep just for this.
+    let mut out = String::with_capacity(input.len());
+    let mut depth: i32 = 0;
+    for ch in input.chars() {
+        match ch {
+            '[' => depth += 1,
+            ']' if depth > 0 => depth -= 1,
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    // Collapse whitespace runs introduced by stripped brackets and
+    // trim the edges. Splitting on whitespace and re-joining is
+    // simpler than walking the string with a state machine and is
+    // cheap on the ms-scale strings whisper produces.
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Stop the audio stream and return the captured samples, mapping the
@@ -1210,6 +1268,79 @@ mod tests {
         fn is_recording(&self) -> bool {
             self.started.load(Ordering::Acquire)
         }
+    }
+
+    // -- whisper bracket-sentinel stripping ------------------------------
+
+    #[test]
+    fn strip_brackets_drops_pure_blank_audio_sentinel() {
+        // The exact case in #196's user report: whisper emitted
+        // `[BLANK_AUDIO]` and the user saw it in the result panel
+        // and on their clipboard.
+        assert_eq!(super::strip_whisper_brackets("[BLANK_AUDIO]"), "");
+    }
+
+    #[test]
+    fn strip_brackets_drops_other_status_sentinels() {
+        // Same shape, different label. Whisper produces these for
+        // music / non-speech / unintelligible segments.
+        for sentinel in [
+            "[NOISE]",
+            "[MUSIC]",
+            "[ MUSIC ]",
+            "[INAUDIBLE]",
+            "[Sound effects]",
+            "[laughter]",
+        ] {
+            assert_eq!(
+                super::strip_whisper_brackets(sentinel),
+                "",
+                "sentinel {sentinel} should strip to empty"
+            );
+        }
+    }
+
+    #[test]
+    fn strip_brackets_keeps_real_speech_around_a_silence_marker() {
+        // Whisper sometimes prefixes a transcript with
+        // `[BLANK_AUDIO]` when there's a leading silence segment —
+        // the real speech follows. Keep the speech, drop the marker,
+        // collapse the surrounding whitespace.
+        assert_eq!(
+            super::strip_whisper_brackets("[BLANK_AUDIO] hello world"),
+            "hello world"
+        );
+        assert_eq!(
+            super::strip_whisper_brackets("hello world [NOISE]"),
+            "hello world"
+        );
+        assert_eq!(
+            super::strip_whisper_brackets("first [NOISE] second"),
+            "first second"
+        );
+    }
+
+    #[test]
+    fn strip_brackets_leaves_text_with_no_brackets_alone() {
+        // The common path. Pin so a regression in the stripping
+        // pass doesn't accidentally trim or reflow real
+        // transcripts.
+        assert_eq!(
+            super::strip_whisper_brackets("Hello, world."),
+            "Hello, world."
+        );
+    }
+
+    #[test]
+    fn strip_brackets_handles_nested_or_unbalanced_brackets_safely() {
+        // Defensive: whisper isn't supposed to emit nested or
+        // unbalanced brackets, but the depth counter shouldn't
+        // panic if it does. Output may not be ideal — the goal is
+        // "doesn't crash, doesn't drop more than it should."
+        assert_eq!(super::strip_whisper_brackets("[[NESTED]]"), "");
+        // A stray closing bracket is preserved (depth never goes
+        // negative).
+        assert_eq!(super::strip_whisper_brackets("hello]"), "hello]");
     }
 
     // -- stop_dictation helper tests --------------------------------------
