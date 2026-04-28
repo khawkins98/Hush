@@ -10,7 +10,7 @@ import { installMocks } from "./_mock";
 // `error-states` style files when those flows land.
 
 test.describe("settings window — toolbar nav", () => {
-  test("renders all six tabs and lands on General by default", async ({
+  test("renders all seven tabs and lands on General by default", async ({
     page,
   }) => {
     await installMocks(page);
@@ -24,6 +24,7 @@ test.describe("settings window — toolbar nav", () => {
       "model",
       "vocabulary",
       "replacements",
+      "meeting",
       "permissions",
       "about",
     ]) {
@@ -183,6 +184,91 @@ test.describe("settings window — PTT editor", () => {
     await expect(page.locator("text=Press your combo")).toBeVisible();
     await expect(record).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Cancel/i })).toBeVisible();
+  });
+});
+
+test.describe("settings window — Meeting tab (Phase E #112)", () => {
+  test("renders the empty-state hint when no overrides exist", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await expect(
+      page.locator('[data-testid="settings-tab-meeting"]'),
+    ).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("section.panel-overrides")).toBeVisible();
+    await expect(page.locator(".empty-history")).toContainText(
+      /No overrides yet/i,
+    );
+  });
+
+  test("submitting the form invokes upsert with trimmed app_name", async ({
+    page,
+  }) => {
+    // The trimming is enforced backend-side too, but pinning it on
+    // the frontend keeps the wire contract honest — a typo with
+    // trailing whitespace shouldn't sneak in.
+    const calls: Array<{ appName: string; kind: string }> = [];
+    await page.exposeFunction("__hush_record_upsert", (args: unknown) => {
+      calls.push(args as { appName: string; kind: string });
+    });
+    await installMocks(page, {
+      meeting_app_override_upsert: (args) => {
+        const { appName, kind } = (args ?? {}) as {
+          appName: string;
+          kind: string;
+        };
+        (
+          window as unknown as {
+            __hush_record_upsert: (a: { appName: string; kind: string }) => void;
+          }
+        ).__hush_record_upsert({ appName, kind });
+        return {
+          appName,
+          kind,
+          createdAt: "2026-04-28T00:00:00Z",
+        };
+      },
+    });
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    await page
+      .getByLabel("App identifier")
+      .fill("  com.example.huddle  ");
+    await page.getByLabel("Classification", { exact: true }).selectOption("meeting");
+    await page.getByRole("button", { name: "Add" }).click();
+
+    await expect.poll(() => calls.length).toBeGreaterThan(0);
+    expect(calls[0]).toEqual({
+      appName: "com.example.huddle",
+      kind: "meeting",
+    });
+  });
+
+  test("renders pre-existing overrides as rows", async ({ page }) => {
+    await installMocks(page, {
+      meeting_app_override_list: () => [
+        {
+          appName: "alpha.app",
+          kind: "meeting",
+          createdAt: "2026-04-26T00:00:00Z",
+        },
+        {
+          appName: "zebra.app",
+          kind: "media",
+          createdAt: "2026-04-27T00:00:00Z",
+        },
+      ],
+    });
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    const rows = page.locator(".override-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).locator(".override-name")).toHaveText("alpha.app");
+    await expect(rows.nth(1).locator(".override-name")).toHaveText("zebra.app");
   });
 });
 

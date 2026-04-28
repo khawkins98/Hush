@@ -39,6 +39,7 @@
   import { onDestroy, onMount, tick } from "svelte";
 
   import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
+  import MeetingAppOverridesPanel from "$lib/MeetingAppOverridesPanel.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
   import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
   import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
@@ -49,6 +50,8 @@
     IpcError,
     MacosPermissionDiagnostic,
     MacosPermissionResetResult,
+    MeetingAppKind,
+    MeetingAppOverride,
     ModelCard,
     ModelSelectNotice,
     ReplacementRule,
@@ -60,6 +63,7 @@
     | "model"
     | "vocabulary"
     | "replacements"
+    | "meeting"
     | "permissions"
     | "about";
 
@@ -79,6 +83,7 @@
     { key: "model", label: "Model", testId: "settings-tab-model" },
     { key: "vocabulary", label: "Vocabulary", testId: "settings-tab-vocabulary" },
     { key: "replacements", label: "Replacements", testId: "settings-tab-replacements" },
+    { key: "meeting", label: "Meeting", testId: "settings-tab-meeting" },
     { key: "permissions", label: "Permissions", testId: "settings-tab-permissions" },
     { key: "about", label: "About", testId: "settings-tab-about" },
   ];
@@ -122,6 +127,14 @@
   let newFind = $state("");
   let newReplace = $state("");
   let findInputEl = $state<HTMLInputElement | null>(null);
+
+  // ---- Meeting app classification overrides (Phase E, #112) -------------
+  let appOverrides = $state<MeetingAppOverride[]>([]);
+  let appOverridesLoaded = $state(false);
+  let appOverridesError = $state<string | null>(null);
+  let newOverrideName = $state("");
+  let newOverrideKind = $state<MeetingAppKind>("meeting");
+  let overrideInputEl = $state<HTMLInputElement | null>(null);
 
   // ---- About tab --------------------------------------------------------
   // Version pulled from Tauri at runtime so the displayed value
@@ -193,6 +206,77 @@
       macosDiagnostic = res.canReset ? res : null;
     } catch {
       macosDiagnostic = null;
+    }
+  }
+
+  async function loadAppOverrides(): Promise<void> {
+    try {
+      appOverrides = await invoke<MeetingAppOverride[]>(
+        "meeting_app_override_list",
+      );
+      appOverridesError = null;
+    } catch (e) {
+      appOverridesError = formatError(e);
+    } finally {
+      appOverridesLoaded = true;
+    }
+  }
+
+  async function addAppOverride(e: Event) {
+    e.preventDefault();
+    const name = newOverrideName.trim();
+    if (!name) return;
+    try {
+      const created = await invoke<MeetingAppOverride>(
+        "meeting_app_override_upsert",
+        { appName: name, kind: newOverrideKind },
+      );
+      // Replace any existing entry for this app (upsert) and resort
+      // by app name so the rendered order matches the backend's
+      // ORDER BY.
+      appOverrides = [
+        ...appOverrides.filter((o) => o.appName !== created.appName),
+        created,
+      ].sort((a, b) => a.appName.localeCompare(b.appName));
+      newOverrideName = "";
+      newOverrideKind = "meeting";
+      appOverridesError = null;
+      await tick();
+      overrideInputEl?.focus();
+    } catch (err) {
+      appOverridesError = formatError(err);
+    }
+  }
+
+  async function changeAppOverrideKind(
+    override: MeetingAppOverride,
+    kind: MeetingAppKind,
+  ) {
+    try {
+      const updated = await invoke<MeetingAppOverride>(
+        "meeting_app_override_upsert",
+        { appName: override.appName, kind },
+      );
+      appOverrides = appOverrides.map((o) =>
+        o.appName === updated.appName ? updated : o,
+      );
+      appOverridesError = null;
+    } catch (e) {
+      appOverridesError = formatError(e);
+    }
+  }
+
+  async function deleteAppOverride(override: MeetingAppOverride) {
+    try {
+      await invoke("meeting_app_override_delete", {
+        appName: override.appName,
+      });
+      appOverrides = appOverrides.filter(
+        (o) => o.appName !== override.appName,
+      );
+      appOverridesError = null;
+    } catch (e) {
+      appOverridesError = formatError(e);
     }
   }
 
@@ -377,6 +461,7 @@
         target === "model" ||
         target === "vocabulary" ||
         target === "replacements" ||
+        target === "meeting" ||
         target === "permissions" ||
         target === "about"
       ) {
@@ -391,6 +476,7 @@
       loadMacosDiagnostic(),
       loadAutostartState(),
       loadAppMetadata(),
+      loadAppOverrides(),
     ]);
   });
 
@@ -579,6 +665,19 @@
         bind:inputEl={findInputEl}
         onSubmit={addReplacement}
         onDelete={deleteReplacement}
+      />
+    {:else if active === "meeting"}
+      <h1 class="tab-title">Meeting</h1>
+      <MeetingAppOverridesPanel
+        overrides={appOverrides}
+        overridesLoaded={appOverridesLoaded}
+        overridesError={appOverridesError}
+        bind:newAppName={newOverrideName}
+        bind:newKind={newOverrideKind}
+        bind:inputEl={overrideInputEl}
+        onSubmit={addAppOverride}
+        onChangeKind={changeAppOverrideKind}
+        onDelete={deleteAppOverride}
       />
     {:else if active === "permissions"}
       {#if macosDiagnostic}
