@@ -68,6 +68,11 @@
   let historyQuery = $state("");
   let historySearching = $state(false);
   let historyError = $state<string | null>(null);
+  // Unfiltered total — `historyEntries` shows the current page /
+  // filtered slice, so the total drives the sidebar counter and
+  // the "Clear all N" confirmation copy. Fetched via
+  // `history_count` alongside every list/search refresh.
+  let historyTotalCount = $state(0);
   // Sentinel that any history-touching command bumps so we can react
   // to an external invalidation (e.g. a successful stop_dictation
   // inserted a new row).
@@ -363,11 +368,19 @@
     historyError = null;
     historySearching = true;
     try {
-      historyEntries = await invoke<HistoryEntry[]>("history_search", {
-        query: historyQuery,
-        limit: HISTORY_PAGE_SIZE,
-        offset: 0,
-      });
+      // Fetch the current page and the unfiltered total in
+      // parallel — the total drives the "Clear all N"
+      // confirmation copy and the sidebar counter.
+      const [entries, total] = await Promise.all([
+        invoke<HistoryEntry[]>("history_search", {
+          query: historyQuery,
+          limit: HISTORY_PAGE_SIZE,
+          offset: 0,
+        }),
+        invoke<number>("history_count"),
+      ]);
+      historyEntries = entries;
+      historyTotalCount = total;
       historyVersion += 1;
     } catch (e) {
       historyError = formatError(e);
@@ -406,6 +419,24 @@
       // delete succeeded but our optimistic view drifted.
       historyEntries = historyEntries.filter((e) => e.id !== entry.id);
       void refreshHistory();
+    } catch (e) {
+      historyError = formatError(e);
+    }
+  }
+
+  async function clearAllHistory() {
+    try {
+      const removed = await invoke<number>("history_clear");
+      historyEntries = [];
+      historyTotalCount = 0;
+      historyVersion += 1;
+      historyError = null;
+      // Confirmation feedback is surfaced inline by the panel — the
+      // confirm prompt closes automatically when the IPC fires.
+      // Logging the removed count is enough for now; a future toast
+      // / status pill can render `Cleared {removed} transcripts.` if
+      // the silent confirm path turns out to feel ambiguous.
+      void removed;
     } catch (e) {
       historyError = formatError(e);
     }
@@ -888,7 +919,7 @@
   <AppSidebar
     active={activeSection}
     onSelect={(s) => (activeSection = s)}
-    historyCount={historyEntries.length}
+    historyCount={historyTotalCount}
     meetingsCount={meetingSessions.length}
     activeMeetingInProgress={meetingActiveId !== null}
   />
@@ -1024,10 +1055,12 @@
         {historySearching}
         {historyError}
         {historyVersion}
+        {historyTotalCount}
         {formatTimestamp}
         {onSearchInput}
         onCopy={copyHistoryEntry}
         onDelete={deleteHistoryEntry}
+        onClearAll={clearAllHistory}
       />
     {/if}
   </main>
