@@ -151,7 +151,7 @@ pub async fn my_command(state: State<'_, AppState>, arg: String) -> IpcResult<My
 }
 ```
 
-Errors should map to a variant of `IpcError` so the frontend's `formatError` `switch(ipc.kind)` dispatches the right recovery copy. Adding a new error variant means updating that switch — see step 4 below.
+Errors should map to a variant of `IpcError` so the frontend's `formatErrorDisplay` (in `src/lib/errors.ts`) can produce a tailored `{ headline, hint?, details? }` for the shared `ErrorDisplay` component. Adding a new error variant means updating that mapper — see step 4 below.
 
 ### 2. Register the command in the Tauri builder
 
@@ -200,7 +200,7 @@ The mock's field shape must mirror the Rust struct — same camelCase names, sam
 
 If the new command needs error simulation in a test, override at the spec level (`installMocks(page, { my_command: () => { throw { kind: "settings", message: "..." } } })`).
 
-If the command introduces a new `IpcError` variant, also update the frontend's `formatError` switch in `+page.svelte` so the user gets tailored copy instead of the generic default.
+If the command introduces a new `IpcError` variant, also update `formatErrorDisplay` in `src/lib/errors.ts` so the user gets tailored copy in the shared `ErrorDisplay` instead of the generic default.
 
 ### Verifying
 
@@ -218,6 +218,12 @@ npm run tauri dev                   # Real backend roundtrip (if it touches star
 If any of these surface a mismatch, fix at the appropriate layer above. The four places are coupled; CI catches Rust-only and TS-only breaks but cannot catch type-shape mismatches between them — that's a hands-on smoke responsibility.
 
 ---
+
+## Destructive UI actions: click-to-confirm
+
+Buttons that delete user data (clear history, delete a session, remove a vocabulary term or replacement, remove an installed model) use a click-to-confirm pattern instead of a `window.confirm` dialog: the first click swaps the button into an "Are you sure?" state that auto-resets after ~5 s, the second click commits. This keeps the dialog-free, keyboard-friendly feel of the rest of the app and avoids the OS-modal context-switch.
+
+When adding a new destructive surface, mirror the pattern: a `pendingConfirmId` (or `pendingConfirm` boolean) `$state`, a `setTimeout` to clear it, and matching aria copy ("Confirm deletion" vs "Delete"). Voice should be consistent — short, plain ("Delete it?", not "Are you absolutely sure you wish to proceed?").
 
 ## Code comments
 

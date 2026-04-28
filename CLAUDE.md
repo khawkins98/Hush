@@ -115,7 +115,7 @@ A `#[tauri::command]` lives in **four** places that must stay aligned. CI catche
 3. **TypeScript type** in `src/lib/types.ts` (or inline in `+page.svelte` if scoped to the page), then `invoke<MyResult>("my_command", ...)`.
 4. **Playwright mock** in `tests/e2e/_mock.ts` with a default handler whose field shape mirrors the Rust struct exactly. Mocks are serialized via `toString()` and rebuilt in the page context, so they can't capture closure variables — any per-test counters must go through `page.exposeFunction`.
 
-A new `IpcError` variant also needs the frontend's `formatError` switch in `+page.svelte` updated.
+A new `IpcError` variant also needs `formatErrorDisplay` in `src/lib/errors.ts` updated to map it to the structured `{ headline, hint?, details? }` shape that `ErrorDisplay.svelte` renders. Page-level surfaces wrap that in their own `ErrorDisplay` slot.
 
 A new IPC the **settings window** needs to invoke isn't automatically allowed by the `default` capability — the settings window has its own `capabilities/settings.json`. Custom `#[tauri::command]` functions don't need permission entries, but Tauri plugin commands (autostart, clipboard, etc.) do. Add explicitly.
 
@@ -176,9 +176,12 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 
 ### Frontend (`src/`)
 
-- `lib/*.svelte` — Svelte 5 components (runes-based; `$state`, `$derived`, `$effect`, `$bindable`, `$props()`). `AppSidebar.svelte`, `PttHotkeyEditor.svelte`, plus the panel components (`HistoryPanel`, `MeetingSessionsPanel`, `ModelPickerPanel`, `VocabularyPanel`, `ReplacementsPanel`, `MacosDiagnosticPanel`, `ControlsSection`, `ResultBlock`).
+- `lib/*.svelte` — Svelte 5 components (runes-based; `$state`, `$derived`, `$effect`, `$bindable`, `$props()`). `AppSidebar.svelte`, `PttHotkeyEditor.svelte`, `ErrorDisplay.svelte` (shared structured-error renderer), plus the panel components (`HistoryPanel`, `MeetingSessionsPanel`, `ModelPickerPanel`, `VocabularyPanel`, `ReplacementsPanel`, `MeetingAppOverridesPanel`, `MacosDiagnosticPanel`, `ControlsSection`, `ResultBlock`).
 - `lib/format.ts`, `lib/types.ts` — shared format helpers and TS types mirroring backend serde shapes (camelCase).
-- `routes/+page.svelte` — main window; orchestrates Dictation / Meetings / History sections. ~1.2k LOC; tracked under #156. Does NOT own model picker, vocabulary, replacements, or macOS-permissions diagnostic state — those moved to the Settings window in Phase 3 of the IA redesign.
+- `lib/errors.ts` — `ErrorDisplay` shape + `formatErrorDisplay` / `formatErrorMessage` helpers. Single place to map an `IpcError` variant (or a thrown `Error`) into the headline / hint / details rendered by `ErrorDisplay.svelte`.
+- `app.css` — global stylesheet imported by every route via `+layout.svelte`. Hosts the accent CSS custom properties (`--accent`, `--accent-hover`) used across components.
+- `routes/+layout.svelte` — markup-free layout that imports `app.css`. SvelteKit requires a layout file to apply a global stylesheet to every route.
+- `routes/+page.svelte` — main window; orchestrates Dictation / Meetings / History sections. ~1.5k LOC; tracked under #156. Does NOT own model picker, vocabulary, replacements, or macOS-permissions diagnostic state — those live in the Settings window.
 - `routes/settings/+page.svelte` — standalone Settings window. State-owner for the moved panels. Cross-window invalidation is event-driven where it matters (`model:download-done` is broadcast; replacements/vocab changes are picked up at the next `start_dictation`).
 - `routes/hud/+page.svelte` — recording HUD pill. Loaded into the secondary `hud` window.
 - `app.html` — page shell.

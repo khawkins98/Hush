@@ -122,8 +122,8 @@ pub struct ForegroundApp {
 /// — and a single lifecycle: read/written by the dictation + history +
 /// meeting flows, hot-mocked behind the trait seam in tests. Bundling
 /// them keeps `AppState`'s top-level field count bounded as new
-/// repositories land (Phase D's diarization summaries, Phase E's per-
-/// app classifier overrides).
+/// repositories land (e.g. future diarization summaries beyond the
+/// current speaker-label column).
 ///
 /// `settings` is intentionally NOT in this struct. It has a different
 /// access pattern: read at boot to drive transcriber / PTT / autostart

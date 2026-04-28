@@ -329,7 +329,7 @@ mod tests {
         assert!(u.id > 0);
         assert_eq!(u.session_id, s.id);
         assert!(u.is_final);
-        assert!(u.speaker_label.is_none(), "diarization not yet shipped");
+        assert!(u.speaker_label.is_none(), "no label was supplied on insert");
 
         // Count was bumped atomically.
         let after = repo.list().await.unwrap()[0].clone();
