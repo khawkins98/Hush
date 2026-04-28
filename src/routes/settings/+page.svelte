@@ -49,6 +49,7 @@
     formatErrorMessage,
     type ErrorDisplay,
   } from "$lib/errors";
+  import { Events } from "$lib/events";
   import { formatMb } from "$lib/format";
   import type {
     DownloadProgress,
@@ -424,7 +425,7 @@
     type DownloadStatusEvent = { id: string; message: string | null };
 
     unlistenDownloadProgress = await listen<DownloadProgressEvent>(
-      "model:download-progress",
+      Events.ModelDownloadProgress,
       (e) => {
         const next = new Map(downloading);
         next.set(e.payload.id, {
@@ -434,13 +435,13 @@
         downloading = next;
       },
     );
-    unlistenDownloadDone = await listen<DownloadStatusEvent>("model:download-done", (e) => {
+    unlistenDownloadDone = await listen<DownloadStatusEvent>(Events.ModelDownloadDone, (e) => {
       const next = new Map(downloading);
       next.delete(e.payload.id);
       downloading = next;
       void loadModels();
     });
-    unlistenDownloadFailed = await listen<DownloadStatusEvent>("model:download-failed", (e) => {
+    unlistenDownloadFailed = await listen<DownloadStatusEvent>(Events.ModelDownloadFailed, (e) => {
       const failed = new Map(downloadFailed);
       failed.set(e.payload.id, e.payload.message ?? "Download failed.");
       downloadFailed = failed;
@@ -453,7 +454,7 @@
     // diagnostic" link / future menu items. Payload is the tab key
     // — silently ignored if it isn't one we know, so future tabs
     // added on the main window don't crash a stale settings build.
-    unlistenGotoTab = await listen<string>("settings:goto-tab", (e) => {
+    unlistenGotoTab = await listen<string>(Events.SettingsGotoTab, (e) => {
       const target = e.payload;
       if (
         target === "general" ||

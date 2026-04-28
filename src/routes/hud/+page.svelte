@@ -22,6 +22,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { onMount } from "svelte";
+  import { Events } from "$lib/events";
 
   // Latest RMS from the backend pump, in roughly [0, 1]. We hold
   // it as a runes-state float and let the meter's CSS width track
@@ -49,7 +50,7 @@
       raf = requestAnimationFrame(tick);
     };
 
-    listen<number>("audio:level", (event) => {
+    listen<number>(Events.AudioLevel, (event) => {
       rms = event.payload ?? 0;
     }).then((fn) => {
       unlisten = fn;
