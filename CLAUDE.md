@@ -52,12 +52,19 @@ cd src-tauri && HUSH_TEST_AUDIO=/path/to/sample.wav cargo test --features whispe
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check
 
-# Frontend e2e (Playwright + Chromium with mocked Tauri IPC)
+# Frontend e2e — Path A (Playwright + mocked Tauri IPC)
 npm run test:e2e
 npm run test:e2e:ui                                              # interactive
 
-# Run a single e2e spec
+# Run a single Path A spec
 npx playwright test tests/e2e/meeting-panel.spec.ts
+
+# Frontend e2e — Path B (tauri-driver + WebdriverIO, real binary)
+# Prereq: `cargo install tauri-driver --locked` and a debug build:
+#   npm run tauri build -- --debug
+# See `tests/e2e-tauri/README.md` for full setup. CI integration is
+# deferred until tauri-driver's macOS support stabilises.
+npm run test:e2e:tauri
 
 # Reset stale dev servers (kills tauri/vite processes)
 npm run dev-cleanup
@@ -177,5 +184,6 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 
 ### Other
 
-- `tests/e2e/` — Playwright specs against `HUSH_E2E=1` mode (vite swaps `@tauri-apps/api/{core,event}` for in-tree stubs). Helper at `tests/e2e/_mock.ts`. Sidebar nav uses `gotoSection(page, "meetings" | "history")` to switch tabs in tests.
+- `tests/e2e/` — Path A. Playwright specs against `HUSH_E2E=1` mode (vite swaps `@tauri-apps/api/{core,event}` for in-tree stubs). Helper at `tests/e2e/_mock.ts`. Sidebar nav uses `gotoSection(page, "meetings" | "history")` to switch tabs in tests.
+- `tests/e2e-tauri/` — Path B (#57 / #202). WebdriverIO + `tauri-driver` against the real built binary. Catches the flows Path A's IPC mocks can't (real `invoke` round-trips, `listen` events, HUD secondary-window lifecycle, real model download against `wiremock`). Scaffold + smoke spec ship today; CI integration deferred until tauri-driver's macOS path stabilises. Run locally per the README.
 - `src-tauri/capabilities/` — per-window Tauri capability files: `default.json` (main), `settings.json`, `hud.json`. Adding a new permission to a window is deliberate; every grant widens that window's blast radius.

@@ -207,8 +207,12 @@ These can't be exercised by CI:
   must be clean
 - `cd src-tauri && cargo fmt --all -- --check` — must be clean
 - `npm run check` — svelte-check, must be clean
-- `npm run test:e2e` — 30 Playwright specs (Chromium with mocked
-  IPC; full-stack flows are tracked behind #57 tauri-driver path)
+- `npm run test:e2e` — 41 Path A specs (Playwright + Chromium,
+  mocked IPC)
+- `npm run test:e2e:tauri` — Path B (tauri-driver, real binary).
+  Scaffold + smoke spec landed under #202 (refs #57); CI is
+  deferred until tauri-driver's macOS path stabilises. Run
+  locally per `tests/e2e-tauri/README.md`.
 - `cd src-tauri && HUSH_TEST_AUDIO=/path/to/sample.wav cargo test -- --ignored`
   for the audio fixture (needs a real WAV)
 
@@ -252,7 +256,10 @@ These can't be exercised by CI:
   perf; needs careful benchmarking before changing.
 - [#57](https://github.com/khawkins98/Hush/issues/57) — tauri-driver
   E2E for full-stack flows (HUD lifecycle, real audio, real model
-  download).
+  download). **Scaffold landed (#202)**: directory structure,
+  `wdio.conf.ts`, smoke spec, README. CI integration deferred
+  until tauri-driver's macOS path stabilises; spec coverage grows
+  as Path A's mock-shaped gaps surface.
 - [#116](https://github.com/khawkins98/Hush/issues/116) — AppState
   DataServices grouping. Issue body explicitly says "don't refactor
   preemptively"; revisit when a 5th repository lands.
