@@ -106,13 +106,14 @@ pub const ENV_PTT_HOTKEY: &str = "HUSH_PTT_HOTKEY";
 /// otherwise auto-enable. Set `HUSH_PTT_DISABLE=1`.
 pub const ENV_PTT_DISABLE: &str = "HUSH_PTT_DISABLE";
 
-/// Force-enable the rdev PTT listener on platforms where it would
-/// otherwise auto-disable. Set `HUSH_PTT_ENABLE=1`. Currently only
-/// meaningful on macOS, where PTT stays opt-in: the macOS-26 abort
-/// (#69) is fixed by pinning rdev to fufesou's fork (see Cargo.toml),
-/// but enabling PTT triggers the Input Monitoring permission
-/// prompt — a privacy surprise some users won't want without first
-/// opting in.
+/// Force-enable the rdev PTT listener even when the persisted
+/// setting says off. Set `HUSH_PTT_ENABLE=1`. Most useful as a
+/// power-user / CI override after the user has explicitly disabled
+/// PTT in Settings: the env var overrides the persisted-false on a
+/// per-session basis without flipping the persisted state. Pre-#194
+/// this was also the canonical way to opt in on macOS (where the
+/// platform default was off); the platform default is on
+/// everywhere now, so fresh installs don't need this var.
 pub const ENV_PTT_ENABLE: &str = "HUSH_PTT_ENABLE";
 
 /// Event emitted to the frontend on PTT key-down.
@@ -507,33 +508,17 @@ pub fn register_ptt_listener<R: Runtime>(
             rollback_spawned();
             return Ok(());
         }
-        PttEnablement::DisabledMacosDefault => {
-            // Default-disable on macOS, opt-in via env var.
-            //
-            // The macOS-26 hard-abort that originally drove the
-            // default-off behaviour (rdev calling
-            // `TISGetInputSourceProperty` from a non-main thread,
-            // hitting `dispatch_assert_queue_fail` — see #69) is
-            // fixed by pinning to fufesou/rdev's fork (the one
-            // RustDesk ships in production), which attaches the
-            // CGEventTap to `CFRunLoopGetMain()` so the callback
-            // runs on the main thread and TSM is happy. Narsil's
-            // upstream PR #147 was incomplete — it only fixed the
-            // `send` path, not `listen`. See Cargo.toml comment.
-            //
-            // We *could* flip the default to on, but PTT is still
-            // worth opting into deliberately: it triggers the Input
-            // Monitoring permission prompt on first install, and a
-            // dictation app silently asking to read every keystroke
-            // is a privacy surprise some users won't want. Once
-            // #70 ships a settings-window toggle, the gate moves
-            // there.
-            tracing::warn!(
-                "PTT listener skipped on macOS by default. The macOS-26 abort that previously \
-                 made this unsafe is fixed by pinning rdev to fufesou's fork (see Cargo.toml), \
-                 so {ENV_PTT_ENABLE}=1 is now safe. PTT stays opt-in because enabling it \
-                 triggers the Input Monitoring permission prompt — toggle hotkey and \
-                 button-driven dictation work without it."
+        PttEnablement::DisabledByPreference => {
+            // The persisted setting says off — either the user
+            // disabled the toggle in Settings → General → Hotkeys,
+            // or they upgraded from a pre-#194 install that had
+            // `enabled = false` written to the DB. Either way,
+            // honour their choice: skip the listener silently
+            // (`info!`, not `warn!`) and let them re-enable from
+            // the same place if they change their mind.
+            tracing::info!(
+                "PTT listener skipped: persisted setting says disabled. \
+                 Re-enable in Settings → General → Hotkeys."
             );
             rollback_spawned();
             return Ok(());
@@ -639,31 +624,34 @@ pub fn register_ptt_listener<R: Runtime>(
 ///
 /// Three possibilities, computed once at startup:
 /// - `Enabled` — register the listener.
-/// - `DisabledByEnv` — `HUSH_PTT_DISABLE=1` set; user opted out.
-/// - `DisabledMacosDefault` — macOS-only; opt out by default until #69
-///   ships a TSM-free event-tap implementation. User can override via
-///   `HUSH_PTT_ENABLE=1` if on older macOS where rdev's TSM call works.
+/// - `DisabledByEnv` — `HUSH_PTT_DISABLE=1` set; user opted out via env.
+/// - `DisabledByPreference` — persisted setting says off (user
+///   disabled the toggle in Settings → General → Hotkeys, or — on
+///   pre-#194 installs that explicitly persisted `false` — that
+///   choice survives the upgrade). Pre-#194 this variant was
+///   `DisabledMacosDefault` and only applied on macOS; #194 flipped
+///   the platform default to on everywhere now that fufesou's rdev
+///   fork resolves the macOS-26 abort, so the variant now means
+///   "user said no" rather than "platform defaults say no".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PttEnablement {
     Enabled,
     DisabledByEnv,
-    DisabledMacosDefault,
+    DisabledByPreference,
 }
 
-/// Resolve PTT enablement from the environment + persisted state +
-/// platform default.
+/// Resolve PTT enablement from the environment + persisted state.
 ///
 /// Pure function: pulled out of `register_ptt_listener` so unit tests can
 /// drive the decision without spawning a Tauri runtime or touching the
 /// real environment. `persisted_active` is the in-memory mirror of the
 /// settings DB value, which already incorporates the platform default
-/// (`build_default` falls back to `!cfg!(target_os = "macos")` when the
-/// DB row is absent).
+/// (`build_default` falls back to `true` on every platform when the DB
+/// row is absent — see #194).
 fn resolve_enablement(
     disable: Option<&str>,
     enable: Option<&str>,
     persisted_active: bool,
-    is_macos: bool,
 ) -> PttEnablement {
     let truthy = |v: Option<&str>| {
         matches!(
@@ -678,28 +666,22 @@ fn resolve_enablement(
         return PttEnablement::Enabled;
     }
     if persisted_active {
-        return PttEnablement::Enabled;
+        PttEnablement::Enabled
+    } else {
+        // The user has explicitly persisted `enabled = false`. Pre-#194
+        // this branch also caught macOS fresh installs (the platform
+        // default was off) — that's no longer the case; a fresh install
+        // boots with `persisted_active = true`.
+        PttEnablement::DisabledByPreference
     }
-    if is_macos {
-        // macOS without env enable AND without persisted-true: stay
-        // off so the Input Monitoring permission prompt doesn't fire
-        // on first launch.
-        return PttEnablement::DisabledMacosDefault;
-    }
-    PttEnablement::Enabled
 }
 
 /// Production wrapper around [`resolve_enablement`] that reads the real
-/// environment + the build-time `cfg(target_os)`.
+/// environment.
 fn ptt_enablement(persisted_active: bool) -> PttEnablement {
     let disable = std::env::var(ENV_PTT_DISABLE).ok();
     let enable = std::env::var(ENV_PTT_ENABLE).ok();
-    resolve_enablement(
-        disable.as_deref(),
-        enable.as_deref(),
-        persisted_active,
-        cfg!(target_os = "macos"),
-    )
+    resolve_enablement(disable.as_deref(), enable.as_deref(), persisted_active)
 }
 
 /// Emit a Tauri event, swallowing failures with a warning. Same posture
@@ -914,71 +896,58 @@ mod tests {
 
     // -- Enablement resolution -------------------------------------------
     //
-    // Pinning the disable/enable matrix because regressing this is how
-    // users get a hard crash on macOS 26+ — the assertions trap at the
-    // OS level (dispatch_assert_queue_fail), not as a Rust panic, so
-    // catch_unwind can't save us. The defence is to never spawn the
-    // rdev listener on macOS by default. See #69 for the underlying bug.
+    // Pinning the disable/enable matrix. Pre-#194 the macOS branch was
+    // load-bearing: rdev::listen aborted at the OS level on macOS 26+
+    // (dispatch_assert_queue_fail, no panic to catch), so the macOS
+    // default had to be off. With fufesou's rdev fork pinned, that
+    // constraint is gone and the platform default is uniform. The
+    // matrix tests now pin "user said no via env" and "user said no
+    // via persisted setting" as the only two off paths.
 
     #[test]
-    fn enablement_macos_disabled_by_default() {
-        // No env, no persisted-active, on macOS → off (privacy
-        // default — don't trigger Input Monitoring on first launch).
+    fn enablement_default_is_on_when_persisted_active_is_true() {
+        // Fresh install: build_default writes `persisted_active = true`
+        // on every platform. Listener spawns — fires Input Monitoring
+        // prompt on macOS at first launch.
+        assert_eq!(resolve_enablement(None, None, true), PttEnablement::Enabled);
+    }
+
+    #[test]
+    fn enablement_persisted_false_disables() {
+        // User explicitly disabled the toggle in Settings → General
+        // → Hotkeys (or upgraded from a pre-#194 install that had
+        // `enabled = false` written to the DB). Listener stays off.
         assert_eq!(
-            resolve_enablement(None, None, false, true),
-            PttEnablement::DisabledMacosDefault
+            resolve_enablement(None, None, false),
+            PttEnablement::DisabledByPreference
         );
     }
 
     #[test]
-    fn enablement_macos_opt_in_via_env() {
+    fn enablement_env_enable_wins_over_persisted_false() {
+        // Power-user override: HUSH_PTT_ENABLE=1 forces the
+        // listener up even when the persisted setting says off.
         assert_eq!(
-            resolve_enablement(None, Some("1"), false, true),
+            resolve_enablement(None, Some("1"), false),
             PttEnablement::Enabled
         );
         assert_eq!(
-            resolve_enablement(None, Some("true"), false, true),
-            PttEnablement::Enabled
-        );
-    }
-
-    #[test]
-    fn enablement_macos_opt_in_via_persisted_state() {
-        // Settings UI flipped enabled to true; should boot the
-        // listener even without HUSH_PTT_ENABLE.
-        assert_eq!(
-            resolve_enablement(None, None, true, true),
+            resolve_enablement(None, Some("true"), false),
             PttEnablement::Enabled
         );
     }
 
     #[test]
-    fn enablement_disable_wins_over_enable_and_persisted() {
-        // If the user sets HUSH_PTT_DISABLE=1, it overrides every
-        // other signal — surprise-prevention when the user is
+    fn enablement_env_disable_wins_over_everything() {
+        // HUSH_PTT_DISABLE=1 is the kill switch — overrides env-enable
+        // AND persisted-true. Surprise-prevention when the user is
         // trying to stop a misbehaving listener.
         assert_eq!(
-            resolve_enablement(Some("1"), Some("1"), true, true),
+            resolve_enablement(Some("1"), Some("1"), true),
             PttEnablement::DisabledByEnv
         );
         assert_eq!(
-            resolve_enablement(Some("1"), None, true, false),
-            PttEnablement::DisabledByEnv
-        );
-    }
-
-    #[test]
-    fn enablement_non_macos_enabled_by_default() {
-        assert_eq!(
-            resolve_enablement(None, None, false, false),
-            PttEnablement::Enabled
-        );
-    }
-
-    #[test]
-    fn enablement_non_macos_disable_via_env() {
-        assert_eq!(
-            resolve_enablement(Some("1"), None, false, false),
+            resolve_enablement(Some("1"), None, true),
             PttEnablement::DisabledByEnv
         );
     }
@@ -987,22 +956,22 @@ mod tests {
     fn enablement_truthy_values_are_normalised() {
         // Be forgiving about HUSH_PTT_ENABLE=YES vs =yes vs ="1 " etc.
         assert_eq!(
-            resolve_enablement(None, Some("YES"), false, true),
+            resolve_enablement(None, Some("YES"), false),
             PttEnablement::Enabled
         );
         assert_eq!(
-            resolve_enablement(None, Some(" on "), false, true),
+            resolve_enablement(None, Some(" on "), false),
             PttEnablement::Enabled
         );
-        // Anything else stays disabled (and we fall through to the
-        // persisted/default check, which is also off here).
+        // Anything not in the truthy set falls through to the
+        // persisted/default check.
         assert_eq!(
-            resolve_enablement(None, Some("0"), false, true),
-            PttEnablement::DisabledMacosDefault
+            resolve_enablement(None, Some("0"), false),
+            PttEnablement::DisabledByPreference
         );
         assert_eq!(
-            resolve_enablement(None, Some(""), false, true),
-            PttEnablement::DisabledMacosDefault
+            resolve_enablement(None, Some(""), false),
+            PttEnablement::DisabledByPreference
         );
     }
 }
