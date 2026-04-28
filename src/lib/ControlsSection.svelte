@@ -68,12 +68,12 @@
     <div class="setup-banner-text">
       <strong>Set up your first model</strong>
       <span>
-        Hush needs a Whisper model to transcribe. Pick one from the
-        Models section below — Whisper Base is a solid default.
+        Hush needs a Whisper model to transcribe. Open Settings →
+        Model to pick one — Whisper Base is a solid default.
       </span>
     </div>
     <button class="primary" onclick={onScrollToModelPicker}>
-      Choose a model
+      Open Settings → Model
     </button>
   </aside>
 {/if}
