@@ -268,7 +268,7 @@ These can't be exercised by CI:
   as Path A's mock-shaped gaps surface.
 - [#156](https://github.com/khawkins98/Hush/issues/156) —
   `+page.svelte` state-layer refactor. Phase 3 lifted ~158 LOC; the
-  file is still ~1.2k. Worth more extraction (meeting state into a
+  file is still ~1.5k. Worth more extraction (meeting state into a
   composable) when next a contributor reports navigation friction.
 
 ### Recently shipped, removed from this list

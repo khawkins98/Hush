@@ -28,6 +28,8 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 **Meeting Mode**
 - 🎤 Long-running multi-source capture (mic + macOS system-audio in parallel via ScreenCaptureKit) with You/Remote-tagged transcripts
 - ⚡ Streaming Whisper sliding-window transcription with live partials + final utterances
+- 🗣️ Speaker diarization (D1: silence-gap heuristic, "Speaker A / Speaker B"; `EnergyDiarizer`, #191/#201)
+- 🤖 Per-app classifier with user-editable overrides (Settings → Meeting tab; #112/#192)
 - 📜 Searchable session history; in-app diagnostic for revoked permissions
 
 **Library**
@@ -42,9 +44,6 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 - 🟢 Live TCC permission detection (Microphone, Screen Recording, Input Monitoring) without triggering OS prompts; green "Permissions OK" pill on the Dictation surface when everything is granted
 - ⚙️ Autostart toggle (Launch Hush at login)
 - 👋 First-run welcome that explains Microphone + Input Monitoring permissions, with a "Show welcome on next launch" reset button
-
-- 🗣️ Speaker diarization in meetings (D1: silence-gap heuristic, "Speaker A / Speaker B"; ships in `EnergyDiarizer`, #191/#201)
-- 🤖 Per-app classifier with user overrides for Meeting Mode (#112/#192 — Settings → Meeting tab)
 
 ### Planned (v1.x)
 

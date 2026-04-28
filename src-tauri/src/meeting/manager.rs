@@ -24,12 +24,15 @@
 //!
 //! ## Speaker labels
 //!
-//! Each persisted utterance carries a `speaker_label` derived
-//! from its capture source: `"mic"` (you) or `"system"` (remote
-//! participants on a typical Zoom / Meet call). Real per-speaker
-//! diarization is upstream of this module ([#111]); when it
-//! ships, the pump will pass through the model's speaker id
-//! instead of the source-derived hint.
+//! Each persisted utterance carries a `speaker_label`. The pump
+//! runs every batch of finals through the configured `Diarize`
+//! impl (production: `EnergyDiarizer`, D1 silence-gap heuristic
+//! from #201) which produces `"Speaker A"` / `"Speaker B"`. When
+//! the diarizer abstains (`NoopDiarizer` in tests, or a future
+//! impl that emits None for low-confidence cases),
+//! `dispatch_utterances` falls back to the source-derived
+//! `"mic"` / `"system"` tag. D2 (model-based) is still upstream
+//! ([#111]).
 //!
 //! ## Streaming (post-#108)
 //!
