@@ -126,6 +126,29 @@
     await onStop();
   }
 
+  // Per-row click-to-confirm for session Delete. Stop-session got
+  // a confirm in #131; Delete-historical-session was still
+  // one-click despite producing the same "lost data with no undo"
+  // outcome. First click arms; second click within 5 s fires;
+  // 5 s timer auto-resets so a stale armed state can't catch
+  // the user.
+  let confirmingDeleteSessionId = $state<number | null>(null);
+  let confirmDeleteSessionTimer: number | undefined;
+
+  function handleSessionDelete(session: MeetingSession) {
+    if (confirmingDeleteSessionId === session.id) {
+      window.clearTimeout(confirmDeleteSessionTimer);
+      confirmingDeleteSessionId = null;
+      void onDelete(session);
+      return;
+    }
+    window.clearTimeout(confirmDeleteSessionTimer);
+    confirmingDeleteSessionId = session.id;
+    confirmDeleteSessionTimer = window.setTimeout(() => {
+      confirmingDeleteSessionId = null;
+    }, 5000);
+  }
+
   /**
    * Auto-expand the row of a session that just transitioned from
    * Active to Ended. The user clicked Stop, the panel re-renders
@@ -907,11 +930,17 @@
             </button>
             <button
               type="button"
-              class="ghost"
-              onclick={() => void onDelete(session)}
-              aria-label={`Delete session from ${session.appName}`}
+              class="ghost danger"
+              class:confirming={confirmingDeleteSessionId === session.id}
+              onclick={() => handleSessionDelete(session)}
+              aria-label={confirmingDeleteSessionId === session.id
+                ? `Click again to confirm deleting session from ${session.appName}`
+                : `Delete session from ${session.appName}`}
+              data-testid="meeting-session-delete-{session.id}"
             >
-              Delete
+              {confirmingDeleteSessionId === session.id
+                ? "Click to confirm"
+                : "Delete"}
             </button>
           </div>
         </li>
@@ -1561,6 +1590,21 @@ button.stop:hover:not(:disabled) {
 
 button.ghost {
   background-color: transparent;
+}
+
+button.ghost.danger {
+  color: #b03030;
+  border-color: #e1b8b8;
+}
+button.ghost.danger:hover:not(:disabled) {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+}
+button.ghost.danger.confirming {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+  color: #8a0000;
+  font-weight: 600;
 }
 
 button:hover:not(:disabled) {
