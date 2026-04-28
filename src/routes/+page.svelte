@@ -1037,6 +1037,27 @@
           Long-running multi-source capture with searchable transcripts.
         </p>
       </header>
+
+      {#if activeModel}
+        <!--
+          Active-model chip — same shape as Dictation. Meeting Mode
+          uses the same transcriber so showing which model is loaded
+          here too removes the "wait, what's transcribing this?"
+          ambiguity when the user lands on Meetings without first
+          touching Dictation. Click → Settings → Model.
+        -->
+        <button
+          type="button"
+          class="active-model-chip"
+          onclick={openModelSettings}
+          aria-label="Active model: {activeModel.displayName}. Click to change."
+          title="Change transcription model"
+        >
+          <span class="active-model-name">{activeModel.displayName}</span>
+          <span class="active-model-chevron" aria-hidden="true">›</span>
+        </button>
+      {/if}
+
       <MeetingSessionsPanel
         sessions={meetingSessions}
         sessionsLoaded={meetingSessionsLoaded}
