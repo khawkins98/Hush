@@ -68,7 +68,7 @@
   let historyLoaded = $state(false);
   let historyQuery = $state("");
   let historySearching = $state(false);
-  let historyError = $state<string | null>(null);
+  let historyError = $state<ErrorDisplay | null>(null);
   // Unfiltered total — `historyEntries` shows the current page /
   // filtered slice, so the total drives the sidebar counter and
   // the "Clear all N" confirmation copy. Fetched via
@@ -384,7 +384,7 @@
       historyTotalCount = total;
       historyVersion += 1;
     } catch (e) {
-      historyError = formatError(e);
+      historyError = formatErrorDisplay(e);
     } finally {
       historyLoaded = true;
       historySearching = false;
@@ -408,7 +408,11 @@
     try {
       await navigator.clipboard.writeText(entry.transcript);
     } catch (e) {
-      historyError = `Copy failed: ${String(e)}`;
+      historyError = {
+        headline: "Copy failed",
+        hint: "Hush couldn't write to the clipboard. Try copying again, or paste from this entry's text directly.",
+        details: String(e),
+      };
     }
   }
 
@@ -421,7 +425,7 @@
       historyEntries = historyEntries.filter((e) => e.id !== entry.id);
       void refreshHistory();
     } catch (e) {
-      historyError = formatError(e);
+      historyError = formatErrorDisplay(e);
     }
   }
 
@@ -439,7 +443,7 @@
       // the silent confirm path turns out to feel ambiguous.
       void removed;
     } catch (e) {
-      historyError = formatError(e);
+      historyError = formatErrorDisplay(e);
     }
   }
 

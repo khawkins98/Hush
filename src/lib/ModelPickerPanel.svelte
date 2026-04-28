@@ -1,10 +1,12 @@
 <script lang="ts">
+  import ErrorDisplay from "./ErrorDisplay.svelte";
+  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type { ModelCard, ModelSelectNotice, DownloadProgress } from "./types";
 
   type Props = {
     models: ModelCard[];
     modelsLoaded: boolean;
-    modelsError: string | null;
+    modelsError: ErrorDisplayShape | null;
     modelsRestartNotice: ModelSelectNotice;
     downloading: Map<string, DownloadProgress>;
     downloadFailed: Map<string, string>;
@@ -51,10 +53,7 @@
   </p>
 
   {#if modelsError}
-    <p class="error scoped-error" role="alert">
-      <strong>Model:</strong>
-      {modelsError}
-    </p>
+    <ErrorDisplay error={modelsError} scope="Model" />
   {/if}
 
   {#if modelsRestartNotice === "loaded"}
@@ -305,23 +304,8 @@ button.ghost.primary:hover:not(:disabled) {
   border-color: #4a6cd0;
 }
 
-.error {
-  margin-top: 1.5rem;
-  padding: 0.75rem 1rem;
-  background-color: #fee;
-  border: 1px solid #d83a3a;
-  border-radius: 8px;
-  color: #8a0000;
-  text-align: left;
-  line-height: 1.5;
-}
-
-.scoped-error {
-  padding-left: 1rem;
-}
-.scoped-error strong {
-  margin-right: 0.4rem;
-}
+/* Error rendering migrated to the shared ErrorDisplay component
+   (#199 + follow-up). */
 
 .loading-skeleton {
   margin: 0.5rem 0;
@@ -569,11 +553,6 @@ button.ghost.primary:hover:not(:disabled) {
   }
   .history-header h2 {
     color: #d8d8d8;
-  }
-  .error {
-    background-color: #4a1a1a;
-    border-color: #d83a3a;
-    color: #ffd0d0;
   }
   .restart-notice {
     background-color: #1a3a1a;

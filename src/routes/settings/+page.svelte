@@ -44,6 +44,7 @@
   import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
   import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
   import VocabularyPanel from "$lib/VocabularyPanel.svelte";
+  import { formatErrorDisplay, type ErrorDisplay } from "$lib/errors";
   import { formatMb } from "$lib/format";
   import type {
     DownloadProgress,
@@ -91,7 +92,7 @@
   // ---- Model picker state ------------------------------------------------
   let models = $state<ModelCard[]>([]);
   let modelsLoaded = $state(false);
-  let modelsError = $state<string | null>(null);
+  let modelsError = $state<ErrorDisplay | null>(null);
   let modelsRestartNotice = $state<ModelSelectNotice>(null);
   let downloading = $state<Map<string, DownloadProgress>>(new Map());
   let downloadFailed = $state<Map<string, string>>(new Map());
@@ -116,14 +117,14 @@
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
   let vocabularyLoaded = $state(false);
-  let vocabularyError = $state<string | null>(null);
+  let vocabularyError = $state<ErrorDisplay | null>(null);
   let newVocab = $state("");
   let vocabInputEl = $state<HTMLInputElement | null>(null);
 
   // ---- Replacements state -----------------------------------------------
   let replacements = $state<ReplacementRule[]>([]);
   let replacementsLoaded = $state(false);
-  let replacementsError = $state<string | null>(null);
+  let replacementsError = $state<ErrorDisplay | null>(null);
   let newFind = $state("");
   let newReplace = $state("");
   let findInputEl = $state<HTMLInputElement | null>(null);
@@ -131,7 +132,7 @@
   // ---- Meeting app classification overrides (Phase E, #112) -------------
   let appOverrides = $state<MeetingAppOverride[]>([]);
   let appOverridesLoaded = $state(false);
-  let appOverridesError = $state<string | null>(null);
+  let appOverridesError = $state<ErrorDisplay | null>(null);
   let newOverrideName = $state("");
   let newOverrideKind = $state<MeetingAppKind>("meeting");
   let overrideInputEl = $state<HTMLInputElement | null>(null);
@@ -170,7 +171,7 @@
       models = await invoke<ModelCard[]>("model_list");
       modelsError = null;
     } catch (e) {
-      modelsError = formatError(e);
+      modelsError = formatErrorDisplay(e);
     } finally {
       modelsLoaded = true;
     }
@@ -181,7 +182,7 @@
       vocabulary = await invoke<VocabularyTerm[]>("vocabulary_list");
       vocabularyError = null;
     } catch (e) {
-      vocabularyError = formatError(e);
+      vocabularyError = formatErrorDisplay(e);
     } finally {
       vocabularyLoaded = true;
     }
@@ -192,7 +193,7 @@
       replacements = await invoke<ReplacementRule[]>("replacements_list");
       replacementsError = null;
     } catch (e) {
-      replacementsError = formatError(e);
+      replacementsError = formatErrorDisplay(e);
     } finally {
       replacementsLoaded = true;
     }
@@ -216,7 +217,7 @@
       );
       appOverridesError = null;
     } catch (e) {
-      appOverridesError = formatError(e);
+      appOverridesError = formatErrorDisplay(e);
     } finally {
       appOverridesLoaded = true;
     }
@@ -244,7 +245,7 @@
       await tick();
       overrideInputEl?.focus();
     } catch (err) {
-      appOverridesError = formatError(err);
+      appOverridesError = formatErrorDisplay(err);
     }
   }
 
@@ -262,7 +263,7 @@
       );
       appOverridesError = null;
     } catch (e) {
-      appOverridesError = formatError(e);
+      appOverridesError = formatErrorDisplay(e);
     }
   }
 
@@ -276,7 +277,7 @@
       );
       appOverridesError = null;
     } catch (e) {
-      appOverridesError = formatError(e);
+      appOverridesError = formatErrorDisplay(e);
     }
   }
 
@@ -294,7 +295,7 @@
       await tick();
       vocabInputEl?.focus();
     } catch (err) {
-      vocabularyError = formatError(err);
+      vocabularyError = formatErrorDisplay(err);
     }
   }
 
@@ -304,7 +305,7 @@
       vocabulary = vocabulary.filter((v) => v.id !== term.id);
       vocabularyError = null;
     } catch (e) {
-      vocabularyError = formatError(e);
+      vocabularyError = formatErrorDisplay(e);
     }
   }
 
@@ -326,7 +327,7 @@
       await tick();
       findInputEl?.focus();
     } catch (err) {
-      replacementsError = formatError(err);
+      replacementsError = formatErrorDisplay(err);
     }
   }
 
@@ -336,7 +337,7 @@
       replacements = replacements.filter((r) => r.id !== rule.id);
       replacementsError = null;
     } catch (e) {
-      replacementsError = formatError(e);
+      replacementsError = formatErrorDisplay(e);
     }
   }
 
@@ -347,8 +348,7 @@
       modelsError = null;
       await loadModels();
     } catch (e) {
-      const formatted = formatError(e);
-      modelsError = formatted;
+      modelsError = formatErrorDisplay(e);
       if (typeof e === "object" && e !== null && "kind" in e) {
         const ipc = e as IpcError;
         if (ipc.kind === "model-not-downloaded") {
@@ -391,7 +391,7 @@
       await invoke("model_remove", { id: card.id });
       await loadModels();
     } catch (e) {
-      modelsError = formatError(e);
+      modelsError = formatErrorDisplay(e);
     }
   }
 

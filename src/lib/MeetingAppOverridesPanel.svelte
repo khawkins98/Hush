@@ -1,10 +1,12 @@
 <script lang="ts">
+  import ErrorDisplay from "./ErrorDisplay.svelte";
+  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type { MeetingAppKind, MeetingAppOverride } from "./types";
 
   type Props = {
     overrides: MeetingAppOverride[];
     overridesLoaded: boolean;
-    overridesError: string | null;
+    overridesError: ErrorDisplayShape | null;
     // Form fields are bindable so the parent owns the state and can
     // clear them after a successful add.
     newAppName: string;
@@ -66,10 +68,7 @@
   </p>
 
   {#if overridesError}
-    <p class="error scoped-error" role="alert">
-      <strong>App classification:</strong>
-      {overridesError}
-    </p>
+    <ErrorDisplay error={overridesError} scope="App classification" />
   {/if}
 
   <form class="override-form" onsubmit={onSubmit}>
@@ -312,17 +311,8 @@ button.ghost.danger:hover:not(:disabled) {
   border-color: #d83a3a;
 }
 
-.error {
-  margin-bottom: 1rem;
-  padding: 0.75rem 1rem;
-  background-color: #fee;
-  border: 1px solid #d83a3a;
-  border-radius: 8px;
-  color: #8a0000;
-}
-.scoped-error strong {
-  margin-right: 0.4rem;
-}
+/* Error rendering migrated to the shared ErrorDisplay component
+   (#199 + follow-up). */
 
 @media (prefers-color-scheme: dark) {
   .history-header h2 {
@@ -369,11 +359,6 @@ button.ghost.danger:hover:not(:disabled) {
   }
   button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
-  }
-  .error {
-    background-color: #4a1a1a;
-    border-color: #d83a3a;
-    color: #ffd0d0;
   }
 }
 </style>
