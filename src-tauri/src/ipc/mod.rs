@@ -610,13 +610,19 @@ impl AppState {
         //   - HUSH_PTT_DISABLE=1 → off
         //   - HUSH_PTT_ENABLE=1  → on
         //   - otherwise: settings DB → persisted value
-        //   - otherwise: platform default (false on macOS for
-        //     privacy, true elsewhere — those platforms don't gate
-        //     keyboard observation behind a TCC prompt that would
-        //     surprise a fresh-install user).
+        //   - otherwise: platform default (true everywhere now that
+        //     the macOS-26 abort is fixed by pinning rdev to
+        //     fufesou's fork). The Input Monitoring TCC prompt fires
+        //     on first listener spawn — same as it would when the
+        //     user later flipped the toggle in Settings — so the
+        //     onboarding cost is "one extra prompt at first launch"
+        //     in exchange for the toggle hotkey + PTT both working
+        //     out of the box. Pre-#55 this was opt-out on macOS
+        //     because rdev::listen aborted; that constraint no
+        //     longer applies.
         let ptt_active = match settings.get(crate::settings::keys::PTT_ENABLED).await {
             Ok(Some(raw)) => raw == "true",
-            _ => !cfg!(target_os = "macos"),
+            _ => true,
         };
 
         AppStateBuilder::new()

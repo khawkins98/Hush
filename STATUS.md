@@ -22,9 +22,11 @@ What's in the build right now:
   recording HUD. Sidebar nav inside main: Dictation / Meetings /
   History.
 - **Dictation** — toggle hotkey (⌃⌥H) + configurable push-to-talk
-  combo. PTT is opt-in via Settings → General → Hotkeys (toggling on
-  fires the macOS Input Monitoring prompt at click time, not at boot).
-  Default combo: `Right ⌘` on macOS, `Right Ctrl` elsewhere.
+  combo. PTT is **on by default everywhere** as of #194 — fires the
+  macOS Input Monitoring TCC prompt at boot, but the toggle hotkey
+  and PTT both work out of the box. Disable in Settings → General →
+  Hotkeys if not needed. Default combo: `Right ⌘` on macOS,
+  `Right Ctrl` elsewhere.
 - **Meeting Mode** — long-running multi-source capture (mic + macOS
   system-audio in parallel via ScreenCaptureKit), live partial-utterance
   rendering, You/Remote-tagged transcripts, searchable session history.
