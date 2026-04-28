@@ -59,7 +59,7 @@
 
   {#if modelsRestartNotice === "loaded"}
     <p class="restart-notice notice-loaded" role="status">
-      ✓ Loaded. Ready to record.
+      ✓ Loaded — ready to record now (no restart needed).
     </p>
   {:else if modelsRestartNotice === "needs-download"}
     <p class="restart-notice notice-warn" role="status">

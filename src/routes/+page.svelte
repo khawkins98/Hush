@@ -129,12 +129,13 @@
   let isMacOS = typeof navigator !== "undefined"
     && /Mac|iPhone|iPad/i.test(navigator.platform);
 
-  // Scroll the model picker section into view. Used by the "Set up
-  // your first model" banner and the click-through on the
-  // transcription-unavailable error chip.
-  function scrollToModelPicker() {
-    const heading = document.getElementById("models-heading");
-    if (heading) heading.scrollIntoView({ behavior: "smooth", block: "start" });
+  // Open Settings → Model. Used by the "Set up your first model"
+  // banner and the click-through on the transcription-unavailable
+  // error chip. Pre-IA-redesign this scrolled to a same-page
+  // `#models-heading`; the picker has lived in the Settings window
+  // since #163-#167 so the on-page scroll became a silent no-op.
+  function openModelSettings() {
+    void openSettingsTab("model");
   }
 
   let unlistenToggle: UnlistenFn | null = null;
@@ -777,9 +778,9 @@
       switch (ipc.kind) {
         case "transcription-unavailable":
           return (
-            "No transcription model is loaded yet. Pick one from the " +
-            "Models section below and click Download — Hush will fetch " +
-            "and verify it, then prompt you to restart."
+            "No transcription model is loaded yet. Open Settings → " +
+            "Model and pick one — Hush will fetch and verify it, " +
+            "then load it without a restart."
           );
         case "audio":
           return `Audio capture error: ${ipc.message ?? "unknown"}. Check your microphone and Screen Recording permissions, or try a different input device.`;
@@ -913,7 +914,7 @@
         {error}
         onStart={start}
         onStop={stop}
-        onScrollToModelPicker={scrollToModelPicker}
+        onScrollToModelPicker={openModelSettings}
       />
 
       {#if result}
