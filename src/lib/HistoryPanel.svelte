@@ -335,7 +335,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  border-color: #396cd8;
+  border-color: var(--accent-hover);
 }
 
 button:disabled {
@@ -453,7 +453,7 @@ button.ghost.danger.confirming {
     border-color: #3a3a3a;
   }
   button:hover:not(:disabled) {
-    border-color: #6a8cf0;
+    border-color: var(--accent);
   }
   .history-header h2 {
     color: #d8d8d8;

@@ -853,7 +853,7 @@
     font-weight: 600;
   }
   .tab-button:focus-visible {
-    outline: 2px solid #6a8cf0;
+    outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
 
@@ -952,7 +952,7 @@
     font-size: 0.85rem;
   }
   .about-tab a {
-    color: #396cd8;
+    color: var(--accent-hover);
   }
   @media (prefers-color-scheme: dark) {
     .about-version,
@@ -967,7 +967,7 @@
       color: #b8b8b8;
     }
     .about-tab a {
-      color: #6a8cf0;
+      color: var(--accent);
     }
   }
 

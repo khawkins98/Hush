@@ -264,7 +264,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  border-color: #396cd8;
+  border-color: var(--accent-hover);
 }
 
 button:disabled {
@@ -295,7 +295,7 @@ button.ghost.danger:hover:not(:disabled) {
 }
 
 button.ghost.primary {
-  border-color: #6a8cf0;
+  border-color: var(--accent);
   color: #2c3e8f;
 }
 
@@ -383,9 +383,9 @@ button.ghost.primary:hover:not(:disabled) {
 }
 
 .model-card.selected {
-  border-color: #6a8cf0;
+  border-color: var(--accent);
   background-color: #f5f8ff;
-  box-shadow: 0 0 0 1px #6a8cf0;
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .model-card.unavailable {
@@ -435,7 +435,7 @@ button.ghost.primary:hover:not(:disabled) {
 }
 
 .model-card-current {
-  color: #6a8cf0;
+  color: var(--accent);
   font-size: 0.85rem;
 }
 
@@ -469,7 +469,7 @@ button.ghost.primary:hover:not(:disabled) {
 }
 
 .bars span.on {
-  background-color: #6a8cf0;
+  background-color: var(--accent);
 }
 
 .model-desc {
@@ -498,7 +498,7 @@ button.ghost.primary:hover:not(:disabled) {
 
 .download-progress-bar {
   height: 100%;
-  background-color: #6a8cf0;
+  background-color: var(--accent);
   transition: width 0.15s ease-out;
 }
 
@@ -527,7 +527,7 @@ button.ghost.primary:hover:not(:disabled) {
     border-color: #3a3a3a;
   }
   button:hover:not(:disabled) {
-    border-color: #6a8cf0;
+    border-color: var(--accent);
   }
   button.ghost {
     border-color: #3a3a3a;
@@ -545,7 +545,7 @@ button.ghost.primary:hover:not(:disabled) {
     border-color: #d83a3a;
   }
   button.ghost.primary {
-    border-color: #6a8cf0;
+    border-color: var(--accent);
     color: #c0d0ff;
   }
   button.ghost.primary:hover:not(:disabled) {
@@ -586,7 +586,7 @@ button.ghost.primary:hover:not(:disabled) {
   }
   .model-card.selected {
     background-color: #2a3050;
-    border-color: #6a8cf0;
+    border-color: var(--accent);
   }
   .model-stats {
     color: #aaa;
