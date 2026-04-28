@@ -207,6 +207,8 @@ pub fn run() {
             ipc::commands::get_first_run_completed,
             ipc::commands::mark_first_run_completed,
             ipc::commands::reset_first_run,
+            ipc::commands::get_hud_enabled,
+            ipc::commands::set_hud_enabled,
             ipc::commands::ptt_get_config,
             ipc::commands::ptt_set_config,
             ipc::commands::macos::open_macos_privacy_pane,

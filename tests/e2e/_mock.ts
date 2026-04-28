@@ -43,6 +43,12 @@ export async function installMocks(
       get_first_run_completed: () => true,
       mark_first_run_completed: () => undefined,
       reset_first_run: () => undefined,
+      // HUD-overlay-enabled toggle (Settings → General). Default
+      // matches the backend's "on by default" behaviour so the
+      // checkbox renders checked. Specs that exercise the toggle
+      // override per-test.
+      get_hud_enabled: () => true,
+      set_hud_enabled: () => undefined,
       ptt_get_config: () => ({
         combo: ["RightMeta"],
         enabled: false,
