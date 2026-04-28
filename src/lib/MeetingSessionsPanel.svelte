@@ -104,6 +104,25 @@
     new Map(),
   );
 
+  // Local search filter over historical sessions. Matches against
+  // the visible identifying fields — app name and the user's notes
+  // — case-insensitively. Frontend-only (no FTS round-trip): the
+  // session list is small and already in memory, so a substring
+  // filter is fast and gives an instant empty-on-no-match state.
+  // The History tab uses SQLite FTS5 because transcripts can grow
+  // unbounded; meetings here are at most a few dozen and don't
+  // warrant the same plumbing.
+  let searchQuery = $state("");
+  let filteredSessions = $derived.by(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q.length === 0) return sessions;
+    return sessions.filter((s) => {
+      if (s.appName.toLowerCase().includes(q)) return true;
+      if (s.notes && s.notes.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  });
+
   /**
    * Stop-button confirmation state (#131). The Stop button used to
    * fire `onStop` immediately on click, which the round-8 UX
@@ -496,6 +515,15 @@
       Meeting transcripts
       <span class="panel-subtitle">live capture, never saved</span>
     </h2>
+    {#if sessions.length > 0}
+      <input
+        type="search"
+        class="meetings-search"
+        placeholder="Filter by app or notes…"
+        bind:value={searchQuery}
+        aria-label="Filter meeting sessions"
+      />
+    {/if}
   </header>
 
   <!--
@@ -841,9 +869,14 @@
         >.
       </p>
     </div>
+  {:else if filteredSessions.length === 0}
+    <p class="empty-meetings">
+      No matches for "<em>{searchQuery}</em>". Filter is matched
+      against app name and notes only.
+    </p>
   {:else}
     <ul class="sessions-list">
-      {#each sessions as session (session.id)}
+      {#each filteredSessions as session (session.id)}
         <li class="session-row">
           <div class="session-meta">
             <span class="session-app">{session.appName}</span>
@@ -949,12 +982,33 @@
   margin-top: 2rem;
 }
 
+.meetings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
 .meetings-header h2 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-size: 1.1rem;
-  margin: 0 0 0.5rem;
+  margin: 0;
+}
+
+.meetings-search {
+  flex: 1;
+  max-width: 18rem;
+  padding: 0.5em 0.85em;
+  font-size: 0.9rem;
+  border-radius: 8px;
+  border: 1px solid #d1d1d1;
+  font-family: inherit;
+  color: #0f0f0f;
+  background-color: #ffffff;
 }
 
 .panel-tag {
@@ -1631,6 +1685,11 @@ button:disabled {
   }
   .hint-prose {
     color: #aaa;
+  }
+  .meetings-search {
+    color: #f0f0f0;
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
   }
   .meeting-source-label,
   .meeting-source-loading,
