@@ -95,12 +95,32 @@
   ];
 
   // ---- Model picker state ------------------------------------------------
-  let models = $state<ModelCard[]>([]);
-  let modelsLoaded = $state(false);
-  let modelsError = $state<ErrorDisplay | null>(null);
-  let modelsRestartNotice = $state<ModelSelectNotice>(null);
-  let downloading = $state<Map<string, DownloadProgress>>(new Map());
-  let downloadFailed = $state<Map<string, string>>(new Map());
+  // Bundle for the model picker. The six fields are read/written
+  // together — load → display → click Download → progress events
+  // mutate `downloading` → done event clears it + bumps `models` —
+  // so they live in one struct rather than six top-level
+  // declarations. Svelte 5 deep reactivity means we can mutate the
+  // inner Maps directly (`modelFetch.downloading.set(...)`) without
+  // the rebuild-and-reassign dance the previous shape needed.
+  type ModelFetch = {
+    models: ModelCard[];
+    loaded: boolean;
+    error: ErrorDisplay | null;
+    restartNotice: ModelSelectNotice;
+    /// In-flight download progress keyed by card id.
+    downloading: Map<string, DownloadProgress>;
+    /// Per-card failure message from the most recent attempt.
+    /// Cleared on retry.
+    failed: Map<string, string>;
+  };
+  let modelFetch = $state<ModelFetch>({
+    models: [],
+    loaded: false,
+    error: null,
+    restartNotice: null,
+    downloading: new Map(),
+    failed: new Map(),
+  });
 
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
@@ -168,12 +188,12 @@
 
   async function loadModels(): Promise<void> {
     try {
-      models = await invoke<ModelCard[]>("model_list");
-      modelsError = null;
+      modelFetch.models = await invoke<ModelCard[]>("model_list");
+      modelFetch.error = null;
     } catch (e) {
-      modelsError = formatErrorDisplay(e);
+      modelFetch.error = formatErrorDisplay(e);
     } finally {
-      modelsLoaded = true;
+      modelFetch.loaded = true;
     }
   }
 
@@ -344,34 +364,28 @@
   async function selectModel(card: ModelCard) {
     try {
       const result = await invoke<{ loaded: boolean }>("model_select", { id: card.id });
-      modelsRestartNotice = result.loaded ? "loaded" : "needs-restart";
-      modelsError = null;
+      modelFetch.restartNotice = result.loaded ? "loaded" : "needs-restart";
+      modelFetch.error = null;
       await loadModels();
     } catch (e) {
-      modelsError = formatErrorDisplay(e);
+      modelFetch.error = formatErrorDisplay(e);
       if (typeof e === "object" && e !== null && "kind" in e) {
         const ipc = e as IpcError;
         if (ipc.kind === "model-not-downloaded") {
-          modelsRestartNotice = "needs-download";
+          modelFetch.restartNotice = "needs-download";
         }
       }
     }
   }
 
   async function downloadModel(card: ModelCard) {
-    downloadFailed = new Map(downloadFailed);
-    downloadFailed.delete(card.id);
-    downloading = new Map(downloading);
-    downloading.set(card.id, { received: 0, total: null });
+    modelFetch.failed.delete(card.id);
+    modelFetch.downloading.set(card.id, { received: 0, total: null });
     try {
       await invoke("model_download", { id: card.id });
     } catch (e) {
-      const failed = new Map(downloadFailed);
-      failed.set(card.id, formatErrorMessage(e));
-      downloadFailed = failed;
-      const next = new Map(downloading);
-      next.delete(card.id);
-      downloading = next;
+      modelFetch.failed.set(card.id, formatErrorMessage(e));
+      modelFetch.downloading.delete(card.id);
     }
   }
 
@@ -381,9 +395,7 @@
     } catch (e) {
       console.warn("[hush] cancel download failed", e);
     }
-    const next = new Map(downloading);
-    next.delete(card.id);
-    downloading = next;
+    modelFetch.downloading.delete(card.id);
   }
 
   async function removeModel(card: ModelCard) {
@@ -391,7 +403,7 @@
       await invoke("model_remove", { id: card.id });
       await loadModels();
     } catch (e) {
-      modelsError = formatErrorDisplay(e);
+      modelFetch.error = formatErrorDisplay(e);
     }
   }
 
@@ -427,27 +439,19 @@
     unlistenDownloadProgress = await listen<DownloadProgressEvent>(
       Events.ModelDownloadProgress,
       (e) => {
-        const next = new Map(downloading);
-        next.set(e.payload.id, {
+        modelFetch.downloading.set(e.payload.id, {
           received: e.payload.bytesReceived,
           total: e.payload.bytesTotal,
         });
-        downloading = next;
       },
     );
     unlistenDownloadDone = await listen<DownloadStatusEvent>(Events.ModelDownloadDone, (e) => {
-      const next = new Map(downloading);
-      next.delete(e.payload.id);
-      downloading = next;
+      modelFetch.downloading.delete(e.payload.id);
       void loadModels();
     });
     unlistenDownloadFailed = await listen<DownloadStatusEvent>(Events.ModelDownloadFailed, (e) => {
-      const failed = new Map(downloadFailed);
-      failed.set(e.payload.id, e.payload.message ?? "Download failed.");
-      downloadFailed = failed;
-      const next = new Map(downloading);
-      next.delete(e.payload.id);
-      downloading = next;
+      modelFetch.failed.set(e.payload.id, e.payload.message ?? "Download failed.");
+      modelFetch.downloading.delete(e.payload.id);
     });
 
     // Deep-link from the main window's "Open the Permissions
@@ -633,12 +637,12 @@
       </section>
     {:else if active === "model"}
       <ModelPickerPanel
-        {models}
-        {modelsLoaded}
-        {modelsError}
-        {modelsRestartNotice}
-        {downloading}
-        {downloadFailed}
+        models={modelFetch.models}
+        modelsLoaded={modelFetch.loaded}
+        modelsError={modelFetch.error}
+        modelsRestartNotice={modelFetch.restartNotice}
+        downloading={modelFetch.downloading}
+        downloadFailed={modelFetch.failed}
         {formatMb}
         onSelect={selectModel}
         onDownload={downloadModel}
