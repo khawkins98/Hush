@@ -32,6 +32,9 @@ Thumbs.db
 playwright-report/
 test-results/
 
+# WebdriverIO + tauri-driver runtime output (Path B, #57)
+tests/e2e-tauri/.wdio-logs/
+
 # Claude Code runtime artefacts (memory, worktrees, scheduled-task locks).
 # Local to each contributor's machine; not part of the project source.
 .claude/
