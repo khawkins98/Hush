@@ -193,7 +193,7 @@
     font-weight: 600;
   }
   .nav-item:focus-visible {
-    outline: 2px solid #6a8cf0;
+    outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
 

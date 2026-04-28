@@ -1,0 +1,33 @@
+/* Global accent palette (#208).
+ *
+ * Pre-#208 every component hard-coded hex literals for the same
+ * mid-saturation blue family — `#6a8cf0` for the primary accent,
+ * `#396cd8` for the darker hover/border companion, plus a few
+ * stragglers (`#2c3e8f`, `rgba(44, 62, 143, …)`) used by the sidebar
+ * for active-row backgrounds. UX review flagged the drift across
+ * surfaces; this file is the single source of truth.
+ *
+ * The two named variables here cover ~90 % of accent uses across
+ * the components. The `rgba(44, 62, 143, X)` sidebar backgrounds and
+ * the `#2c3e8f` sidebar text are kept verbatim in `AppSidebar.svelte`
+ * because they describe a more saturated "active row on light bg"
+ * shape that doesn't match the primary accent — splitting them off
+ * here would imply "any component can use the sidebar palette,"
+ * which isn't the intent.
+ *
+ * Light + dark both use the same accent values: `#6a8cf0` reads as
+ * a "trustworthy blue" against either #ffffff or #1a1a1a backdrops,
+ * with enough contrast on either to satisfy WCAG AA for non-text
+ * uses (borders, focus rings, brand chips). When a component needs
+ * a different value in dark mode (rare), it overrides locally.
+ */
+
+:root {
+  /* Primary accent. Buttons-and-borders default; hover targets;
+     focus rings; the brand chip in the sidebar. */
+  --accent: #6a8cf0;
+  /* Hover / pressed companion — slightly darker, more saturated.
+     Used for hover-state border colour on default buttons and the
+     "Change" chip's hover text. */
+  --accent-hover: #396cd8;
+}

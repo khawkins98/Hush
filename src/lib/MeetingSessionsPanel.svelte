@@ -969,7 +969,7 @@
   width: 1.5rem;
   height: 1.5rem;
   border-radius: 4px;
-  background-color: #6a8cf0;
+  background-color: var(--accent);
   color: white;
   font-size: 0.85rem;
   font-weight: 600;
@@ -998,7 +998,7 @@
 .privacy-line {
   margin: 0.25rem 0 0.75rem;
   padding: 0.6rem 0.85rem;
-  border-left: 3px solid #6a8cf0;
+  border-left: 3px solid var(--accent);
   background-color: rgba(106, 140, 240, 0.08);
   border-radius: 4px;
   font-size: 0.9rem;
@@ -1181,7 +1181,7 @@
 
 .utterance.speaker-row-mic {
   background-color: rgba(106, 140, 240, 0.08);
-  border-left: 3px solid #6a8cf0;
+  border-left: 3px solid var(--accent);
 }
 
 .utterance.speaker-row-system {
@@ -1312,9 +1312,9 @@
   padding: 0.3em 0.7em;
   font-size: 0.8rem;
   font-weight: 600;
-  background-color: #6a8cf0;
+  background-color: var(--accent);
   color: #ffffff;
-  border: 1px solid #6a8cf0;
+  border: 1px solid var(--accent);
   border-radius: 999px;
   cursor: pointer;
   font-family: inherit;
@@ -1537,9 +1537,9 @@ button {
 }
 
 button.primary {
-  background-color: #6a8cf0;
+  background-color: var(--accent);
   color: white;
-  border-color: #6a8cf0;
+  border-color: var(--accent);
   font-weight: 600;
   padding: 0.5em 1em;
   font-size: 0.9rem;
@@ -1608,7 +1608,7 @@ button.ghost.danger.confirming {
 }
 
 button:hover:not(:disabled) {
-  border-color: #396cd8;
+  border-color: var(--accent-hover);
 }
 
 button:disabled {
@@ -1709,8 +1709,8 @@ button:disabled {
     color: #f0f0f0;
   }
   .jump-to-latest {
-    background-color: #6a8cf0;
-    border-color: #6a8cf0;
+    background-color: var(--accent);
+    border-color: var(--accent);
     color: #ffffff;
   }
   .empty-meetings {
@@ -1730,7 +1730,7 @@ button:disabled {
     color: #999;
   }
   .placeholder-tail a {
-    color: #6a8cf0;
+    color: var(--accent);
   }
   .session-row {
     border-color: #3a3a3a;
@@ -1764,7 +1764,7 @@ button:disabled {
     border-color: #3a3a3a;
   }
   button:hover:not(:disabled) {
-    border-color: #6a8cf0;
+    border-color: var(--accent);
   }
   .error {
     background-color: #4a1a1a;
