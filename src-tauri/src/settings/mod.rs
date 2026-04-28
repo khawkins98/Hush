@@ -70,6 +70,20 @@ pub mod keys {
     /// Power users who'd rather not see the floating pill can flip
     /// this off in Settings → General.
     pub const HUD_ENABLED: &str = "hud_enabled";
+
+    /// Auto-start mode for Meeting Mode. The foreground poller
+    /// uses this to decide what to do when a Meeting-classified
+    /// app focuses. Stored as one of:
+    /// - `"off"` — never auto-start (the default; user starts
+    ///   every session manually).
+    /// - `"always"` — auto-start a session the moment a Meeting-
+    ///   classified app focuses; no prompt.
+    ///
+    /// Future: `"ask"` once the prompt UI ships. Absent /
+    /// unparseable values fall back to `"off"` — the safer
+    /// default; nobody wants their mic to spontaneously turn on
+    /// because of a bad settings row.
+    pub const MEETING_AUTOSTART_MODE: &str = "meeting_autostart_mode";
 }
 
 /// Repository trait at the storage boundary.

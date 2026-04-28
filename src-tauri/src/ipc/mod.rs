@@ -267,6 +267,36 @@ pub struct AppState {
     /// `set_hud_enabled` IPC command, which also persists to the
     /// `hud_enabled` settings row.
     pub hud_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// User-chosen Meeting-Mode auto-start mode (Off / Always).
+    /// Read by the foreground poller every tick; flipped by the
+    /// `set_meeting_autostart_mode` IPC. Encoded as an
+    /// `AtomicU8` (`0 = Off`, `1 = Always`) for lock-free reads
+    /// — the poller ticks every 3 s so even a `Mutex` would be
+    /// cheap, but matching the existing pattern (`hud_enabled`,
+    /// `ptt_active`) is consistent.
+    pub meeting_autostart_mode: Arc<std::sync::atomic::AtomicU8>,
+}
+
+/// Encode [`crate::meeting::MeetingAutostartMode`] into the
+/// `AppState::meeting_autostart_mode` atomic. Centralised so the
+/// boot path, the IPC writer, and the poller reader all agree on
+/// the byte value.
+pub(crate) fn encode_autostart_mode(mode: crate::meeting::MeetingAutostartMode) -> u8 {
+    match mode {
+        crate::meeting::MeetingAutostartMode::Off => 0,
+        crate::meeting::MeetingAutostartMode::Always => 1,
+    }
+}
+
+/// Decode the byte stored in `AppState::meeting_autostart_mode`
+/// back into the enum. Unknown bytes (a future variant a stale
+/// build doesn't recognise) fall back to `Off` — the safer
+/// default.
+pub(crate) fn decode_autostart_mode(byte: u8) -> crate::meeting::MeetingAutostartMode {
+    match byte {
+        1 => crate::meeting::MeetingAutostartMode::Always,
+        _ => crate::meeting::MeetingAutostartMode::Off,
+    }
 }
 
 /// Builder for [`AppState`].
@@ -306,6 +336,7 @@ pub struct AppStateBuilder {
     ptt_combo: Option<crate::hotkey::ptt::PttCombo>,
     ptt_active: Option<bool>,
     hud_enabled: Option<bool>,
+    meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
 }
 
 impl AppStateBuilder {
@@ -401,6 +432,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn meeting_autostart_mode(mut self, mode: crate::meeting::MeetingAutostartMode) -> Self {
+        self.meeting_autostart_mode = Some(mode);
+        self
+    }
+
     /// Construct the [`AppState`], or return a descriptive error naming
     /// the first required field that wasn't set.
     pub fn build(self) -> Result<AppState> {
@@ -484,6 +520,12 @@ impl AppStateBuilder {
             ptt_listener_spawned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
                 self.hud_enabled.unwrap_or(true),
+            )),
+            meeting_autostart_mode: Arc::new(std::sync::atomic::AtomicU8::new(
+                encode_autostart_mode(
+                    self.meeting_autostart_mode
+                        .unwrap_or(crate::meeting::MeetingAutostartMode::Off),
+                ),
             )),
         })
     }
@@ -674,6 +716,19 @@ impl AppState {
                 .flatten(),
         );
 
+        // Meeting auto-start mode. Off by default; absent or
+        // garbage rows fall through to Off (the safer default —
+        // a corrupted row should not silently make the mic
+        // spontaneously turn on).
+        let meeting_autostart_mode = crate::meeting::MeetingAutostartMode::from_setting(
+            settings
+                .get(crate::settings::keys::MEETING_AUTOSTART_MODE)
+                .await
+                .ok()
+                .flatten()
+                .as_deref(),
+        );
+
         AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
@@ -689,6 +744,7 @@ impl AppState {
             .ptt_combo(ptt_combo)
             .ptt_active(ptt_active)
             .hud_enabled(hud_enabled)
+            .meeting_autostart_mode(meeting_autostart_mode)
             .build()
     }
 }
