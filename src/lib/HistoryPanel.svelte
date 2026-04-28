@@ -47,6 +47,26 @@
   let clearConfirming = $state(false);
   let clearTimer: number | undefined;
 
+  // Per-row Delete also click-to-confirm. Each row arms
+  // independently — clicking Delete on a different row resets
+  // the previous arm. 5 s auto-reset matches Clear-all's window.
+  let confirmingDeleteId = $state<number | null>(null);
+  let confirmDeleteTimer: number | undefined;
+
+  function handleRowDelete(entry: HistoryEntry) {
+    if (confirmingDeleteId === entry.id) {
+      window.clearTimeout(confirmDeleteTimer);
+      confirmingDeleteId = null;
+      void onDelete(entry);
+      return;
+    }
+    window.clearTimeout(confirmDeleteTimer);
+    confirmingDeleteId = entry.id;
+    confirmDeleteTimer = window.setTimeout(() => {
+      confirmingDeleteId = null;
+    }, 5000);
+  }
+
   function startClear() {
     if (historyTotalCount === 0) return;
     if (!clearConfirming) {
@@ -170,8 +190,16 @@
             <button class="ghost" onclick={() => onCopy(entry)}>
               Copy
             </button>
-            <button class="ghost danger" onclick={() => onDelete(entry)}>
-              Delete
+            <button
+              class="ghost danger"
+              class:confirming={confirmingDeleteId === entry.id}
+              onclick={() => handleRowDelete(entry)}
+              aria-label={confirmingDeleteId === entry.id
+                ? "Click again to confirm deleting this transcript"
+                : "Delete this transcript"}
+              data-testid="history-delete-{entry.id}"
+            >
+              {confirmingDeleteId === entry.id ? "Click to confirm" : "Delete"}
             </button>
           </div>
         </li>
@@ -335,6 +363,13 @@ button.ghost.danger {
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
   border-color: #d83a3a;
+}
+
+button.ghost.danger.confirming {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+  color: #8a0000;
+  font-weight: 600;
 }
 
 .empty-history {

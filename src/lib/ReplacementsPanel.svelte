@@ -24,6 +24,26 @@
     onSubmit,
     onDelete,
   }: Props = $props();
+
+  // Per-row click-to-confirm. First click arms; second click within
+  // 5 s fires. Same shape as VocabularyPanel + History clear-all
+  // (#198) so destructive actions feel consistent across panels.
+  let confirmingId = $state<number | null>(null);
+  let confirmTimer: number | undefined;
+
+  function handleDelete(rule: ReplacementRule) {
+    if (confirmingId === rule.id) {
+      window.clearTimeout(confirmTimer);
+      confirmingId = null;
+      void onDelete(rule);
+      return;
+    }
+    window.clearTimeout(confirmTimer);
+    confirmingId = rule.id;
+    confirmTimer = window.setTimeout(() => {
+      confirmingId = null;
+    }, 5000);
+  }
 </script>
 
 <section class="replacements panel-replacements" aria-labelledby="replacements-heading">
@@ -81,10 +101,14 @@
           </code>
           <button
             class="ghost danger"
-            onclick={() => onDelete(rule)}
-            aria-label="Delete replacement {rule.findText} to {rule.replaceText}"
+            class:confirming={confirmingId === rule.id}
+            onclick={() => handleDelete(rule)}
+            aria-label={confirmingId === rule.id
+              ? `Click again to confirm deleting ${rule.findText} → ${rule.replaceText}`
+              : `Delete replacement ${rule.findText} to ${rule.replaceText}`}
+            data-testid="replacement-delete-{rule.id}"
           >
-            Delete
+            {confirmingId === rule.id ? "Click to confirm" : "Delete"}
           </button>
         </li>
       {/each}
@@ -198,6 +222,13 @@ button.ghost.danger {
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
   border-color: #d83a3a;
+}
+
+button.ghost.danger.confirming {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+  color: #8a0000;
+  font-weight: 600;
 }
 
 /* Error rendering migrated to the shared ErrorDisplay component
