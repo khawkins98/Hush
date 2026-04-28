@@ -42,6 +42,59 @@ test.describe("IPC error copy", () => {
     await expect(errorRegion).not.toContainText(/HUSH_MODEL_PATH/);
     await expect(errorRegion).not.toContainText(/coming in/i);
   });
+
+  test("error renders as headline + hint with technical details collapsed (#199)", async ({
+    page,
+  }) => {
+    // Pin the unified ErrorDisplay shape: friendly headline, action-
+    // oriented hint, raw technical message tucked inside a closed
+    // <details>. Pre-#199 the error rendered as one wall of nested
+    // context strings — the hint and the failure point were
+    // indistinguishable.
+    //
+    // The mock's body is .toString()'d and rebuilt in the page
+    // context, so closure variables don't survive — every literal
+    // is inlined.
+    await installMocks(page, {
+      start_dictation: () => {
+        throw {
+          kind: "audio",
+          message: "deeply: nested: context: chain: with low-level error",
+        };
+      },
+    });
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Start recording" }).click();
+
+    const errorRegion = page.getByRole("alert").first();
+    await expect(errorRegion).toBeVisible();
+
+    // Headline is what the user reads first.
+    await expect(errorRegion.locator(".error-headline")).toBeVisible();
+    await expect(errorRegion.locator(".error-headline")).toContainText(
+      /microphone access failed/i,
+    );
+
+    // Hint surfaces the actionable copy.
+    await expect(errorRegion.locator(".error-hint")).toBeVisible();
+
+    // Technical details are inside a closed <details> element. The
+    // raw message appears in the DOM but the body is hidden until
+    // the user expands. Pin both: the summary is visible, the body
+    // contains the technical chain.
+    const details = errorRegion.locator(".error-details");
+    await expect(details).toBeVisible();
+    await expect(details.locator("summary")).toContainText(
+      /technical details/i,
+    );
+    // Open the disclosure and assert the body contains the raw
+    // message — the panel ships closed by default.
+    await details.locator("summary").click();
+    await expect(details.locator(".error-details-body")).toContainText(
+      "deeply: nested: context",
+    );
+  });
 });
 
 test.describe("first-time setup banner", () => {

@@ -8,6 +8,7 @@
   import ResultBlock from "$lib/ResultBlock.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import MeetingSessionsPanel from "$lib/MeetingSessionsPanel.svelte";
+  import { formatErrorDisplay, type ErrorDisplay } from "$lib/errors";
   import { formatTimestamp } from "$lib/format";
   import type {
     AudioSource,
@@ -61,7 +62,7 @@
   let recording = $state(false);
   let busy = $state(false);
   let result = $state<DictationResult | null>(null);
-  let error = $state<string | null>(null);
+  let error = $state<ErrorDisplay | null>(null);
 
   let historyEntries = $state<HistoryEntry[]>([]);
   let historyLoaded = $state(false);
@@ -296,7 +297,7 @@
       await invoke("start_dictation", { source: selectedAsAudioSource() });
       recording = true;
     } catch (e) {
-      error = formatError(e);
+      error = formatErrorDisplay(e);
     } finally {
       busy = false;
     }
@@ -331,7 +332,7 @@
         setTimeout(() => void refreshMeetingSessions(), 200);
       }
     } catch (e) {
-      error = formatError(e);
+      error = formatErrorDisplay(e);
       // Even if transcription failed, the recording itself stopped on the
       // Rust side — surface that so the UI is never stuck in "recording".
       recording = false;
@@ -358,7 +359,7 @@
       const sys = sources.find((s) => s.kind === "system-audio");
       meetingIncludeSystemAudio = sys?.isSupported ?? false;
     } catch (e) {
-      error = formatError(e);
+      error = formatErrorDisplay(e);
     } finally {
       sourcesLoaded = true;
     }
@@ -583,7 +584,7 @@
   // with no further wiring.
   let meetingSessions = $state<MeetingSession[]>([]);
   let meetingSessionsLoaded = $state(false);
-  let meetingSessionsError = $state<string | null>(null);
+  let meetingSessionsError = $state<ErrorDisplay | null>(null);
   // Active session id from `meeting_active_session`. `null` means no
   // session in flight; non-null means the panel renders the Stop
   // button + a live status line.
@@ -622,7 +623,7 @@
       meetingActiveId = active.active;
       meetingSessionsError = null;
     } catch (e) {
-      meetingSessionsError = formatError(e);
+      meetingSessionsError = formatErrorDisplay(e);
     } finally {
       meetingSessionsLoaded = true;
     }
@@ -643,7 +644,7 @@
     } catch (e) {
       // Don't blow away the existing detail on a single failed poll;
       // the panel keeps showing whatever we last successfully read.
-      meetingSessionsError = formatError(e);
+      meetingSessionsError = formatErrorDisplay(e);
     }
   }
 
@@ -682,7 +683,7 @@
       await invoke("meeting_session_delete", { id: session.id });
       meetingSessions = meetingSessions.filter((s) => s.id !== session.id);
     } catch (e) {
-      meetingSessionsError = formatError(e);
+      meetingSessionsError = formatErrorDisplay(e);
     }
   }
 
@@ -703,7 +704,7 @@
       meetingSessionsError = null;
       return detail;
     } catch (e) {
-      meetingSessionsError = formatError(e);
+      meetingSessionsError = formatErrorDisplay(e);
       throw e;
     }
   }
@@ -726,8 +727,10 @@
         sources.push({ kind: "system-audio" });
       }
       if (sources.length === 0) {
-        meetingSessionsError =
-          "Pick at least one audio source before starting a session.";
+        meetingSessionsError = {
+          headline: "No audio sources selected",
+          hint: "Pick at least one source (microphone or system audio) before starting a session.",
+        };
         return;
       }
       // Reset the dropped-sources set: each fresh meeting starts
@@ -746,7 +749,7 @@
       // session) reaches the user — `e instanceof Error` is false for
       // tagged IPC errors, so a plain `e.message` check would silently
       // mask the helpful copy.
-      meetingSessionsError = formatError(e);
+      meetingSessionsError = formatErrorDisplay(e);
     } finally {
       meetingBusy = false;
     }
@@ -767,7 +770,7 @@
       await invoke("meeting_stop_manual");
       await refreshMeetingSessions();
     } catch (e) {
-      meetingSessionsError = formatError(e);
+      meetingSessionsError = formatErrorDisplay(e);
     } finally {
       meetingBusy = false;
     }

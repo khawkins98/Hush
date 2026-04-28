@@ -1,4 +1,6 @@
 <script lang="ts">
+  import ErrorDisplay from "./ErrorDisplay.svelte";
+  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type { AudioSourceListing } from "./types";
 
   type Props = {
@@ -13,7 +15,7 @@
     busy: boolean;
     transcribing: boolean;
     noModelInstalled: boolean;
-    error: string | null;
+    error: ErrorDisplayShape | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onScrollToModelPicker: () => void;
@@ -160,7 +162,7 @@
 </section>
 
 {#if error}
-  <p class="error" role="alert">{error}</p>
+  <ErrorDisplay {error} />
 {/if}
 
 <style>
@@ -340,16 +342,9 @@ button.primary:hover:not(:disabled) {
   to { transform: rotate(360deg); }
 }
 
-.error {
-  margin-top: 1.5rem;
-  padding: 0.75rem 1rem;
-  background-color: #fee;
-  border: 1px solid #d83a3a;
-  border-radius: 8px;
-  color: #8a0000;
-  text-align: left;
-  line-height: 1.5;
-}
+/* Error rendering moved to the shared ErrorDisplay component
+   (#199); the previous `.error` rule lived here when the panel
+   surfaced its own raw error string. */
 
 @media (prefers-color-scheme: dark) {
   label,
@@ -369,13 +364,6 @@ button.primary:hover:not(:disabled) {
   }
   button:hover:not(:disabled) {
     border-color: #6a8cf0;
-  }
-  .error {
-    /* Increased contrast over the previous #ffa0a0 — flagged in the
-       UX review as likely below WCAG AA on dark mode. */
-    background-color: #4a1a1a;
-    border-color: #d83a3a;
-    color: #ffd0d0;
   }
 }
 </style>
