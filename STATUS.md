@@ -52,10 +52,15 @@ What's deferred:
   and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)).
   Need hands-on testing on those platforms; no maintainer machine for
   either.
-- **Speaker diarization** ([#111](https://github.com/khawkins98/Hush/issues/111))
-  — Phase D, needs an ML model decision.
-- **Per-app classifier for meeting auto-detect**
-  ([#112](https://github.com/khawkins98/Hush/issues/112)) — Phase E.
+- **D2 model-based speaker diarization** ([#111](https://github.com/khawkins98/Hush/issues/111))
+  — D1 silence-gap heuristic shipped under #191/#201 (renders Speaker
+  A/B in meeting transcripts); D2 (ONNX speaker-embedding) needs a
+  model decision. Known D1 caveat: per-source pump runs the
+  diarizer independently — see `learnings.md` 2026-04-28.
+- **Auto-start Meeting Mode on foreground-app detection**
+  ([#112](https://github.com/khawkins98/Hush/issues/112)) — per-app
+  override storage + Settings UI shipped under #112/#192;
+  auto-start lifecycle still pending (manual-start works today).
 - **Mac App Store distribution** ([#114](https://github.com/khawkins98/Hush/issues/114))
   — needs Ken's call.
 
@@ -241,9 +246,13 @@ These can't be exercised by CI:
 ### Multi-PR roadmap
 
 - [#111](https://github.com/khawkins98/Hush/issues/111) — Speaker
-  diarization (Phase D).
+  diarization. **D1 shipped** (silence-gap `EnergyDiarizer`,
+  #191/#201, in production); **D2 deferred** (model-based ONNX
+  speaker-embedding, needs a model decision).
 - [#112](https://github.com/khawkins98/Hush/issues/112) — Per-app
-  classifier policy refinement (Phase E).
+  classifier policy. **Override storage + Settings UI shipped**
+  under #112/#192; auto-start-on-classify lifecycle still pending
+  (manual-start works today).
 - [#173](https://github.com/khawkins98/Hush/issues/173) — Layer 2
   native UI (per-OS class + targeted CSS overrides).
   Deferred until macOS-only hands-on coverage stops being a liability
@@ -251,22 +260,21 @@ These can't be exercised by CI:
 
 ### Polish, deferred-on-purpose
 
-- [#55](https://github.com/khawkins98/Hush/issues/55) — Replace
-  `Mutex<Vec<f32>>` in cpal callback with rtrb SPSC. Audio-hot-path
-  perf; needs careful benchmarking before changing.
 - [#57](https://github.com/khawkins98/Hush/issues/57) — tauri-driver
   E2E for full-stack flows (HUD lifecycle, real audio, real model
   download). **Scaffold landed (#202)**: directory structure,
   `wdio.conf.ts`, smoke spec, README. CI integration deferred
   until tauri-driver's macOS path stabilises; spec coverage grows
   as Path A's mock-shaped gaps surface.
-- [#116](https://github.com/khawkins98/Hush/issues/116) — AppState
-  DataServices grouping. Issue body explicitly says "don't refactor
-  preemptively"; revisit when a 5th repository lands.
 - [#156](https://github.com/khawkins98/Hush/issues/156) —
   `+page.svelte` state-layer refactor. Phase 3 lifted ~158 LOC; the
   file is still ~1.2k. Worth more extraction (meeting state into a
   composable) when next a contributor reports navigation friction.
+
+### Recently shipped, removed from this list
+
+- #55 (rtrb SPSC ring buffer) — landed #193.
+- #116 (AppState DataServices grouping) — landed #190.
 
 ---
 

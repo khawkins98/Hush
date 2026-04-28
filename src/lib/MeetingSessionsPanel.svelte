@@ -6,14 +6,13 @@
   // transcript that updates while a session is in flight, and an
   // expand-on-click affordance for historical sessions.
   //
-  // Speaker badges are source-derived (mic = "You", system =
-  // "Remote") as primitive diarization ahead of the per-speaker
-  // model in #111. Streaming whisper (#108) is still upstream of
-  // this panel; today the live transcript updates roughly every
-  // 10 s — the chunking cadence the SessionManager pump uses for
-  // one-shot whisper inference. Once streaming lands, utterances
-  // will arrive continuously through the same `meeting_session_get`
-  // IPC the panel already polls, with no frontend rewrite needed.
+  // Speaker badges show "Speaker A" / "Speaker B" from D1's
+  // EnergyDiarizer (#191/#201) when the diarizer produced a
+  // verdict, falling back to the source-derived "You" (mic) /
+  // "Remote" (system) when it didn't. Streaming whisper (#108)
+  // feeds partials in continuously; the panel polls
+  // `meeting_session_get` to merge in-flight partials with the
+  // settled finals list.
 
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
@@ -677,9 +676,10 @@
       Live transcript view (#122 PR4). The parent polls the
       `meeting_session_get` IPC every ~3 s while a session is in
       flight; new utterances render here as they finalise. Each
-      row carries a coarse "You" / "Remote" badge derived from
-      the source the chunk came from (mic / system) — primitive
-      diarization ahead of #111's per-speaker model.
+      row carries a speaker badge — "Speaker A" / "Speaker B" from
+      D1 diarization (#201) when the silence-gap heuristic
+      produced a verdict, otherwise the source-derived "You"
+      (mic) / "Remote" (system) fallback.
     -->
     {#if activeDetail && (activeDetail.utterances.length > 0 || (activeDetail.currentPartials?.length ?? 0) > 0)}
       <!--

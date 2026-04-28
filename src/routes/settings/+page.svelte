@@ -686,7 +686,7 @@
           {#each [
             { key: "microphone", label: "Microphone", status: macosDiagnostic.statuses.microphone, why: "Required for dictation." },
             { key: "screenRecording", label: "Screen Recording", status: macosDiagnostic.statuses.screenRecording, why: "Required for system-audio capture in meetings." },
-            { key: "inputMonitoring", label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Optional — only used if you opt into push-to-talk via HUSH_PTT_ENABLE=1." },
+            { key: "inputMonitoring", label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Required for push-to-talk (on by default). Disable PTT in General → Hotkeys if you'd rather skip the prompt." },
           ] as row (row.key)}
             <li class="perm-row" data-perm={row.key} data-status={row.status}>
               <span class="perm-dot" aria-hidden="true"></span>

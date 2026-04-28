@@ -47,9 +47,10 @@ pub struct ModelMetadata {
     /// User-facing name shown on the picker card (e.g. "Whisper Base").
     pub display_name: String,
 
-    /// Filename the model is expected to live under in the app's models
-    /// directory (e.g. `ggml-base.bin`). Hush does not yet auto-download;
-    /// users place files manually until that lands.
+    /// Filename the model is expected to live under in the app's
+    /// models directory (e.g. `ggml-base.bin`). Resolved by
+    /// `crate::transcription::download` (auto-download from
+    /// Hugging Face, SHA-256 verified) or by manual placement.
     pub filename: String,
 
     /// On-disk size in MB, for the picker card. Approximate — actual
