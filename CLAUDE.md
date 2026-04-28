@@ -163,7 +163,8 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 
 - `audio/` — cpal mic + SCK system-audio + the `AudioSession` handle trait.
 - `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (host-restricted to huggingface.co, SHA-256 verified), resample helpers, model catalog.
-- `meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection.
+- `meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection. `app_overrides` submodule persists per-app classifier overrides (#112) consulted at every session start.
+- `diarization/` — `Diarize` trait + `EnergyDiarizer` (D1, silence-gap heuristic). Wired in production as of #201. D2 (model-based ONNX speaker embeddings) deferred. `dispatch_utterances` falls back to the source-derived `"mic"` / `"system"` label when the diarizer leaves `speaker_label = None`.
 - `ipc/` — `AppState`, `AppStateBuilder`, `IpcError`. `commands/` is now a directory: `mod.rs` holds dictation / history / replacements / vocabulary / models / app commands; `commands/meeting.rs` holds the meeting-mode commands + types + sanitiser (extracted under #82). New domain-cohesive command groups should follow the same submodule pattern.
 - `hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey + `rdev` for push-to-talk. PTT exposes a configurable combo (set of keys held simultaneously) via `PttCombo` and a `ComboMatcher` state machine; combo + Enabled persist to settings DB and are editable in Settings → General → Hotkeys. **Default-on across all platforms** as of #194 — the macOS Input Monitoring TCC prompt fires at first-listener-spawn (~boot time), but in exchange both the toggle hotkey and PTT work out of the box. Pre-#194 the macOS default was off because rdev `listen()` aborted on macOS 26+; that constraint is gone now that we pin to [fufesou's fork](https://github.com/fufesou/rdev) (the one RustDesk ships, which attaches the CGEventTap to `CFRunLoopGetMain()`). Narsil's upstream PR #147 was incomplete (only fixed the `send` path).
 - `hud/` — borderless transparent always-on-top recording HUD with drag (`data-tauri-drag-region`) + dismiss button + level meter pump.
@@ -171,6 +172,7 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 - `app_menu/` — native macOS menu bar. No-op on non-macOS. Menu events emit `menu:goto-section` to the main window or call `settings_window::show` directly.
 - `tray/` — status-bar / system-tray icon (macOS menu-bar extra, Windows system tray, Linux notification area). Menu: Show Hush / Toggle Recording / Quit. "Toggle Recording" emits the existing `hotkey:toggle` Tauri event the frontend listens for; one source of truth for start/stop semantics. Behind the `tauri = { features = ["tray-icon"] }` Cargo feature.
 - `macos_perms/` — programmatic TCC permission status reads via AVFoundation / CoreGraphics / IOKit. Used by `diagnose_macos_permissions` to surface granted/denied/not-determined per permission without triggering OS prompts.
+- `updater/` — stub for the Tauri updater plugin. Plugin registration deferred until #10 wires the signing key + endpoints (the plugin panics on null config).
 
 ### Frontend (`src/`)
 

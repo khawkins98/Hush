@@ -145,14 +145,14 @@ pub struct DataServices {
     /// User-defined vocabulary terms threaded through the Whisper
     /// initial prompt for proper-noun bias.
     pub vocabulary: Arc<dyn VocabularyRepository>,
-    /// Meeting Mode session row storage (Phase C foundation, refs
-    /// #33 / #109). Read-side handle — browsing / deleting sessions
-    /// reads from this. The write-side
-    /// ([`AppState::meeting_manager`]) is the stateful owner that
-    /// opens / closes sessions and appends utterances.
+    /// Meeting Mode session row storage (refs #33 / #109).
+    /// Read-side handle — browsing / deleting sessions reads from
+    /// this. The write-side ([`AppState::meeting_manager`]) is the
+    /// stateful owner that opens / closes sessions and appends
+    /// utterances.
     pub meetings: Arc<dyn crate::meeting::MeetingSessionRepository>,
-    /// Per-app classifier overrides (Phase E, #112). The Settings
-    /// panel reads/writes through these IPC commands; the
+    /// Per-app classifier overrides (#112/#192). The Settings panel
+    /// reads/writes through these IPC commands; the
     /// `SessionManager` reads at every session start so edits take
     /// effect without an app restart.
     pub meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository>,
@@ -195,12 +195,12 @@ pub struct AppState {
     /// model picker writes through the shared `Arc`, so the pump
     /// picks up the new model on its next chunk automatically.
     pub transcribe: TranscribeSlot,
-    /// Speaker diarization seam (#111). Tags meeting utterances with
-    /// per-speaker labels. The default impl is
-    /// [`crate::diarization::NoopDiarizer`], which preserves the
-    /// pump's source-derived `"mic"` / `"system"` stamp; flipping
-    /// to [`crate::diarization::EnergyDiarizer`] in `build_default`
-    /// turns on the D1 silence-gap heuristic.
+    /// Speaker diarization seam (#191/#201). Tags meeting utterances
+    /// with per-speaker labels. Production wires
+    /// [`crate::diarization::EnergyDiarizer`] (D1 silence-gap
+    /// heuristic). The trait builder default falls back to
+    /// [`crate::diarization::NoopDiarizer`] for tests; swapping the
+    /// production wiring is one line in `build_default`.
     pub diarize: Arc<dyn crate::diarization::Diarize>,
     /// Persistent user-data repositories bundled together. See
     /// [`DataServices`] for why these four group naturally and why
@@ -529,11 +529,13 @@ impl AppState {
     /// resolution and hands us the path, so this function stays trivially
     /// testable.
     ///
-    /// Why an env var for the model and not the database: the model
-    /// picker UI is a M3 deliverable. For M1/M2 the env var keeps the
-    /// spike unblocked without committing to a settings schema we'd have
-    /// to migrate later. The eventual replacement is `settings.json` in
-    /// the platform app-data directory, populated by the in-app picker.
+    /// Why the env var still exists alongside the picker: the
+    /// `HUSH_MODEL_PATH` path is a power-user / CI override. The
+    /// picker (Settings → Model) is the primary mechanism for end
+    /// users; the resolved selection persists in the settings DB,
+    /// and the env var wins when both are set so a developer can
+    /// pin a specific GGUF for the session without disturbing the
+    /// user's saved choice.
     pub async fn build_default(
         app: tauri::AppHandle,
         db_path: &Path,

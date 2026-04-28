@@ -278,12 +278,13 @@ pub struct SessionManager {
     /// the frontend. Production wires this to a `tauri::AppHandle`
     /// emitter; tests use [`NoopMeetingEventEmitter`].
     event_emitter: Arc<dyn MeetingEventEmitter>,
-    /// Speaker diarization (#111). Production wires
-    /// [`crate::diarization::NoopDiarizer`] today, which preserves
-    /// the source-derived `"mic"` / `"system"` labels. Switching to
-    /// [`crate::diarization::EnergyDiarizer`] turns on the D1
-    /// silence-gap heuristic; the pump dispatches utterances
-    /// through this before stamping the source label.
+    /// Speaker diarization (#191/#201). Production wires
+    /// [`crate::diarization::EnergyDiarizer`] (D1 silence-gap
+    /// heuristic). The pump dispatches every batch of finals
+    /// through this before stamping the source-derived label;
+    /// `dispatch_utterances` only writes the `"mic"` / `"system"`
+    /// fallback when the diarizer leaves `speaker_label = None`
+    /// (e.g. swapped back to `NoopDiarizer`).
     diarize: Arc<dyn crate::diarization::Diarize>,
 }
 
@@ -1122,11 +1123,12 @@ async fn dispatch_utterances(
     repo: &Arc<dyn MeetingSessionRepository>,
 ) {
     for mut u in utterances {
-        // Source-derived speaker label is the fallback when no
-        // diarizer ran (the production wiring uses NoopDiarizer
-        // today). When EnergyDiarizer or a future model-based impl
-        // is wired, `speaker_label` is already set with per-speaker
-        // tags and we leave it alone.
+        // Source-derived speaker label is the fallback for any
+        // utterance whose diarizer abstained (`NoopDiarizer`, or
+        // a future impl that emits None for low-confidence cases).
+        // Production wires `EnergyDiarizer` (#201) which always
+        // produces a per-speaker tag; this branch is the
+        // swap-back-to-Noop / D2-abstain path.
         if u.speaker_label.is_none() {
             u.speaker_label = Some(source_label.to_owned());
         }

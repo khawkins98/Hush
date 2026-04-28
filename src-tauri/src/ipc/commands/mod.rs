@@ -27,19 +27,13 @@
 //!   [`vocabulary_list`], [`vocabulary_create`],
 //!   [`vocabulary_update`], [`vocabulary_delete`].
 //! - **Model picker.** [`model_list`], [`model_select`].
-//! - **Meeting Mode (Phase C scaffold; refs #33 / #109).**
-//!   [`meeting_sessions_list`], [`meeting_session_get`],
-//!   [`meeting_session_delete`], [`meeting_session_set_notes`].
-//!   Backed by the `meeting` repository wired into [`AppState`];
-//!   the streaming pump that actually creates sessions lands in
-//!   [#110]. The list is empty until then; the panel renders a
-//!   "no sessions yet" placeholder with a link to the relevant
-//!   tickets.
-//!
-//! [#110]: https://github.com/khawkins98/Hush/issues/110
+//! - **Meeting Mode (refs #33 / #109).** Commands live in
+//!   `commands/meeting.rs`. Sessions are populated by the
+//!   `SessionManager` chunking pump (`meeting::manager::run_pump`);
+//!   the panel renders an empty state when no sessions exist yet.
 
-// Meeting Mode commands (Phase C; refs #33 / #109) live in their
-// own submodule — extracted under #82 to give the largest cohesive
+// Meeting Mode commands (refs #33 / #109) live in their own
+// submodule — extracted under #82 to give the largest cohesive
 // command group its own seam. `lib.rs` references them via their
 // full path (e.g. `ipc::commands::meeting::meeting_start_manual`)
 // because Tauri's `generate_handler!` is path-sensitive: it generates
@@ -145,13 +139,11 @@ pub enum IpcError {
     Replacements(String),
 
     /// Meeting-session repository (SQLite) error — failed CRUD on
-    /// `meeting_sessions` or `utterances` (Phase C scaffold tables).
+    /// `meeting_sessions` / `utterances` / `meeting_app_overrides`.
     /// Surfaced separately from `Settings` so the frontend's panel
-    /// can switch on `meeting-sessions` for tailored recovery copy
-    /// when the streaming pump (#110) starts driving real writes.
-    /// Pre-#110 the repo is read-only; this variant is reachable
-    /// today only via list/get/delete on an existing-but-corrupt
-    /// table.
+    /// can switch on `meeting-sessions` for tailored recovery copy.
+    /// Reachable through the lifecycle commands (start_manual /
+    /// stop_manual / session_get / etc.) and the override CRUD.
     #[error("meeting-sessions: {0}")]
     MeetingSessions(String),
 

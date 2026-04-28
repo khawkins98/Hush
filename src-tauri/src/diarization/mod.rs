@@ -37,14 +37,17 @@
 //! `AppState` and threads through the meeting `SessionManager` into
 //! the pump's per-chunk dispatch.
 //!
-//! ## Default impl
+//! ## Production wiring
 //!
-//! [`NoopDiarizer`] is wired in production today. It leaves
-//! `speaker_label` alone, so the pump's source-derived stamp
-//! (`"mic"` / `"system"`) survives — preserving the pre-#111
-//! behaviour while the real impl bakes. Swap to [`EnergyDiarizer`]
-//! by changing one line in `lib.rs::build_default` once D1 has been
-//! tried in a real meeting.
+//! [`EnergyDiarizer`] is wired in production as of #201. The pump
+//! runs every batch of finals through it, so meeting transcripts
+//! render Speaker A / Speaker B labels alternating on silence-gap
+//! timing. [`NoopDiarizer`] stays available as a fallback: when
+//! a `Diarize` impl leaves `speaker_label = None`,
+//! `dispatch_utterances` stamps the source-derived
+//! `"mic"` / `"system"` label so the panel still has something to
+//! render. Swap back to `NoopDiarizer` in `lib.rs::build_default`
+//! to restore the pre-#201 source-only behaviour.
 
 use crate::audio::CaptureFormat;
 use crate::transcription::Utterance;
@@ -79,12 +82,11 @@ pub trait Diarize: Send + Sync {
     );
 }
 
-/// Default impl. Leaves `speaker_label` as it is so the pump's
-/// existing source-derived stamp (`"mic"` / `"system"`) wins.
-///
-/// Use in production until the energy-based impl has been hands-on
-/// tested in a real two-speaker meeting — flipping the wiring is a
-/// one-line change in `lib.rs::build_default`.
+/// Fallback impl. Leaves `speaker_label` as it is so the pump's
+/// source-derived stamp (`"mic"` / `"system"`) wins via
+/// `dispatch_utterances`'s `is_none` guard. Pre-#201 this was the
+/// production wiring; post-#201 it stays as the swap-back option
+/// for sessions where the user prefers source-only labels.
 pub struct NoopDiarizer;
 
 impl Diarize for NoopDiarizer {

@@ -68,11 +68,10 @@ export type VocabularyTerm = {
   term: string;
 };
 
-// Meeting Mode (Phase C scaffold; refs #33 / #109). Wire shapes
-// mirror the Rust types in `src-tauri/src/meeting/mod.rs`. Today
-// the panel reads these via `meeting_sessions_list` /
-// `meeting_session_get` but the underlying repo is empty until
-// the streaming pump (#110) starts inserting sessions.
+// Meeting Mode (refs #33 / #109). Wire shapes mirror the Rust
+// types in `src-tauri/src/meeting/mod.rs`. Sessions are populated
+// by the SessionManager chunking pump; the panel renders an empty
+// state until the user runs their first meeting.
 
 export type MeetingAppKind = "meeting" | "media" | "other";
 

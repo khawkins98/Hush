@@ -6,28 +6,23 @@
 //! the design memo at `docs/system-audio-meeting-mode-proposal.md`;
 //! no source code referenced. See §13.8 of the PRD.
 //!
-//! ## Phase C scaffold
+//! ## Module layout
 //!
-//! This module is the **data layer** for the meeting-mode pivot. It
-//! persists sessions and per-utterance transcripts but does not yet
-//! drive any of the runtime behaviour:
+//! - **`mod.rs`** — shared types: `MeetingAppKind`, `MeetingSession`,
+//!   `PersistedUtterance`, the `MeetingSessionRepository` trait.
+//! - **`manager`** — `SessionManager` runtime: lifecycle state
+//!   machine, chunking pump, `AppClassifier` for foreground-app
+//!   detection. Driven manually today; auto-start on classifier
+//!   verdict is the open piece of #112.
+//! - **`app_overrides`** — per-app classifier override storage
+//!   (#112/#192). The Settings panel reads/writes through here;
+//!   `SessionManager` reads a fresh snapshot at every session
+//!   start so edits take effect without a restart.
+//! - **`sqlite`** — `SqliteMeetingSessionRepository` persistence.
 //!
-//! - **Session manager** (the policy that decides "is the user in a
-//!   meeting?") — tracked in [#110]. Lives in a future
-//!   `meeting::SessionManager` once it lands.
-//! - **App classifier** (which apps trigger sessions) — tracked in
-//!   [#110] / [#112].
-//! - **Streaming wiring** (the path from `Transcribe::transcribe_chunks`'s
-//!   utterance stream into this layer's `utterances` table) —
-//!   tracked in [#110]. Depends on a backend that overrides
-//!   `transcribe_chunks` to emit real partials (#108).
-//! - **UI panel** — scaffolded in `src/lib/MeetingSessionsPanel.svelte`
-//!   with placeholder copy until the data starts flowing.
-//!
-//! [#108]: https://github.com/khawkins98/Hush/issues/108
-//! [#110]: https://github.com/khawkins98/Hush/issues/110
-//! [#111]: https://github.com/khawkins98/Hush/issues/111
-//! [#112]: https://github.com/khawkins98/Hush/issues/112
+//! Streaming inference + diarization compose externally:
+//! `Transcribe::start_stream` (#108) feeds the pump; `Diarize`
+//! (#191/#201) labels the finals before dispatch.
 //!
 //! ## Privacy invariant
 //!
@@ -94,7 +89,10 @@ pub struct MeetingSession {
     /// `None` while the session is in-flight; populated when the
     /// session closes.
     pub ended_at: Option<String>,
-    /// `None` until diarization (#111) ships.
+    /// Distinct speaker count for the session. Populated by the
+    /// diarizer when D2 (model-based) lands; the D1 silence-gap
+    /// heuristic doesn't produce a stable count, so this stays
+    /// `None` for D1 sessions.
     pub speaker_count: Option<i64>,
     /// Denormalised count so the panel's session-list view doesn't
     /// need a `JOIN COUNT(*)` per row.
@@ -128,7 +126,9 @@ pub struct PersistedUtterance {
     pub session_id: i64,
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
-    /// `None` until diarization ships.
+    /// Set by the diarizer (D1 `EnergyDiarizer` ships "Speaker A" /
+    /// "Speaker B"; #201). Falls back to the source-derived
+    /// `"mic"` / `"system"` tag when the diarizer abstains.
     pub speaker_label: Option<String>,
     pub text: String,
     /// Reserved. v1 only persists `is_final = true` utterances; the

@@ -1,10 +1,11 @@
 //! Pure-logic PCM format helpers.
 //!
-//! This module is deliberately free of any OS or `cpal` dependency so it can
-//! be unit-tested without an audio device. It currently exposes channel
-//! downmixing; sample-rate conversion will land alongside the transcription
-//! integration (TODO(#4)) once we know whether `whisper-rs` will accept a
-//! native-rate buffer or whether we need to resample first.
+//! This module is deliberately free of any OS or `cpal` dependency
+//! so it can be unit-tested without an audio device. It exposes
+//! channel downmixing; sample-rate conversion lives in
+//! [`crate::transcription::resample`] (whisper.cpp expects 16 kHz
+//! mono, the cpal capture format is host-native, the resample step
+//! bridges them).
 
 /// Average channel-interleaved samples down to a single mono channel.
 ///

@@ -29,7 +29,9 @@
 //!   the row); UI/query work follows the first cut once we know what
 //!   the filter UX should look like.
 //! - **Retention policies / pruning.** Not yet decided what default
-//!   retention to apply; deferred to settings (M3).
+//!   retention to apply. The History panel exposes per-row Delete
+//!   and Clear-all (#198) for manual cleanup; an automatic pruning
+//!   policy is a future settings choice.
 
 pub mod sqlite;
 

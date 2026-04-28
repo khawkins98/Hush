@@ -47,10 +47,10 @@
           macOS only adds an app to a permission list once the app
           actively requests it. Hush requests Microphone the first
           time you click Start recording — until then it won't show
-          under Microphone. Hush requests Input Monitoring only when
-          PTT is enabled (and PTT is off by default on macOS 26+, see
-          below) — until then it won't show under Input Monitoring at
-          all, even though that's expected.
+          under Microphone. Hush requests Input Monitoring on first
+          launch (PTT is on by default since #194); if you've
+          disabled PTT in Settings → General → Hotkeys, the listener
+          never spawns and Hush won't show under Input Monitoring.
         </li>
         <li>
           <strong>Bundle-id mismatch on dev builds.</strong> When

@@ -97,7 +97,11 @@ Playwright + Chromium drives the SvelteKit dev server in `HUSH_E2E=1` mode, whic
 
 What the suite catches: UI regressions, modal a11y, error-copy drift, retry-race UX, aria-attribute bugs.
 
-What it does **not** catch: real IPC, HUD lifecycle, hotkey registration, real audio, real model download. Those flows are tracked behind issue #57 (tauri-driver Path B).
+What it does **not** catch: real IPC, HUD lifecycle, hotkey registration, real audio, real model download. Those are Path B.
+
+### Frontend e2e — Path B (`npm run test:e2e:tauri`)
+
+`tauri-driver` + WebdriverIO drives a real built Hush binary. Catches the flows Path A's mocks can't: real `invoke` round-trips, real `listen` events, HUD secondary-window lifecycle, real model download against `wiremock`. Scaffold landed under #202 (refs #57); CI is deferred until tauri-driver's macOS path stabilises. Run locally per `tests/e2e-tauri/README.md` — `cargo install tauri-driver --locked`, `npm run tauri build -- --debug`, then the test command above.
 
 ### Manual smoke
 
@@ -127,7 +131,7 @@ A `#[tauri::command]` is touched in **four** places that all have to stay in syn
 
 ### 1. Define the Rust types
 
-In `src-tauri/src/ipc/commands.rs` (or another file under `src-tauri/src/ipc/`), add the request/response struct. Apply `#[serde(rename_all = "camelCase")]` so the wire shape matches JS conventions:
+In `src-tauri/src/ipc/commands/mod.rs` (or one of the existing domain submodules — `commands/meeting.rs`, `commands/models.rs`, `commands/macos.rs` — extracted under #82), add the request/response struct. New domain-cohesive command groups should follow the same submodule pattern. Apply `#[serde(rename_all = "camelCase")]` so the wire shape matches JS conventions:
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
@@ -156,11 +160,12 @@ In `src-tauri/src/lib.rs`, add the command to the `tauri::generate_handler![...]
 ```rust
 .invoke_handler(tauri::generate_handler![
     // ... existing commands ...
-    ipc::commands::my_command,
+    ipc::commands::my_command,                       // for top-level commands
+    ipc::commands::meeting::meeting_my_command,      // for submodule commands
 ])
 ```
 
-The macro looks for `__cmd__<name>` siblings in the same module as the function. Use the **full module path** (`ipc::commands::my_command`), not a re-export — `pub use` does not carry the macro's hidden symbol. (See `learnings.md` for the trap that cost us once.)
+The macro looks for `__cmd__<name>` siblings in the same module as the function. Use the **full module path** (`ipc::commands::my_command`, or `ipc::commands::meeting::…` for submodule commands), not a re-export — `pub use` does not carry the macro's hidden symbol. (See `learnings.md` 2026-04-25 for the trap that cost us once.)
 
 ### 3. Add the TypeScript type and call site
 

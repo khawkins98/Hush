@@ -20,7 +20,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 **Dictation**
 - 🎙️ Toggle-record global hotkey (`Ctrl+⌥/Alt+H` by default; works on every platform)
-- 🎙️ **Configurable push-to-talk** — pick any combination of modifier / function / Caps Lock keys held simultaneously. Default is `Right ⌘` on macOS, `Right Ctrl` elsewhere. Edit in Settings → General → Hotkeys; combo + Enabled persist across launches.
+- 🎙️ **Configurable push-to-talk, on by default** (#194) — pick any combination of modifier / function / Caps Lock keys held simultaneously. Default is `Right ⌘` on macOS, `Right Ctrl` elsewhere. Edit in Settings → General → Hotkeys; combo + Enabled persist across launches.
 - 🤫 100% local transcription — whisper.cpp on your machine; no audio ever leaves the device
 - 📋 Transcription written to clipboard with a "Ready to paste" notification
 - 🔴 Recording HUD overlay — transparent always-on-top pill with pulsing dot + live RMS level meter, draggable, with a dismiss button that hides without stopping the recording
@@ -43,11 +43,14 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 - ⚙️ Autostart toggle (Launch Hush at login)
 - 👋 First-run welcome that explains Microphone + Input Monitoring permissions, with a "Show welcome on next launch" reset button
 
+- 🗣️ Speaker diarization in meetings (D1: silence-gap heuristic, "Speaker A / Speaker B"; ships in `EnergyDiarizer`, #191/#201)
+- 🤖 Per-app classifier with user overrides for Meeting Mode (#112/#192 — Settings → Meeting tab)
+
 ### Planned (v1.x)
 
 - 🔊 Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)) system-audio capture (macOS shipped via ScreenCaptureKit)
-- 🗣️ Speaker diarization for meetings ([#111](https://github.com/khawkins98/Hush/issues/111))
-- 🤖 Per-app classifier for auto-detecting meeting context ([#112](https://github.com/khawkins98/Hush/issues/112))
+- 🧠 Model-based speaker diarization (D2; ONNX speaker-embedding) — replaces D1's heuristic with per-speaker accuracy
+- ⚡ Auto-start Meeting Mode on foreground-app classification (D1 of #112 — manual-start ships today)
 - 🔄 Auto-update channel via the Tauri updater plugin ([#10](https://github.com/khawkins98/Hush/issues/10))
 - 🎯 Parakeet via ONNX as a second engine ([#32](https://github.com/khawkins98/Hush/issues/32))
 
@@ -57,7 +60,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 
 | Platform | Status | Tested by maintainer |
 |---|---|---|
-| **macOS 26** | Primary target. Daily-driven. PTT is opt-in via Settings → General → Hotkeys (it triggers the OS Input Monitoring permission prompt; we don't fire that on first launch). | ✅ Yes |
+| **macOS 26** | Primary target. Daily-driven. PTT is on by default (#194); the Input Monitoring prompt fires at first launch. Disable in Settings → General → Hotkeys if not wanted. | ✅ Yes |
 | **macOS ≤ 15** | Not directly supported. Code may compile and run, but the maintainer does not test against older macOS, will not gate features on older-macOS APIs, and bug reports against older versions are best-effort. | ❌ Not supported |
 | **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested |
 | **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ❌ Not hands-on tested |
