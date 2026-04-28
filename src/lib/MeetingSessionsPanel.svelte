@@ -830,15 +830,10 @@
         and timestamps are what land on disk.
       </p>
       <p class="placeholder-tail">
-        Streaming transcription (so text appears as soon as you
-        speak rather than every ~10 s) and per-speaker labels
-        beyond mic vs system audio are still upstream — see
-        <a
-          href="https://github.com/khawkins98/Hush/issues/108"
-          target="_blank"
-          rel="noopener noreferrer">#108</a
-        >
-        and
+        Streaming partials and Speaker A / B labels both ship today.
+        Model-based diarization (so the same person stays "Speaker
+        A" across long meetings rather than the silence-gap
+        heuristic's ~70 % guess) is still upstream — see
         <a
           href="https://github.com/khawkins98/Hush/issues/111"
           target="_blank"
