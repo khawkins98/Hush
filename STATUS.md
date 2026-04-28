@@ -1,6 +1,6 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-04-26, late (post-v0.1.0 tag, picker shipped)
+**Snapshot:** 2026-04-28, post-IA-redesign + multi-agent review
 **Author:** Claude (working async on Ken's behalf)
 
 A working hand-off doc; not the canonical CHANGELOG or PRD. The goal:
@@ -12,131 +12,140 @@ pickup, don't try to keep it incrementally up-to-date.
 
 ## Where the project stands
 
-**v0.1.0 is tagged** (`git tag v0.1.0`, also pushed to origin).
-Captures the M3-complete state: dictation loop end-to-end functional
-on macOS 26 — hotkey or button → record → transcribe → clipboard →
-notification → searchable history. Older macOS versions, Linux, and
-Windows are not hands-on tested.
+**Daily-usable on macOS 26.** v0.1.0 was tagged with the dictation
+hot-path; ~85 PRs since (the pivot to Meeting Mode and a full IA
+redesign) have brought the app to the shape it ships in today.
 
-After v0.1.0 the project pivoted toward a **system-audio + meeting-mode
-extension** (design memo at `docs/system-audio-meeting-mode-proposal.md`).
-The dictation flow stays — meeting-mode is a second product surface
-inside the same app, not a replacement.
+What's in the build right now:
 
-What's landed since v0.1.0:
+- **Three windows** — main app + standalone Settings (⌘,) + transparent
+  recording HUD. Sidebar nav inside main: Dictation / Meetings /
+  History.
+- **Dictation** — toggle hotkey (⌃⌥H) + configurable push-to-talk
+  combo. PTT is opt-in via Settings → General → Hotkeys (toggling on
+  fires the macOS Input Monitoring prompt at click time, not at boot).
+  Default combo: `Right ⌘` on macOS, `Right Ctrl` elsewhere.
+- **Meeting Mode** — long-running multi-source capture (mic + macOS
+  system-audio in parallel via ScreenCaptureKit), live partial-utterance
+  rendering, You/Remote-tagged transcripts, searchable session history.
+  Streaming Whisper sliding-window powers the live partials.
+- **Settings window** — model picker (auto-download from Hugging Face,
+  SHA-256 verified), vocabulary terms, find/replace rules, macOS
+  permissions diagnostic, autostart toggle, hotkey display, first-run
+  welcome reset.
+- **macOS niceties** — native menu bar (⌘1/⌘2/⌘3 sidebar shortcuts,
+  ⌘, opens Settings), status-bar icon (Show / Toggle Recording /
+  Quit), live TCC permission detection (green "Permissions OK" pill on
+  Dictation when mic + Screen Recording are granted), HUD drag +
+  dismiss, system font stack + native form-control rendering.
+- **Library** — SQLite history with FTS5 + recording duration,
+  vocabulary + replacements CRUD.
 
-- **#96** — `AudioSource` enum (`Microphone(Option<String>)` /
-  `SystemAudio`) + `AudioCapture::start_with_source` trait method.
-  Foundation for #33; no behaviour change yet.
-- **#98** — Phase A1 of #33: source picker UI + `audio_list_sources`
-  IPC command + `start_dictation` taking discriminated `AudioSource`.
-  The mic dropdown is now grouped (`<optgroup>` "Microphone" + "System
-  audio"); the system-audio entry renders disabled with a "(coming
-  soon — #33)" affordance until per-platform backends ship.
-- Dependency hygiene: `zip` (unused) dropped, `sha2` 0.10 → 0.11,
-  `active-win-pos-rs` 0.8 → 0.10. Held: `reqwest`, `whisper-rs`,
-  `cpal`, frontend (vite/typescript/svelte) — those need user
-  sign-off because of risk surface.
+What's deferred:
 
-What ships next (per the phased plan in the design memo):
+- **Auto-update** ([#10](https://github.com/khawkins98/Hush/issues/10))
+  — needs a pubkey decision before the updater plugin can wire up.
+- **Parakeet ONNX backend** (#32) — green-lit on 2026-04-25; multi-PR.
+- **Per-platform system audio**: Linux ([#106](https://github.com/khawkins98/Hush/issues/106))
+  and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)).
+  Need hands-on testing on those platforms; no maintainer machine for
+  either.
+- **Speaker diarization** ([#111](https://github.com/khawkins98/Hush/issues/111))
+  — Phase D, needs an ML model decision.
+- **Per-app classifier for meeting auto-detect**
+  ([#112](https://github.com/khawkins98/Hush/issues/112)) — Phase E.
+- **Mac App Store distribution** ([#114](https://github.com/khawkins98/Hush/issues/114))
+  — needs Ken's call.
 
-- **Phase A2/A3/A4**: per-platform `SystemAudio` impls. Linux
-  PulseAudio monitor source, Windows WASAPI loopback, macOS
-  ScreenCaptureKit. Each its own PR — needs hands-on testing on
-  the target platform; not safe to do autonomously.
-- **Phase B**: streaming transcription. Whisper sliding-window
-  for the interim path; Parakeet (#32) for the eventual default.
-  Also benefits the existing dictation hot-path latency.
-- **Phase C**: sessions + meeting-mode UI surface (new tables,
-  per-utterance transcripts, per-app classifier).
-- **Phase D**: speaker diarization.
-- **Phase E**: app-aware policy refinement.
-
-Test count: **143** Rust unit tests (was 135 pre-pivot — +8 for
-the AudioSource trait surface and listing default impl); **7**
-Playwright frontend smoke tests (mocked-Tauri); 1 ignored
-audio-fixture integration test that defaults to the bundled JFK
-clip when `HUSH_TEST_MODEL` is set. Frontend type-check 0 errors /
-0 warnings. Clippy + rustfmt clean.
-
-For the prose record of what shipped and why, see
-[`CHANGELOG.md`](./CHANGELOG.md) (`[Unreleased]` section) and
-[`learnings.md`](./learnings.md) (engineering-decision log).
+The last multi-agent review (writer / Rust / UX / security) ran on
+2026-04-28 against #182. Every critical finding is fixed; the deferred
+items are tracked in the relevant issues. Security found nothing
+exploitable.
 
 ---
 
 ## Modules at a glance
 
-| Module | Status | Tests |
-|---|---|---|
-| `audio` (cpal + RMS level meter + AudioSource trait, post-#96/#98) | shipped (mic only; SystemAudio per-OS pending) | 24 |
-| `transcription::resample` | shipped | 9 |
-| `transcription::whisper` (default-feature) | shipped | stub-tested + manual smoke |
-| `transcription::catalog` (SHAs filled in) | shipped | 6 |
-| `transcription::download` | shipped | 7 |
-| `db` (sqlx pool + migrations) | shipped | 4 |
-| `history` (CRUD + FTS5; `insert`→`create` post-#88) | shipped | 11 |
-| `dictionary::replacements` (own submodule post-#86) | shipped | 9 + 6 sqlite |
-| `dictionary::vocabulary` (own submodule post-#86) | shipped | 9 + 8 sqlite |
-| `repository` (generic CRUD trait, new in #88) | shipped | — |
-| `settings` (K/V) | shipped | 6 |
-| `ipc` (~25 Tauri commands; `audio_list_sources` added in #98) | shipped | 17+ |
-| `hotkey` (toggle ⌃⌥H; PTT macOS-disabled) | shipped | 12 (incl. enablement matrix) |
-| `hud` (transparent on macOS via macos-private-api) | shipped | — (manual smoke) |
-| `updater` | stub (registration deferred to #10) | — |
+Backend (`src-tauri/src/`):
 
-Frontend: 7 components under `src/lib/` (post-#84) + a thin
-`src/routes/+page.svelte` (1080 lines of layout + cross-cutting
-state) + shared types in `src/lib/types.ts`.
+- `audio/` — cpal mic + ScreenCaptureKit system-audio + the
+  `AudioSession` handle trait used by the meeting pump.
+- `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF
+  auto-download (SHA-256 verified, host-restricted to
+  `huggingface.co` and `hf.co`), sliding-window streaming.
+- `meeting/` — `SessionManager` + chunking pump + `AppClassifier`.
+- `ipc/` — `AppState`, `AppStateBuilder`, `IpcError`. Commands split
+  into `commands/{mod,meeting,models,macos}.rs` per domain.
+- `hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey;
+  pinned `fufesou/rdev` for PTT (the Narsil upstream's macOS-26 fix
+  is incomplete; fufesou attaches the tap to `CFRunLoopGetMain()`).
+- `hud/` — borderless transparent always-on-top recording pill with
+  drag + dismiss + level meter.
+- `settings_window/` — `show()`/`hide()` for the Settings window.
+- `app_menu/` — native macOS menu bar (no-op elsewhere).
+- `tray/` — status-bar / system-tray icon (cross-platform).
+- `macos_perms/` — programmatic TCC reads via AVFoundation /
+  CoreGraphics / IOKit (no OS prompts triggered).
 
-Tauri events flowing backend → frontend:
-`hotkey:toggle`, `hotkey:ptt-press`, `hotkey:ptt-release`,
-`audio:level`, `model:download-progress`, `model:download-done`,
-`model:download-failed`.
+Frontend (`src/`):
+
+- `routes/+page.svelte` — main window; orchestrates Dictation /
+  Meetings / History sections.
+- `routes/settings/+page.svelte` — standalone Settings window.
+- `routes/hud/+page.svelte` — recording HUD pill.
+- `lib/*.svelte` — Svelte 5 (runes-based) component library:
+  `AppSidebar`, `PttHotkeyEditor`, plus the existing panels.
+- `lib/format.ts`, `lib/types.ts` — shared TS types mirroring backend
+  serde shapes (camelCase).
 
 ---
 
 ## Decisions still in force
 
-- **Whisper.cpp via `whisper-rs` is the v1 engine.** Cmake-gated
-  behind the `whisper` Cargo feature, which is a **default**
-  feature.
-- **Parakeet** approved via ONNX (#32, not yet started).
-- **Hot-load on model selection** is shipped.
-- **Auto-download** gated on per-model verified SHA-256.
-- **Download client redirect policy** is host-restricted to both
-  `huggingface.co` and `hf.co` zones. Hop cap 4. SHA verification
-  still applies on top.
-- **No outbound network traffic** except the explicit user-clicked
-  model download. Updater plugin registration is deferred until #10
-  (it panicked on null config; commented out in `lib.rs` until the
-  signing key/endpoints are wired).
-- **PTT disabled by default on macOS** (#69) due to the rdev/TSM
-  crash on macOS 26+. Native CGEventTap replacement parked under
-  #70 until production demand justifies it.
-- **macOS 26 is the only hands-on-tested platform.** Older macOS
-  versions and Linux/Windows compile + pass CI but the maintainer
-  doesn't run them.
-- **CSP is `null`** — pre-existing tradeoff documented in
-  `learnings.md`. Revisit before non-technical-user shipping.
-- **Per-domain repository traits aliased through a generic
-  `Repository<T, NewT, Id>`** for replacements + vocabulary
-  (post-#88). History stays standalone (paginated list + search +
-  count + no-update don't fit). Settings stays its own trait
-  (K/V semantics).
+These are calls already made; future contributors should treat them as
+load-bearing unless explicitly revisiting.
+
+- **macOS 26+ only.** Older macOS isn't a target; no `@available`
+  guards, no compat shims. Linux/Windows compile cleanly via CI
+  (ubuntu-latest, no Windows runner today) but are not hands-on tested.
+- **Black-box reimplementation discipline.** No reading VoiceInk's
+  source code, ever. See `hush-prd.md` §13.8 + the
+  `learnings.md` discipline note.
+- **`whisper` is a default Cargo feature.** UI-only contributors opt
+  out with `--no-default-features`. ScreenCaptureKit is unconditional
+  on macOS (no feature flag).
+- **PTT stays opt-in via the Settings UI.** The macOS-26 abort that
+  forced default-off is fixed (fufesou rdev fork), but enabling the
+  listener fires the Input Monitoring prompt — a privacy surprise
+  worth a deliberate user click.
+- **No telemetry.** The updater plugin is currently stubbed; if
+  telemetry ever lands it will be opt-in with a separate privacy review.
 
 ---
 
 ## Build prerequisites
 
-```bash
-# Once on a fresh macOS machine:
-brew install cmake          # whisper-rs needs it; mandatory now
-nvm install 22 && nvm use 22
+- Rust stable
+- Node.js ≥ 20
+- `cmake` (for whisper.cpp's bindings — the default build needs it)
+- Platform build deps from
+  [Tauri prerequisites](https://tauri.app/start/prerequisites/)
 
-# Per-checkout:
+```bash
+git clone https://github.com/khawkins98/Hush.git
 cd Hush
 npm install
+npm run tauri dev          # full app
+# or:
+cd src-tauri && cargo tauri dev --no-default-features   # UI-only path (no cmake required)
+```
+
+For the macOS `.app` bundle (required for SCK / Screen Recording
+testing because the bare dev binary doesn't register cleanly with
+TCC):
+
+```bash
+npm run tauri:bundle
 ```
 
 ---
@@ -145,119 +154,118 @@ npm install
 
 ### a) Full app, default flow
 
-```bash
-npm run tauri dev
-```
+`npm run tauri dev`, give the app a few seconds to compile + boot.
+On a fresh install you should see:
 
-If you have a model in `~/Library/Application Support/com.khawkins.hush/models/`,
-the boot log shows `loaded selected whisper model …` and you can
-record immediately. If not:
-
-1. The "Set up your first model" banner appears above the controls.
-2. Click **Choose a model** → smooth-scroll to the picker.
-3. Click **Download** on Whisper Base → progress bar runs → SHA-256
-   verifies → file lands.
-4. Click the card again → **"✓ Loaded. Ready to record."** No
-   restart.
-5. Press the hotkey (`⌃⌥H`) or click **Start** → speak → press
-   hotkey or **Stop**. After a few seconds the transcript is on
-   the clipboard.
+1. The first-run welcome modal (macOS-only — covers Microphone +
+   Input Monitoring).
+2. After dismissing, the main window renders the Dictation tab. The
+   "Set up your first model" banner shows because no GGUF is on disk
+   yet; click into it to reach the Settings → Model picker.
 
 ### b) Stuck on macOS permissions
 
-In-app: open the **macOS permissions — diagnostic and reset**
-disclosure at the bottom of the page (#83 / #67). Or from the
-shell:
+If the recording dot pulses but the level meter stays flat, mic
+access is the most likely cause. Check:
 
-```bash
-npm run dev-cleanup -- --reset
-# Resets TCC entries for com.khawkins.hush. Next launch re-prompts.
-```
+- The Dictation tab's permission hint card (only renders when
+  something is *actually denied*, not for `not-determined`)
+- Settings → Permissions tab for the per-permission status pills
+  (Granted / Denied / Not yet granted)
+- For the dev binary specifically, macOS attributes the request to
+  the parent process (iTerm / Terminal that ran `npm run tauri dev`)
+  rather than Hush itself — see CLAUDE.md's "macOS TCC dev-binary
+  quirk" section. Use `npm run tauri:bundle` for the proper-app
+  smoke path.
 
-See `docs/macos-permissions.md` for the full troubleshooting tree.
+### c) Manual smoke before merging dictation-touching changes
 
-### c) UI-only contributor without cmake
+These can't be exercised by CI:
 
-```bash
-npm run tauri:ui-only
-# Builds without the whisper feature. App boots, picker renders,
-# Start surfaces the "no model loaded" path. UI iteration without
-# the heavy cmake/whisper.cpp toolchain.
-```
+- [ ] `npm run tauri dev` boots without panicking (covers
+      `setup` / plugin / capability / rpath regressions)
+- [ ] Toggle hotkey (⌃⌥H) starts + stops recording
+- [ ] Recording HUD appears + drags + dismiss button works
+- [ ] On stop, transcript lands in the clipboard + a "Ready to
+      paste" notification fires
+- [ ] History panel populates the new entry with the right
+      timestamp + duration
+- [ ] If touching meeting flows: start a meeting from the Meetings
+      tab, talk, watch live partials firm up to finals, stop the
+      session (with the inline confirmation prompt), confirm the
+      session row auto-expands its transcript
+- [ ] If touching PTT: open Settings → General → Hotkeys, toggle
+      Enable on (macOS prompt fires), record a new combo, hold
+      the combo, confirm dictation starts/stops
 
 ### d) Automated suites
 
-```bash
-cd src-tauri && cargo test --lib            # 135 unit tests
-HUSH_TEST_MODEL=/path/to/ggml-base.bin \
-  cargo test --features whisper --test audio_fixture -- --ignored
-                                             # bundled JFK fixture
-cd .. && npm run check                       # frontend type check
-npm run test:e2e                             # 7 Playwright specs (mocked Tauri)
-```
+- `cd src-tauri && cargo test --lib` — 214 unit tests, fast
+- `cd src-tauri && cargo clippy --all-targets -- -D warnings` —
+  must be clean
+- `cd src-tauri && cargo fmt --all -- --check` — must be clean
+- `npm run check` — svelte-check, must be clean
+- `npm run test:e2e` — 30 Playwright specs (Chromium with mocked
+  IPC; full-stack flows are tracked behind #57 tauri-driver path)
+- `cd src-tauri && HUSH_TEST_AUDIO=/path/to/sample.wav cargo test -- --ignored`
+  for the audio fixture (needs a real WAV)
 
 ---
 
-## Open issues, by priority
+## Open work, by priority
 
-### Pivot work — Phase A2/3/4 (per-platform `SystemAudio`)
+### Awaiting user decision
 
-Each needs hands-on testing on the target platform; not safe to do
-autonomously. Order is by user-value-on-macOS-26-first:
+- [#10](https://github.com/khawkins98/Hush/issues/10) — Auto-update
+  signed channel. Needs pubkey + endpoint decision before the
+  `tauri-plugin-updater` can be uncommented in `lib.rs`.
+- [#114](https://github.com/khawkins98/Hush/issues/114) — Mac App
+  Store distribution. Decision call.
+- [#32](https://github.com/khawkins98/Hush/issues/32) — Parakeet
+  ONNX as a second engine. Greenlit but multi-PR; product input on
+  scope sequencing welcome.
 
-- **macOS** ScreenCaptureKit. Needs either a Swift shim or a Rust
-  wrapper crate (`screencapturekit-rs` etc.). Largest of the three
-  per-platform PRs and the highest user value.
-- **Linux** PulseAudio / PipeWire monitor source. Discoverable via
-  cpal's existing input-device list (monitor sources show up as
-  `Monitor of <Sink>`); the picker filters by name pattern.
-- **Windows** WASAPI loopback. cpal already exposes loopback via
-  `Device::loopback()` on the default output; mostly free.
+### Hardware-blocked
 
-### Pivot work — Phases B/C/D/E
+- [#106](https://github.com/khawkins98/Hush/issues/106) — Linux
+  system-audio (PulseAudio / PipeWire monitor source).
+- [#107](https://github.com/khawkins98/Hush/issues/107) — Windows
+  system-audio (WASAPI loopback).
 
-- **Phase B** — Streaming transcription (Whisper sliding-window
-  interim, Parakeet eventual default). Refactor + new trait +
-  per-utterance event wiring. Independent of system-audio; benefits
-  the existing dictation hot-path latency.
-- **Phase C** — Sessions + meeting-mode UI. New tables, IPC
-  commands, panel.
-- **Phase D** — Diarization (energy-based first, model-based later).
-- **Phase E** — App-aware policy refinement.
+### Multi-PR roadmap
 
-### Substantial / needs decision
+- [#111](https://github.com/khawkins98/Hush/issues/111) — Speaker
+  diarization (Phase D).
+- [#112](https://github.com/khawkins98/Hush/issues/112) — Per-app
+  classifier policy refinement (Phase E).
+- [#173](https://github.com/khawkins98/Hush/issues/173) — Layer 2
+  native UI (per-OS class + targeted CSS overrides).
+  Deferred until macOS-only hands-on coverage stops being a liability
+  for sight-unseen Windows/Linux work.
 
-- **#32** Parakeet via ONNX — second engine. Approved for
-  Phase B's streaming-friendly path.
-- **#10** Updater (signed channel) — needs the signing key +
-  endpoint setup.
-- **#70** Native CGEventTap to bring back default-on PTT on macOS.
+### Polish, deferred-on-purpose
 
-### Smaller / scoped
-
-- **#55** `rtrb` SPSC ring for cpal callback (replaces
-  `Mutex<Vec<f32>>`). Needs hands-on mic smoke; CI can't verify.
-  More important now that the audio path will multiplex mic +
-  system audio in Phase C.
-- **#57** tauri-driver Path B (full-stack E2E). Infra, large lift.
-- **#82** `ipc/commands.rs` sub-module structure (1.4k LOC).
-  Polish-only; will get worse as meeting-mode adds another ~10
-  commands — worth revisiting if/when that lands.
-
-### Held for user decision (dep upgrades)
-
-`reqwest` 0.12 → 0.13 (security-relevant: redirect policy),
-`whisper-rs` 0.14 → 0.16 (transcription correctness risk),
-`cpal` 0.15 → 0.17 (audio backend risk; Phase A2/3/4 may be a
-better moment to land this since we'll be exercising the audio
-path heavily anyway), `vite` / `typescript` / `svelte` (frontend
-tooling majors).
+- [#55](https://github.com/khawkins98/Hush/issues/55) — Replace
+  `Mutex<Vec<f32>>` in cpal callback with rtrb SPSC. Audio-hot-path
+  perf; needs careful benchmarking before changing.
+- [#57](https://github.com/khawkins98/Hush/issues/57) — tauri-driver
+  E2E for full-stack flows (HUD lifecycle, real audio, real model
+  download).
+- [#116](https://github.com/khawkins98/Hush/issues/116) — AppState
+  DataServices grouping. Issue body explicitly says "don't refactor
+  preemptively"; revisit when a 5th repository lands.
+- [#156](https://github.com/khawkins98/Hush/issues/156) —
+  `+page.svelte` state-layer refactor. Phase 3 lifted ~158 LOC; the
+  file is still ~1.2k. Worth more extraction (meeting state into a
+  composable) when next a contributor reports navigation friction.
 
 ---
 
-## How to read this file later
+## Recently shipped (for inbound contributors)
 
-The CHANGELOG records what shipped. The PRD is policy.
-`learnings.md` is the engineering-decision log. **This file rots
-faster than any of those** — re-write it when you're paged in,
-don't try to keep it incrementally up-to-date.
+If you pulled `main` and want to know what changed: `CHANGELOG.md`'s
+`[Unreleased]` block lists ~80 PRs since v0.1.0, grouped by theme
+under standard Keep-a-Changelog headings. The most recent stretch
+(post-#143) covers the IA redesign, Settings window, configurable
+PTT, macOS TCC live detection, tray icon, and the multi-agent
+review-driven fixes (#183 / #184 / #185).
