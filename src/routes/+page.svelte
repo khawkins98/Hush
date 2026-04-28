@@ -27,12 +27,36 @@
   // with the user's actual usage (handful per day).
   const HISTORY_PAGE_SIZE = 25;
 
-  // Sidebar nav state (Phase 1 of the IA redesign). Drives which
-  // content block renders in the main pane; the hot-path Dictation
-  // section is the default landing tab. Stays page-local for v1 —
-  // a Phase 4 follow-up may persist the last-active section in
-  // settings so the window reopens to wherever the user was.
-  let activeSection = $state<AppSection>("dictation");
+  // Sidebar nav state. Drives which content block renders in the
+  // main pane. Persists the last-active section in localStorage so
+  // closing on History reopens to History — useful for users who
+  // dip in primarily to review meeting transcripts. localStorage
+  // (rather than the backend settings repo) because the value is
+  // window-scoped UI state, not anything the backend or other
+  // surfaces care about.
+  const ACTIVE_SECTION_KEY = "hush.activeSection";
+  function loadActiveSection(): AppSection {
+    try {
+      const stored = window.localStorage.getItem(ACTIVE_SECTION_KEY);
+      if (stored === "dictation" || stored === "meetings" || stored === "history") {
+        return stored;
+      }
+    } catch {
+      // localStorage unavailable (private mode / Tauri webview
+      // without storage access); fall through to the default.
+    }
+    return "dictation";
+  }
+  let activeSection = $state<AppSection>(loadActiveSection());
+  $effect(() => {
+    try {
+      window.localStorage.setItem(ACTIVE_SECTION_KEY, activeSection);
+    } catch {
+      // Best-effort — if storage write fails we just lose the
+      // persistence, the in-memory state still works for this
+      // session.
+    }
+  });
 
   let sources = $state<AudioSourceListing[]>([]);
   let sourcesLoaded = $state(false);
