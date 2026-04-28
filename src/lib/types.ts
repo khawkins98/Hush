@@ -124,6 +124,15 @@ export type ActiveMeetingSession = {
   active: number | null;
 };
 
+// User-supplied per-app classifier override (Phase E, #112). The
+// classifier consults these before the static defaults — an entry
+// here with the same `appName` as a default wins.
+export type MeetingAppOverride = {
+  appName: string;
+  kind: MeetingAppKind;
+  createdAt: string;
+};
+
 // Mirrors `ModelCard` on the Rust side. `metadata` is flattened by
 // serde so all the catalog fields land at the top level.
 export type ModelCard = {

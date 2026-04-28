@@ -131,6 +131,66 @@ pub async fn meeting_session_set_notes(
         .map_err(|e| IpcError::MeetingSessions(format!("session set_notes: {e:#}")))
 }
 
+// -- Per-app classifier overrides (Phase E, #112) ----------------------
+//
+// User-supplied overrides for the meeting-app classifier. The
+// SessionManager reads these at every session start so an edit in
+// the Settings panel takes effect on the next start without an
+// app restart.
+
+/// All overrides, ordered by `app_name`.
+#[tauri::command]
+pub async fn meeting_app_override_list(
+    state: State<'_, AppState>,
+) -> IpcResult<Vec<crate::meeting::MeetingAppOverride>> {
+    state
+        .data
+        .meeting_app_overrides
+        .list()
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("app overrides list: {e:#}")))
+}
+
+/// Insert or update the override for `app_name`. The Settings panel
+/// uses this both for the "add new" form and for in-place kind
+/// changes on existing rows.
+#[tauri::command]
+pub async fn meeting_app_override_upsert(
+    state: State<'_, AppState>,
+    app_name: String,
+    kind: crate::meeting::MeetingAppKind,
+) -> IpcResult<crate::meeting::MeetingAppOverride> {
+    let trimmed = app_name.trim();
+    if trimmed.is_empty() {
+        return Err(IpcError::MeetingSessions(
+            "app_name must not be empty".into(),
+        ));
+    }
+    state
+        .data
+        .meeting_app_overrides
+        .upsert(crate::meeting::NewMeetingAppOverride {
+            app_name: trimmed.to_owned(),
+            kind,
+        })
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("app overrides upsert: {e:#}")))
+}
+
+/// Delete the override for the given app. No-op if no row exists.
+#[tauri::command]
+pub async fn meeting_app_override_delete(
+    state: State<'_, AppState>,
+    app_name: String,
+) -> IpcResult<()> {
+    state
+        .data
+        .meeting_app_overrides
+        .delete(&app_name)
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("app overrides delete: {e:#}")))
+}
+
 /// Snapshot of the active meeting session. Empty (`active: None`)
 /// means no session is in flight; the panel renders the start
 /// button. `Some(id)` means a session is active; the panel renders

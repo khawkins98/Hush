@@ -173,6 +173,26 @@ impl AudioSession for NoOpSession {
     }
 }
 
+/// Test-only override repo. Returns an empty list so the
+/// classifier falls through to the static defaults — same behaviour
+/// the pre-#112 SessionManager exhibited.
+#[cfg(test)]
+struct NoOpAppOverrides;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl super::MeetingAppOverrideRepository for NoOpAppOverrides {
+    async fn list(&self) -> Result<Vec<super::MeetingAppOverride>> {
+        Ok(vec![])
+    }
+    async fn upsert(&self, _: super::NewMeetingAppOverride) -> Result<super::MeetingAppOverride> {
+        Err(anyhow!("NoOpAppOverrides::upsert not supported"))
+    }
+    async fn delete(&self, _: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Manages the lifecycle of meeting-mode sessions.
 ///
 /// Holds an in-memory pointer to the currently-active session id so
@@ -216,6 +236,11 @@ impl MeetingEventEmitter for NoopMeetingEventEmitter {
 
 pub struct SessionManager {
     repo: Arc<dyn MeetingSessionRepository>,
+    /// User-overrides repo (#112). Read at every session start so
+    /// edits in the Settings panel take effect without an app
+    /// restart. The cached `classifier` field below is rebuilt from
+    /// a fresh override snapshot inside `start_manual`.
+    app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
     classifier: AppClassifier,
     /// Audio backend the pump uses to open per-source capture
     /// sessions. Cloned from `AppState::audio` at construction.
@@ -302,9 +327,11 @@ impl SessionManager {
         transcribe: crate::ipc::TranscribeSlot,
         event_emitter: Arc<dyn MeetingEventEmitter>,
         diarize: Arc<dyn crate::diarization::Diarize>,
+        app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
     ) -> Self {
         Self {
             repo,
+            app_overrides,
             classifier: AppClassifier::default_table(),
             audio,
             transcribe,
@@ -356,7 +383,9 @@ impl SessionManager {
         let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
         let diarize: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
-        Self::new(repo, audio, transcribe, emitter, diarize)
+        let app_overrides: Arc<dyn super::MeetingAppOverrideRepository> =
+            Arc::new(NoOpAppOverrides);
+        Self::new(repo, audio, transcribe, emitter, diarize, app_overrides)
     }
 
     /// Start a meeting session manually (button-driven).
@@ -458,7 +487,37 @@ impl SessionManager {
         }
 
         let app_name = app_name.unwrap_or_else(|| "manual".to_owned());
-        let app_kind = self.classifier.classify(&app_name);
+        // Load a fresh override snapshot at every session start (#112).
+        // The Settings panel writes here without notifying the manager,
+        // so reading per-session is the simplest invalidation strategy
+        // — the cost is one indexed lookup against a tiny table.
+        // Failures degrade to "no overrides" so a corrupt or
+        // unreachable database can't block session creation.
+        let overrides = match self.app_overrides.list().await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| (r.app_name, r.kind))
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "meeting: failed to load app overrides; falling back to defaults"
+                );
+                Vec::new()
+            }
+        };
+        let classifier = if overrides.is_empty() {
+            // Tiny fast-path: when there are no overrides, reuse the
+            // cached defaults instead of allocating a fresh classifier
+            // every time. Skips one Vec clone per session start.
+            None
+        } else {
+            Some(AppClassifier::with_overrides(overrides))
+        };
+        let app_kind = classifier
+            .as_ref()
+            .unwrap_or(&self.classifier)
+            .classify(&app_name);
 
         let session = match self
             .repo
@@ -1144,6 +1203,17 @@ pub struct AppClassifier {
     /// past ~20. v1 stays linear because the default table is small
     /// and the per-classify cost is irrelevant.
     entries: Vec<(&'static str, MeetingAppKind)>,
+    /// User-supplied overrides loaded from
+    /// [`super::MeetingAppOverrideRepository`] (#112). Consulted
+    /// before the static `entries` table — an override row with the
+    /// same `app_name` as a default wins.
+    ///
+    /// Snapshot at construction time. Edits to the override table
+    /// from the Settings panel don't propagate live; the next
+    /// session start reads a fresh snapshot. Live propagation would
+    /// need an event-driven invalidation, which the manual-start
+    /// session lifecycle doesn't justify yet.
+    overrides: Vec<(String, MeetingAppKind)>,
 }
 
 impl AppClassifier {
@@ -1178,10 +1248,29 @@ impl AppClassifier {
                 ("Music", MeetingAppKind::Media),
                 ("Podcasts", MeetingAppKind::Media),
             ],
+            overrides: Vec::new(),
         }
     }
 
+    /// Construct with a user-override snapshot loaded from the
+    /// repository. The override list is checked before the static
+    /// defaults, so a row with the same `app_name` as a default
+    /// wins.
+    pub fn with_overrides(overrides: Vec<(String, MeetingAppKind)>) -> Self {
+        let mut classifier = Self::default_table();
+        classifier.overrides = overrides;
+        classifier
+    }
+
     pub fn classify(&self, app_name: &str) -> MeetingAppKind {
+        // User overrides win over defaults — even when an override
+        // explicitly maps an app the table classifies as Meeting to
+        // Other (the way to ignore an app the defaults catch).
+        for (key, kind) in &self.overrides {
+            if key == app_name {
+                return *kind;
+            }
+        }
         for (key, kind) in &self.entries {
             if *key == app_name {
                 return *kind;
@@ -1257,7 +1346,9 @@ mod tests {
         let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
         let diarize: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
-        SessionManager::new(repo, audio, transcribe, emitter, diarize)
+        let app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+            Arc::new(NoOpAppOverrides);
+        SessionManager::new(repo, audio, transcribe, emitter, diarize, app_overrides)
     }
 
     #[tokio::test]
@@ -1765,5 +1856,47 @@ mod tests {
         let c = AppClassifier::default_table();
         assert_eq!(c.classify("RandomEditor.app"), MeetingAppKind::Other);
         assert_eq!(c.classify(""), MeetingAppKind::Other);
+    }
+
+    #[test]
+    fn classifier_override_overrides_a_default_meeting_app() {
+        // The user can re-classify a default Meeting app as Other to
+        // ignore it (e.g. Slack on a workspace where they don't take
+        // calls and only want manual sessions).
+        let c = AppClassifier::with_overrides(vec![("Slack".into(), MeetingAppKind::Other)]);
+        assert_eq!(c.classify("Slack"), MeetingAppKind::Other);
+    }
+
+    #[test]
+    fn classifier_override_classifies_unknown_app() {
+        // An app the default table doesn't know about gets the
+        // user-supplied kind. The "internal-tool web app is a
+        // meeting app" use case from #112.
+        let c = AppClassifier::with_overrides(vec![(
+            "com.acme.huddle".into(),
+            MeetingAppKind::Meeting,
+        )]);
+        assert_eq!(c.classify("com.acme.huddle"), MeetingAppKind::Meeting);
+    }
+
+    #[test]
+    fn classifier_override_promotes_a_default_media_app() {
+        // YouTube is Media by default; an override flips it to
+        // Meeting (e.g. live-streamed conference call).
+        let c = AppClassifier::with_overrides(vec![("YouTube".into(), MeetingAppKind::Meeting)]);
+        assert_eq!(c.classify("YouTube"), MeetingAppKind::Meeting);
+    }
+
+    #[test]
+    fn classifier_override_does_not_affect_other_apps() {
+        // An override for one app must not leak into the
+        // classification of others. Pin so a future bug that uses
+        // prefix matching or wildcards fails loud.
+        let c = AppClassifier::with_overrides(vec![(
+            "com.acme.huddle".into(),
+            MeetingAppKind::Meeting,
+        )]);
+        assert_eq!(c.classify("Spotify"), MeetingAppKind::Media);
+        assert_eq!(c.classify("us.zoom.xos"), MeetingAppKind::Meeting);
     }
 }
