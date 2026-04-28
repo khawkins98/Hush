@@ -8,14 +8,18 @@ import { installMocks } from "./_mock";
 // for the variants the user is most likely to hit.
 
 test.describe("IPC error copy", () => {
-  test("transcription-unavailable points at the model picker", async ({ page }) => {
-    // The default mock `model_list` has Whisper Base as `isDownloaded: true`
-    // — that suppresses the no-model banner so we exercise the
-    // post-click-error path, not the never-let-the-user-click-Start path.
-    // (The banner-instead-of-error path is covered in
-    // first-run.spec.ts's no-model test.)
+  test("transcription-unavailable points at Settings → Model", async ({ page }) => {
+    // Post-#195 the pre-flight in `start_dictation` returns
+    // TranscriptionUnavailable BEFORE audio capture opens, so the
+    // user sees the error at click time rather than after a wasted
+    // recording. Mock the start path here (was `stop_dictation`).
+    //
+    // The default mock `model_list` has Whisper Base as
+    // `isDownloaded: true` — that suppresses the no-model banner so
+    // we exercise the post-click-error path, not the never-let-the-
+    // user-click-Start path. (The banner path is covered below.)
     await installMocks(page, {
-      stop_dictation: () => {
+      start_dictation: () => {
         // Tauri's invoke rejects with the serialised IpcError shape.
         // The frontend's catch block reads `err.kind`.
         throw { kind: "transcription-unavailable" };
@@ -24,15 +28,15 @@ test.describe("IPC error copy", () => {
     await page.goto("/");
 
     await page.getByRole("button", { name: "Start recording" }).click();
-    await page.getByRole("button", { name: "Stop recording and transcribe" }).click();
 
-    // The new copy points at the in-app Models section and mentions
-    // Download — replaces the stale HUSH_MODEL_PATH instruction. Match
-    // on substring so the wording can drift without breaking the test.
+    // The new copy points the user at Settings → Model and explicitly
+    // mentions "no restart needed" (the model hot-swap shipped under
+    // a separate PR; the old copy still said "prompt you to restart"
+    // — pinned out here so a regression in either direction surfaces).
     const errorRegion = page.getByRole("alert").first();
     await expect(errorRegion).toBeVisible();
-    await expect(errorRegion).toContainText(/model/i);
-    await expect(errorRegion).toContainText(/download/i);
+    await expect(errorRegion).toContainText(/Settings.*Model/i);
+    await expect(errorRegion).toContainText(/without a restart/i);
     // Regression: the old copy mentioned HUSH_MODEL_PATH and a
     // milestone-deferred picker. New copy must not.
     await expect(errorRegion).not.toContainText(/HUSH_MODEL_PATH/);
@@ -67,16 +71,17 @@ test.describe("first-time setup banner", () => {
     });
     await page.goto("/");
 
-    // Banner is visible with the action button. Match exact text to
-    // disambiguate from the disabled Start button's aria-label
-    // "Choose a model first" — both contain the substring "Choose a model".
+    // Banner is visible with the action button. The button copy
+    // mirrors where the user actually has to go (Settings → Model)
+    // since the in-page picker moved out under #163-#167.
     await expect(page.getByText("Set up your first model")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Choose a model", exact: true }),
+      page.getByRole("button", { name: /Open Settings/i }),
     ).toBeVisible();
 
     // Start is disabled — clicking through to a "no model" error is
-    // worse UX than not letting them click at all.
+    // worse UX than not letting them click at all. Match by aria-label
+    // (the visible label is "● Start recording" with a leading dot).
     await expect(
       page.getByRole("button", { name: "Choose a model first", exact: true }),
     ).toBeDisabled();

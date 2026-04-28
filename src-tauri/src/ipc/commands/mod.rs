@@ -219,6 +219,24 @@ pub fn start_dictation(
 /// runtime — the public command is a one-line wrapper that lifts the
 /// `State<'_, AppState>` newtype off and forwards.
 fn start_dictation_inner(state: &AppState, source: AudioSource) -> IpcResult<()> {
+    // Pre-flight: refuse to open audio capture when no transcriber is
+    // loaded. Pre-#195 this check lived only in `stop_dictation`, so a
+    // user with no model would record audio (HUD up, mic hot, level
+    // meter dancing), press Stop, and *only then* see the
+    // "no transcription model loaded" error. The recording is wasted
+    // — we have audio bytes nobody will ever transcribe — and the
+    // user has spent N seconds waiting for an outcome that was never
+    // possible. Fail fast at start so the error surfaces before
+    // anyone speaks. The frontend's model-loaded banner gates the
+    // Start button visually; this is the structural backstop for the
+    // hotkey path that bypasses button gating.
+    {
+        let guard = state.transcribe.lock().map_err(poisoned)?;
+        if guard.is_none() {
+            return Err(IpcError::TranscriptionUnavailable);
+        }
+    }
+
     let foreground = capture_foreground();
 
     state
@@ -960,6 +978,17 @@ mod tests {
 
     use crate::audio::{AudioCapture, AudioDevice, CapturedAudio};
     use crate::ipc::AppState;
+    use crate::transcription::Transcribe;
+
+    /// Local Transcribe stub. The crate-root tests have an
+    /// `EchoTranscribe` but it isn't `pub(crate)`; declaring a fresh
+    /// one here keeps the dependency minimal.
+    struct OkTranscribe;
+    impl Transcribe for OkTranscribe {
+        fn transcribe(&self, _audio: &CapturedAudio) -> anyhow::Result<String> {
+            Ok("ok".to_owned())
+        }
+    }
 
     struct AudioThatFailsToStart;
 
@@ -1001,8 +1030,10 @@ mod tests {
     #[test]
     fn start_dictation_does_not_overwrite_foreground_on_audio_start_failure() {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatFailsToStart);
+        let transcribe: Arc<dyn Transcribe> = Arc::new(OkTranscribe);
         let state = crate::ipc::AppStateBuilder::new()
             .audio(audio)
+            .transcribe(Some(transcribe))
             .history(Arc::new(crate::ipc::tests::NoopHistory))
             .replacements(Arc::new(crate::ipc::tests::NoopReplacements))
             .vocabulary(Arc::new(crate::ipc::tests::NoopVocabulary))
@@ -1060,8 +1091,10 @@ mod tests {
         let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatStarts {
             recording: AtomicBool::new(false),
         });
+        let transcribe: Arc<dyn Transcribe> = Arc::new(OkTranscribe);
         let state = crate::ipc::AppStateBuilder::new()
             .audio(audio)
+            .transcribe(Some(transcribe))
             .history(Arc::new(crate::ipc::tests::NoopHistory))
             .replacements(Arc::new(crate::ipc::tests::NoopReplacements))
             .vocabulary(Arc::new(crate::ipc::tests::NoopVocabulary))
@@ -1103,6 +1136,80 @@ mod tests {
     #[allow(dead_code)]
     fn _assert_state_mutex_holds_foreground(state: AppState) -> Mutex<Option<ForegroundApp>> {
         state.pending_foreground
+    }
+
+    #[test]
+    fn start_dictation_returns_unavailable_when_no_transcriber_is_loaded() {
+        // Pre-#195 this scenario silently opened audio capture and
+        // failed at `stop_dictation` — the user spent N seconds
+        // recording before learning no transcriber was loaded.
+        // Pin the new pre-flight: no transcriber → fail fast, no
+        // audio side effects, no foreground slot mutation.
+        let audio_started = Arc::new(AtomicBool::new(false));
+        let audio: Arc<dyn AudioCapture> = Arc::new(StartFlagAudio {
+            started: Arc::clone(&audio_started),
+        });
+        let state = crate::ipc::AppStateBuilder::new()
+            .audio(audio)
+            // No `.transcribe(...)` — slot stays None.
+            .history(Arc::new(crate::ipc::tests::NoopHistory))
+            .replacements(Arc::new(crate::ipc::tests::NoopReplacements))
+            .vocabulary(Arc::new(crate::ipc::tests::NoopVocabulary))
+            .settings(Arc::new(crate::ipc::tests::MemSettings {
+                map: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }))
+            .meetings({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })
+            .meeting_app_overrides({
+                let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetingAppOverrides);
+                o
+            })
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })))
+            .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+            .build()
+            .expect("test state: builder fields complete");
+
+        let err = start_dictation_inner(&state, AudioSource::default_microphone())
+            .expect_err("no-transcriber must surface as a hard error");
+        assert!(
+            matches!(err, IpcError::TranscriptionUnavailable),
+            "expected TranscriptionUnavailable, got {err:?}"
+        );
+        assert!(
+            !audio_started.load(Ordering::Acquire),
+            "audio.start_with_source must NOT be called when no transcriber is loaded"
+        );
+    }
+
+    /// Audio backend whose only job is recording whether `start_with_source`
+    /// (or `start`) was called, so the pre-flight test can prove the
+    /// audio path was skipped before the error returned.
+    struct StartFlagAudio {
+        started: Arc<AtomicBool>,
+    }
+
+    impl AudioCapture for StartFlagAudio {
+        fn list_input_devices(&self) -> anyhow::Result<Vec<AudioDevice>> {
+            Ok(vec![])
+        }
+        fn start(&self, _: Option<&str>) -> anyhow::Result<()> {
+            self.started.store(true, Ordering::Release);
+            Ok(())
+        }
+        fn stop(&self) -> anyhow::Result<CapturedAudio> {
+            unreachable!("stop should not be called");
+        }
+        fn is_recording(&self) -> bool {
+            self.started.load(Ordering::Acquire)
+        }
     }
 
     // -- stop_dictation helper tests --------------------------------------
