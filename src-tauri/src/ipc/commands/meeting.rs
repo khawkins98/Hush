@@ -246,10 +246,7 @@ pub async fn meeting_start_manual(
     // shouldn't fail the start of an otherwise-running session.
     // Suppressed entirely when the user has flipped HUD off in
     // Settings → General.
-    if state
-        .hud_enabled
-        .load(std::sync::atomic::Ordering::Relaxed)
-    {
+    if state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed) {
         if let Err(e) = crate::hud::show(&app) {
             tracing::error!(error = ?e, "failed to show recording HUD on meeting start");
         }

@@ -211,10 +211,7 @@ pub fn start_dictation(
 ) -> IpcResult<()> {
     let source = source.unwrap_or_else(AudioSource::default_microphone);
     start_dictation_inner(&state, source)?;
-    if state
-        .hud_enabled
-        .load(std::sync::atomic::Ordering::Relaxed)
-    {
+    if state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed) {
         if let Err(e) = crate::hud::show(&app) {
             tracing::error!(error = ?e, "failed to show recording HUD");
         }
@@ -869,9 +866,7 @@ pub async fn mark_first_run_completed(state: State<'_, AppState>) -> IpcResult<(
 /// floating pill that confirms the mic is hot.
 #[tauri::command]
 pub fn get_hud_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
-    Ok(state
-        .hud_enabled
-        .load(std::sync::atomic::Ordering::Relaxed))
+    Ok(state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Persist the recording-HUD-enabled flag and update the in-memory
