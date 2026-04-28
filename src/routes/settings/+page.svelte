@@ -44,7 +44,11 @@
   import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
   import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
   import VocabularyPanel from "$lib/VocabularyPanel.svelte";
-  import { formatErrorDisplay, type ErrorDisplay } from "$lib/errors";
+  import {
+    formatErrorDisplay,
+    formatErrorMessage,
+    type ErrorDisplay,
+  } from "$lib/errors";
   import { formatMb } from "$lib/format";
   import type {
     DownloadProgress,
@@ -152,17 +156,12 @@
   let macosResetMessage = $state<string | null>(null);
   let macosResetting = $state(false);
 
-  // ---- Error formatting (subset of main window's helper) ----------------
-  function formatError(e: unknown): string {
-    if (typeof e === "object" && e !== null && "kind" in e) {
-      const ipc = e as IpcError;
-      if (ipc.kind === "transcription") {
-        return `Transcription failed: ${ipc.message ?? "unknown"}.`;
-      }
-      return ipc.message ? `${ipc.kind}: ${ipc.message}` : ipc.kind;
-    }
-    return String(e);
-  }
+  // Error formatting: routed through `lib/errors.ts` (#205) so the
+  // main and Settings windows share one source of truth.
+  // Rich-shaped state uses `formatErrorDisplay`; the few string-
+  // shaped surfaces in this file (`autostartError`,
+  // `firstRunResetMessage`, `macosResetMessage`, per-card
+  // `downloadFailed`) use `formatErrorMessage`.
 
   // ---- Loaders -----------------------------------------------------------
 
@@ -367,7 +366,7 @@
       await invoke("model_download", { id: card.id });
     } catch (e) {
       const failed = new Map(downloadFailed);
-      failed.set(card.id, formatError(e));
+      failed.set(card.id, formatErrorMessage(e));
       downloadFailed = failed;
       const next = new Map(downloading);
       next.delete(card.id);
@@ -412,7 +411,7 @@
       );
       macosResetMessage = res.summary;
     } catch (e) {
-      macosResetMessage = formatError(e);
+      macosResetMessage = formatErrorMessage(e);
     } finally {
       macosResetting = false;
     }
@@ -522,7 +521,7 @@
       else await disableAutostart();
       autostartEnabled = checked;
     } catch (err) {
-      autostartError = formatError(err);
+      autostartError = formatErrorMessage(err);
       // Re-read so the checkbox reverts to truth rather than the
       // optimistic state that didn't persist.
       await loadAutostartState();
@@ -543,7 +542,7 @@
         firstRunResetMessage = null;
       }, 3000);
     } catch (e) {
-      firstRunResetMessage = formatError(e);
+      firstRunResetMessage = formatErrorMessage(e);
     } finally {
       firstRunResetBusy = false;
     }

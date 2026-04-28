@@ -159,3 +159,23 @@ export function formatErrorDisplay(e: unknown): ErrorDisplay {
       };
   }
 }
+
+/// String flavour of [`formatErrorDisplay`] for surfaces that
+/// haven't migrated to the rich `ErrorDisplay` shape — autostart's
+/// inline status text, the per-card model-download failure map,
+/// and the shared `firstRunResetMessage` / `macosResetMessage`
+/// status lines that double as success copy. Routes both windows
+/// through one source of truth so per-window `formatError` shadows
+/// can't drift.
+///
+/// Renders as `"headline: details"` (or just `"headline"` when no
+/// details). Hint is dropped — the surfaces using this format show
+/// the message inline next to the action that failed, where a
+/// multi-line hint reads as noise.
+export function formatErrorMessage(e: unknown): string {
+  const display = formatErrorDisplay(e);
+  if (display.details && display.details.length > 0) {
+    return `${display.headline}: ${display.details}`;
+  }
+  return display.headline;
+}
