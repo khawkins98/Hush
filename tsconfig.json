@@ -10,10 +10,18 @@
     "sourceMap": true,
     "strict": true,
     "moduleResolution": "bundler"
-  }
+  },
+  // The Path B (tauri-driver) suite under `tests/e2e-tauri/` uses
+  // mocha + WebdriverIO globals that the root tsconfig doesn't
+  // know about; the suite has its own `tests/e2e-tauri/tsconfig.json`
+  // that pulls those types in. Exclude the e2e-tauri tree here so
+  // `npm run check` (svelte-check) doesn't double-check it under
+  // the wrong configuration.
+  "exclude": [
+    "node_modules/**",
+    "tests/e2e-tauri/**",
+    "wdio.conf.ts"
+  ]
   // Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
   // except $lib which is handled by https://svelte.dev/docs/kit/configuration#files
-  //
-  // If you want to overwrite includes/excludes, make sure to copy over the relevant includes/excludes
-  // from the referenced tsconfig.json - TypeScript does not merge them in
 }
