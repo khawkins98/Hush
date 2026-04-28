@@ -103,6 +103,25 @@
   aria-live="polite"
   aria-label="Recording in progress"
 >
+  <!--
+    Subtle 6-dot grip glyph at the leading edge. The whole pill is a
+    drag region (data-tauri-drag-region on the root), but without a
+    visual cue users can't tell — the grip dots are the standard
+    macOS / web idiom (see Finder sidebar, Notion blocks, draggable
+    list rows). aria-hidden because screen readers already get
+    "Recording in progress" from the root's aria-label and this is
+    pure visual affordance.
+  -->
+  <span class="hud-grip" aria-hidden="true">
+    <svg viewBox="0 0 6 12" width="6" height="12">
+      <circle cx="1.5" cy="2" r="0.9" fill="currentColor" />
+      <circle cx="4.5" cy="2" r="0.9" fill="currentColor" />
+      <circle cx="1.5" cy="6" r="0.9" fill="currentColor" />
+      <circle cx="4.5" cy="6" r="0.9" fill="currentColor" />
+      <circle cx="1.5" cy="10" r="0.9" fill="currentColor" />
+      <circle cx="4.5" cy="10" r="0.9" fill="currentColor" />
+    </svg>
+  </span>
   <span class="hud-dot"></span>
   <span class="hud-label">Recording</span>
   <div class="hud-meter" role="presentation">
@@ -193,6 +212,20 @@
   .hud-dismiss:focus-visible {
     outline: 2px solid rgba(255, 255, 255, 0.6);
     outline-offset: 1px;
+  }
+
+  /* Drag grip. Ghosted by default and lit on hover so it stays
+     discoverable without competing with the recording dot for
+     attention. inline-flex keeps the SVG vertically centred. */
+  .hud-grip {
+    display: inline-flex;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.35);
+    margin-right: -0.15rem;
+    transition: color 0.12s;
+  }
+  .hud-root:hover .hud-grip {
+    color: rgba(255, 255, 255, 0.65);
   }
 
   .hud-dot {
