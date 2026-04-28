@@ -121,6 +121,16 @@
     modelsLoaded && models.length > 0 && !models.some((m) => m.isDownloaded),
   );
 
+  // The currently-loaded model — `isSelected && isDownloaded`. We
+  // can show the display name + a "Change" affordance on the
+  // Dictation screen so the user always knows which model their
+  // recordings will hit. `null` when no model is loaded yet (the
+  // setup banner above takes over in that case so we don't render
+  // a duplicate affordance).
+  let activeModel = $derived(
+    models.find((m) => m.isSelected && m.isDownloaded) ?? null,
+  );
+
   // Push-to-talk is disabled by default on macOS — rdev 0.5 hard-aborts
   // on macOS 26+ (see `src-tauri/src/hotkey/ptt.rs` module header).
   // Power users can re-enable with `HUSH_PTT_ENABLE=1`, but the
@@ -903,6 +913,29 @@
         to push-to-talk.
       </aside>
 
+      {#if activeModel}
+        <!--
+          Always-visible "which model am I about to record into?"
+          line + a click-through to swap. The picker lives in the
+          Settings window; this affordance is the same shape as
+          the setup-banner's "Open Settings → Model" CTA so the
+          user has one mental model for "where do I change models?"
+          regardless of whether one is loaded or not.
+        -->
+        <p class="active-model" aria-label="Active transcription model">
+          <span class="active-model-label">Model:</span>
+          <strong>{activeModel.displayName}</strong>
+          <button
+            type="button"
+            class="active-model-change"
+            onclick={openModelSettings}
+            aria-label="Change transcription model"
+          >
+            Change
+          </button>
+        </p>
+      {/if}
+
       <ControlsSection
         {sources}
         {sourcesLoaded}
@@ -1174,6 +1207,61 @@ h1 {
   top: 0.75rem;
   z-index: 5;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.active-model {
+  /* "Model: <name> · Change" — a quiet always-on signal of which
+     transcriber the next recording will hit. Lives between the
+     shortcut hint and the controls section so it's adjacent to
+     the surface that consumes it. The Change button is text-only
+     to keep the line compact; styling matches the picker's link
+     accent. */
+  margin: 0.5rem 0 1rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  color: #555;
+  text-align: left;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.active-model-label {
+  color: #888;
+}
+.active-model strong {
+  color: #222;
+  font-weight: 600;
+}
+.active-model-change {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #396cd8;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.active-model-change:hover {
+  color: #1d4ed8;
+}
+@media (prefers-color-scheme: dark) {
+  .active-model {
+    color: #b8b8b8;
+  }
+  .active-model-label {
+    color: #888;
+  }
+  .active-model strong {
+    color: #e8e8e8;
+  }
+  .active-model-change {
+    color: #6a8cf0;
+  }
+  .active-model-change:hover {
+    color: #93b1ff;
+  }
 }
 
 .hint kbd {
