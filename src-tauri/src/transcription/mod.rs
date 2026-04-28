@@ -71,26 +71,28 @@ use crate::audio::{CaptureFormat, CapturedAudio};
 
 /// One transcribed utterance, the unit a streaming backend emits.
 ///
-/// Mirrors the row shape that Phase C of the meeting-mode pivot will
-/// persist (one utterance row per speaker turn, grouped by session —
-/// see `docs/system-audio-meeting-mode-proposal.md`). For the existing
-/// one-shot dictation flow there's exactly one utterance per call,
-/// `is_final = true`, with timestamps spanning the whole recording —
-/// the legacy `transcribe()` path constructs that shape via the
-/// default [`Transcribe::transcribe_chunks`] impl.
+/// Mirrors the row shape `crate::meeting::PersistedUtterance` writes
+/// to the `utterances` table (one row per speaker turn, grouped by
+/// session — see `docs/system-audio-meeting-mode-proposal.md`). For
+/// the one-shot dictation flow there's exactly one utterance per
+/// call, `is_final = true`, with timestamps spanning the whole
+/// recording — the legacy `transcribe()` path constructs that shape
+/// via the default [`Transcribe::transcribe_chunks`] impl.
 ///
 /// `started_at_ms` and `ended_at_ms` are offsets from the start of
 /// the streaming session, not wall-clock timestamps. The session
 /// owner pairs these with a wall-clock anchor when persisting.
 ///
-/// `speaker_label` is `None` until diarization (Phase D) lands; until
-/// then every utterance reads as "unknown speaker" in the UI. Including
-/// the field on the type today means the streaming-emitting backend
-/// can be retrofitted without a wire-shape break.
+/// `speaker_label` is set by the diarizer (`EnergyDiarizer` in
+/// production, #201) — typically `"Speaker A"` / `"Speaker B"` for
+/// D1, model-derived ids when D2 lands. `None` only when the
+/// diarizer abstains (e.g. `NoopDiarizer` in tests); the meeting
+/// pump's `dispatch_utterances` falls back to the source-derived
+/// `"mic"` / `"system"` label in that case so the panel always has
+/// something to render.
 ///
-/// `serde` derives so this can flow over the IPC boundary as soon as
-/// Phase C wires the meeting-mode panel to receive partial utterances
-/// via Tauri events.
+/// `serde` derives so this flows over the IPC boundary into the
+/// meeting-mode panel for partial utterance rendering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Utterance {
@@ -111,9 +113,11 @@ pub struct Utterance {
     /// arrives. The legacy one-shot path always emits `is_final = true`.
     pub is_final: bool,
     /// Diarization label (`"Speaker A"`, `"Speaker B"`, or
-    /// user-renamed). `None` until Phase D ships speaker
-    /// segmentation. Single-speaker dictation use cases leave this
-    /// `None` indefinitely — that's expected, not a regression.
+    /// user-renamed). Set by the diarizer (D1 `EnergyDiarizer` in
+    /// production, #201). Single-speaker dictation paths leave this
+    /// `None` and the IPC layer skips the meeting-pump dispatch
+    /// (where the source-derived fallback would apply) — for
+    /// dictation the field is informational only.
     pub speaker_label: Option<String>,
 }
 
@@ -533,10 +537,10 @@ mod tests {
 
     #[test]
     fn utterance_serde_uses_camel_case_for_frontend_consumption() {
-        // The Phase C meeting-mode panel will receive these via
-        // Tauri events. Pin the wire shape so a Rust-side rename
-        // fails loud rather than silently drifting from the
-        // frontend's TypeScript view.
+        // The meeting-mode panel receives these via the
+        // `meeting_session_get` poll. Pin the wire shape so a
+        // Rust-side rename fails loud rather than silently
+        // drifting from the frontend's TypeScript view.
         let u = Utterance {
             text: "hello".into(),
             started_at_ms: 100,

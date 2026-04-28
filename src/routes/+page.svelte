@@ -603,11 +603,10 @@
         || permStatuses.inputMonitoring === "denied"),
   );
 
-  // Meeting Mode (Phase C scaffold; refs #33 / #109). The repo is
-  // empty until the streaming pump (#110) starts inserting sessions,
-  // but the panel reads through the same IPC surface real sessions
-  // will use, so the moment data starts flowing the panel populates
-  // with no further wiring.
+  // Meeting Mode session list. Populated from the meetings repo via
+  // `meeting_sessions_list`; rows are appended by the streaming pump
+  // (`SessionManager`) as it persists chunks. The Meetings panel
+  // reads through the same IPC surface real sessions use.
   let meetingSessions = $state<MeetingSession[]>([]);
   let meetingSessionsLoaded = $state(false);
   let meetingSessionsError = $state<ErrorDisplay | null>(null);
@@ -944,8 +943,9 @@
 
       <!--
         Hotkey hint card. Stays sticky inside the Dictation pane so
-        the shortcut stays visible as the result block grows. PTT
-        clause hides on macOS where it's disabled by default (#161).
+        the shortcut stays visible as the result block grows. The
+        PTT key shown matches the platform default; the editor in
+        Settings → General overrides it.
       -->
       <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
         <strong>Shortcuts:</strong>

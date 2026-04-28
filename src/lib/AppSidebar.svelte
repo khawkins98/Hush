@@ -1,16 +1,12 @@
 <!--
-  Left-rail navigation for the main window. Phase 1 of the IA
-  redesign (UX brief 2026-04-27): splits the main window's flat
-  panel stack into Dictation / Meetings / History sections, keeps
-  not-yet-moved configuration panels under a temporary
-  "Configuration" tab until Phase 3 lifts them into the standalone
-  Settings window.
+  Left-rail navigation for the main window. Splits the main
+  window's content into Dictation / Meetings / History sections;
+  configuration lives in the standalone Settings window opened
+  from the footer (or ⌘, on macOS).
 
   Why a sibling component rather than inline markup: the parent
-  page is already 1.4k LOC (#156). Pulling the sidebar out keeps
-  the new layout legible in `+page.svelte` and makes the eventual
-  cleanup PR (drop "Configuration" tab once Settings ships) a
-  one-line diff in this file.
+  page is already large (#156). Pulling the sidebar out keeps the
+  layout legible in `+page.svelte`.
 -->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
