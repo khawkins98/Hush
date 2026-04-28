@@ -12,10 +12,14 @@
 //!   Linux's notification area):** opens the menu below.
 //! - **Show Hush:** focuses the main window if open, restores it if
 //!   minimised, brings it forward if the user alt-tabbed away.
-//! - **Toggle Recording:** mirrors the global toggle hotkey
-//!   (`Ctrl+⌥/Alt+H`) by emitting `hotkey:toggle` — the frontend's
-//!   existing listener handles start/stop, so a single source of truth
-//!   for "are we recording" stays put.
+//! - **Start / Stop Recording:** state-aware label that mirrors the
+//!   frontend's `recording` rune. Clicking emits `hotkey:toggle` —
+//!   the frontend's existing listener handles start/stop. The label
+//!   updates via the `ui:recording-state` Tauri event the frontend
+//!   pushes when its `recording` value changes.
+//! - **Open Settings…:** opens (or focuses) the standalone Settings
+//!   window. Useful if the user closed the main window and only has
+//!   the tray to reach configuration.
 //! - **Quit:** clean exit through Tauri's app-handle.
 //!
 //! ## Why event-not-IPC for "Toggle Recording"
@@ -29,7 +33,7 @@
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 
 /// Build the tray icon and install it on the app. Best-effort: a
 /// build failure is logged and swallowed — the rest of the app
@@ -47,7 +51,10 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(
         app,
         "tray:toggle",
-        "Toggle Recording",
+        // Default label assumes "not recording". The
+        // `ui:recording-state` listener below swaps to "Stop
+        // Recording" when the frontend's `recording` rune flips.
+        "Start Recording",
         true,
         // Render the same accelerator as the global toggle hotkey
         // so the user sees the keyboard binding next to the menu
@@ -56,10 +63,21 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         // hint glyph (Tauri does not actually wire it).
         Some("CmdOrCtrl+Alt+H"),
     )?;
+    let settings = MenuItem::with_id(
+        app,
+        "tray:settings",
+        "Open Settings…",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit Hush"))?;
 
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &toggle, &separator, &quit])?;
+    let separator2 = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[&show, &toggle, &separator, &settings, &separator2, &quit],
+    )?;
 
     let _tray = TrayIconBuilder::with_id("hush-tray")
         .menu(&menu)
@@ -87,6 +105,25 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .on_tray_icon_event(handle_icon_event)
         .build(app)?;
 
+    // Listen for the frontend's recording-state pushes and update
+    // the toggle menu item's label. The frontend emits
+    // `ui:recording-state` with a JSON boolean payload whenever its
+    // `recording` rune changes — see `src/routes/+page.svelte`. The
+    // toggle item is cloned into the closure so the listener owns a
+    // direct handle and doesn't need to walk the tray's menu tree
+    // (Tauri's `TrayIcon` has no `menu()` getter as of 2.10).
+    // Listener is detached and lives for the lifetime of the app.
+    let toggle_for_listener = toggle.clone();
+    app.listen("ui:recording-state", move |event| {
+        let recording: bool = serde_json::from_str(event.payload()).unwrap_or(false);
+        let label = if recording {
+            "Stop Recording"
+        } else {
+            "Start Recording"
+        };
+        let _ = toggle_for_listener.set_text(label);
+    });
+
     Ok(())
 }
 
@@ -94,6 +131,11 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
     match event.id.as_ref() {
         "tray:show" => show_main_window(app),
         "tray:toggle" => emit_toggle(app),
+        "tray:settings" => {
+            if let Err(e) = crate::settings_window::show(app) {
+                tracing::warn!(error = ?e, "tray: failed to open settings window");
+            }
+        }
         _ => {}
     }
 }

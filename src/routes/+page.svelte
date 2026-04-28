@@ -149,6 +149,15 @@
     document.title = recording ? "Hush ● Recording" : "Hush";
   });
 
+  // Push recording state to the backend so the tray's "Start / Stop
+  // Recording" menu item label can mirror the UI. The tray module
+  // listens for `ui:recording-state` and swaps its label. Best-effort:
+  // a failed emit just leaves the tray label stale until the next
+  // toggle, which is harmless.
+  $effect(() => {
+    void emit("ui:recording-state", recording);
+  });
+
   onMount(async () => {
     // Check the first-run flag BEFORE the Promise.all — round-7 UX
     // reviewer caught a real timing bug: when the flag fetch raced
