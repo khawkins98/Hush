@@ -172,6 +172,14 @@
   let newOverrideKind = $state<MeetingAppKind>("meeting");
   let overrideInputEl = $state<HTMLInputElement | null>(null);
 
+  // Meeting auto-start mode dropdown. Backend serde encoding is
+  // kebab-case ("off" / "always") so the values bind directly to
+  // the `<option>` strings without further mapping.
+  type MeetingAutostartMode = "off" | "always";
+  let meetingAutostartMode = $state<MeetingAutostartMode>("off");
+  let meetingAutostartBusy = $state(false);
+  let meetingAutostartError = $state<string | null>(null);
+
   // ---- About tab --------------------------------------------------------
   // Version pulled from Tauri at runtime so the displayed value
   // tracks `tauri.conf.json` / `Cargo.toml` instead of a hardcoded
@@ -250,6 +258,35 @@
       appOverridesError = formatErrorDisplay(e);
     } finally {
       appOverridesLoaded = true;
+    }
+  }
+
+  async function loadMeetingAutostartMode(): Promise<void> {
+    try {
+      meetingAutostartMode = await invoke<MeetingAutostartMode>(
+        "get_meeting_autostart_mode",
+      );
+      meetingAutostartError = null;
+    } catch (e) {
+      meetingAutostartError = "Couldn't read auto-start mode.";
+      console.warn("[hush] get_meeting_autostart_mode failed", e);
+    }
+  }
+
+  async function onMeetingAutostartChange(e: Event) {
+    const next = (e.target as HTMLSelectElement).value as MeetingAutostartMode;
+    meetingAutostartBusy = true;
+    meetingAutostartError = null;
+    try {
+      await invoke("set_meeting_autostart_mode", { mode: next });
+      meetingAutostartMode = next;
+    } catch (err) {
+      meetingAutostartError = formatErrorMessage(err);
+      // Re-read on failure so the dropdown reflects what's
+      // actually persisted, not the optimistic value.
+      await loadMeetingAutostartMode();
+    } finally {
+      meetingAutostartBusy = false;
     }
   }
 
@@ -492,6 +529,7 @@
       loadHudEnabled(),
       loadAppMetadata(),
       loadAppOverrides(),
+      loadMeetingAutostartMode(),
     ]);
   });
 
@@ -735,6 +773,32 @@
       />
     {:else if active === "meeting"}
       <h1 class="tab-title">Meeting</h1>
+
+      <section class="settings-group" aria-labelledby="settings-autostart-heading">
+        <h2 id="settings-autostart-heading" class="group-heading">Auto-start</h2>
+        <label class="select-row">
+          <span class="row-label">When a meeting app focuses</span>
+          <select
+            data-testid="settings-meeting-autostart"
+            disabled={meetingAutostartBusy}
+            value={meetingAutostartMode}
+            onchange={onMeetingAutostartChange}
+          >
+            <option value="off">Off — start manually</option>
+            <option value="always">Always start a session</option>
+          </select>
+        </label>
+        <p class="row-note">
+          When set to "Always", Hush opens a Meeting Mode session
+          on its own the moment a known meeting app (Zoom, Teams,
+          Discord, …) comes to focus. Stops manually only.
+          Defaults to Off — opt in here.
+        </p>
+        {#if meetingAutostartError}
+          <p class="settings-error">{meetingAutostartError}</p>
+        {/if}
+      </section>
+
       <MeetingAppOverridesPanel
         overrides={appOverrides}
         overridesLoaded={appOverridesLoaded}
