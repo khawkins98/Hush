@@ -367,6 +367,47 @@ pub async fn stop_dictation(
         .saturating_mul(1000)
         .checked_div(format.sample_rate as u64 * format.channels.max(1) as u64)
         .map(|ms| ms as i64);
+
+    // Short-press shortcut (#197): when the recording is too brief
+    // to contain real speech, skip whisper inference and return a
+    // friendly empty result. Pre-#197 a held-too-short PTT press
+    // produced an empty / near-empty sample buffer that whisper-rs
+    // rejected with "Input sample buffer was empty"; the IPC layer
+    // surfaced that as a `Transcription` error and the result panel
+    // showed the scary technical message. Now the empty-state
+    // handling that #196 wired for `[BLANK_AUDIO]` covers this case
+    // too — same path, no inference attempt, duration still shown.
+    //
+    // Threshold rationale: whisper.cpp's mel front-end needs at least
+    // one frame (~32 ms at 16 kHz). Anything below 200 ms is well
+    // below the floor of a deliberate utterance — even "no" /
+    // "yes" / "k" runs ~250-400 ms in normal speech — so the
+    // short-circuit is virtually free of false positives. Users
+    // who hold the hotkey deliberately for longer always reach the
+    // inference path.
+    const MIN_TRANSCRIBE_MS: i64 = 200;
+    let too_short = match duration_ms {
+        Some(ms) => ms < MIN_TRANSCRIBE_MS,
+        // Conservative: missing duration (impossible format) →
+        // treat as too-short rather than crash whisper with
+        // unknown input.
+        None => true,
+    };
+    if too_short {
+        let foreground = take_foreground_snapshot(&state)?;
+        // Don't write to the clipboard for an empty result —
+        // pre-#197 this branch was unreachable so the question
+        // didn't come up. The user just held the hotkey and got
+        // nothing; the last clipboard contents (their previous
+        // dictation, or whatever they copied manually) should
+        // survive the no-op press.
+        return Ok(DictationResult {
+            text: String::new(),
+            foreground,
+            duration_ms,
+        });
+    }
+
     let utterances = transcriber
         .transcribe_chunks(&[captured.samples], format, &prompt)
         .map_err(|e| IpcError::Transcription(e.to_string()))?;

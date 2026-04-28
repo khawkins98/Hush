@@ -915,25 +915,21 @@
 
       {#if activeModel}
         <!--
-          Always-visible "which model am I about to record into?"
-          line + a click-through to swap. The picker lives in the
-          Settings window; this affordance is the same shape as
-          the setup-banner's "Open Settings → Model" CTA so the
-          user has one mental model for "where do I change models?"
-          regardless of whether one is loaded or not.
+          Active-model chip. Single button so the entire pill is
+          the click target — the "Model: X · Change" three-piece
+          treatment in #196 read as disjointed; one chip with a
+          quiet chevron is cleaner. Click → Settings → Model.
         -->
-        <p class="active-model" aria-label="Active transcription model">
-          <span class="active-model-label">Model:</span>
-          <strong>{activeModel.displayName}</strong>
-          <button
-            type="button"
-            class="active-model-change"
-            onclick={openModelSettings}
-            aria-label="Change transcription model"
-          >
-            Change
-          </button>
-        </p>
+        <button
+          type="button"
+          class="active-model-chip"
+          onclick={openModelSettings}
+          aria-label="Active model: {activeModel.displayName}. Click to change."
+          title="Change transcription model"
+        >
+          <span class="active-model-name">{activeModel.displayName}</span>
+          <span class="active-model-chevron" aria-hidden="true">›</span>
+        </button>
       {/if}
 
       <ControlsSection
@@ -1209,58 +1205,65 @@ h1 {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
-.active-model {
-  /* "Model: <name> · Change" — a quiet always-on signal of which
-     transcriber the next recording will hit. Lives between the
-     shortcut hint and the controls section so it's adjacent to
-     the surface that consumes it. The Change button is text-only
-     to keep the line compact; styling matches the picker's link
-     accent. */
+.active-model-chip {
+  /* Quiet pill that surfaces the active model + opens the picker.
+     The whole chip is the click target; a small chevron at the
+     trailing edge hints "click to change" without shouting. Sits
+     between the shortcut hint and the controls section. */
   margin: 0.5rem 0 1rem;
-  padding: 0.4rem 0.75rem;
+  padding: 0.3rem 0.7rem;
   font-size: 0.85rem;
-  color: #555;
-  text-align: left;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-.active-model-label {
-  color: #888;
-}
-.active-model strong {
-  color: #222;
-  font-weight: 600;
-}
-.active-model-change {
-  background: transparent;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: #396cd8;
+  font-family: inherit;
+  color: #444;
+  background-color: #f3f3f5;
+  border: 1px solid #e1e1e4;
+  border-radius: 999px;
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
-.active-model-change:hover {
-  color: #1d4ed8;
+.active-model-chip:hover {
+  background-color: #e8e8ec;
+  border-color: #d4d4d9;
+  color: #222;
 }
+.active-model-chip:focus-visible {
+  outline: 2px solid #6a8cf0;
+  outline-offset: 2px;
+}
+.active-model-name {
+  font-weight: 500;
+}
+.active-model-chevron {
+  font-size: 1.05em;
+  color: #999;
+  margin-left: 0.05rem;
+  /* Vertically nudge the chevron — Apple-style "›" sits a hair
+     above the optical baseline at this font size. */
+  transform: translateY(-0.05em);
+}
+.active-model-chip:hover .active-model-chevron {
+  color: #555;
+}
+
 @media (prefers-color-scheme: dark) {
-  .active-model {
+  .active-model-chip {
     color: #b8b8b8;
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
   }
-  .active-model-label {
-    color: #888;
-  }
-  .active-model strong {
+  .active-model-chip:hover {
+    background-color: #353535;
+    border-color: #4a4a4a;
     color: #e8e8e8;
   }
-  .active-model-change {
-    color: #6a8cf0;
+  .active-model-chevron {
+    color: #777;
   }
-  .active-model-change:hover {
-    color: #93b1ff;
+  .active-model-chip:hover .active-model-chevron {
+    color: #b8b8b8;
   }
 }
 
