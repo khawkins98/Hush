@@ -876,6 +876,13 @@ pub fn get_hud_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
 /// the same value back.
 #[tauri::command]
 pub async fn set_hud_enabled(state: State<'_, AppState>, enabled: bool) -> IpcResult<()> {
+    set_hud_enabled_inner(&state, enabled).await
+}
+
+/// Tauri-free orchestration for [`set_hud_enabled`]. Tests exercise
+/// this against a `MemSettings`-backed `AppState` rather than a
+/// real Tauri runtime.
+pub(crate) async fn set_hud_enabled_inner(state: &AppState, enabled: bool) -> IpcResult<()> {
     state
         .hud_enabled
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -1683,5 +1690,59 @@ mod tests {
         // Second take must be None: the slot is consumed, not cloned.
         let again = take_foreground_snapshot(&state).expect("not poisoned");
         assert!(again.is_none());
+    }
+
+    // ---- HUD-enabled IPC commands ----------------------------------------
+
+    #[tokio::test]
+    async fn set_hud_enabled_persists_false_to_settings_and_atomic() {
+        let state = crate::ipc::tests::mock_state();
+        // Default at construction is `true`; flip to false and verify
+        // both the in-memory atomic and the persisted settings row.
+        state
+            .hud_enabled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        set_hud_enabled_inner(&state, false)
+            .await
+            .expect("set_hud_enabled_inner ok");
+
+        assert!(
+            !state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed),
+            "atomic should reflect the new false value"
+        );
+        let persisted = state
+            .settings
+            .get(crate::settings::keys::HUD_ENABLED)
+            .await
+            .expect("settings get ok");
+        assert_eq!(
+            persisted.as_deref(),
+            Some("false"),
+            "persisted row should match the literal serde encoding"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_hud_enabled_persists_true_after_a_round_trip() {
+        // Round-trip false → true so we cover the both-directions
+        // path. A single-direction test would miss a regression
+        // where `set_hud_enabled` only ever wrote "false".
+        let state = crate::ipc::tests::mock_state();
+
+        set_hud_enabled_inner(&state, false)
+            .await
+            .expect("set false ok");
+        set_hud_enabled_inner(&state, true)
+            .await
+            .expect("set true ok");
+
+        assert!(state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed));
+        let persisted = state
+            .settings
+            .get(crate::settings::keys::HUD_ENABLED)
+            .await
+            .expect("settings get ok");
+        assert_eq!(persisted.as_deref(), Some("true"));
     }
 }
