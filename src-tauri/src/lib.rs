@@ -143,6 +143,18 @@ pub fn run() {
                 }
             });
 
+            // Meeting auto-start poller (#112). Watches the foreground
+            // app every 3 s; on a transition into a Meeting-classified
+            // app, if the user has opted in via Settings → Meeting, it
+            // calls `meeting_manager.start_manual` automatically. See
+            // `meeting/autostart.rs` for the decision logic and the
+            // explicit list of what's deliberately deferred (auto-stop
+            // on blur, "ask" mode, permission pre-check).
+            let app_for_autostart = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                run_meeting_autostart_poller(app_for_autostart).await;
+            });
+
             // Native macOS menu bar (no-op on other platforms).
             // Replaces Tauri's auto-generated minimal menu with one
             // that names the app "Hush", binds Settings… to ⌘,, and
@@ -209,6 +221,8 @@ pub fn run() {
             ipc::commands::reset_first_run,
             ipc::commands::get_hud_enabled,
             ipc::commands::set_hud_enabled,
+            ipc::commands::get_meeting_autostart_mode,
+            ipc::commands::set_meeting_autostart_mode,
             ipc::commands::ptt_get_config,
             ipc::commands::ptt_set_config,
             ipc::commands::macos::open_macos_privacy_pane,
@@ -228,3 +242,102 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running Hush");
 }
+
+/// Foreground-app poller for Meeting Mode auto-start (#112).
+///
+/// Ticks every `MEETING_AUTOSTART_POLL_INTERVAL`. Snapshots the
+/// active window via `active-win-pos-rs::get_active_window`, runs
+/// it through the existing `AppClassifier`, and asks
+/// [`meeting::AutostartDecision::decide`] whether to start a
+/// session. On a `Start` verdict it calls
+/// `meeting_manager.start_manual` with the default sources
+/// (mic + system audio when supported by the platform).
+///
+/// Loop never exits during normal operation; it terminates when
+/// the Tauri runtime tears down at app shutdown.
+async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
+    use tauri::Manager;
+    let mut ticker = tokio::time::interval(MEETING_AUTOSTART_POLL_INTERVAL);
+    let mut last_kind: Option<meeting::MeetingAppKind> = None;
+
+    loop {
+        ticker.tick().await;
+        let Some(state) = app.try_state::<ipc::AppState>() else {
+            // State hasn't been managed yet — race against
+            // setup. Try again on the next tick.
+            continue;
+        };
+
+        let mode = ipc::decode_autostart_mode(
+            state
+                .meeting_autostart_mode
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        if mode == meeting::MeetingAutostartMode::Off {
+            // Reset memory so flipping the mode back on later
+            // doesn't auto-start because of a long-stale
+            // verdict. Cheap; the AtomicU8 read is the hot path.
+            last_kind = None;
+            continue;
+        }
+
+        // Snapshot foreground app. `active-win-pos-rs` errors on
+        // no-active-window (lock screen, full-screen game) — treat
+        // that as "no transition this tick" and keep the previous
+        // kind so we don't churn `last_kind` on transient gaps.
+        let Ok(window) = active_win_pos_rs::get_active_window() else {
+            continue;
+        };
+        let app_name = window.app_name;
+        let classifier = meeting::AppClassifier::default_table();
+        let kind = classifier.classify(&app_name);
+        let session_active = state.meeting_manager.active_session_id().is_some();
+
+        let decision = meeting::AutostartDecision::decide(
+            last_kind,
+            kind,
+            &app_name,
+            mode,
+            session_active,
+        );
+        last_kind = Some(kind);
+
+        let meeting::AutostartDecision::Start { app_name } = decision else {
+            continue;
+        };
+
+        // Pick the default capture sources. Mic always; system
+        // audio if the platform supports it. Mirrors the panel's
+        // default selection for manual starts.
+        let mic_source = audio::AudioSource::default_microphone();
+        let mut sources = vec![mic_source];
+        #[cfg(target_os = "macos")]
+        {
+            sources.push(audio::AudioSource::SystemAudio);
+        }
+
+        if let Err(e) = state
+            .meeting_manager
+            .start_manual(sources, Some(app_name.clone()))
+            .await
+        {
+            // Most likely cause: mic permission denied. Log and
+            // keep the poller running — flipping the toggle off
+            // is a single-click recovery in Settings → Meeting.
+            tracing::warn!(
+                app_name,
+                error = ?e,
+                "auto-start meeting session failed"
+            );
+        } else {
+            tracing::info!(app_name, "auto-started meeting session");
+        }
+    }
+}
+
+/// Tick interval for the foreground-app poller. 3 s is a good
+/// balance: fast enough that "I clicked into Zoom" feels instant,
+/// slow enough that idle CPU is unnoticeable. The OS APIs we're
+/// hitting (`active-win-pos-rs::get_active_window`) are a single
+/// IPC each.
+const MEETING_AUTOSTART_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);

@@ -35,6 +35,7 @@
 //! the data layer's API surface.
 
 pub mod app_overrides;
+pub mod autostart;
 pub mod manager;
 pub mod sqlite;
 
@@ -42,6 +43,7 @@ pub use app_overrides::{
     MeetingAppOverride, MeetingAppOverrideRepository, NewMeetingAppOverride,
     SqliteMeetingAppOverrideRepository,
 };
+pub use autostart::{AutostartDecision, MeetingAutostartMode};
 pub use manager::{AppClassifier, MeetingEventEmitter, NoopMeetingEventEmitter, SessionManager};
 pub use sqlite::SqliteMeetingSessionRepository;
 

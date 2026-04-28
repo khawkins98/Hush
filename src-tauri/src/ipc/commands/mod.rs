@@ -889,6 +889,40 @@ pub async fn set_hud_enabled(state: State<'_, AppState>, enabled: bool) -> IpcRe
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Read the current Meeting-Mode auto-start mode. The Settings
+/// → Meeting tab calls this on mount so the dropdown renders the
+/// persisted value.
+#[tauri::command]
+pub fn get_meeting_autostart_mode(
+    state: State<'_, AppState>,
+) -> IpcResult<crate::meeting::MeetingAutostartMode> {
+    Ok(crate::ipc::decode_autostart_mode(
+        state
+            .meeting_autostart_mode
+            .load(std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
+/// Persist the Meeting-Mode auto-start mode. Updates both the
+/// in-memory atomic the foreground poller reads and the settings
+/// row used at next-launch boot, so the value is observable to the
+/// poller within the next 3 s tick without an app restart.
+#[tauri::command]
+pub async fn set_meeting_autostart_mode(
+    state: State<'_, AppState>,
+    mode: crate::meeting::MeetingAutostartMode,
+) -> IpcResult<()> {
+    state.meeting_autostart_mode.store(
+        crate::ipc::encode_autostart_mode(mode),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    state
+        .settings
+        .set(crate::settings::keys::MEETING_AUTOSTART_MODE, mode.as_setting())
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
 /// Clear the first-run-completed flag so the welcome modal renders
 /// again on the next app launch. Used by the Settings → General
 /// "Show welcome on next launch" affordance — useful for users

@@ -224,6 +224,27 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     );
   });
 
+  test("auto-start dropdown reflects the persisted mode and updates on change", async ({
+    page,
+  }) => {
+    // Backend reports "always"; dropdown mounts with that value.
+    await installMocks(page, {
+      get_meeting_autostart_mode: () => "always",
+    });
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    const dropdown = page.locator('[data-testid="settings-meeting-autostart"]');
+    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toHaveValue("always");
+
+    // Switching to "off" optimistically updates the dropdown
+    // (the default mock's `set_meeting_autostart_mode` is a
+    // no-op `() => undefined` so the optimistic value sticks).
+    await dropdown.selectOption("off");
+    await expect(dropdown).toHaveValue("off");
+  });
+
   test("submitting the form invokes upsert with trimmed app_name", async ({
     page,
   }) => {
