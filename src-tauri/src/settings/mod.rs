@@ -62,6 +62,14 @@ pub mod keys {
     /// single key" (RightMeta on macOS, RightControl elsewhere). All
     /// keys in the combo must be held simultaneously to trigger PTT.
     pub const PTT_COMBO: &str = "ptt_combo";
+
+    /// Whether the recording HUD overlay should appear during
+    /// dictation / meeting capture. Stored as `"true"` / `"false"`;
+    /// absent means "show the HUD" (the default — first-time users
+    /// benefit from the visual confirmation that the mic is hot).
+    /// Power users who'd rather not see the floating pill can flip
+    /// this off in Settings → General.
+    pub const HUD_ENABLED: &str = "hud_enabled";
 }
 
 /// Repository trait at the storage boundary.

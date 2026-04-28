@@ -259,6 +259,14 @@ pub struct AppState {
     /// for the first time, so first-time opt-in doesn't require an
     /// app restart.
     pub ptt_listener_spawned: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the recording HUD overlay should appear during
+    /// dictation / meeting capture. Read by `start_dictation` /
+    /// meeting-pump start paths to decide whether to call
+    /// `crate::hud::show`. Stored as an `AtomicBool` so the sync
+    /// hot path can read it without locking; flipped by the
+    /// `set_hud_enabled` IPC command, which also persists to the
+    /// `hud_enabled` settings row.
+    pub hud_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Builder for [`AppState`].
@@ -297,6 +305,7 @@ pub struct AppStateBuilder {
     models_dir: Option<PathBuf>,
     ptt_combo: Option<crate::hotkey::ptt::PttCombo>,
     ptt_active: Option<bool>,
+    hud_enabled: Option<bool>,
 }
 
 impl AppStateBuilder {
@@ -387,6 +396,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn hud_enabled(mut self, enabled: bool) -> Self {
+        self.hud_enabled = Some(enabled);
+        self
+    }
+
     /// Construct the [`AppState`], or return a descriptive error naming
     /// the first required field that wasn't set.
     pub fn build(self) -> Result<AppState> {
@@ -468,6 +482,9 @@ impl AppStateBuilder {
                 self.ptt_active.unwrap_or(false),
             )),
             ptt_listener_spawned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                self.hud_enabled.unwrap_or(true),
+            )),
         })
     }
 }
@@ -635,6 +652,15 @@ impl AppState {
             _ => true,
         };
 
+        // HUD on by default. Absent / unparseable settings rows fall
+        // through to the default rather than silently turning the
+        // HUD off — first-time users benefit from the visual cue
+        // that the mic is hot.
+        let hud_enabled = match settings.get(crate::settings::keys::HUD_ENABLED).await {
+            Ok(Some(raw)) => raw != "false",
+            _ => true,
+        };
+
         AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
@@ -649,6 +675,7 @@ impl AppState {
             .models_dir(models_dir)
             .ptt_combo(ptt_combo)
             .ptt_active(ptt_active)
+            .hud_enabled(hud_enabled)
             .build()
     }
 }

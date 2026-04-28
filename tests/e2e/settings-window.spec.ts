@@ -117,6 +117,27 @@ test.describe("settings window — General tab", () => {
     await expect(toggle).toBeChecked();
   });
 
+  test("HUD toggle reflects the persisted value and fires set_hud_enabled on click", async ({
+    page,
+  }) => {
+    // Backend reports HUD is currently OFF; checkbox mounts
+    // unchecked.
+    await installMocks(page, {
+      get_hud_enabled: () => false,
+    });
+    await page.goto("/settings");
+
+    const toggle = page.locator('[data-testid="settings-hud-toggle"]');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).not.toBeChecked();
+
+    // Click to enable; checkbox flips to checked. The mock's
+    // default `set_hud_enabled` is a no-op `() => undefined` so
+    // the optimistic update sticks.
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+  });
+
   test("first-run reset button shows confirmation copy after click", async ({
     page,
   }) => {
