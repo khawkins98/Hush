@@ -34,7 +34,16 @@ export type AudioSource =
   | { kind: "microphone"; deviceId: string | null }
   | { kind: "system-audio" };
 export type ForegroundApp = { appName: string; windowTitle: string };
-export type DictationResult = { text: string; foreground: ForegroundApp | null };
+export type DictationResult = {
+  text: string;
+  foreground: ForegroundApp | null;
+  /// Wall-clock length of the captured audio, in milliseconds.
+  /// Surfaced in ResultBlock so the user always sees "Recorded
+  /// for X.Xs" — including when transcription found nothing
+  /// recognisable. `null` only when the capture format was
+  /// degenerate; never seen in practice.
+  durationMs: number | null;
+};
 export type IpcError = { kind: string; message?: string };
 
 export type HistoryEntry = {
