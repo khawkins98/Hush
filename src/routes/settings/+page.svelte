@@ -28,6 +28,7 @@
   and have the main window listen.
 -->
 <script lang="ts">
+  import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
@@ -121,6 +122,15 @@
   let newFind = $state("");
   let newReplace = $state("");
   let findInputEl = $state<HTMLInputElement | null>(null);
+
+  // ---- About tab --------------------------------------------------------
+  // Version pulled from Tauri at runtime so the displayed value
+  // tracks `tauri.conf.json` / `Cargo.toml` instead of a hardcoded
+  // string that would silently rot. `getName` returns the
+  // `productName` field, which is what users see in the menu bar.
+  let appVersion = $state<string>("");
+  let appName = $state<string>("Hush");
+  let tauriVersion = $state<string>("");
 
   // ---- macOS permission diagnostic --------------------------------------
   let macosDiagnostic = $state<MacosPermissionDiagnostic | null>(null);
@@ -380,8 +390,27 @@
       loadReplacements(),
       loadMacosDiagnostic(),
       loadAutostartState(),
+      loadAppMetadata(),
     ]);
   });
+
+  // Pull build identity from Tauri. Failures are non-fatal — the
+  // About tab just falls back to the default empty strings, which
+  // render as "Hush" + an empty version line.
+  async function loadAppMetadata(): Promise<void> {
+    try {
+      const [name, version, tauri] = await Promise.all([
+        getName(),
+        getVersion(),
+        getTauriVersion(),
+      ]);
+      appName = name;
+      appVersion = version;
+      tauriVersion = tauri;
+    } catch {
+      // Ignored; the About tab just shows the static copy.
+    }
+  }
 
   // ---- General-tab handlers --------------------------------------------
 
@@ -595,11 +624,70 @@
       {/if}
     {:else if active === "about"}
       <h1 class="tab-title">About</h1>
-      <p class="placeholder">
-        Hush — local-only voice-to-text. Hotkey-driven dictation +
-        long-running meeting capture, all powered by whisper.cpp on
-        your own hardware. No cloud, no telemetry.
-      </p>
+      <section class="about-tab">
+        <header class="about-header">
+          <h2 class="about-name">{appName}</h2>
+          {#if appVersion}
+            <p class="about-version">Version {appVersion}</p>
+          {/if}
+        </header>
+
+        <p class="about-blurb">
+          Local-only voice-to-text. Hotkey-driven dictation plus
+          long-running meeting capture, powered by whisper.cpp on
+          your own hardware. No cloud, no telemetry.
+        </p>
+
+        <dl class="about-meta">
+          <dt>License</dt>
+          <dd>
+            <a
+              href="https://www.apache.org/licenses/LICENSE-2.0"
+              target="_blank"
+              rel="noopener noreferrer">Apache License 2.0</a
+            >
+          </dd>
+          <dt>Source</dt>
+          <dd>
+            <a
+              href="https://github.com/khawkins98/Hush"
+              target="_blank"
+              rel="noopener noreferrer">github.com/khawkins98/Hush</a
+            >
+          </dd>
+          <dt>Report a bug</dt>
+          <dd>
+            <a
+              href="https://github.com/khawkins98/Hush/issues/new"
+              target="_blank"
+              rel="noopener noreferrer">Open an issue</a
+            >
+          </dd>
+          {#if tauriVersion}
+            <dt>Tauri runtime</dt>
+            <dd><code>{tauriVersion}</code></dd>
+          {/if}
+        </dl>
+
+        <p class="about-credit">
+          Built on
+          <a
+            href="https://github.com/ggerganov/whisper.cpp"
+            target="_blank"
+            rel="noopener noreferrer">whisper.cpp</a
+          >,
+          <a
+            href="https://tauri.app"
+            target="_blank"
+            rel="noopener noreferrer">Tauri</a
+          >, and
+          <a
+            href="https://svelte.dev"
+            target="_blank"
+            rel="noopener noreferrer">Svelte</a
+          >.
+        </p>
+      </section>
     {/if}
   </section>
 </main>
@@ -715,6 +803,74 @@
     font-size: 0.95rem;
     line-height: 1.5;
     max-width: 36rem;
+  }
+
+  .about-tab {
+    max-width: 36rem;
+    line-height: 1.5;
+  }
+  .about-header {
+    margin-bottom: 1.25rem;
+  }
+  .about-name {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+  }
+  .about-version {
+    margin: 0.15rem 0 0;
+    color: #666;
+    font-size: 0.85rem;
+  }
+  .about-blurb {
+    margin: 0 0 1.25rem;
+    font-size: 0.95rem;
+    color: #333;
+  }
+  .about-meta {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 1rem;
+    row-gap: 0.4rem;
+    margin: 0 0 1.25rem;
+    font-size: 0.9rem;
+  }
+  .about-meta dt {
+    color: #666;
+    font-weight: 500;
+  }
+  .about-meta dd {
+    margin: 0;
+  }
+  .about-meta code {
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    color: #444;
+  }
+  .about-credit {
+    margin: 0;
+    color: #666;
+    font-size: 0.85rem;
+  }
+  .about-tab a {
+    color: #396cd8;
+  }
+  @media (prefers-color-scheme: dark) {
+    .about-version,
+    .about-meta dt,
+    .about-credit {
+      color: #9a9a9a;
+    }
+    .about-blurb {
+      color: #d8d8d8;
+    }
+    .about-meta code {
+      color: #b8b8b8;
+    }
+    .about-tab a {
+      color: #6a8cf0;
+    }
   }
 
   .settings-group {
