@@ -1,4 +1,6 @@
 <script lang="ts">
+  import ErrorDisplay from "./ErrorDisplay.svelte";
+  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type { HistoryEntry } from "./types";
 
   type Props = {
@@ -6,7 +8,7 @@
     historyLoaded: boolean;
     historyQuery: string;
     historySearching: boolean;
-    historyError: string | null;
+    historyError: ErrorDisplayShape | null;
     historyVersion: number;
     /// Unfiltered total — drives the "Clear all 7" confirmation
     /// copy. Different from `historyEntries.length` when the user
@@ -138,10 +140,7 @@
   </header>
 
   {#if historyError}
-    <p class="error scoped-error" role="alert">
-      <strong>History:</strong>
-      {historyError}
-    </p>
+    <ErrorDisplay error={historyError} scope="History" />
   {/if}
 
   {#if !historyLoaded}
@@ -371,25 +370,8 @@ button.ghost.danger:hover:not(:disabled) {
   margin-right: 0.5rem;
 }
 
-.error {
-  margin-top: 1.5rem;
-  padding: 0.75rem 1rem;
-  background-color: #fee;
-  border: 1px solid #d83a3a;
-  border-radius: 8px;
-  color: #8a0000;
-  text-align: left;
-  line-height: 1.5;
-}
-
-.scoped-error {
-  /* `.error` already provides the red box; `strong` inside scopes
-     the message to a section. */
-  padding-left: 1rem;
-}
-.scoped-error strong {
-  margin-right: 0.4rem;
-}
+/* Error rendering migrated to the shared ErrorDisplay component
+   (#199 + follow-up). */
 
 .loading-skeleton {
   margin: 0.5rem 0;
@@ -467,11 +449,6 @@ button.ghost.danger:hover:not(:disabled) {
     background-color: #1f1f1f;
     border-color: #3a3a3a;
     color: #999;
-  }
-  .error {
-    background-color: #4a1a1a;
-    border-color: #d83a3a;
-    color: #ffd0d0;
   }
 }
 </style>
