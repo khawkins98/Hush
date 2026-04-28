@@ -139,6 +139,16 @@
   let firstRunResetBusy = $state(false);
   let firstRunResetMessage = $state<string | null>(null);
 
+  // HUD-overlay-enabled toggle. Defaults to true on the backend
+  // (the recording HUD is on by default — first-time users
+  // benefit from the visual cue that the mic is hot). Power
+  // users who'd rather not see the floating pill can flip it off
+  // here. Optimistically updated on click; on failure the
+  // checkbox snaps back to the persisted value.
+  let hudEnabled = $state(true);
+  let hudBusy = $state(false);
+  let hudError = $state<string | null>(null);
+
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
   let vocabularyLoaded = $state(false);
@@ -479,6 +489,7 @@
       loadReplacements(),
       loadMacosDiagnostic(),
       loadAutostartState(),
+      loadHudEnabled(),
       loadAppMetadata(),
       loadAppOverrides(),
     ]);
@@ -532,6 +543,33 @@
       await loadAutostartState();
     } finally {
       autostartBusy = false;
+    }
+  }
+
+  async function loadHudEnabled(): Promise<void> {
+    try {
+      hudEnabled = await invoke<boolean>("get_hud_enabled");
+      hudError = null;
+    } catch (e) {
+      hudError = "Couldn't read HUD setting.";
+      console.warn("[hush] get_hud_enabled failed", e);
+    }
+  }
+
+  async function onHudToggle(e: Event) {
+    const checked = (e.target as HTMLInputElement).checked;
+    hudBusy = true;
+    hudError = null;
+    try {
+      await invoke("set_hud_enabled", { enabled: checked });
+      hudEnabled = checked;
+    } catch (err) {
+      hudError = formatErrorMessage(err);
+      // Re-read on failure so the checkbox reflects the persisted
+      // value rather than the optimistic state.
+      await loadHudEnabled();
+    } finally {
+      hudBusy = false;
     }
   }
 
@@ -601,6 +639,31 @@
         </label>
         {#if autostartError}
           <p class="settings-error">{autostartError}</p>
+        {/if}
+      </section>
+
+      <section class="settings-group" aria-labelledby="settings-interface-heading">
+        <h2 id="settings-interface-heading" class="group-heading">Interface</h2>
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            data-testid="settings-hud-toggle"
+            disabled={hudBusy}
+            checked={hudEnabled}
+            onchange={onHudToggle}
+          />
+          <span class="toggle-label">
+            <span class="toggle-name">Show recording HUD</span>
+            <span class="toggle-desc">
+              The floating pill that appears in the top-right corner
+              while Hush is capturing audio. Off hides it for both
+              dictation and meeting mode; recording itself is
+              unaffected.
+            </span>
+          </span>
+        </label>
+        {#if hudError}
+          <p class="settings-error">{hudError}</p>
         {/if}
       </section>
 

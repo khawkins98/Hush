@@ -244,8 +244,12 @@ pub async fn meeting_start_manual(
     // "audio is being captured" cue meeting mode that the dictation
     // hot path already provides — best-effort, a HUD-show failure
     // shouldn't fail the start of an otherwise-running session.
-    if let Err(e) = crate::hud::show(&app) {
-        tracing::error!(error = ?e, "failed to show recording HUD on meeting start");
+    // Suppressed entirely when the user has flipped HUD off in
+    // Settings → General.
+    if state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Err(e) = crate::hud::show(&app) {
+            tracing::error!(error = ?e, "failed to show recording HUD on meeting start");
+        }
     }
     Ok(session)
 }

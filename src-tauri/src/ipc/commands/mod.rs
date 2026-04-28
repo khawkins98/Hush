@@ -211,8 +211,10 @@ pub fn start_dictation(
 ) -> IpcResult<()> {
     let source = source.unwrap_or_else(AudioSource::default_microphone);
     start_dictation_inner(&state, source)?;
-    if let Err(e) = crate::hud::show(&app) {
-        tracing::error!(error = ?e, "failed to show recording HUD");
+    if state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Err(e) = crate::hud::show(&app) {
+            tracing::error!(error = ?e, "failed to show recording HUD");
+        }
     }
     Ok(())
 }
@@ -853,6 +855,36 @@ pub async fn mark_first_run_completed(state: State<'_, AppState>) -> IpcResult<(
     state
         .settings
         .set(crate::settings::keys::FIRST_RUN_COMPLETED, "true")
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
+/// Read the recording-HUD-enabled flag. The Settings → General
+/// toggle reads this on mount so the checkbox renders the
+/// persisted value rather than always-checked. Defaults to `true`
+/// when the row is absent — first-time users benefit from the
+/// floating pill that confirms the mic is hot.
+#[tauri::command]
+pub fn get_hud_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
+    Ok(state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Persist the recording-HUD-enabled flag and update the in-memory
+/// `AppState` flag the dictation / meeting start paths read.
+/// Stored as the literal `"true"` / `"false"` under
+/// [`crate::settings::keys::HUD_ENABLED`] so the next launch reads
+/// the same value back.
+#[tauri::command]
+pub async fn set_hud_enabled(state: State<'_, AppState>, enabled: bool) -> IpcResult<()> {
+    state
+        .hud_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    state
+        .settings
+        .set(
+            crate::settings::keys::HUD_ENABLED,
+            if enabled { "true" } else { "false" },
+        )
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
