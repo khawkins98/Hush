@@ -117,6 +117,7 @@ export async function installMocks(
       history_search: () => [],
       history_delete: () => undefined,
       history_count: () => 0,
+      history_clear: () => 0,
 
       // ---- replacements ----
       replacements_list: () => [],

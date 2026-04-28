@@ -109,6 +109,13 @@ pub trait HistoryRepository: Send + Sync {
     /// just force every UI call site to ignore it.
     async fn delete(&self, id: i64) -> Result<()>;
 
+    /// Delete every history row. The frontend gates this behind a
+    /// confirmation prompt — once the IPC fires, there is no
+    /// recovery: the rows are gone and the corresponding FTS5 index
+    /// entries with them. Returns the number of rows removed so the
+    /// UI can render "Cleared N transcripts" feedback.
+    async fn clear(&self) -> Result<i64>;
+
     /// Total row count (no filter). Used by the frontend to drive
     /// pagination state ("page 3 of 12") without paging back to the end.
     async fn count(&self) -> Result<i64>;

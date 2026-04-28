@@ -122,6 +122,20 @@ impl HistoryRepository for SqliteHistoryRepository {
         Ok(())
     }
 
+    async fn clear(&self) -> Result<i64> {
+        // The AFTER DELETE trigger from migration 0001 fires per row
+        // and keeps `history_fts` in sync. For a several-thousand-row
+        // history this still runs in tens of milliseconds — the FTS5
+        // delta operations are cheap. If profiling later shows a
+        // smarter "rebuild fts from scratch" path is needed, that's
+        // a follow-up.
+        let result = sqlx::query("DELETE FROM history")
+            .execute(self.db.pool())
+            .await
+            .context("clear history")?;
+        Ok(result.rows_affected() as i64)
+    }
+
     async fn count(&self) -> Result<i64> {
         let row: (i64,) = sqlx::query_as("SELECT count(*) FROM history")
             .fetch_one(self.db.pool())
@@ -326,5 +340,41 @@ mod tests {
         repo.create(sample("one", None)).await.unwrap();
         repo.create(sample("two", None)).await.unwrap();
         assert_eq!(repo.count().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn clear_removes_every_row_and_returns_the_count() {
+        let repo = fresh_repo().await;
+        for txt in ["one", "two", "three"] {
+            repo.create(sample(txt, None)).await.unwrap();
+        }
+        let removed = repo.clear().await.unwrap();
+        assert_eq!(removed, 3);
+        assert_eq!(repo.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn clear_drops_rows_from_fts_index() {
+        // Same trigger discipline as `delete`: the AFTER DELETE
+        // trigger from migration 0001 fires once per cleared row,
+        // so search should return empty immediately afterwards.
+        let repo = fresh_repo().await;
+        repo.create(sample("haystack needle haystack", None))
+            .await
+            .unwrap();
+        repo.clear().await.unwrap();
+        let after = repo.search("needle", 10, 0).await.unwrap();
+        assert!(after.is_empty(), "fts index still returned: {after:?}");
+    }
+
+    #[tokio::test]
+    async fn clear_on_empty_table_returns_zero() {
+        // No rows means nothing to delete — `clear` succeeds and
+        // reports `0` rather than erroring. The frontend's
+        // confirmation flow can still be exercised on an empty
+        // history (the user sees "Cleared 0 transcripts") which
+        // is preferable to a hidden no-op.
+        let repo = fresh_repo().await;
+        assert_eq!(repo.clear().await.unwrap(), 0);
     }
 }

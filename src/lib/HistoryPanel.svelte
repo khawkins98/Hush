@@ -8,10 +8,18 @@
     historySearching: boolean;
     historyError: string | null;
     historyVersion: number;
+    /// Unfiltered total — drives the "Clear all 7" confirmation
+    /// copy. Different from `historyEntries.length` when the user
+    /// has a search query active.
+    historyTotalCount: number;
     formatTimestamp: (iso: string) => string;
     onSearchInput: (e: Event) => void;
     onCopy: (entry: HistoryEntry) => void | Promise<void>;
     onDelete: (entry: HistoryEntry) => void | Promise<void>;
+    /// Wipes every history row. The panel handles the click-to-
+    /// confirm dance in-component so the parent doesn't have to
+    /// thread a confirming-flag through props.
+    onClearAll: () => void | Promise<void>;
   };
 
   let {
@@ -21,11 +29,42 @@
     historySearching,
     historyError,
     historyVersion,
+    historyTotalCount,
     formatTimestamp,
     onSearchInput,
     onCopy,
     onDelete,
+    onClearAll,
   }: Props = $props();
+
+  // Click-to-confirm state for the "Clear all" button. Same shape
+  // as the meeting-mode Stop session confirmation: first click
+  // reveals the danger-styled confirm; second click within the
+  // timeout fires the clear; the prompt auto-resets after ~5 s so
+  // a stale armed state can't catch the user later.
+  let clearConfirming = $state(false);
+  let clearTimer: number | undefined;
+
+  function startClear() {
+    if (historyTotalCount === 0) return;
+    if (!clearConfirming) {
+      clearConfirming = true;
+      window.clearTimeout(clearTimer);
+      clearTimer = window.setTimeout(() => {
+        clearConfirming = false;
+      }, 5000);
+      return;
+    }
+    // Second click — fire and reset.
+    window.clearTimeout(clearTimer);
+    clearConfirming = false;
+    void onClearAll();
+  }
+
+  function cancelClear() {
+    window.clearTimeout(clearTimer);
+    clearConfirming = false;
+  }
 
   // Render duration as a compact m:ss / s.s string. Sub-second clips
   // get one decimal so a 0.4s mis-press is visibly different from a
@@ -47,16 +86,53 @@
       <span class="panel-tag" aria-hidden="true">H</span>
       History
     </h2>
-    <div class="search-wrap">
-      <input
-        type="search"
-        placeholder="Search transcriptions…"
-        value={historyQuery}
-        oninput={onSearchInput}
-        aria-label="Search history"
-      />
-      {#if historySearching}
-        <span class="search-spinner" aria-label="Searching" role="status"></span>
+    <div class="header-actions">
+      <div class="search-wrap">
+        <input
+          type="search"
+          placeholder="Search transcriptions…"
+          value={historyQuery}
+          oninput={onSearchInput}
+          aria-label="Search history"
+        />
+        {#if historySearching}
+          <span class="search-spinner" aria-label="Searching" role="status"></span>
+        {/if}
+      </div>
+      {#if historyTotalCount > 0}
+        {#if clearConfirming}
+          <div class="clear-confirm" role="group" aria-label="Confirm clear history">
+            <span class="clear-confirm-text">
+              Delete all {historyTotalCount}?
+            </span>
+            <button
+              type="button"
+              class="ghost danger clear-confirm-yes"
+              onclick={startClear}
+              data-testid="history-clear-confirm"
+            >
+              Yes, clear
+            </button>
+            <button
+              type="button"
+              class="ghost"
+              onclick={cancelClear}
+              data-testid="history-clear-cancel"
+            >
+              Cancel
+            </button>
+          </div>
+        {:else}
+          <button
+            type="button"
+            class="ghost danger"
+            onclick={startClear}
+            aria-label="Clear all transcripts"
+            data-testid="history-clear-all"
+          >
+            Clear all
+          </button>
+        {/if}
       {/if}
     </div>
   </header>
@@ -131,6 +207,52 @@
   max-width: 18rem;
   padding: 0.5em 0.85em;
   font-size: 0.9rem;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.clear-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  background-color: #fdf3f3;
+  border: 1px solid #e8c4c4;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.clear-confirm-text {
+  color: #8a3030;
+  font-weight: 500;
+}
+.clear-confirm-yes {
+  /* Slightly emphasised — same `danger` palette but opaque so the
+     primary action reads first. The Cancel button below it stays
+     in the default ghost-danger styling. */
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+  color: #8a0000;
+}
+
+@media (prefers-color-scheme: dark) {
+  .clear-confirm {
+    background-color: #2c1818;
+    border-color: #4a2020;
+  }
+  .clear-confirm-text {
+    color: #ff9090;
+  }
+  .clear-confirm-yes {
+    background-color: #3a1818;
+    border-color: #d83a3a;
+    color: #ff9090;
+  }
 }
 
 .history-list {
