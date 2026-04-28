@@ -1,4 +1,4 @@
-//! Meeting Mode IPC commands (Phase C; refs #33 / #109).
+//! Meeting Mode IPC commands (refs #33 / #109).
 //!
 //! Long-running multi-source capture sessions with You/Remote-tagged
 //! transcripts. Backed by:
@@ -29,8 +29,8 @@ use crate::ipc::AppState;
 use super::{IpcError, IpcResult};
 
 /// List all meeting sessions, newest-first. Returns whatever the
-/// streaming pump (#122 Phase 2 / #141) has persisted — empty for
-/// a fresh install, populated after the user has run a meeting.
+/// `SessionManager` pump has persisted — empty for a fresh
+/// install, populated after the user has run a meeting.
 #[tauri::command]
 pub async fn meeting_sessions_list(
     state: State<'_, AppState>,

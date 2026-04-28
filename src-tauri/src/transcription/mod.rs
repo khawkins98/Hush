@@ -27,14 +27,19 @@
 //! unit-tested). Resampling lives in [`resample`] in this module. The
 //! whisper-rs glue is in [`whisper`] and is feature-gated.
 //!
-//! ## Out of scope for M1 (intentional)
+//! ## Production composition
 //!
-//! - Model auto-download, SHA verification, picker UI: deferred to M3. The
-//!   constructor takes a caller-provided model path and lets the caller
-//!   decide where the file came from.
-//! - Personal Dictionary prompt biasing: TODO(#6).
-//! - Tauri event progress reporting: deferred until the IPC layer exists.
-//! - GPU acceleration features in `whisper-rs`: M1 is CPU-only.
+//! - Model resolution + auto-download + SHA verification + picker UI:
+//!   live in [`crate::transcription::download`] and the model picker
+//!   commands. The constructor here still takes a caller-provided
+//!   path; resolution happens upstream in `AppStateBuilder`.
+//! - Personal Dictionary prompt biasing: vocabulary terms join the
+//!   model's `initial_prompt` via `format_vocabulary_prompt`.
+//! - Tauri event progress reporting: `model:download-progress` /
+//!   `model:download-done` / `model:download-failed`, broadcast
+//!   from `download.rs`.
+//! - GPU acceleration features in `whisper-rs`: still CPU-only;
+//!   GPU is a future engine choice (#32 tracks Parakeet/ONNX).
 //!
 //! ## Test seam (PRD §13.5)
 //!

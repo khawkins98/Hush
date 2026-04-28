@@ -137,11 +137,10 @@
     models.find((m) => m.isSelected && m.isDownloaded) ?? null,
   );
 
-  // Push-to-talk is disabled by default on macOS — rdev 0.5 hard-aborts
-  // on macOS 26+ (see `src-tauri/src/hotkey/ptt.rs` module header).
-  // Power users can re-enable with `HUSH_PTT_ENABLE=1`, but the
-  // default surface should not advertise the Right-Ctrl hold or the
-  // shortcut card reads as broken to most macOS users.
+  // Platform check used to pick the right modifier glyph in the
+  // shortcut hint (Right ⌘ on macOS, Right Ctrl elsewhere). PTT is
+  // on by default everywhere as of #194; this flag isn't gating
+  // visibility anymore, just glyph copy.
   let isMacOS = typeof navigator !== "undefined"
     && /Mac|iPhone|iPad/i.test(navigator.platform);
 
@@ -561,10 +560,10 @@
     !!permStatuses
       && permStatuses.microphone === "granted"
       && permStatuses.screenRecording === "granted"
-      // PTT is opt-in on macOS 26+ and most users won't grant
-      // Input Monitoring; treat its `not-determined` state as
-      // acceptable. Only `denied` for mic / screen recording or a
-      // sticky `denied` for input monitoring downgrades the pill.
+      // Input Monitoring's `not-determined` is acceptable —
+      // happens between PTT being enabled (default-on per #194)
+      // and the user actually pressing the combo for the first
+      // time. Only an explicit `denied` downgrades the pill.
       && permStatuses.inputMonitoring !== "denied",
   );
 
@@ -896,14 +895,15 @@
       </section>
 
       <section class="first-run-section">
-        <h3>Input Monitoring (macOS — push-to-talk only)</h3>
+        <h3>Input Monitoring (macOS — push-to-talk)</h3>
         <p>
           Push-to-talk (hold <kbd>Right ⌘</kbd> while you speak) is
-          <strong>opt-in</strong>: launching Hush with
-          <code>HUSH_PTT_ENABLE=1</code> turns it on and macOS will
-          prompt for Input Monitoring on first use. The toggle hotkey
+          <strong>on by default</strong>; macOS will prompt for
+          Input Monitoring the first time the listener spawns. If
+          you'd rather not, disable it in Settings → General →
+          Hotkeys. The toggle hotkey
           (<kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>) and the
-          on-screen Start button work without it.
+          on-screen Start button work either way.
         </p>
         <button class="ghost" onclick={() => openPrivacyPane("input-monitoring")}>
           Open Input Monitoring settings

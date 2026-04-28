@@ -22,11 +22,9 @@
 //! ## Scope
 //!
 //! Closes the toggle-record half of #5. Push-to-talk (key-down / key-up
-//! via `rdev`) is the second half and lands in a follow-up PR — `rdev`
-//! requires Input Monitoring permission on macOS, has Wayland reliability
-//! quirks, and benefits from being scoped to its own change. Toggle is the
-//! M2 critical-path hotkey because the smallest useful version of the
-//! product just needs "press, talk, press, paste".
+//! via `rdev`) is the second half — see `hotkey::ptt`. Toggle is
+//! the canonical hotkey for the press / talk / press / paste flow;
+//! PTT adds press-and-hold semantics on top.
 //!
 //! ## Architecture
 //!
@@ -38,16 +36,17 @@
 //! orchestration path (the existing IPC commands) for the pipeline.
 //!
 //! Backend-driven dictation (no frontend window open) is a future
-//! enhancement and would re-use the standalone helpers in `ipc::*`. For
-//! M2, Tauri keeps the window alive in the tray, so a listener is always
-//! present.
+//! enhancement and would re-use the standalone helpers in `ipc::*`.
+//! Tauri keeps the window alive via the tray icon, so a listener is
+//! always present today.
 //!
 //! ## Configuration
 //!
-//! The default hotkey is [`DEFAULT_TOGGLE_HOTKEY`]. It can be overridden at
-//! launch via the `HUSH_TOGGLE_HOTKEY` environment variable, mirroring the
-//! `HUSH_MODEL_PATH` pattern in [`crate::ipc`]. Settings-file persistence
-//! (and a rebind UI) lands with M3.
+//! The default hotkey is [`DEFAULT_TOGGLE_HOTKEY`]. The PTT combo
+//! is editable in Settings → General → Hotkeys (`PttHotkeyEditor`);
+//! the toggle hotkey itself is still env-configurable
+//! (`HUSH_TOGGLE_HOTKEY`) but doesn't yet have a Settings UI for
+//! rebinding.
 //!
 //! ## Platform notes
 //!
@@ -90,9 +89,9 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 /// a picker.
 pub const DEFAULT_TOGGLE_HOTKEY: &str = "Ctrl+Alt+H";
 
-/// Environment variable consulted at app startup to override the default.
-/// Once the settings UI lands (M3), this becomes a development override
-/// rather than the primary configuration mechanism.
+/// Environment variable consulted at app startup to override the
+/// default toggle hotkey. The PTT combo has a Settings → General
+/// → Hotkeys picker; the toggle hotkey itself is env-only today.
 pub const ENV_TOGGLE_HOTKEY: &str = "HUSH_TOGGLE_HOTKEY";
 
 /// Event name emitted to the frontend on hotkey press.

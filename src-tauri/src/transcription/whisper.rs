@@ -85,9 +85,10 @@ impl WhisperTranscription {
     /// Load a GGUF model from `model_path` and return a ready-to-use handle.
     ///
     /// The path must point at a quantised GGUF file compatible with
-    /// whisper.cpp (e.g. `ggml-base.q5_0.bin`). Auto-download and a model
-    /// picker UI are deferred to M3 — for M1 the caller is responsible for
-    /// supplying a path that exists.
+    /// whisper.cpp (e.g. `ggml-base.q5_0.bin`). Path resolution
+    /// (catalog selection, env override, auto-download) happens
+    /// upstream in `AppStateBuilder` / the model picker; this
+    /// constructor just loads the file at the supplied path.
     ///
     /// # Errors
     ///
@@ -524,8 +525,9 @@ mod tests {
 
     /// The constructor must reject a non-existent path with a clear error.
     /// We do not load a real model in this test (no GGUF in the fixture
-    /// tree); the happy-path constructor is exercised manually until M3
-    /// adds a managed test-model fixture.
+    /// tree); the happy-path constructor is exercised by the
+    /// `tests/audio_fixture.rs` integration test when
+    /// `HUSH_TEST_MODEL` points at a real GGUF.
     #[test]
     fn constructor_rejects_missing_model_file() {
         let err = WhisperTranscription::new("/nonexistent/path/to/model.bin").unwrap_err();
