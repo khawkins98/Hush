@@ -80,7 +80,7 @@ use anyhow::{anyhow, Result};
 
 #[cfg(test)]
 use crate::audio::CapturedAudio;
-use crate::audio::{AudioCapture, AudioSession, AudioSource};
+use crate::audio::{AudioCapture, AudioSession, AudioSource, CaptureFormat};
 #[cfg(test)]
 use crate::transcription::Transcribe;
 use crate::transcription::{StreamingTranscribeSession, Utterance};
@@ -88,6 +88,18 @@ use crate::transcription::{StreamingTranscribeSession, Utterance};
 use super::{
     MeetingAppKind, MeetingSession, MeetingSessionRepository, NewMeetingSession,
     NewPersistedUtterance,
+};
+
+/// Canonical capture format passed to the diarizer (#111). The pump
+/// no longer has the per-source audio at the dispatch boundary (the
+/// streaming session has already consumed it), so D1's
+/// [`crate::diarization::EnergyDiarizer`] — which only needs
+/// utterance timestamps — can ignore this. D2's model-based path
+/// will need real audio threaded through; that's a follow-up
+/// refactor.
+const CANONICAL_FORMAT: CaptureFormat = CaptureFormat {
+    sample_rate: 16_000,
+    channels: 1,
 };
 
 /// Pump tick interval — how often the streaming pump pulls samples
@@ -241,6 +253,13 @@ pub struct SessionManager {
     /// the frontend. Production wires this to a `tauri::AppHandle`
     /// emitter; tests use [`NoopMeetingEventEmitter`].
     event_emitter: Arc<dyn MeetingEventEmitter>,
+    /// Speaker diarization (#111). Production wires
+    /// [`crate::diarization::NoopDiarizer`] today, which preserves
+    /// the source-derived `"mic"` / `"system"` labels. Switching to
+    /// [`crate::diarization::EnergyDiarizer`] turns on the D1
+    /// silence-gap heuristic; the pump dispatches utterances
+    /// through this before stamping the source label.
+    diarize: Arc<dyn crate::diarization::Diarize>,
 }
 
 /// Lifecycle state for the manager's session slot. Three-valued
@@ -282,6 +301,7 @@ impl SessionManager {
         audio: Arc<dyn AudioCapture>,
         transcribe: crate::ipc::TranscribeSlot,
         event_emitter: Arc<dyn MeetingEventEmitter>,
+        diarize: Arc<dyn crate::diarization::Diarize>,
     ) -> Self {
         Self {
             repo,
@@ -291,6 +311,7 @@ impl SessionManager {
             state: Mutex::new(SessionState::Idle),
             partials: Arc::new(RwLock::new(HashMap::new())),
             event_emitter,
+            diarize,
         }
     }
 
@@ -333,7 +354,9 @@ impl SessionManager {
         let audio: Arc<dyn AudioCapture> = Arc::new(NoOpAudio);
         let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
         let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
-        Self::new(repo, audio, transcribe, emitter)
+        let diarize: Arc<dyn crate::diarization::Diarize> =
+            Arc::new(crate::diarization::NoopDiarizer);
+        Self::new(repo, audio, transcribe, emitter, diarize)
     }
 
     /// Start a meeting session manually (button-driven).
@@ -541,6 +564,7 @@ impl SessionManager {
             partials: Arc::clone(&self.partials),
             cancel: Arc::clone(&cancel),
             event_emitter: Arc::clone(&self.event_emitter),
+            diarize: Arc::clone(&self.diarize),
         }));
 
         // Commit Active. The slot has been Opening since the start
@@ -788,6 +812,11 @@ struct PumpContext {
     /// path and the streaming-feed/drain failure path that today
     /// only emit `tracing::warn!` lines the user never sees.
     event_emitter: Arc<dyn MeetingEventEmitter>,
+    /// Diarization seam (#111). The pump runs every batch of finals
+    /// through this before stamping the source-derived label, so a
+    /// non-Noop impl can override `"mic"` / `"system"` with
+    /// per-speaker labels.
+    diarize: Arc<dyn crate::diarization::Diarize>,
 }
 
 /// Pump task body. Loops on a `PUMP_TICK` cadence: drain each audio
@@ -944,6 +973,18 @@ async fn run_pump(mut ctx: PumpContext) {
                 }
             };
 
+            // Diarize before dispatch (#111). The trait may overwrite
+            // `speaker_label` with per-speaker tags ("Speaker A" /
+            // "Speaker B" for D1, model-derived ids for D2);
+            // `dispatch_utterances` only stamps the source-derived
+            // fallback when the label is still `None`. Audio is
+            // unavailable here (the streaming session has already
+            // consumed the drain buffer); D1 doesn't need it. D2 will
+            // need the audio threaded through the pump — a follow-up
+            // refactor.
+            let mut utterances = utterances;
+            ctx.diarize
+                .label_utterances(&mut utterances, &[], CANONICAL_FORMAT);
             dispatch_utterances(
                 session_id,
                 &source_label,
@@ -990,6 +1031,10 @@ async fn run_pump(mut ctx: PumpContext) {
                 continue;
             }
         };
+        // Tail flush: same diarize-then-dispatch as the per-tick path.
+        let mut finals = finals;
+        ctx.diarize
+            .label_utterances(&mut finals, &[], CANONICAL_FORMAT);
         dispatch_utterances(session_id, &source_label, finals, &ctx.partials, &ctx.repo).await;
     }
 
@@ -1003,8 +1048,10 @@ async fn run_pump(mut ctx: PumpContext) {
 }
 
 /// Route streaming-session output: finals land in the database,
-/// partials land in the in-memory map. Tagged with the source-derived
-/// `speaker_label` so the panel can render mic vs system distinct.
+/// partials land in the in-memory map. Falls back to the source-
+/// derived `speaker_label` (`"mic"` / `"system"`) when the
+/// diarizer (#111) hasn't already set one — so the panel always has
+/// a label to render with.
 ///
 /// Errors are logged + swallowed — a single bad utterance shouldn't
 /// abort the session.
@@ -1016,10 +1063,14 @@ async fn dispatch_utterances(
     repo: &Arc<dyn MeetingSessionRepository>,
 ) {
     for mut u in utterances {
-        // Source-derived speaker label is the only label the pump
-        // emits today (real diarization is #111). Stamp it on every
-        // utterance so the panel's mic/system colouring works.
-        u.speaker_label = Some(source_label.to_owned());
+        // Source-derived speaker label is the fallback when no
+        // diarizer ran (the production wiring uses NoopDiarizer
+        // today). When EnergyDiarizer or a future model-based impl
+        // is wired, `speaker_label` is already set with per-speaker
+        // tags and we leave it alone.
+        if u.speaker_label.is_none() {
+            u.speaker_label = Some(source_label.to_owned());
+        }
 
         if u.is_final {
             // Skip empty finals — the streaming session usually
@@ -1204,7 +1255,9 @@ mod tests {
         let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
         let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
         let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
-        SessionManager::new(repo, audio, transcribe, emitter)
+        let diarize: Arc<dyn crate::diarization::Diarize> =
+            Arc::new(crate::diarization::NoopDiarizer);
+        SessionManager::new(repo, audio, transcribe, emitter, diarize)
     }
 
     #[tokio::test]
@@ -1604,6 +1657,62 @@ mod tests {
             utterances.is_empty(),
             "whitespace final must not be persisted"
         );
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_preserves_pre_set_speaker_label() {
+        // Post-#111 contract: when a diarizer has already stamped
+        // `speaker_label` (e.g. with "Speaker A"), dispatch must NOT
+        // overwrite it with the source-derived fallback. Pin so a
+        // future refactor that drops the `is_none()` guard fails loud.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        let mut u = make_final("hello world", 0, 1_000, "mic");
+        u.speaker_label = Some("Speaker A".to_owned());
+
+        dispatch_utterances(
+            session.id,
+            // The source label is "system" but the diarizer-set
+            // "Speaker A" wins; the fallback is only applied when
+            // the label is None.
+            "system",
+            vec![u],
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        let utterances = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert_eq!(utterances.len(), 1);
+        assert_eq!(utterances[0].speaker_label.as_deref(), Some("Speaker A"));
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_falls_back_to_source_label_when_unlabelled() {
+        // Symmetric: when the diarizer is Noop (or otherwise leaves
+        // `speaker_label = None`), dispatch fills the slot with the
+        // source-derived label so the panel always has something to
+        // colour-code by.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        let mut u = make_final("hello", 0, 1_000, "");
+        u.speaker_label = None;
+
+        dispatch_utterances(session.id, "system", vec![u], &mgr.partials, &mgr.repo).await;
+
+        let utterances = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert_eq!(utterances.len(), 1);
+        assert_eq!(utterances[0].speaker_label.as_deref(), Some("system"));
         mgr.stop_manual().await.unwrap();
     }
 
