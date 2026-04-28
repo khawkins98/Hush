@@ -144,4 +144,63 @@ test.describe("audio source picker", () => {
       },
     });
   });
+
+  test("Start emits ui:recording-state(true) so the tray label can sync", async ({
+    page,
+  }) => {
+    // The tray's "Start / Stop Recording" menu item mirrors the
+    // frontend's `recording` rune via the `ui:recording-state` event
+    // (see src-tauri/src/tray/mod.rs::build). Without this emit the
+    // tray label would freeze on "Start Recording" forever — a silent
+    // regression CI couldn't catch otherwise. Pinning the contract
+    // here keeps the four-place IPC sync rule honest for the cross-
+    // window event channel.
+    await installMocks(page);
+
+    // Inject a wrapper around the e2e bus's fire() that records
+    // every emitted ui:recording-state payload onto `window`.
+    // Installed via addInitScript so it lands before the page's
+    // first $effect runs.
+    await page.addInitScript(() => {
+      (window as unknown as { __hush_recording_events: unknown[] })
+        .__hush_recording_events = [];
+      // Wait for the bus singleton to come up, then wrap fire().
+      const interval = window.setInterval(() => {
+        const bus = (
+          window as unknown as {
+            __hush_e2e_event_bus?: {
+              fire: (n: string, p: unknown) => void;
+            };
+          }
+        ).__hush_e2e_event_bus;
+        if (!bus) return;
+        const original = bus.fire.bind(bus);
+        bus.fire = (name: string, payload: unknown) => {
+          if (name === "ui:recording-state") {
+            (
+              window as unknown as { __hush_recording_events: unknown[] }
+            ).__hush_recording_events.push(payload);
+          }
+          original(name, payload);
+        };
+        window.clearInterval(interval);
+      }, 5);
+    });
+
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Start recording" }).click();
+
+    // After the click, `start_dictation` resolves and the recording
+    // rune flips; the $effect in +page.svelte fires
+    // `emit("ui:recording-state", true)`.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as unknown as { __hush_recording_events: unknown[] })
+            .__hush_recording_events.includes(true),
+        ),
+      )
+      .toBe(true);
+  });
 });

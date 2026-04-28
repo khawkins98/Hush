@@ -31,6 +31,15 @@ export default defineConfig(async () => ({
             projectRoot,
             "tests/e2e/setup/event-stub.ts",
           ),
+          // The real `@tauri-apps/api/app` imports `invoke` from its
+          // own bundled `./core.js` (a relative path), so our core
+          // alias above doesn't intercept its calls. The app stub
+          // routes `getName` / `getVersion` / `getTauriVersion`
+          // through the same mock bus.
+          "@tauri-apps/api/app": path.resolve(
+            projectRoot,
+            "tests/e2e/setup/app-stub.ts",
+          ),
         },
       }
     : {},
