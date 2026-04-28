@@ -196,17 +196,17 @@
   }
 
   /**
-   * Display label for an utterance's speaker. Pre-real-diarization
-   * (#111) the pump tags utterances with `"mic"` / `"system"` based
-   * on the source the chunk came from — a coarse but useful split
-   * that maps to "you" vs "remote participants" on a typical Zoom
-   * call. Until #111 lands, that's the best signal we have.
-   */
-  /**
+   * Display label for an utterance's speaker. The pump runs every
+   * batch of finals through the configured `Diarize` impl
+   * (production: `EnergyDiarizer`, #191 D1) which produces
+   * `"Speaker A"` / `"Speaker B"` based on silence-gap timing. When
+   * the diarizer leaves the label `None`, the dispatch falls back
+   * to the source-derived `"mic"` / `"system"` tag — a coarse but
+   * useful split that maps to "You" vs "Remote" on a typical call.
    * Both `PersistedUtterance` and `StreamingUtterance` carry a
-   * `speakerLabel`; the helper accepts either via a structural
-   * type so the partials list (#108 PR4) and the finals list can
-   * use the same display logic.
+   * `speakerLabel`; the helper accepts either via a structural type
+   * so the partials list (#108 PR4) and the finals list use the
+   * same display logic.
    */
   function speakerLabel(u: { speakerLabel: string | null }): string {
     switch (u.speakerLabel) {
@@ -218,6 +218,8 @@
       case undefined:
         return "Speaker";
       default:
+        // "Speaker A" / "Speaker B" from EnergyDiarizer (#191), or
+        // any future model-derived id, passes through verbatim.
         return u.speakerLabel;
     }
   }
