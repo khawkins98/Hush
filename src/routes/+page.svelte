@@ -11,6 +11,7 @@
   import FirstRunModal from "$lib/FirstRunModal.svelte";
   import MacosPermsPill from "$lib/MacosPermsPill.svelte";
   import { formatErrorDisplay, type ErrorDisplay } from "$lib/errors";
+  import { Events } from "$lib/events";
   import { formatTimestamp } from "$lib/format";
   import type {
     AudioSource,
@@ -189,7 +190,7 @@
   // a failed emit just leaves the tray label stale until the next
   // toggle, which is harmless.
   $effect(() => {
-    void emit("ui:recording-state", recording);
+    void emit(Events.UiRecordingState, recording);
   });
 
   onMount(async () => {
@@ -232,7 +233,7 @@
     // press the backend emits `hotkey:toggle`. We dispatch start vs stop
     // here against the frontend's own recording flag so the toggle
     // semantics live next to the UI state they affect.
-    unlistenToggle = await listen("hotkey:toggle", () => {
+    unlistenToggle = await listen(Events.HotkeyToggle, () => {
       if (busy) return; // ignore presses while a transcription is in flight
       if (recording) void stop();
       else void start();
@@ -243,7 +244,7 @@
     // `AppSection` union; an unknown value is ignored so the
     // frontend stays robust to a future menu entry the page
     // doesn't yet know about.
-    unlistenMenuGoto = await listen<string>("menu:goto-section", (e) => {
+    unlistenMenuGoto = await listen<string>(Events.MenuGotoSection, (e) => {
       const payload = e.payload;
       if (
         payload === "dictation" ||
@@ -260,7 +261,7 @@
     // "no model installed" banner disappears once a download in the
     // other window completes. Tauri broadcasts events to every
     // window, so the same backend emit reaches both surfaces.
-    unlistenDownloadDone = await listen<{ id: string }>("model:download-done", () => {
+    unlistenDownloadDone = await listen<{ id: string }>(Events.ModelDownloadDone, () => {
       void refreshModels();
     });
 
@@ -275,7 +276,7 @@
       sessionId: number;
       sourceKind: string;
       reason: string;
-    }>("meeting:source-failed", (e) => {
+    }>(Events.MeetingSourceFailed, (e) => {
       const next = new Set(meetingDroppedSources);
       next.add(e.payload.sourceKind);
       meetingDroppedSources = next;
@@ -283,11 +284,11 @@
 
     // Push-to-talk: the rdev listener in `hotkey::ptt` emits these
     // events on key-down and key-up of the configured PTT key.
-    unlistenPttPress = await listen("hotkey:ptt-press", () => {
+    unlistenPttPress = await listen(Events.HotkeyPttPress, () => {
       if (busy || recording) return;
       void start();
     });
-    unlistenPttRelease = await listen("hotkey:ptt-release", () => {
+    unlistenPttRelease = await listen(Events.HotkeyPttRelease, () => {
       // Only stop if we are actually recording. A spurious release (e.g.
       // the user released the key after a press the UI ignored because
       // it was busy) must not call `stop_dictation` against an empty
@@ -773,7 +774,7 @@
       // human perception (~32 ms). Cheaper than polling for a
       // ready signal and good enough for this UI affordance.
       await new Promise((r) => setTimeout(r, 50));
-      await emit("settings:goto-tab", tab);
+      await emit(Events.SettingsGotoTab, tab);
     } catch (e) {
       console.warn("[hush] open settings tab failed", e);
     }
