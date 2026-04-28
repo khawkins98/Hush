@@ -534,6 +534,16 @@ impl crate::meeting::MeetingEventEmitter for AppHandleMeetingEventEmitter {
     }
 }
 
+/// Parse the persisted [`crate::settings::keys::HUD_ENABLED`] row
+/// into a bool. The on-disk encoding is the literal string
+/// `"true"` / `"false"`; absent rows and any other value fall back
+/// to `true` (the HUD is on by default — first-time users benefit
+/// from the visual cue that the mic is hot, and a corrupted row
+/// shouldn't silently turn it off).
+pub(crate) fn parse_hud_enabled_setting(raw: Option<String>) -> bool {
+    !matches!(raw.as_deref(), Some("false"))
+}
+
 impl AppState {
     /// Build the state used in production: the cpal audio backend, the
     /// SQLite-backed history repository at `db_path`, plus (when the
@@ -656,10 +666,13 @@ impl AppState {
         // through to the default rather than silently turning the
         // HUD off — first-time users benefit from the visual cue
         // that the mic is hot.
-        let hud_enabled = match settings.get(crate::settings::keys::HUD_ENABLED).await {
-            Ok(Some(raw)) => raw != "false",
-            _ => true,
-        };
+        let hud_enabled = parse_hud_enabled_setting(
+            settings
+                .get(crate::settings::keys::HUD_ENABLED)
+                .await
+                .ok()
+                .flatten(),
+        );
 
         AppStateBuilder::new()
             .audio(audio)
@@ -1310,5 +1323,24 @@ mod tests {
         assert!(!is_huggingface_host(Some("hf.co.attacker.com")));
         assert!(!is_huggingface_host(Some("")));
         assert!(!is_huggingface_host(None));
+    }
+
+    #[test]
+    fn parse_hud_enabled_setting_handles_all_branches() {
+        // Absent row → on. First-time users must see the HUD even
+        // before they have ever touched the toggle.
+        assert!(parse_hud_enabled_setting(None));
+        // Literal "false" → off. The only string that turns it off.
+        assert!(!parse_hud_enabled_setting(Some("false".into())));
+        // Literal "true" → on.
+        assert!(parse_hud_enabled_setting(Some("true".into())));
+        // Anything else falls through to on. Defends against a
+        // settings-table corruption that scribbled garbage into
+        // the row — silently turning the HUD off for that user
+        // would be worse than silently re-enabling.
+        assert!(parse_hud_enabled_setting(Some("garbage".into())));
+        assert!(parse_hud_enabled_setting(Some("".into())));
+        assert!(parse_hud_enabled_setting(Some("True".into())));
+        assert!(parse_hud_enabled_setting(Some("FALSE".into())));
     }
 }
