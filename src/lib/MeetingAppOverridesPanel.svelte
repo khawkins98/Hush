@@ -32,6 +32,28 @@
     onDelete,
   }: Props = $props();
 
+  // Per-row click-to-confirm. First click arms the row's Remove
+  // button (label flips to "Click to confirm"); second click within
+  // 5 s fires `onDelete`; the timer clears the armed state so a
+  // stale arm can't catch the user later. Same shape as
+  // VocabularyPanel / ReplacementsPanel / HistoryPanel.
+  let confirmingAppName = $state<string | null>(null);
+  let confirmTimer: number | undefined;
+
+  function handleDelete(override: MeetingAppOverride) {
+    if (confirmingAppName === override.appName) {
+      window.clearTimeout(confirmTimer);
+      confirmingAppName = null;
+      void onDelete(override);
+      return;
+    }
+    window.clearTimeout(confirmTimer);
+    confirmingAppName = override.appName;
+    confirmTimer = window.setTimeout(() => {
+      confirmingAppName = null;
+    }, 5000);
+  }
+
   // Display copy for the kind enum. The Rust serde repr is
   // kebab-case ("meeting" / "media" / "other"); this mapping is
   // the user-facing label.
@@ -118,10 +140,13 @@
           <span class="override-meta">{kindLabel(override.kind)}</span>
           <button
             class="ghost danger"
-            onclick={() => onDelete(override)}
-            aria-label="Remove override for {override.appName}"
+            class:confirming={confirmingAppName === override.appName}
+            onclick={() => handleDelete(override)}
+            aria-label={confirmingAppName === override.appName
+              ? `Click again to confirm removing override for ${override.appName}`
+              : `Remove override for ${override.appName}`}
           >
-            Remove
+            {confirmingAppName === override.appName ? "Click to confirm" : "Remove"}
           </button>
         </li>
       {/each}
@@ -310,6 +335,13 @@ button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
   border-color: #d83a3a;
 }
+/* Confirming state — armed first click, awaiting the second one. */
+button.ghost.danger.confirming {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+  color: #8a0000;
+  font-weight: 600;
+}
 
 /* Error rendering migrated to the shared ErrorDisplay component
    (#199 + follow-up). */
@@ -359,6 +391,11 @@ button.ghost.danger:hover:not(:disabled) {
   }
   button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
+  }
+  button.ghost.danger.confirming {
+    background-color: #3a1818;
+    border-color: #d83a3a;
+    color: #ffb0b0;
   }
 }
 </style>
