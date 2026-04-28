@@ -22,6 +22,28 @@
     onSubmit,
     onDelete,
   }: Props = $props();
+
+  // Per-row click-to-confirm. First click arms the row's Delete
+  // button (label flips to "Click to confirm"); second click within
+  // 5 s fires `onDelete`; the timer clears the armed state so a
+  // stale click later doesn't catch the user. Same pattern as
+  // History's clear-all (#198) and the meeting Stop confirm.
+  let confirmingId = $state<number | null>(null);
+  let confirmTimer: number | undefined;
+
+  function handleDelete(term: VocabularyTerm) {
+    if (confirmingId === term.id) {
+      window.clearTimeout(confirmTimer);
+      confirmingId = null;
+      void onDelete(term);
+      return;
+    }
+    window.clearTimeout(confirmTimer);
+    confirmingId = term.id;
+    confirmTimer = window.setTimeout(() => {
+      confirmingId = null;
+    }, 5000);
+  }
 </script>
 
 <section class="vocabulary panel-vocabulary" aria-labelledby="vocabulary-heading">
@@ -69,10 +91,14 @@
           <code class="replacement-find">{term.term}</code>
           <button
             class="ghost danger"
-            onclick={() => onDelete(term)}
-            aria-label="Delete vocabulary term {term.term}"
+            class:confirming={confirmingId === term.id}
+            onclick={() => handleDelete(term)}
+            aria-label={confirmingId === term.id
+              ? `Click again to confirm deleting ${term.term}`
+              : `Delete vocabulary term ${term.term}`}
+            data-testid="vocab-delete-{term.id}"
           >
-            Delete
+            {confirmingId === term.id ? "Click to confirm" : "Delete"}
           </button>
         </li>
       {/each}
@@ -184,6 +210,17 @@ button.ghost.danger {
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
   border-color: #d83a3a;
+}
+
+/* Armed state: first click flips the button into a higher-contrast
+   "click to confirm" affordance. Same red palette as the resting
+   danger state but opaque so the user reads "this is the confirm
+   click" without ambiguity. Auto-resets after 5 s. */
+button.ghost.danger.confirming {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+  color: #8a0000;
+  font-weight: 600;
 }
 
 /* Error rendering migrated to the shared ErrorDisplay component
