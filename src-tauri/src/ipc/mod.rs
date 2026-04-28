@@ -116,6 +116,43 @@ pub struct ForegroundApp {
     pub window_title: String,
 }
 
+/// User-data repositories grouped behind a single [`AppState`] field.
+///
+/// The four bundled here share a single shape — `Arc<dyn …Repository>`
+/// — and a single lifecycle: read/written by the dictation + history +
+/// meeting flows, hot-mocked behind the trait seam in tests. Bundling
+/// them keeps `AppState`'s top-level field count bounded as new
+/// repositories land (Phase D's diarization summaries, Phase E's per-
+/// app classifier overrides).
+///
+/// `settings` is intentionally NOT in this struct. It has a different
+/// access pattern: read at boot to drive transcriber / PTT / autostart
+/// state, written through a small fixed set of commands, observed
+/// indirectly by the model hot-swap path. Mixing it with the user-data
+/// repos would obscure that special role and force every consumer to
+/// depend on the bundle when they only need settings.
+///
+/// `meeting_manager` (the stateful session lifecycle owner) also stays
+/// flat — it isn't a `Repository` shape, it owns mutable in-memory
+/// state, and meeting commands routinely need both `data.meetings`
+/// (the row store) and `meeting_manager` (the live session) in the
+/// same call.
+pub struct DataServices {
+    /// Dictation transcript history. CRUD + FTS5 search.
+    pub history: Arc<dyn HistoryRepository>,
+    /// User-defined find/replace rules applied to every transcript.
+    pub replacements: Arc<dyn ReplacementRepository>,
+    /// User-defined vocabulary terms threaded through the Whisper
+    /// initial prompt for proper-noun bias.
+    pub vocabulary: Arc<dyn VocabularyRepository>,
+    /// Meeting Mode session row storage (Phase C foundation, refs
+    /// #33 / #109). Read-side handle — browsing / deleting sessions
+    /// reads from this. The write-side
+    /// ([`AppState::meeting_manager`]) is the stateful owner that
+    /// opens / closes sessions and appends utterances.
+    pub meetings: Arc<dyn crate::meeting::MeetingSessionRepository>,
+}
+
 /// Long-lived application state, registered with `tauri::Builder::manage`.
 ///
 /// Ownership rules:
@@ -126,9 +163,10 @@ pub struct ForegroundApp {
 ///   backend is gated behind the `whisper` Cargo feature *and* requires a
 ///   model path. When either is absent the `stop_dictation` command returns
 ///   [`commands::IpcError::TranscriptionUnavailable`] rather than crashing.
-/// - `history` is `Arc<dyn HistoryRepository>` so the IPC layer can hold a
-///   handle without knowing about the SQLite-specific impl. Tests of
-///   history-touching commands swap in a deterministic mock at this seam.
+/// - `data` bundles the four user-data repositories — see [`DataServices`]
+///   for the grouping rationale. Each is `Arc<dyn …Repository>` so the IPC
+///   layer can hold handles without knowing about the SQLite-specific impl;
+///   tests swap in deterministic mocks at the trait seam.
 /// - `pending_foreground` is captured on `start_dictation` and taken on
 ///   `stop_dictation`. The `Mutex` is for `&self` interior mutability; it
 ///   is never contended on the hot path because dictation is fundamentally
@@ -152,16 +190,11 @@ pub struct AppState {
     /// model picker writes through the shared `Arc`, so the pump
     /// picks up the new model on its next chunk automatically.
     pub transcribe: TranscribeSlot,
-    pub history: Arc<dyn HistoryRepository>,
-    pub replacements: Arc<dyn ReplacementRepository>,
-    pub vocabulary: Arc<dyn VocabularyRepository>,
+    /// Persistent user-data repositories bundled together. See
+    /// [`DataServices`] for why these four group naturally and why
+    /// `settings` stays separate.
+    pub data: DataServices,
     pub settings: Arc<dyn SettingsRepository>,
-    /// Meeting Mode session storage (Phase C foundation, refs #33 / #109).
-    /// Read-side handle — browsing / deleting sessions reads from
-    /// this. The write-side ([`Self::meeting_manager`]) is the
-    /// stateful owner that opens / closes sessions and appends
-    /// utterances.
-    pub meetings: Arc<dyn crate::meeting::MeetingSessionRepository>,
     /// Meeting Mode session lifecycle owner (#110 manual-start MVP).
     /// Holds an in-memory pointer to the active session id so the
     /// IPC layer's `stop_dictation` path can route transcripts into
@@ -334,21 +367,23 @@ impl AppStateBuilder {
             transcribe: self
                 .transcribe_arc
                 .unwrap_or_else(|| Arc::new(Mutex::new(self.transcribe))),
-            history: self
-                .history
-                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: history not set"))?,
-            replacements: self
-                .replacements
-                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: replacements not set"))?,
-            vocabulary: self
-                .vocabulary
-                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: vocabulary not set"))?,
+            data: DataServices {
+                history: self
+                    .history
+                    .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: history not set"))?,
+                replacements: self
+                    .replacements
+                    .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: replacements not set"))?,
+                vocabulary: self
+                    .vocabulary
+                    .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: vocabulary not set"))?,
+                meetings: self
+                    .meetings
+                    .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meetings not set"))?,
+            },
             settings: self
                 .settings
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: settings not set"))?,
-            meetings: self
-                .meetings
-                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meetings not set"))?,
             meeting_manager: self
                 .meeting_manager
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meeting_manager not set"))?,
