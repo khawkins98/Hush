@@ -15,6 +15,8 @@
   // will arrive continuously through the same `meeting_session_get`
   // IPC the panel already polls, with no frontend rewrite needed.
 
+  import ErrorDisplay from "./ErrorDisplay.svelte";
+  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type {
     AudioSourceListing,
     MeetingSession,
@@ -25,7 +27,7 @@
   type Props = {
     sessions: MeetingSession[];
     sessionsLoaded: boolean;
-    sessionsError: string | null;
+    sessionsError: ErrorDisplayShape | null;
     /// Active session id from the backend's `meeting_active_session`
     /// command. `null` means no session is in flight; renders Start
     /// button. Non-null means a session is open; renders Stop button
@@ -780,10 +782,7 @@
   </details>
 
   {#if sessionsError}
-    <p class="error scoped-error" role="alert">
-      <strong>Meeting sessions:</strong>
-      {sessionsError}
-    </p>
+    <ErrorDisplay error={sessionsError} scope="Meeting sessions" />
   {/if}
 
   {#if !sessionsLoaded}
