@@ -305,11 +305,16 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
         // audio if the platform supports it. Mirrors the panel's
         // default selection for manual starts.
         let mic_source = audio::AudioSource::default_microphone();
-        let mut sources = vec![mic_source];
+        // Linux / Windows builds today have only the mic
+        // source — system-audio capture lands under #106 / #107.
+        // The cfg-gated push below is the only mutator, so on
+        // those platforms `sources` would warn `unused_mut`
+        // (Ubuntu CI runs clippy with `-D warnings`); the
+        // branchless construction sidesteps it.
         #[cfg(target_os = "macos")]
-        {
-            sources.push(audio::AudioSource::SystemAudio);
-        }
+        let sources = vec![mic_source, audio::AudioSource::SystemAudio];
+        #[cfg(not(target_os = "macos"))]
+        let sources = vec![mic_source];
 
         if let Err(e) = state
             .meeting_manager
