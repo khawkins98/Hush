@@ -36,6 +36,7 @@ pub async fn meeting_sessions_list(
     state: State<'_, AppState>,
 ) -> IpcResult<Vec<crate::meeting::MeetingSession>> {
     state
+        .data
         .meetings
         .list()
         .await
@@ -76,6 +77,7 @@ pub async fn meeting_session_get(
     id: i64,
 ) -> IpcResult<MeetingSessionDetail> {
     let sessions = state
+        .data
         .meetings
         .list()
         .await
@@ -85,6 +87,7 @@ pub async fn meeting_session_get(
         .find(|s| s.id == id)
         .ok_or_else(|| IpcError::MeetingSessions(format!("session {id} not found")))?;
     let utterances = state
+        .data
         .meetings
         .list_utterances(id)
         .await
@@ -105,6 +108,7 @@ pub async fn meeting_session_get(
 #[tauri::command]
 pub async fn meeting_session_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
     state
+        .data
         .meetings
         .delete(id)
         .await
@@ -120,6 +124,7 @@ pub async fn meeting_session_set_notes(
     notes: Option<String>,
 ) -> IpcResult<()> {
     state
+        .data
         .meetings
         .set_notes(id, notes)
         .await

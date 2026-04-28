@@ -377,7 +377,7 @@ pub async fn stop_dictation(
 
     let foreground = take_foreground_snapshot(&state)?;
     spawn_history_create(
-        Arc::clone(&state.history),
+        Arc::clone(&state.data.history),
         NewHistoryEntry {
             transcript: text.clone(),
             app_name: foreground.as_ref().map(|f| f.app_name.clone()),
@@ -429,7 +429,7 @@ fn stop_audio_capture(state: &AppState) -> IpcResult<crate::audio::CapturedAudio
 /// (both via the trait's default `transcribe_with_prompt` and via
 /// `set_initial_prompt` itself), so the caller never has to branch.
 async fn load_vocabulary_prompt(state: &AppState) -> String {
-    match state.vocabulary.list().await {
+    match state.data.vocabulary.list().await {
         Ok(terms) => format_vocabulary_prompt(&terms),
         Err(e) => {
             tracing::error!(error = ?e, "failed to load vocabulary; skipping prompt-biasing");
@@ -444,7 +444,7 @@ async fn load_vocabulary_prompt(state: &AppState) -> String {
 /// pending; surfacing a rules-load error as fatal would block them on
 /// a strictly-secondary feature.
 async fn load_replacement_rules(state: &AppState) -> Vec<ReplacementRule> {
-    match state.replacements.list().await {
+    match state.data.replacements.list().await {
         Ok(rules) => rules,
         Err(e) => {
             tracing::error!(error = ?e, "failed to load replacement rules; skipping post-processing");
@@ -512,6 +512,7 @@ pub async fn history_list(
     offset: i64,
 ) -> IpcResult<Vec<HistoryEntry>> {
     state
+        .data
         .history
         .list(limit, offset)
         .await
@@ -529,6 +530,7 @@ pub async fn history_search(
     offset: i64,
 ) -> IpcResult<Vec<HistoryEntry>> {
     state
+        .data
         .history
         .search(&query, limit, offset)
         .await
@@ -540,6 +542,7 @@ pub async fn history_search(
 #[tauri::command]
 pub async fn history_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
     state
+        .data
         .history
         .delete(id)
         .await
@@ -550,6 +553,7 @@ pub async fn history_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()
 #[tauri::command]
 pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
     state
+        .data
         .history
         .count()
         .await
@@ -568,6 +572,7 @@ pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
 #[tauri::command]
 pub async fn replacements_list(state: State<'_, AppState>) -> IpcResult<Vec<ReplacementRule>> {
     state
+        .data
         .replacements
         .list()
         .await
@@ -585,6 +590,7 @@ pub async fn replacement_create(
     sort_order: i64,
 ) -> IpcResult<ReplacementRule> {
     state
+        .data
         .replacements
         .create(NewReplacementRule {
             find_text,
@@ -604,6 +610,7 @@ pub async fn replacement_update(
     rule: ReplacementRule,
 ) -> IpcResult<()> {
     state
+        .data
         .replacements
         .update(rule)
         .await
@@ -614,6 +621,7 @@ pub async fn replacement_update(
 #[tauri::command]
 pub async fn replacement_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
     state
+        .data
         .replacements
         .delete(id)
         .await
@@ -632,6 +640,7 @@ pub async fn replacement_delete(state: State<'_, AppState>, id: i64) -> IpcResul
 #[tauri::command]
 pub async fn vocabulary_list(state: State<'_, AppState>) -> IpcResult<Vec<VocabularyTerm>> {
     state
+        .data
         .vocabulary
         .list()
         .await
@@ -646,6 +655,7 @@ pub async fn vocabulary_create(
     term: String,
 ) -> IpcResult<VocabularyTerm> {
     state
+        .data
         .vocabulary
         .create(NewVocabularyTerm { term })
         .await
@@ -656,6 +666,7 @@ pub async fn vocabulary_create(
 #[tauri::command]
 pub async fn vocabulary_update(state: State<'_, AppState>, term: VocabularyTerm) -> IpcResult<()> {
     state
+        .data
         .vocabulary
         .update(term)
         .await
@@ -666,6 +677,7 @@ pub async fn vocabulary_update(state: State<'_, AppState>, term: VocabularyTerm)
 #[tauri::command]
 pub async fn vocabulary_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
     state
+        .data
         .vocabulary
         .delete(id)
         .await
