@@ -895,6 +895,18 @@ async fn run_pump(mut ctx: PumpContext) {
     // parallel to `handles` / `sources`.
     let mut drain_buffers: Vec<Vec<f32>> = (0..ctx.handles.len()).map(|_| Vec::new()).collect();
 
+    // Per-tick scratch for the merge-sort-label-split pattern (#206).
+    // Accumulates `(source_label, utterances)` pairs from each
+    // source's inference, then `diarize_and_dispatch_merged` runs the
+    // diarizer once over the chronologically-merged batch before
+    // splitting back per source for dispatch. Pre-#206 this lived
+    // inside the per-source loop, which meant the diarizer never saw
+    // mic + system audio interleaved — its alternating-talker
+    // heuristic produced "Speaker A/B" inside each source's stream
+    // without coordination, so "Speaker A" meant different people
+    // depending on which source the chunk came from.
+    let mut tick_buckets: Vec<TickBucket> = Vec::new();
+
     loop {
         // Sleep with periodic cancel polls. The pump tick is shorter
         // than the previous chunk-and-restart cycle (500 ms vs 10 s),
@@ -1033,22 +1045,22 @@ async fn run_pump(mut ctx: PumpContext) {
                 }
             };
 
-            // Diarize before dispatch (#111). The trait may overwrite
-            // `speaker_label` with per-speaker tags ("Speaker A" /
-            // "Speaker B" for D1, model-derived ids for D2);
-            // `dispatch_utterances` only stamps the source-derived
-            // fallback when the label is still `None`. Audio is
-            // unavailable here (the streaming session has already
-            // consumed the drain buffer); D1 doesn't need it. D2 will
-            // need the audio threaded through the pump — a follow-up
-            // refactor.
-            let mut utterances = utterances;
-            ctx.diarize
-                .label_utterances(&mut utterances, &[], CANONICAL_FORMAT);
-            dispatch_utterances(
-                session_id,
-                &source_label,
+            // Accumulate this source's utterances into the tick
+            // bucket. The per-tick `diarize_and_dispatch_merged`
+            // call below runs the diarizer once over the merged +
+            // chronologically-sorted batch, then splits the labelled
+            // result back per source for dispatch (#206).
+            tick_buckets.push(TickBucket {
+                source_label,
                 utterances,
+            });
+        }
+
+        if !tick_buckets.is_empty() {
+            diarize_and_dispatch_merged(
+                ctx.session_id,
+                std::mem::take(&mut tick_buckets),
+                &ctx.diarize,
                 &ctx.partials,
                 &ctx.repo,
             )
@@ -1059,7 +1071,10 @@ async fn run_pump(mut ctx: PumpContext) {
     // Cancel — flush each streaming session. `finish` drains
     // anything still in the rolling window as finals; we persist
     // those before returning so `stop_manual` sees the
-    // tail-of-conversation utterances.
+    // tail-of-conversation utterances. Same merge-sort-label-split
+    // shape as the per-tick path (#206) so the tail flush can't
+    // re-introduce the per-source independent-A/B regression.
+    let mut tail_buckets: Vec<TickBucket> = Vec::new();
     #[allow(clippy::needless_range_loop)] // see explanation in the tick loop above
     for i in 0..ctx.sources.len() {
         let Some(session) = ctx.streaming_sessions[i].take() else {
@@ -1091,11 +1106,21 @@ async fn run_pump(mut ctx: PumpContext) {
                 continue;
             }
         };
-        // Tail flush: same diarize-then-dispatch as the per-tick path.
-        let mut finals = finals;
-        ctx.diarize
-            .label_utterances(&mut finals, &[], CANONICAL_FORMAT);
-        dispatch_utterances(session_id, &source_label, finals, &ctx.partials, &ctx.repo).await;
+        tail_buckets.push(TickBucket {
+            source_label,
+            utterances: finals,
+        });
+    }
+
+    if !tail_buckets.is_empty() {
+        diarize_and_dispatch_merged(
+            ctx.session_id,
+            tail_buckets,
+            &ctx.diarize,
+            &ctx.partials,
+            &ctx.repo,
+        )
+        .await;
     }
 
     // Belt-and-braces: clear partials for this session id. The
@@ -1107,11 +1132,100 @@ async fn run_pump(mut ctx: PumpContext) {
     }
 }
 
+/// One source's worth of utterances for the merge-sort-label-split
+/// pump dispatch (#206). The pump accumulates these per tick (and
+/// once at tail flush), then `diarize_and_dispatch_merged` runs the
+/// diarizer over the chronologically-merged batch and dispatches
+/// each source's labelled slice through `dispatch_utterances`.
+struct TickBucket {
+    source_label: String,
+    utterances: Vec<Utterance>,
+}
+
+/// Diarize + dispatch a tick's worth of utterances across all
+/// sources, in chronological order (#206).
+///
+/// Pre-#206 the dispatch was per-source: the pump called
+/// `diarize.label_utterances` once per source bucket and dispatched
+/// each separately. The diarizer never saw mic + system audio
+/// interleaved, so its alternating-talker heuristic produced
+/// `"Speaker A" / "Speaker B"` independently inside each source
+/// stream — meaning "Speaker A" referred to a different actual
+/// speaker on a mic+system meeting depending on which source the
+/// utterance came from.
+///
+/// The fix here is purely structural: tag each utterance with its
+/// source-bucket index, sort the merged list by `started_at_ms`,
+/// run the diarizer once, then split the labelled result back into
+/// per-source slices (preserving original source order) for the
+/// existing `dispatch_utterances` path. The trait surface is
+/// unchanged; the wiring carries the cross-source coordination.
+async fn diarize_and_dispatch_merged(
+    session_id: i64,
+    buckets: Vec<TickBucket>,
+    diarize: &Arc<dyn crate::diarization::Diarize>,
+    partials: &Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
+    repo: &Arc<dyn MeetingSessionRepository>,
+) {
+    if buckets.is_empty() {
+        return;
+    }
+
+    // Hold the source labels in original order — the dispatch loop
+    // at the bottom needs them, but the merge step consumes the
+    // bucket vec.
+    let source_labels: Vec<String> = buckets.iter().map(|b| b.source_label.clone()).collect();
+
+    // Tag each utterance with its source bucket index, then move
+    // into a flat `(idx, utterance)` vec. Owning move avoids the
+    // double-clone shape the naive version had.
+    let mut tagged: Vec<(usize, Utterance)> = Vec::new();
+    for (idx, bucket) in buckets.into_iter().enumerate() {
+        for u in bucket.utterances {
+            tagged.push((idx, u));
+        }
+    }
+
+    if tagged.is_empty() {
+        return;
+    }
+
+    // Sort by start time. `sort_by_key` is stable, so utterances
+    // sharing a `started_at_ms` keep their original per-source
+    // arrival order — important when mic + system happen to
+    // produce simultaneous finals and we don't want a race-y
+    // re-ordering on every tick.
+    tagged.sort_by_key(|(_, u)| u.started_at_ms);
+
+    // Split tags from utterances (move out, no clones). Diarizer
+    // takes `&mut [Utterance]` so it sees the chronological
+    // sequence and labels accordingly.
+    let mut bucket_indices: Vec<usize> = Vec::with_capacity(tagged.len());
+    let mut chronological: Vec<Utterance> = Vec::with_capacity(tagged.len());
+    for (idx, u) in tagged {
+        bucket_indices.push(idx);
+        chronological.push(u);
+    }
+    diarize.label_utterances(&mut chronological, &[], CANONICAL_FORMAT);
+
+    // Re-split the labelled vec back into per-source buckets,
+    // preserving original source order so the dispatch order
+    // matches the pre-#206 behaviour.
+    let mut split: Vec<Vec<Utterance>> = (0..source_labels.len()).map(|_| Vec::new()).collect();
+    for (idx, u) in bucket_indices.into_iter().zip(chronological) {
+        split[idx].push(u);
+    }
+
+    for (label, utts) in source_labels.into_iter().zip(split) {
+        dispatch_utterances(session_id, &label, utts, partials, repo).await;
+    }
+}
+
 /// Route streaming-session output: finals land in the database,
 /// partials land in the in-memory map. Falls back to the source-
 /// derived `speaker_label` (`"mic"` / `"system"`) when the
-/// diarizer (#111) hasn't already set one — so the panel always has
-/// a label to render with.
+/// diarizer hasn't already set one — so the panel always has a
+/// label to render with.
 ///
 /// Errors are logged + swallowed — a single bad utterance shouldn't
 /// abort the session.
@@ -1807,6 +1921,125 @@ mod tests {
         assert_eq!(utterances.len(), 1);
         assert_eq!(utterances[0].speaker_label.as_deref(), Some("system"));
         mgr.stop_manual().await.unwrap();
+    }
+
+    /// Recording diarizer for the merged-dispatch test (#206). Saves
+    /// the chronological sequence of `started_at_ms` values it
+    /// receives, then writes deterministic `"Speaker A"` labels so
+    /// the test can assert order without relying on the real
+    /// `EnergyDiarizer` heuristic.
+    struct RecordingDiarizer {
+        seen_starts: Mutex<Vec<u64>>,
+    }
+
+    impl crate::diarization::Diarize for RecordingDiarizer {
+        fn label_utterances(
+            &self,
+            utterances: &mut [crate::transcription::Utterance],
+            _audio: &[Vec<f32>],
+            _format: crate::audio::CaptureFormat,
+        ) {
+            let mut seen = self.seen_starts.lock().unwrap();
+            for u in utterances.iter() {
+                seen.push(u.started_at_ms);
+            }
+            for u in utterances.iter_mut() {
+                u.speaker_label = Some("Speaker A".to_owned());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_runs_diarizer_in_chronological_order() {
+        // The whole point of #206: pre-fix the diarizer ran twice
+        // (once per source), each time over its own per-source
+        // chronological slice. Post-fix it runs ONCE over the
+        // merged-and-sorted batch — so a mic utterance at t=100
+        // followed by a system utterance at t=200 is what the
+        // diarizer sees, regardless of how the pump assembled the
+        // tick buckets.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None)
+            .await
+            .unwrap();
+
+        let recorder = Arc::new(RecordingDiarizer {
+            seen_starts: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+
+        // Mic finals at t=200 and t=400; system finals at t=100 and
+        // t=300. The pump assembles buckets in source order
+        // (mic-first then system), so the merge step has to
+        // re-order chronologically.
+        let mic_bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![
+                make_final("mic-200", 200, 280, "mic"),
+                make_final("mic-400", 400, 480, "mic"),
+            ],
+        };
+        let sys_bucket = TickBucket {
+            source_label: "system".to_owned(),
+            utterances: vec![
+                make_final("sys-100", 100, 180, "system"),
+                make_final("sys-300", 300, 380, "system"),
+            ],
+        };
+
+        diarize_and_dispatch_merged(
+            session.id,
+            vec![mic_bucket, sys_bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        // The diarizer saw all four starts in chronological order.
+        let seen = recorder.seen_starts.lock().unwrap().clone();
+        assert_eq!(seen, vec![100, 200, 300, 400]);
+
+        // All four landed in the DB; mic ones tagged "mic" pre-
+        // dispatch (by RecordingDiarizer's "Speaker A" label, which
+        // dispatch_utterances respects via its is_none guard).
+        let persisted = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert_eq!(persisted.len(), 4);
+        for u in &persisted {
+            assert_eq!(
+                u.speaker_label.as_deref(),
+                Some("Speaker A"),
+                "diarizer label should win over the source fallback"
+            );
+        }
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_is_a_no_op_for_empty_buckets() {
+        // Defensive: the pump only calls into the helper when the
+        // tick produced at least one utterance, but pin the empty-
+        // path behaviour so a future caller can't crash through it.
+        let mgr = fresh_manager().await;
+        let diarize: Arc<dyn crate::diarization::Diarize> =
+            Arc::new(crate::diarization::NoopDiarizer);
+
+        diarize_and_dispatch_merged(0, vec![], &diarize, &mgr.partials, &mgr.repo).await;
+        diarize_and_dispatch_merged(
+            0,
+            vec![TickBucket {
+                source_label: "mic".into(),
+                utterances: vec![],
+            }],
+            &diarize,
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+        // No assertions needed beyond "didn't panic"; mgr.repo is
+        // empty so the existing list_utterances path covers it.
     }
 
     #[tokio::test]
