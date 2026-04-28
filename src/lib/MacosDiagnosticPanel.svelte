@@ -178,7 +178,7 @@
 .macos-diag-reset-result {
   padding: 0.5rem 0.75rem;
   background-color: rgba(106, 140, 240, 0.1);
-  border-left: 3px solid #6a8cf0;
+  border-left: 3px solid var(--accent);
   border-radius: 4px;
   font-size: 0.9rem;
 }
@@ -227,7 +227,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  border-color: #396cd8;
+  border-color: var(--accent-hover);
 }
 
 button:disabled {
@@ -248,9 +248,9 @@ button.ghost:hover:not(:disabled) {
 }
 
 button.primary {
-  background-color: #6a8cf0;
+  background-color: var(--accent);
   color: white;
-  border-color: #6a8cf0;
+  border-color: var(--accent);
   font-weight: 600;
 }
 
@@ -266,7 +266,7 @@ button.primary:hover:not(:disabled) {
     border-color: #3a3a3a;
   }
   button:hover:not(:disabled) {
-    border-color: #6a8cf0;
+    border-color: var(--accent);
   }
   button.ghost {
     border-color: #3a3a3a;

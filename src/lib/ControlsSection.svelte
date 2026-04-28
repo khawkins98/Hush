@@ -269,7 +269,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  border-color: #396cd8;
+  border-color: var(--accent-hover);
 }
 
 button:disabled {
@@ -284,9 +284,9 @@ button.stop {
 }
 
 button.primary {
-  background-color: #6a8cf0;
+  background-color: var(--accent);
   color: white;
-  border-color: #6a8cf0;
+  border-color: var(--accent);
   font-weight: 600;
 }
 
@@ -363,7 +363,7 @@ button.primary:hover:not(:disabled) {
     border-color: #3a3a3a;
   }
   button:hover:not(:disabled) {
-    border-color: #6a8cf0;
+    border-color: var(--accent);
   }
 }
 </style>

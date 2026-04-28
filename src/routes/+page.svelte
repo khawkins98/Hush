@@ -1274,7 +1274,7 @@ h1 {
   color: #222;
 }
 .active-model-chip:focus-visible {
-  outline: 2px solid #6a8cf0;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .active-model-name {
@@ -1415,7 +1415,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  border-color: #396cd8;
+  border-color: var(--accent-hover);
 }
 
 button:disabled {
@@ -1436,9 +1436,9 @@ button.ghost:hover:not(:disabled) {
 }
 
 button.primary {
-  background-color: #6a8cf0;
+  background-color: var(--accent);
   color: white;
-  border-color: #6a8cf0;
+  border-color: var(--accent);
   font-weight: 600;
 }
 
@@ -1471,7 +1471,7 @@ button.primary:hover:not(:disabled) {
     border-color: #3a3a3a;
   }
   button:hover:not(:disabled) {
-    border-color: #6a8cf0;
+    border-color: var(--accent);
   }
   button.ghost {
     border-color: #3a3a3a;
