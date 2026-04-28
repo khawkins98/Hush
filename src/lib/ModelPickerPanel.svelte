@@ -65,15 +65,12 @@
   </header>
   <p class="hint-prose">
     Pick a Whisper variant. Bigger models are slower but more
-    accurate. Hush expects model files in
+    accurate. Click Download on a card and Hush fetches the file
+    from Hugging Face (SHA-256 verified) into
     <code class="path-hint" title={models[0]?.expectedPath ?? ""}
       >&lt;app-data&gt;/models/</code
-    >; download them from
-    <a
-      href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
-      target="_blank"
-      rel="noopener noreferrer">whisper.cpp on Hugging Face</a
-    > and place them in that folder.
+    >. You can also drop a GGUF file there manually if you'd
+    rather provide your own.
   </p>
 
   {#if modelsError}
