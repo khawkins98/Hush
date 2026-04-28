@@ -185,3 +185,73 @@ test.describe("settings window — PTT editor", () => {
     await expect(page.getByRole("button", { name: /Cancel/i })).toBeVisible();
   });
 });
+
+test.describe("settings window — About tab", () => {
+  test("renders app name + version + license + repo links", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/settings");
+
+    await page.locator('[data-testid="settings-tab-about"]').click();
+    await expect(
+      page.locator('[data-testid="settings-tab-about"]'),
+    ).toHaveAttribute("aria-current", "page");
+
+    // App-info plugin mocks return "Hush" / "0.1.0" / "2.10.3".
+    // Fail mode for this assertion is the silent-fallback path
+    // (loadAppMetadata threw) — the test would catch a regression
+    // where the @tauri-apps/api/app import broke entirely.
+    await expect(page.locator(".about-name")).toHaveText("Hush");
+    await expect(page.locator(".about-version")).toHaveText(
+      /Version\s+0\.1\.0/,
+    );
+    await expect(page.locator(".about-meta code")).toHaveText("2.10.3");
+
+    // Outbound links the user is most likely to click. Locked to
+    // the actual hrefs because a typo in the repo URL silently
+    // sends users to a dead page.
+    await expect(
+      page.locator('.about-meta a[href*="apache.org"]'),
+    ).toHaveCount(1);
+    await expect(
+      page.locator('.about-meta a[href="https://github.com/khawkins98/Hush"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator(
+        '.about-meta a[href="https://github.com/khawkins98/Hush/issues/new"]',
+      ),
+    ).toBeVisible();
+  });
+
+  test("falls back to static copy when app-info plugin throws", async ({
+    page,
+  }) => {
+    // If the Tauri app-info plugin fails (older runtime, missing
+    // capability), `loadAppMetadata` swallows the error and the
+    // About tab still renders the default app name + the static
+    // license/source links. Regression guard for the silent-catch
+    // path in `loadAppMetadata`.
+    await installMocks(page, {
+      "plugin:app|name": () => {
+        throw new Error("boom");
+      },
+      "plugin:app|version": () => {
+        throw new Error("boom");
+      },
+      "plugin:app|tauri_version": () => {
+        throw new Error("boom");
+      },
+    });
+    await page.goto("/settings");
+
+    await page.locator('[data-testid="settings-tab-about"]').click();
+    await expect(page.locator(".about-name")).toHaveText("Hush");
+    // Version line is gated on a non-empty appVersion — should be hidden.
+    await expect(page.locator(".about-version")).toHaveCount(0);
+    // The static license link is still there.
+    await expect(
+      page.locator('.about-meta a[href*="apache.org"]'),
+    ).toBeVisible();
+  });
+});

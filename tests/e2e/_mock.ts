@@ -55,6 +55,14 @@ export async function installMocks(
       "plugin:autostart|is_enabled": () => false,
       "plugin:autostart|enable": () => undefined,
       "plugin:autostart|disable": () => undefined,
+      // App-info plugin commands. The Settings → About tab calls
+      // `getName` / `getVersion` / `getTauriVersion` from
+      // `@tauri-apps/api/app`, all of which dispatch through these
+      // `plugin:app|<verb>` IPCs. Test values mirror the real
+      // package metadata so the rendered copy is exercised.
+      "plugin:app|name": () => "Hush",
+      "plugin:app|version": () => "0.1.0",
+      "plugin:app|tauri_version": () => "2.10.3",
       open_macos_privacy_pane: () => undefined,
       open_settings: () => undefined,
       diagnose_macos_permissions: () => ({
