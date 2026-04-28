@@ -8,6 +8,8 @@
   import ResultBlock from "$lib/ResultBlock.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import MeetingSessionsPanel from "$lib/MeetingSessionsPanel.svelte";
+  import FirstRunModal from "$lib/FirstRunModal.svelte";
+  import MacosPermsPill from "$lib/MacosPermsPill.svelte";
   import { formatErrorDisplay, type ErrorDisplay } from "$lib/errors";
   import { formatTimestamp } from "$lib/format";
   import type {
@@ -118,16 +120,9 @@
   // deep-link buttons on macOS open System Settings; on other
   // platforms the backend's `open_macos_privacy_pane` is a no-op.
   // Once dismissed, the flag persists in `settings` and the modal
-  // never shows again on this install.
+  // never shows again on this install. Modal markup, focus trap,
+  // keydown handling, and styles live in `FirstRunModal.svelte`.
   let showFirstRun = $state(false);
-
-  // Modal element ref + the focused-element-before-modal stash. The
-  // ref backs the focus trap (so Tab cycles within the modal instead
-  // of escaping to the rest of the page); the stash lets us restore
-  // focus to whatever the user was on before the welcome appeared
-  // when they dismiss it.
-  let firstRunCardEl: HTMLElement | undefined = $state();
-  let firstRunPreviousFocus: HTMLElement | null = null;
 
   // Listener for the broadcast `model:download-done` event. The
   // Settings window's picker drives the actual download UX; we only
@@ -488,12 +483,6 @@
 
   async function dismissFirstRun() {
     showFirstRun = false;
-    // Restore focus to whatever the user was on before the modal
-    // opened. Defensive: the previously-focused element may have
-    // been removed from the DOM, in which case `.focus()` is a no-op
-    // and the browser falls back to body, which is fine.
-    firstRunPreviousFocus?.focus();
-    firstRunPreviousFocus = null;
     try {
       await invoke("mark_first_run_completed");
     } catch (e) {
@@ -503,56 +492,6 @@
       console.error("mark_first_run_completed failed:", e);
     }
   }
-
-  /// Selector for the focusable elements we cycle between in the
-  /// welcome modal. Excludes elements with `tabindex="-1"` so the
-  /// dialog wrapper itself (which is not focusable by users) does
-  /// not enter the rotation.
-  const FOCUSABLE_SELECTOR =
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-  /// Trap Tab cycling inside the welcome modal (closes #48 focus
-  /// trap). Tab from the last focusable wraps to the first;
-  /// Shift+Tab from the first wraps to the last. Escape dismisses
-  /// (per WAI-ARIA guidance for `role="dialog"` `aria-modal="true"`).
-  function handleFirstRunKeydown(event: KeyboardEvent) {
-    if (!showFirstRun) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      void dismissFirstRun();
-      return;
-    }
-    if (event.key !== "Tab" || !firstRunCardEl) return;
-    const focusable = firstRunCardEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && active === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
-  // Auto-focus the first focusable element when the modal opens, and
-  // remember what was focused before so we can restore it on
-  // dismiss. The effect intentionally runs whenever `showFirstRun`
-  // flips — including back to false — but only acts on the
-  // open transition.
-  $effect(() => {
-    if (showFirstRun && firstRunCardEl) {
-      firstRunPreviousFocus =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      // Focus the first action button so a keyboard-only user lands
-      // on something useful (the "Open Microphone settings" button)
-      // rather than the dialog wrapper.
-      const first = firstRunCardEl.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
-      first?.focus();
-    }
-  });
 
   async function openPrivacyPane(target: "microphone" | "input-monitoring") {
     try {
@@ -848,82 +787,11 @@
   // builds its copy directly.
 </script>
 
-<!--
-  Window-level keydown listener for the welcome modal. Lives outside
-  the `{#if showFirstRun}` block because `<svelte:window>` cannot be
-  placed inside ordinary blocks. The handler itself is gated on
-  `showFirstRun`, so it is a no-op when the modal isn't visible.
--->
-<svelte:window onkeydown={handleFirstRunKeydown} />
-
-{#if showFirstRun}
-  <!--
-    First-run welcome modal. Static content; no fetches behind it.
-    Backdrop intercepts clicks so the user has to engage with the
-    Got It button rather than dismissing accidentally. The two
-    permission sections call `open_macos_privacy_pane(...)` which
-    is a no-op on Linux / Windows — those users can still click
-    "Got it" and proceed without harm.
-
-    A11y plumbing (closes #48):
-    - Escape dismisses (the keydown listener is at window level
-      above; gated on `showFirstRun`).
-    - Tab cycles within the modal via `handleFirstRunKeydown`, so a
-      keyboard user cannot accidentally focus elements behind the
-      backdrop.
-    - Auto-focus lands on the first action button on open; on
-      dismiss, focus restores to whatever was focused before.
-  -->
-  <div class="first-run-backdrop" role="dialog" aria-modal="true" aria-labelledby="first-run-heading">
-    <article class="first-run-card" bind:this={firstRunCardEl} tabindex="-1">
-      <header>
-        <h2 id="first-run-heading">Welcome to Hush</h2>
-        <p class="first-run-tagline">
-          Local, private voice-to-text. Here's what to know about
-          permissions and privacy before you start.
-        </p>
-      </header>
-
-      <section class="first-run-section">
-        <h3>Microphone</h3>
-        <p>
-          Hush records audio only while you've explicitly started a
-          dictation session. The first time you record, your OS will
-          ask you to grant Hush microphone access. Without it, the
-          dictation pipeline can't capture what you say.
-        </p>
-        <button class="ghost" onclick={() => openPrivacyPane("microphone")}>
-          Open Microphone settings
-        </button>
-      </section>
-
-      <section class="first-run-section">
-        <h3>Input Monitoring (macOS — push-to-talk)</h3>
-        <p>
-          Push-to-talk (hold <kbd>Right ⌘</kbd> while you speak) is
-          <strong>on by default</strong>; macOS will prompt for
-          Input Monitoring the first time the listener spawns. If
-          you'd rather not, disable it in Settings → General →
-          Hotkeys. The toggle hotkey
-          (<kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>) and the
-          on-screen Start button work either way.
-        </p>
-        <button class="ghost" onclick={() => openPrivacyPane("input-monitoring")}>
-          Open Input Monitoring settings
-        </button>
-      </section>
-
-      <footer class="first-run-footer">
-        <p class="first-run-meta">
-          Hush makes no other network requests except when you click
-          Download on a model card. No telemetry, no cloud transcription,
-          no analytics.
-        </p>
-        <button class="primary" onclick={dismissFirstRun}>Got it</button>
-      </footer>
-    </article>
-  </div>
-{/if}
+<FirstRunModal
+  show={showFirstRun}
+  onDismiss={dismissFirstRun}
+  onOpenPrivacyPane={openPrivacyPane}
+/>
 
 <div class="app-shell">
   <AppSidebar
@@ -992,44 +860,12 @@
         <ResultBlock {result} />
       {/if}
 
-      {#if macosCapable}
-        {#if allPermsGranted}
-          <!--
-            Green pill: AVFoundation / CoreGraphics / IOKit all
-            report `granted`. Stays compact so it doesn't crowd
-            the Dictation surface; click-through still leads into
-            the Settings window for users who want to verify or
-            adjust.
-          -->
-          <p class="permissions-pill permissions-pill-ok" data-testid="perms-pill-ok">
-            <span class="dot" aria-hidden="true"></span>
-            macOS permissions OK.
-            <button
-              type="button"
-              class="link-button"
-              onclick={() => void openSettingsTab("permissions")}
-            >View</button>
-          </p>
-        {:else if anyPermsDenied}
-          <!--
-            Yellow hint: at least one permission is *denied* (a
-            real, actionable problem). On a fresh install where
-            mic / screen-recording are still `not-determined`
-            because the user hasn't tried recording yet, the hint
-            stays hidden — pre-emptively asking "Trouble?" reads
-            as "something is broken" when nothing actually is.
-          -->
-          <p class="permissions-hint" data-testid="perms-hint-yellow">
-            On macOS, dictation needs Microphone access (and Screen
-            Recording for system-audio capture in meetings). Trouble?
-            <button
-              type="button"
-              class="link-button"
-              onclick={() => void openSettingsTab("permissions")}
-            >Open the Permissions diagnostic</button>.
-          </p>
-        {/if}
-      {/if}
+      <MacosPermsPill
+        capable={macosCapable}
+        allGranted={allPermsGranted}
+        anyDenied={anyPermsDenied}
+        onOpenPermissions={() => openSettingsTab("permissions")}
+      />
     {:else if activeSection === "meetings"}
       <header class="section-header">
         <h1>Meetings</h1>
@@ -1150,71 +986,6 @@
   margin-right: auto;
 }
 
-.permissions-hint {
-  margin: 1.25rem auto 0;
-  padding: 0.75rem 1rem;
-  background-color: #fff7e6;
-  border: 1px solid #ffd591;
-  border-radius: 8px;
-  color: #8a5a00;
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
-.permissions-pill {
-  margin: 1.25rem auto 0;
-  padding: 0.5rem 0.85rem;
-  background-color: #e7f8ec;
-  border: 1px solid #b6e5c5;
-  border-radius: 999px;
-  color: #2a6b3c;
-  font-size: 0.8rem;
-  line-height: 1.4;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  /* Override the .app-main centring fallback so the pill renders
-     compact on the left rather than full-width. */
-  max-width: max-content;
-  margin-left: auto;
-  margin-right: auto;
-}
-.permissions-pill .dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background-color: #2eaa53;
-  box-shadow: 0 0 0 2px rgba(46, 170, 83, 0.18);
-  display: inline-block;
-}
-.link-button {
-  background: none;
-  border: none;
-  padding: 0;
-  color: inherit;
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-.link-button:hover {
-  text-decoration: none;
-}
-@media (prefers-color-scheme: dark) {
-  .permissions-hint {
-    background-color: #3a2c00;
-    border-color: #6b5300;
-    color: #ffd591;
-  }
-  .permissions-pill {
-    background-color: #1a3a23;
-    border-color: #2a6b3c;
-    color: #b6e5c5;
-  }
-  .permissions-pill .dot {
-    background-color: #4ad07a;
-    box-shadow: 0 0 0 2px rgba(74, 208, 122, 0.2);
-  }
-}
-
 h1 {
   margin: 0 0 0.25rem;
   font-size: 2.5rem;
@@ -1322,81 +1093,6 @@ h1 {
   margin: 0 0.1rem;
 }
 
-.first-run-backdrop {
-  position: fixed;
-  inset: 0;
-  background-color: rgba(15, 15, 15, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  padding: 1.5rem;
-}
-
-.first-run-card {
-  background-color: #ffffff;
-  border-radius: 12px;
-  padding: 1.5rem 1.75rem;
-  max-width: 30rem;
-  width: 100%;
-  max-height: calc(100vh - 3rem);
-  overflow-y: auto;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
-  text-align: left;
-}
-
-.first-run-card h2 {
-  margin: 0 0 0.35rem;
-  font-size: 1.5rem;
-  letter-spacing: -0.01em;
-}
-
-.first-run-tagline {
-  margin: 0 0 1.25rem;
-  color: #555;
-  font-size: 0.95rem;
-}
-
-.first-run-section {
-  margin-bottom: 1.25rem;
-  padding-bottom: 1.25rem;
-  border-bottom: 1px solid #eee;
-}
-
-.first-run-section:last-of-type {
-  border-bottom: none;
-}
-
-.first-run-section h3 {
-  margin: 0 0 0.35rem;
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.first-run-section p {
-  margin: 0 0 0.6rem;
-  font-size: 0.9rem;
-  color: #444;
-  line-height: 1.5;
-}
-
-.first-run-footer {
-  margin-top: 0.75rem;
-  display: flex;
-  align-items: flex-end;
-  gap: 1rem;
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-
-.first-run-meta {
-  flex: 1;
-  margin: 0;
-  font-size: 0.8rem;
-  color: #6a6a6a;
-  line-height: 1.45;
-}
-
 button {
   border-radius: 8px;
   border: 1px solid #d1d1d1;
@@ -1421,30 +1117,6 @@ button:hover:not(:disabled) {
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-button.ghost {
-  padding: 0.3em 0.75em;
-  font-size: 0.8rem;
-  font-weight: 500;
-  background-color: transparent;
-  border: 1px solid #d1d1d1;
-}
-
-button.ghost:hover:not(:disabled) {
-  background-color: #f0f0f0;
-}
-
-button.primary {
-  background-color: var(--accent);
-  color: white;
-  border-color: var(--accent);
-  font-weight: 600;
-}
-
-button.primary:hover:not(:disabled) {
-  background-color: #4a6cd0;
-  border-color: #4a6cd0;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1472,29 +1144,6 @@ button.primary:hover:not(:disabled) {
   }
   button:hover:not(:disabled) {
     border-color: var(--accent);
-  }
-  button.ghost {
-    border-color: #3a3a3a;
-    color: #f0f0f0;
-  }
-  button.ghost:hover:not(:disabled) {
-    background-color: #353535;
-  }
-  .first-run-backdrop {
-    background-color: rgba(0, 0, 0, 0.65);
-  }
-  .first-run-card {
-    background-color: #1f1f1f;
-    color: #f0f0f0;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  }
-  .first-run-tagline,
-  .first-run-section p,
-  .first-run-meta {
-    color: #c0c0c0;
-  }
-  .first-run-section {
-    border-bottom-color: #2e2e2e;
   }
 }
 </style>
