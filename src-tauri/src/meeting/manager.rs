@@ -1336,36 +1336,111 @@ pub struct AppClassifier {
 }
 
 impl AppClassifier {
-    /// Hardcoded defaults. Bundle ids match what
-    /// `active-win-pos-rs::get_active_window().app_name` returns
-    /// on each platform — process / app names rather than reverse-
-    /// DNS bundle ids on Linux/Windows where the latter doesn't
-    /// exist.
+    /// Hardcoded defaults. Each entry matches what
+    /// `active-win-pos-rs::get_active_window().app_name` returns on
+    /// the corresponding platform — macOS prefers reverse-DNS bundle
+    /// ids, Linux returns the process / app name, and Windows
+    /// returns the executable basename (with `.exe`). To cover all
+    /// three OSes the table lists every variant of an app
+    /// explicitly: matching is exact-string, no normalisation, so
+    /// "Zoom" on Linux and "Zoom.exe" on Windows must each be its
+    /// own entry. Locale variants (e.g. "Microsoft Teams (work or
+    /// school)") only land here if active-win actually returns them
+    /// in shipped builds — covering every translation is unbounded.
     pub fn default_table() -> Self {
         Self {
             entries: vec![
-                // Meeting / video-call apps. Auto-start (when that
-                // policy lands) defaults to "ask" for these.
+                // ---- Meeting / video-call apps ----
+                // Auto-start (when that policy lands) defaults to
+                // "ask" for these.
+                //
+                // Zoom
                 ("zoom.us", MeetingAppKind::Meeting),
-                ("us.zoom.xos", MeetingAppKind::Meeting),
+                ("us.zoom.xos", MeetingAppKind::Meeting), // macOS bundle
+                ("Zoom", MeetingAppKind::Meeting),        // Linux / display name
+                ("Zoom Meetings", MeetingAppKind::Meeting),
+                ("zoom", MeetingAppKind::Meeting),         // Linux process
+                ("Zoom.exe", MeetingAppKind::Meeting),     // Windows
+                ("zoom.exe", MeetingAppKind::Meeting),
+                // Microsoft Teams
                 ("Microsoft Teams", MeetingAppKind::Meeting),
-                ("com.microsoft.teams2", MeetingAppKind::Meeting),
+                ("com.microsoft.teams2", MeetingAppKind::Meeting), // macOS bundle
                 ("Microsoft Teams (work or school)", MeetingAppKind::Meeting),
+                ("ms-teams", MeetingAppKind::Meeting),
+                ("ms-teams.exe", MeetingAppKind::Meeting), // Windows
+                ("Teams.exe", MeetingAppKind::Meeting),
+                ("teams-for-linux", MeetingAppKind::Meeting), // unofficial Linux client
+                // Google Meet (largely browser-based, but a few
+                // PWAs / wrappers exist).
                 ("Google Meet", MeetingAppKind::Meeting),
+                ("Meet", MeetingAppKind::Meeting),
+                // Discord
                 ("Discord", MeetingAppKind::Meeting),
-                ("com.hnc.Discord", MeetingAppKind::Meeting),
+                ("com.hnc.Discord", MeetingAppKind::Meeting), // macOS bundle
+                ("discord", MeetingAppKind::Meeting),         // Linux process
+                ("Discord.exe", MeetingAppKind::Meeting),     // Windows
+                // Slack
                 ("Slack", MeetingAppKind::Meeting),
-                ("com.tinyspeck.slackmacgap", MeetingAppKind::Meeting),
+                ("com.tinyspeck.slackmacgap", MeetingAppKind::Meeting), // macOS bundle
+                ("slack", MeetingAppKind::Meeting),                     // Linux process
+                ("slack.exe", MeetingAppKind::Meeting),                 // Windows
+                ("Slack.exe", MeetingAppKind::Meeting),
+                // Webex
                 ("Webex", MeetingAppKind::Meeting),
-                // Media apps. Auto-start (when shipped) defaults
-                // to "no" for these — most users don't want a
-                // YouTube watch-party transcribed by accident.
+                ("Cisco Webex Meetings", MeetingAppKind::Meeting),
+                ("webex", MeetingAppKind::Meeting),
+                ("Webex.exe", MeetingAppKind::Meeting),
+                ("CiscoCollabHost.exe", MeetingAppKind::Meeting),
+                // Skype (legacy but still in active use, especially
+                // for international calls).
+                ("Skype", MeetingAppKind::Meeting),
+                ("skype", MeetingAppKind::Meeting),
+                ("Skype.exe", MeetingAppKind::Meeting),
+                // GoTo / GoToMeeting
+                ("GoToMeeting", MeetingAppKind::Meeting),
+                ("GoToMeeting.exe", MeetingAppKind::Meeting),
+                ("GoTo", MeetingAppKind::Meeting),
+                // BlueJeans (Verizon)
+                ("BlueJeans", MeetingAppKind::Meeting),
+                ("BlueJeans.exe", MeetingAppKind::Meeting),
+                // Loom (async video — not a live call but the
+                // recording surface is the same)
+                ("Loom", MeetingAppKind::Meeting),
+                ("Loom.exe", MeetingAppKind::Meeting),
+
+                // ---- Media apps ----
+                // Auto-start (when shipped) defaults to "no" for
+                // these — most users don't want a YouTube watch-
+                // party transcribed by accident.
+                //
+                // YouTube (typically a browser tab; PWA / wrappers
+                // included for completeness)
                 ("YouTube", MeetingAppKind::Media),
+                // Spotify
                 ("Spotify", MeetingAppKind::Media),
-                ("com.spotify.client", MeetingAppKind::Media),
+                ("com.spotify.client", MeetingAppKind::Media), // macOS bundle
+                ("spotify", MeetingAppKind::Media),            // Linux process
+                ("Spotify.exe", MeetingAppKind::Media),
+                // Apple Music / iTunes (macOS) and the legacy iTunes
+                // on Windows.
                 ("Apple Music", MeetingAppKind::Media),
                 ("Music", MeetingAppKind::Media),
+                ("iTunes", MeetingAppKind::Media),
+                ("iTunes.exe", MeetingAppKind::Media),
                 ("Podcasts", MeetingAppKind::Media),
+                // Apple TV desktop on macOS — sound is system
+                // audio, the surfaced app is "TV".
+                ("TV", MeetingAppKind::Media),
+                // VLC — cross-platform default media player
+                ("VLC", MeetingAppKind::Media),
+                ("VLC media player", MeetingAppKind::Media),
+                ("vlc", MeetingAppKind::Media),
+                ("vlc.exe", MeetingAppKind::Media),
+                // Plex / Plexamp
+                ("Plex", MeetingAppKind::Media),
+                ("Plex.exe", MeetingAppKind::Media),
+                ("plexamp", MeetingAppKind::Media),
+                ("Plexamp", MeetingAppKind::Media),
             ],
             overrides: Vec::new(),
         }
@@ -2083,10 +2158,58 @@ mod tests {
     }
 
     #[test]
+    fn classifier_recognises_meeting_apps_across_platforms() {
+        // The default table has to cover the variant strings each
+        // OS's `active-win-pos-rs` returns: macOS bundle ids,
+        // Linux process names, Windows .exe basenames. Pin a
+        // sample of each per app so a future "drop a Windows
+        // entry while refactoring" regression fails loud.
+        let c = AppClassifier::default_table();
+        // macOS bundle IDs
+        assert_eq!(c.classify("us.zoom.xos"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("com.microsoft.teams2"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("com.hnc.Discord"), MeetingAppKind::Meeting);
+        assert_eq!(
+            c.classify("com.tinyspeck.slackmacgap"),
+            MeetingAppKind::Meeting
+        );
+        // Linux process names (lowercase)
+        assert_eq!(c.classify("zoom"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("discord"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("slack"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("teams-for-linux"), MeetingAppKind::Meeting);
+        // Windows executables
+        assert_eq!(c.classify("Zoom.exe"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("ms-teams.exe"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("Discord.exe"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("slack.exe"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("Webex.exe"), MeetingAppKind::Meeting);
+        assert_eq!(c.classify("Skype.exe"), MeetingAppKind::Meeting);
+    }
+
+    #[test]
     fn classifier_recognises_default_media_apps() {
         let c = AppClassifier::default_table();
         assert_eq!(c.classify("Spotify"), MeetingAppKind::Media);
         assert_eq!(c.classify("YouTube"), MeetingAppKind::Media);
+    }
+
+    #[test]
+    fn classifier_recognises_media_apps_across_platforms() {
+        // Same shape as the meeting-apps cross-platform pin, for
+        // the media side of the table.
+        let c = AppClassifier::default_table();
+        // macOS bundle IDs / display names
+        assert_eq!(c.classify("com.spotify.client"), MeetingAppKind::Media);
+        assert_eq!(c.classify("Apple Music"), MeetingAppKind::Media);
+        // Linux process names
+        assert_eq!(c.classify("spotify"), MeetingAppKind::Media);
+        assert_eq!(c.classify("vlc"), MeetingAppKind::Media);
+        // Windows executables
+        assert_eq!(c.classify("Spotify.exe"), MeetingAppKind::Media);
+        assert_eq!(c.classify("vlc.exe"), MeetingAppKind::Media);
+        assert_eq!(c.classify("Plex.exe"), MeetingAppKind::Media);
+        assert_eq!(c.classify("iTunes.exe"), MeetingAppKind::Media);
     }
 
     #[test]
