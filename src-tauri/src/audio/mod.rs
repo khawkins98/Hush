@@ -322,7 +322,7 @@ pub trait AudioCapture: Send + Sync {
         match source {
             AudioSource::Microphone(device_id) => self.start(device_id.as_deref()),
             AudioSource::SystemAudio => Err(anyhow!(
-                "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
+                "system audio capture is not yet implemented on this platform — tracked under #106 (Linux) / #107 (Windows)"
             )),
         }
     }
@@ -389,9 +389,9 @@ pub trait AudioCapture: Send + Sync {
         // frontend renders it as disabled in that state with a
         // "coming soon" affordance — the user knows the feature
         // exists in concept and where to look for it once it ships
-        // (issue #33). Hiding it would be more confusing than
-        // showing-disabled because the design memo + roadmap
-        // already mention it as in-flight work.
+        // (Linux: #106, Windows: #107). Hiding it would be more
+        // confusing than showing-disabled because the design memo
+        // already mentions it as in-flight work.
         listings.push(AudioSourceListing {
             kind: AudioSourceKind::SystemAudio,
             id: "system".to_owned(),
@@ -634,7 +634,7 @@ impl AudioCapture for CpalAudioCapture {
             }
             #[cfg(not(target_os = "macos"))]
             AudioSource::SystemAudio => Err(anyhow!(
-                "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
+                "system audio capture is not yet implemented on this platform — tracked under #106 (Linux) / #107 (Windows)"
             )),
         }
     }
@@ -750,7 +750,7 @@ impl AudioCapture for CpalAudioCapture {
             }
             #[cfg(not(target_os = "macos"))]
             AudioSource::SystemAudio => Err(anyhow!(
-                "system audio capture is not yet implemented on this platform — see #33 for the per-OS roadmap"
+                "system audio capture is not yet implemented on this platform — tracked under #106 (Linux) / #107 (Windows)"
             )),
         }
     }

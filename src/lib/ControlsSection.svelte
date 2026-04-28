@@ -94,11 +94,11 @@
     {:else}
       <!--
         Two groups: mic devices (always supported) and the system-audio
-        entry (currently disabled on every platform — see #33 for the
-        per-OS roadmap). Splitting via <optgroup> makes the structure
-        clear to assistive tech; the disabled attribute on the
-        not-yet-supported option means the user can't accidentally
-        pick it and hit a runtime error.
+        entry. ScreenCaptureKit is wired on macOS today; Linux
+        (#106) and Windows (#107) are still pending. Splitting via
+        <optgroup> makes the structure clear to assistive tech; the
+        disabled attribute on the not-yet-supported option means the
+        user can't accidentally pick it and hit a runtime error.
       -->
       <select bind:value={selected} disabled={recording || busy}>
         <optgroup label="Microphone">
@@ -113,7 +113,7 @@
             <option value={systemAudio.id} disabled={!systemAudio.isSupported}>
               {systemAudio.name}{systemAudio.isSupported
                 ? ""
-                : " (coming soon — #33)"}
+                : " (coming soon on this platform)"}
             </option>
           </optgroup>
         {/if}

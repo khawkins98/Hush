@@ -57,7 +57,11 @@ test.describe("audio source picker", () => {
     const sysOption = sysGroup.locator("option").first();
     await expect(sysOption).toHaveAttribute("disabled", "");
     await expect(sysOption).toContainText(/coming soon/i);
-    await expect(sysOption).toContainText(/#33/);
+    // Pre-#209 the "coming soon" suffix carried `#33` (the umbrella
+    // issue, since closed when macOS shipped). Now the option text
+    // is platform-shaped without the issue number; the #106/#107
+    // trackers live in the surrounding copy/error messages.
+    await expect(sysOption).not.toContainText(/#33/);
   });
 
   test("system-audio option becomes selectable when backend reports support", async ({
