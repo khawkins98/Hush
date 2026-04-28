@@ -687,3 +687,25 @@ We pin via git rev (`a90dbe1172f8832f54c97c62e823c5a34af5fdfe` as of this entry)
 PTT stays opt-in via `HUSH_PTT_ENABLE=1` even with the abort fixed: enabling triggers the Input Monitoring permission prompt, which is a privacy surprise for users who don't realise a dictation app would be reading every keystroke. The env gate keeps the prompt to power users who deliberately turn PTT on. A future settings-window toggle will replace the env gate.
 
 **Takeaway for future Apple-framework FFI bugs:** "PR merged" ≠ "your bug is fixed." Read the diff. PR #147 was a real fix for *a* TSM call site, but not the one our code path hits. The cheap-path heuristic ("just bump the dep") is right to try first, but verify with the actual error reproduction, not just "did it merge upstream." Production users (RustDesk in this case) often patch around upstream's incompleteness for years before upstream catches up.
+
+---
+
+## 2026-04-28 — D1 EnergyDiarizer wired: multi-source caveat is structural, not tunable
+
+#191 shipped the `Diarize` trait + an `EnergyDiarizer` impl that alternates Speaker A / Speaker B based on inter-utterance silence gaps. #201 (this entry) flipped the production wiring from `NoopDiarizer` → `EnergyDiarizer::default()`.
+
+**The caveat surfaced wiring it up.** The pump dispatches per-source: each tick drains the mic source's streaming session, dispatches its finals, then drains the system-audio source's, dispatches its finals — independently. Each call to `diarize.label_utterances` sees one source's batch only. That means the EnergyDiarizer's internal "current speaker" letter resets between sources: mic source runs A → B → A; system source runs A → B → A. Same labels, different actual speakers.
+
+For mic + system meetings (the canonical Zoom-style config) the Speaker A label means "you said this on mic" if the utterance came from `mic`, but means "the first remote person to talk in this batch" if it came from `system`. The user can't tell which is which without a per-source visual hint.
+
+**Why we shipped anyway.** The mic-only path (no system audio) doesn't have this problem — every utterance comes from one source, the alternating heuristic is honest. For mixed meetings the source-derived `"mic"` / `"system"` fallback in `dispatch_utterances` only kicks in when the diarizer leaves `speaker_label = None`; EnergyDiarizer always produces a label, so the fallback is bypassed once D1 is on. That's intentional — D1 is the more specific signal — but it does mean the "You" / "Remote" badges stop rendering for mixed meetings unless the user reverts to NoopDiarizer.
+
+**Fixes considered, deferred:**
+
+1. **Pass source context to the diarizer.** Extend `Diarize::label_utterances` to take a source-kind parameter, let `EnergyDiarizer` use the source as the starting letter (mic → A, system → C). Cheapest fix; visually disambiguates the two sides at the cost of a fixed 4-letter cap.
+2. **Stateful per-source diarizer.** Track the running "current speaker" per `(session_id, source_kind)` so a session keeps its mic-A and system-C series consistent across pump ticks. Better than (1) for long meetings where the per-tick reset would otherwise cause labels to flip mid-conversation.
+3. **D2: model-based diarization.** ONNX speaker-embedding model that genuinely knows who's who. Right answer; the heaviest lift.
+
+(1) and (2) are small follow-ups if user hands-on testing of D1 finds the multi-source labels actively confusing. The trait already takes `audio_chunks` + `format` (D2's needs) so threading source context through the same call doesn't widen the API surface much.
+
+**Takeaway:** when shipping a heuristic that runs on a per-shard pipeline (per-source here), the labels it produces are scoped to its shard. If the user-facing display merges shards (the meeting timeline does), the labels need cross-shard context — either provided to the heuristic or composed at a higher layer. The primitive is fine; the wiring needed the cross-shard awareness.

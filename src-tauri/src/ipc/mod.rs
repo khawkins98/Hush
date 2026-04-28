@@ -576,12 +576,20 @@ impl AppState {
         let transcribe_shared = Arc::new(Mutex::new(transcribe));
         let event_emitter: Arc<dyn crate::meeting::MeetingEventEmitter> =
             Arc::new(AppHandleMeetingEventEmitter { app: app.clone() });
-        // Wire NoopDiarizer in production today — preserves the
-        // pump's source-derived `"mic"` / `"system"` labels. Swap to
-        // `crate::diarization::EnergyDiarizer` once D1 has been
-        // hands-on tested in a real two-speaker meeting.
+        // Wire EnergyDiarizer in production (#191 D1). The
+        // silence-gap heuristic alternates Speaker A / Speaker B
+        // when consecutive utterances have a gap > 1.5 s — ~70%
+        // accurate on clean two-speaker meetings, no model
+        // download required. The labels override the pump's
+        // source-derived `"mic"` / `"system"` fallback when the
+        // gap heuristic produces a verdict.
+        //
+        // To revert to the pre-D1 source-only labels for a
+        // session, swap `EnergyDiarizer` for `NoopDiarizer` here
+        // and rebuild — `dispatch_utterances` falls back to the
+        // source label when `speaker_label` is None.
         let diarize: Arc<dyn crate::diarization::Diarize> =
-            Arc::new(crate::diarization::NoopDiarizer);
+            Arc::new(crate::diarization::EnergyDiarizer::default());
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
