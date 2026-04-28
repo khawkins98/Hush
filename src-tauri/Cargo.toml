@@ -35,6 +35,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Audio capture (cross-platform)
 cpal = "0.15"
+# Realtime-safe SPSC ring buffer for the cpal callback → worker
+# thread handoff (#55). The producer side is wait-free, doesn't
+# allocate, and doesn't lock — three properties the cpal callback
+# needs to honour the realtime-audio discipline. Replaces a
+# Mutex<Vec<f32>> that worked in practice but violated the
+# discipline; #55 has the full reasoning.
+rtrb = "0.3"
 
 # HTTP client for the model auto-download path. `rustls-tls` keeps the
 # build cross-platform without depending on system OpenSSL — the same
