@@ -39,9 +39,14 @@
 //! the input shape — there's no way to insert a `Vec<f32>` through
 //! the data layer's API surface.
 
+pub mod app_overrides;
 pub mod manager;
 pub mod sqlite;
 
+pub use app_overrides::{
+    MeetingAppOverride, MeetingAppOverrideRepository, NewMeetingAppOverride,
+    SqliteMeetingAppOverrideRepository,
+};
 pub use manager::{AppClassifier, MeetingEventEmitter, NoopMeetingEventEmitter, SessionManager};
 pub use sqlite::SqliteMeetingSessionRepository;
 

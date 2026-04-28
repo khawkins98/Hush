@@ -1014,6 +1014,11 @@ mod tests {
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
             })
+            .meeting_app_overrides({
+                let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetingAppOverrides);
+                o
+            })
             .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
                     Arc::new(crate::ipc::tests::NoopMeetings);
@@ -1067,6 +1072,11 @@ mod tests {
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
+            })
+            .meeting_app_overrides({
+                let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetingAppOverrides);
+                o
             })
             .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
@@ -1220,6 +1230,11 @@ mod tests {
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
                     Arc::new(crate::ipc::tests::NoopMeetings);
                 m
+            })
+            .meeting_app_overrides({
+                let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetingAppOverrides);
+                o
             })
             .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> =

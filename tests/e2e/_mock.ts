@@ -190,6 +190,24 @@ export async function installMocks(
         notes: null,
       }),
       meeting_stop_manual: () => undefined,
+
+      // ---- Phase E (#112) per-app classifier overrides ----
+      // Empty list by default so the Meeting tab renders the "no
+      // overrides yet" placeholder. Specs that need pre-populated
+      // rows override `meeting_app_override_list` per-test.
+      meeting_app_override_list: () => [],
+      meeting_app_override_upsert: (args) => {
+        const { appName, kind } = (args ?? {}) as {
+          appName: string;
+          kind: string;
+        };
+        return {
+          appName,
+          kind,
+          createdAt: "2026-04-28T00:00:00Z",
+        };
+      },
+      meeting_app_override_delete: () => undefined,
     };
 
     // Rebuild override functions from their stringified source. The

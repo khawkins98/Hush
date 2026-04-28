@@ -151,6 +151,11 @@ pub struct DataServices {
     /// ([`AppState::meeting_manager`]) is the stateful owner that
     /// opens / closes sessions and appends utterances.
     pub meetings: Arc<dyn crate::meeting::MeetingSessionRepository>,
+    /// Per-app classifier overrides (Phase E, #112). The Settings
+    /// panel reads/writes through these IPC commands; the
+    /// `SessionManager` reads at every session start so edits take
+    /// effect without an app restart.
+    pub meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository>,
 }
 
 /// Long-lived application state, registered with `tauri::Builder::manage`.
@@ -287,6 +292,7 @@ pub struct AppStateBuilder {
     vocabulary: Option<Arc<dyn VocabularyRepository>>,
     settings: Option<Arc<dyn SettingsRepository>>,
     meetings: Option<Arc<dyn crate::meeting::MeetingSessionRepository>>,
+    meeting_app_overrides: Option<Arc<dyn crate::meeting::MeetingAppOverrideRepository>>,
     meeting_manager: Option<Arc<crate::meeting::SessionManager>>,
     models_dir: Option<PathBuf>,
     ptt_combo: Option<crate::hotkey::ptt::PttCombo>,
@@ -358,6 +364,14 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn meeting_app_overrides(
+        mut self,
+        overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository>,
+    ) -> Self {
+        self.meeting_app_overrides = Some(overrides);
+        self
+    }
+
     pub fn models_dir(mut self, models_dir: PathBuf) -> Self {
         self.models_dir = Some(models_dir);
         self
@@ -399,6 +413,9 @@ impl AppStateBuilder {
                 meetings: self
                     .meetings
                     .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meetings not set"))?,
+                meeting_app_overrides: self.meeting_app_overrides.ok_or_else(|| {
+                    anyhow::anyhow!("AppStateBuilder: meeting_app_overrides not set")
+                })?,
             },
             settings: self
                 .settings
@@ -537,8 +554,11 @@ impl AppState {
             Arc::new(SqliteVocabularyRepository::new(Arc::clone(&db)));
         let settings: Arc<dyn SettingsRepository> =
             Arc::new(SqliteSettingsRepository::new(Arc::clone(&db)));
-        let meetings: Arc<dyn crate::meeting::MeetingSessionRepository> =
-            Arc::new(crate::meeting::SqliteMeetingSessionRepository::new(db));
+        let meetings: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(
+            crate::meeting::SqliteMeetingSessionRepository::new(Arc::clone(&db)),
+        );
+        let meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+            Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db));
         // Resolve which transcriber to load at startup. Order:
         //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
         //   2. legacy `HUSH_MODEL_PATH` env var (M1/M2 dev workflow)
@@ -568,6 +588,7 @@ impl AppState {
             Arc::clone(&transcribe_shared),
             event_emitter,
             Arc::clone(&diarize),
+            Arc::clone(&meeting_app_overrides),
         ));
 
         // Restore the user's persisted PTT combo, if any. Falls back
@@ -607,6 +628,7 @@ impl AppState {
             .vocabulary(vocabulary)
             .settings(settings)
             .meetings(meetings)
+            .meeting_app_overrides(meeting_app_overrides)
             .meeting_manager(meeting_manager)
             .models_dir(models_dir)
             .ptt_combo(ptt_combo)
@@ -1036,6 +1058,27 @@ mod tests {
         }
     }
 
+    /// Test mock for the meeting-app overrides repo (#112). Returns
+    /// an empty list so the classifier falls through to the static
+    /// defaults — same behaviour the pre-#112 IPC layer exhibited.
+    pub(crate) struct NoopMeetingAppOverrides;
+
+    #[async_trait::async_trait]
+    impl crate::meeting::MeetingAppOverrideRepository for NoopMeetingAppOverrides {
+        async fn list(&self) -> anyhow::Result<Vec<crate::meeting::MeetingAppOverride>> {
+            Ok(vec![])
+        }
+        async fn upsert(
+            &self,
+            _: crate::meeting::NewMeetingAppOverride,
+        ) -> anyhow::Result<crate::meeting::MeetingAppOverride> {
+            unreachable!("mock does not exercise upsert")
+        }
+        async fn delete(&self, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     /// In-memory settings store backed by a HashMap. Lighter than
     /// spinning up a SQLite for tests that just need to round-trip a
     /// few keys.
@@ -1073,6 +1116,11 @@ mod tests {
             .meetings({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
                 m
+            })
+            .meeting_app_overrides({
+                let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                    Arc::new(NoopMeetingAppOverrides);
+                o
             })
             .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
                 let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
