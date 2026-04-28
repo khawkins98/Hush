@@ -15,7 +15,6 @@
     AudioSourceListing,
     DictationResult,
     HistoryEntry,
-    IpcError,
     MacosPermissionDiagnostic,
     ModelCard,
     MeetingSession,
@@ -818,31 +817,12 @@
     }
   }
 
-  /// engineering-shaped (what went wrong technically).
-  function formatError(e: unknown): string {
-    if (typeof e === "object" && e !== null && "kind" in e) {
-      const ipc = e as IpcError;
-      switch (ipc.kind) {
-        case "transcription-unavailable":
-          return (
-            "No transcription model is loaded yet. Open Settings → " +
-            "Model and pick one — Hush will fetch and verify it, " +
-            "then load it without a restart."
-          );
-        case "audio":
-          return `Audio capture error: ${ipc.message ?? "unknown"}. Check your microphone and Screen Recording permissions, or try a different input device.`;
-        case "transcription":
-          return `Transcription failed: ${ipc.message ?? "unknown"}. The model may be incompatible — try a different one.`;
-        case "clipboard":
-          return `Couldn't write to the clipboard: ${ipc.message ?? "unknown"}.`;
-        case "internal":
-          return `Internal error: ${ipc.message ?? "unknown"}. Please restart Hush.`;
-        default:
-          return ipc.message ? `${ipc.kind}: ${ipc.message}` : ipc.kind;
-      }
-    }
-    return String(e);
-  }
+  // Error formatting moved to `lib/errors.ts` (#205): the
+  // `formatErrorDisplay` helper used throughout this file routes
+  // every error through one source of truth. The local
+  // `formatError(e) → string` that lived here was deleted; the
+  // remaining string-shaped error surface (`firstRunResetMessage`)
+  // builds its copy directly.
 </script>
 
 <!--
