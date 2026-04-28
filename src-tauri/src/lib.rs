@@ -3,6 +3,7 @@
 pub mod app_menu;
 pub mod audio;
 pub mod db;
+pub mod diarization;
 pub mod dictionary;
 pub mod history;
 pub mod hotkey;

@@ -190,6 +190,13 @@ pub struct AppState {
     /// model picker writes through the shared `Arc`, so the pump
     /// picks up the new model on its next chunk automatically.
     pub transcribe: TranscribeSlot,
+    /// Speaker diarization seam (#111). Tags meeting utterances with
+    /// per-speaker labels. The default impl is
+    /// [`crate::diarization::NoopDiarizer`], which preserves the
+    /// pump's source-derived `"mic"` / `"system"` stamp; flipping
+    /// to [`crate::diarization::EnergyDiarizer`] in `build_default`
+    /// turns on the D1 silence-gap heuristic.
+    pub diarize: Arc<dyn crate::diarization::Diarize>,
     /// Persistent user-data repositories bundled together. See
     /// [`DataServices`] for why these four group naturally and why
     /// `settings` stays separate.
@@ -274,6 +281,7 @@ pub struct AppStateBuilder {
     /// [`Self::transcribe`] in a fresh Arc — the hot-swap surface
     /// stays inside `AppState` only.
     transcribe_arc: Option<TranscribeSlot>,
+    diarize: Option<Arc<dyn crate::diarization::Diarize>>,
     history: Option<Arc<dyn HistoryRepository>>,
     replacements: Option<Arc<dyn ReplacementRepository>>,
     vocabulary: Option<Arc<dyn VocabularyRepository>>,
@@ -309,6 +317,14 @@ impl AppStateBuilder {
     /// `transcribe()` in a fresh Arc.
     pub fn transcribe_arc(mut self, transcribe: TranscribeSlot) -> Self {
         self.transcribe_arc = Some(transcribe);
+        self
+    }
+
+    /// Optional. Defaults to [`crate::diarization::NoopDiarizer`] —
+    /// the meeting pump's existing source-derived `"mic"` /
+    /// `"system"` labels survive. Override to wire D1 / D2.
+    pub fn diarize(mut self, diarize: Arc<dyn crate::diarization::Diarize>) -> Self {
+        self.diarize = Some(diarize);
         self
     }
 
@@ -367,6 +383,9 @@ impl AppStateBuilder {
             transcribe: self
                 .transcribe_arc
                 .unwrap_or_else(|| Arc::new(Mutex::new(self.transcribe))),
+            diarize: self
+                .diarize
+                .unwrap_or_else(|| Arc::new(crate::diarization::NoopDiarizer)),
             data: DataServices {
                 history: self
                     .history
@@ -537,11 +556,18 @@ impl AppState {
         let transcribe_shared = Arc::new(Mutex::new(transcribe));
         let event_emitter: Arc<dyn crate::meeting::MeetingEventEmitter> =
             Arc::new(AppHandleMeetingEventEmitter { app: app.clone() });
+        // Wire NoopDiarizer in production today — preserves the
+        // pump's source-derived `"mic"` / `"system"` labels. Swap to
+        // `crate::diarization::EnergyDiarizer` once D1 has been
+        // hands-on tested in a real two-speaker meeting.
+        let diarize: Arc<dyn crate::diarization::Diarize> =
+            Arc::new(crate::diarization::NoopDiarizer);
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
             Arc::clone(&transcribe_shared),
             event_emitter,
+            Arc::clone(&diarize),
         ));
 
         // Restore the user's persisted PTT combo, if any. Falls back
@@ -575,6 +601,7 @@ impl AppState {
         AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
+            .diarize(diarize)
             .history(history)
             .replacements(replacements)
             .vocabulary(vocabulary)
