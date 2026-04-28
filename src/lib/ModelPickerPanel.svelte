@@ -30,6 +30,30 @@
     onCancel,
     onRemove,
   }: Props = $props();
+
+  // Per-card click-to-confirm for Remove. First click flips the
+  // button label to "Click to confirm"; second click within 5 s
+  // fires `onRemove`; the timer clears the armed state. Same
+  // shape as the deletion confirms in HistoryPanel /
+  // VocabularyPanel / ReplacementsPanel — keeps the destructive
+  // action behind a deliberate two-step gesture without an OS
+  // confirm dialog.
+  let confirmingRemoveId = $state<string | null>(null);
+  let confirmRemoveTimer: number | undefined;
+
+  function handleRemove(card: ModelCard) {
+    if (confirmingRemoveId === card.id) {
+      window.clearTimeout(confirmRemoveTimer);
+      confirmingRemoveId = null;
+      void onRemove(card);
+      return;
+    }
+    window.clearTimeout(confirmRemoveTimer);
+    confirmingRemoveId = card.id;
+    confirmRemoveTimer = window.setTimeout(() => {
+      confirmingRemoveId = null;
+    }, 5000);
+  }
 </script>
 
 <section class="models panel-models" aria-labelledby="models-heading">
@@ -184,9 +208,18 @@
             </button>
           {:else if card.isDownloaded}
             <!-- Downloaded: a small Remove button so the user can
-                 reclaim disk if they change their mind. -->
-            <button class="ghost danger" onclick={() => onRemove(card)}>
-              Remove
+                 reclaim disk if they change their mind.
+                 Click-to-confirm — first click arms, second click
+                 within 5 s fires. -->
+            <button
+              class="ghost danger"
+              class:confirming={confirmingRemoveId === card.id}
+              onclick={() => handleRemove(card)}
+              aria-label={confirmingRemoveId === card.id
+                ? `Click again to confirm removing ${card.displayName}`
+                : `Remove ${card.displayName}`}
+            >
+              {confirmingRemoveId === card.id ? "Click to confirm" : "Remove"}
             </button>
           {:else}
             <!-- Not downloaded, no in-flight or failure. -->
@@ -292,6 +325,13 @@ button.ghost.danger {
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
   border-color: #d83a3a;
+}
+/* Confirming state — armed first click, awaiting the second one. */
+button.ghost.danger.confirming {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
+  color: #8a0000;
+  font-weight: 600;
 }
 
 button.ghost.primary {
@@ -543,6 +583,11 @@ button.ghost.primary:hover:not(:disabled) {
   button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
     border-color: #d83a3a;
+  }
+  button.ghost.danger.confirming {
+    background-color: #3a1818;
+    border-color: #d83a3a;
+    color: #ffb0b0;
   }
   button.ghost.primary {
     border-color: var(--accent);
