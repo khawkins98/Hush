@@ -714,11 +714,6 @@
       >
         Start a session
       </button>
-      <span class="meeting-controls-hint">
-        Click Start to begin recording. New transcript text streams
-        in as you speak — italicised lines are still firming up,
-        solid lines are settled. Click Stop when you're done.
-      </span>
     {/if}
   </div>
 
@@ -823,6 +818,11 @@
 
   <details class="how-it-works">
     <summary>How it works</summary>
+    <p>
+      Click Start to begin recording. New transcript text streams
+      in as you speak — italicised lines are still firming up,
+      solid lines are settled. Click Stop when you're done.
+    </p>
     <p>
       Audio enters a small in-memory buffer (about 30 seconds at a
       time) where Hush's local Whisper model transcribes it. Once a
@@ -1068,12 +1068,6 @@
   align-items: flex-end;
   gap: 0.6rem;
   margin: 0.5rem 0 1rem;
-}
-
-.meeting-controls-hint {
-  font-size: 0.85rem;
-  color: #777;
-  flex-basis: 100%;
 }
 
 .meeting-source-stack {
@@ -1515,27 +1509,29 @@
   color: #1a1a1a;
 }
 
+/* Quieter classification chip. Walkthrough round flagged the
+   prior all-caps blue "MEETING" tag as overstated for what is
+   ambient context — most rows in this list are Meeting-type by
+   definition. Sentence case + lighter colour, smaller padding. */
 .session-kind {
-  padding: 0.1em 0.5em;
+  padding: 0.05em 0.4em;
   border-radius: 3px;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #6a6a6a;
+  background-color: transparent;
 }
 
 .session-kind-meeting {
-  background-color: rgba(106, 140, 240, 0.15);
-  color: #2a4cb0;
+  color: #5a6a9a;
 }
 
 .session-kind-media {
-  background-color: rgba(216, 58, 58, 0.12);
-  color: #8a0000;
+  color: #9a5a5a;
 }
 
 .session-kind-other {
-  background-color: rgba(0, 0, 0, 0.06);
-  color: #555;
+  color: #777;
 }
 
 .session-notes {
@@ -1693,8 +1689,7 @@ button:disabled {
   }
   .meeting-source-label,
   .meeting-source-loading,
-  .meeting-source-empty,
-  .meeting-controls-hint {
+  .meeting-source-empty {
     color: #aaa;
   }
   .meeting-source-label select {
@@ -1797,15 +1792,12 @@ button:disabled {
     color: #f0f0f0;
   }
   .session-kind-meeting {
-    background-color: rgba(106, 140, 240, 0.2);
-    color: #c8d4f8;
+    color: #a8b8e0;
   }
   .session-kind-media {
-    background-color: rgba(216, 58, 58, 0.2);
-    color: #f8b8b8;
+    color: #d8a0a0;
   }
   .session-kind-other {
-    background-color: rgba(255, 255, 255, 0.08);
     color: #aaa;
   }
   .session-notes {

@@ -806,8 +806,28 @@
   <main class="app-main" data-active-section={activeSection}>
     {#if activeSection === "dictation"}
       <header class="section-header">
-        <h1>Dictation</h1>
-        <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
+        <div class="section-header-text">
+          <h1>Dictation</h1>
+          <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
+        </div>
+        {#if activeModel}
+          <!--
+            Active-model chip. Right-aligned next to the section
+            heading so it reads as a status badge rather than a
+            stray pill floating mid-page. Single button is the
+            click target; the chevron hints "click to change."
+          -->
+          <button
+            type="button"
+            class="active-model-chip"
+            onclick={openModelSettings}
+            aria-label="Active model: {activeModel.displayName}. Click to change."
+            title="Change transcription model"
+          >
+            <span class="active-model-name">{activeModel.displayName}</span>
+            <span class="active-model-chevron" aria-hidden="true">›</span>
+          </button>
+        {/if}
       </header>
 
       <!--
@@ -823,25 +843,6 @@
         {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
         to push-to-talk.
       </aside>
-
-      {#if activeModel}
-        <!--
-          Active-model chip. Single button so the entire pill is
-          the click target — the "Model: X · Change" three-piece
-          treatment in #196 read as disjointed; one chip with a
-          quiet chevron is cleaner. Click → Settings → Model.
-        -->
-        <button
-          type="button"
-          class="active-model-chip"
-          onclick={openModelSettings}
-          aria-label="Active model: {activeModel.displayName}. Click to change."
-          title="Change transcription model"
-        >
-          <span class="active-model-name">{activeModel.displayName}</span>
-          <span class="active-model-chevron" aria-hidden="true">›</span>
-        </button>
-      {/if}
 
       <ControlsSection
         {sources}
@@ -869,31 +870,25 @@
       />
     {:else if activeSection === "meetings"}
       <header class="section-header">
-        <h1>Meetings</h1>
-        <p class="tagline">
-          Long-running multi-source capture with searchable transcripts.
-        </p>
+        <div class="section-header-text">
+          <h1>Meetings</h1>
+          <p class="tagline">
+            Long-running multi-source capture with searchable transcripts.
+          </p>
+        </div>
+        {#if activeModel}
+          <button
+            type="button"
+            class="active-model-chip"
+            onclick={openModelSettings}
+            aria-label="Active model: {activeModel.displayName}. Click to change."
+            title="Change transcription model"
+          >
+            <span class="active-model-name">{activeModel.displayName}</span>
+            <span class="active-model-chevron" aria-hidden="true">›</span>
+          </button>
+        {/if}
       </header>
-
-      {#if activeModel}
-        <!--
-          Active-model chip — same shape as Dictation. Meeting Mode
-          uses the same transcriber so showing which model is loaded
-          here too removes the "wait, what's transcribing this?"
-          ambiguity when the user lands on Meetings without first
-          touching Dictation. Click → Settings → Model.
-        -->
-        <button
-          type="button"
-          class="active-model-chip"
-          onclick={openModelSettings}
-          aria-label="Active model: {activeModel.displayName}. Click to change."
-          title="Change transcription model"
-        >
-          <span class="active-model-name">{activeModel.displayName}</span>
-          <span class="active-model-chevron" aria-hidden="true">›</span>
-        </button>
-      {/if}
 
       <MeetingSessionsPanel
         sessions={meetingSessions}
@@ -914,8 +909,10 @@
       />
     {:else if activeSection === "history"}
       <header class="section-header">
-        <h1>History</h1>
-        <p class="tagline">Every dictation transcript, searchable.</p>
+        <div class="section-header-text">
+          <h1>History</h1>
+          <p class="tagline">Every dictation transcript, searchable.</p>
+        </div>
       </header>
       <HistoryPanel
         {historyEntries}
@@ -925,6 +922,7 @@
         {historyError}
         {historyVersion}
         {historyTotalCount}
+        {models}
         {formatTimestamp}
         {onSearchInput}
         onCopy={copyHistoryEntry}
@@ -991,11 +989,27 @@
 .section-header {
   max-width: 36rem;
   margin: 0 auto 1.5rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.section-header-text {
+  flex: 1;
+  min-width: 0;
 }
 .section-header h1 {
   margin: 0 0 0.25rem;
   font-size: 1.6rem;
   letter-spacing: -0.01em;
+}
+.section-header .active-model-chip {
+  /* Right-aligned status badge inside the header — flush with the
+     h1 baseline so the chip reads as ambient state, not as a
+     standalone affordance to act on. */
+  flex-shrink: 0;
+  margin: 0;
+  align-self: flex-start;
 }
 
 /* Centred content column inside the main pane. Each section's
@@ -1045,9 +1059,9 @@ h1 {
 .active-model-chip {
   /* Quiet pill that surfaces the active model + opens the picker.
      The whole chip is the click target; a small chevron at the
-     trailing edge hints "click to change" without shouting. Sits
-     between the shortcut hint and the controls section. */
-  margin: 0.5rem 0 1rem;
+     trailing edge hints "click to change" without shouting. Lives
+     inside `.section-header`, right-aligned via that container's
+     flex layout. */
   padding: 0.3rem 0.7rem;
   font-size: 0.85rem;
   font-family: inherit;

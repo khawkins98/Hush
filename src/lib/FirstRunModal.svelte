@@ -195,7 +195,11 @@
 .first-run-section {
   margin-bottom: 1.25rem;
   padding-bottom: 1.25rem;
-  border-bottom: 1px solid #eee;
+  /* Walkthrough round flagged the previous `#eee` divider as
+     barely visible on the white card — easy to miss the section
+     break. Slightly stronger grey reads as a deliberate boundary
+     without turning into a hard rule. */
+  border-bottom: 1px solid #d8d8d8;
 }
 
 .first-run-section:last-of-type {
