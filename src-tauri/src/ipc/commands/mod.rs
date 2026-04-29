@@ -933,6 +933,21 @@ pub async fn set_meeting_autostart_mode(
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Manual "Check for updates" probe (#223). Calls
+/// [`crate::updater::check_for_updates`] against the app's shared
+/// HTTP client; the result drives an in-app dialog. Idempotent —
+/// the user can click as many times as they like; no background
+/// polling lives here. Auto-update is the separate
+/// [#10] follow-up.
+///
+/// [#10]: https://github.com/khawkins98/Hush/issues/10
+#[tauri::command]
+pub async fn check_for_updates(
+    state: State<'_, AppState>,
+) -> IpcResult<crate::updater::UpdateCheckResult> {
+    crate::updater::check_for_updates(&state.http).await
+}
+
 /// Clear the first-run-completed flag so the welcome modal renders
 /// again on the next app launch. Used by the Settings → General
 /// "Show welcome on next launch" affordance — useful for users

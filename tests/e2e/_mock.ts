@@ -54,6 +54,13 @@ export async function installMocks(
       // the dropdown override per-test.
       get_meeting_autostart_mode: () => "off",
       set_meeting_autostart_mode: () => undefined,
+      // Manual update probe (#223). Default to "up to date" so
+      // specs that don't override get a stable result if the
+      // user clicks the button.
+      check_for_updates: () => ({
+        kind: "upToDate",
+        current: "0.1.0",
+      }),
       ptt_get_config: () => ({
         combo: ["RightMeta"],
         enabled: false,

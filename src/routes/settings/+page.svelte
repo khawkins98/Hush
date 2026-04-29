@@ -189,6 +189,18 @@
   let appName = $state<string>("Hush");
   let tauriVersion = $state<string>("");
 
+  // Manual "Check for updates" probe (#223). Tagged-union result
+  // from the Rust side; the dialog renders one of three branches
+  // (up to date / update available / failed). `null` means the
+  // user hasn't clicked Check yet — common state. Cleared on tab
+  // change is overkill; the result is small and harmless to keep.
+  type UpdateCheckResult =
+    | { kind: "upToDate"; current: string }
+    | { kind: "updateAvailable"; current: string; latest: string; releaseUrl: string }
+    | { kind: "checkFailed"; reason: string };
+  let updateCheck = $state<UpdateCheckResult | null>(null);
+  let updateChecking = $state(false);
+
   // ---- macOS permission diagnostic --------------------------------------
   let macosDiagnostic = $state<MacosPermissionDiagnostic | null>(null);
   let macosDiagnosticOpen = $state(true); // open by default in the dedicated tab
@@ -533,6 +545,29 @@
     ]);
   });
 
+  // Run the manual update probe. The backend returns a tagged
+  // union; we just stash it and let the markup pick the branch.
+  // Idempotent — repeated clicks just re-fetch.
+  async function onCheckForUpdates() {
+    updateChecking = true;
+    updateCheck = null;
+    try {
+      updateCheck = await invoke<UpdateCheckResult>("check_for_updates");
+    } catch (e) {
+      // The Rust side already maps transport errors to a
+      // `checkFailed` variant; an exception here means the IPC
+      // itself blew up (e.g. the command isn't registered in a
+      // stale build). Surface a generic failure rather than
+      // dropping silently.
+      updateCheck = {
+        kind: "checkFailed",
+        reason: formatErrorMessage(e),
+      };
+    } finally {
+      updateChecking = false;
+    }
+  }
+
   // Pull build identity from Tauri. Failures are non-fatal — the
   // About tab just falls back to the default empty strings, which
   // render as "Hush" + an empty version line.
@@ -870,6 +905,48 @@
           your own hardware. No cloud, no telemetry.
         </p>
 
+        <!--
+          Manual "Check for updates" probe (#223). Sits below the
+          version line so the comparison is contextual: user sees
+          their version, clicks Check, gets a result inline.
+          Auto-update via tauri-plugin-updater is the heavier
+          follow-up — see #10.
+        -->
+        <div class="about-updates">
+          <button
+            type="button"
+            class="ghost"
+            data-testid="settings-check-updates"
+            disabled={updateChecking}
+            onclick={onCheckForUpdates}
+          >
+            {updateChecking ? "Checking…" : "Check for updates"}
+          </button>
+          {#if updateCheck}
+            {#if updateCheck.kind === "upToDate"}
+              <p class="about-update-result about-update-ok" role="status">
+                You're on {updateCheck.current} — that's the
+                latest.
+              </p>
+            {:else if updateCheck.kind === "updateAvailable"}
+              <p class="about-update-result about-update-available" role="status">
+                <strong>Update available:</strong>
+                {updateCheck.latest} (you're on
+                {updateCheck.current}).
+                <a
+                  href={updateCheck.releaseUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >Open release notes</a>.
+              </p>
+            {:else if updateCheck.kind === "checkFailed"}
+              <p class="about-update-result about-update-failed" role="status">
+                {updateCheck.reason}
+              </p>
+            {/if}
+          {/if}
+        </div>
+
         <dl class="about-meta">
           <dt>License</dt>
           <dd>
@@ -1059,6 +1136,38 @@
     font-size: 0.95rem;
     color: #333;
   }
+
+  .about-updates {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin: 0 0 1.25rem;
+  }
+  .about-updates button {
+    align-self: flex-start;
+  }
+  .about-update-result {
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+  .about-update-ok {
+    background-color: #e7f8ec;
+    border: 1px solid #b6e5c5;
+    color: #2a6b3c;
+  }
+  .about-update-available {
+    background-color: #eef2ff;
+    border: 1px solid #c7d2fe;
+    color: #1e1b4b;
+  }
+  .about-update-failed {
+    background-color: #fff7e6;
+    border: 1px solid #ffd591;
+    color: #8a5a00;
+  }
   .about-meta {
     display: grid;
     grid-template-columns: max-content 1fr;
@@ -1102,6 +1211,21 @@
     }
     .about-tab a {
       color: var(--accent);
+    }
+    .about-update-ok {
+      background-color: rgba(46, 170, 83, 0.15);
+      border-color: #2a6b3c;
+      color: #b6e5c5;
+    }
+    .about-update-available {
+      background-color: rgba(106, 140, 240, 0.15);
+      border-color: #3a4a7a;
+      color: #d8e0ff;
+    }
+    .about-update-failed {
+      background-color: rgba(255, 193, 7, 0.12);
+      border-color: #6b5300;
+      color: #ffd591;
     }
   }
 

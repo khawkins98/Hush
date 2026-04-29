@@ -223,6 +223,7 @@ pub fn run() {
             ipc::commands::set_hud_enabled,
             ipc::commands::get_meeting_autostart_mode,
             ipc::commands::set_meeting_autostart_mode,
+            ipc::commands::check_for_updates,
             ipc::commands::ptt_get_config,
             ipc::commands::ptt_set_config,
             ipc::commands::macos::open_macos_privacy_pane,
