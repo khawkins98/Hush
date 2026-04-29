@@ -245,8 +245,12 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
         // real bug, not just polish: hitting Reset wouldn't actually
         // clear the Screen Recording grant, so users iterating on
         // dev builds saw stale "GRANTED" rows survive a reset.
-        let categories: [&str; 4] =
-            ["Microphone", "ScreenCapture", "ListenEvent", "Accessibility"];
+        let categories: [&str; 4] = [
+            "Microphone",
+            "ScreenCapture",
+            "ListenEvent",
+            "Accessibility",
+        ];
         let mut any_reset = false;
         for cat in categories {
             let status = std::process::Command::new("tccutil")
