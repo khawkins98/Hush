@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "hud",
-  "description": "Capability for the recording HUD overlay window. Strictly tighter than the main window's capability — the HUD only listens for the `audio:level` event to drive its level-meter bar; it does not invoke any IPC commands, write to the clipboard, fire notifications, or register shortcuts. Adding new permissions here should be deliberate: every grant widens the HUD's blast radius if a future page somehow runs untrusted content.",
+  "description": "Capability for the recording HUD overlay window. Tightened (#238) from the previous `core:default` umbrella to the minimum the HUD actually uses: `core:event:default` for the `audio:level` listener, and `core:window:allow-hide` for the dismiss button (`getCurrentWebviewWindow().hide()`). The HUD never opens windows, manipulates menus, reads paths, queries app metadata, or accesses tray — granting those was dead surface area an attacker would gain if a malicious script ever ran here. Adding new permissions should be deliberate: every grant widens the HUD's blast radius.",
   "windows": ["hud"],
   "permissions": [
-    "core:default"
+    "core:event:default",
+    "core:window:allow-hide"
   ]
 }
