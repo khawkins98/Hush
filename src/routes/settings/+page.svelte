@@ -126,6 +126,10 @@
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenDownloadFailed: UnlistenFn | null = null;
   let unlistenGotoTab: UnlistenFn | null = null;
+  /// Handle for the window-focus listener wired in onMount. Stored
+  /// so onDestroy can remove it; without removal a closed-then-
+  /// reopened Settings window would accumulate listeners.
+  let settingsFocusHandler: ((this: Window, ev: FocusEvent) => void) | null = null;
 
   // ---- General-tab state ------------------------------------------------
   // Autostart toggle: queried on mount via the autostart plugin and
@@ -249,7 +253,17 @@
     }
   }
 
+  /**
+   * Track whether a refresh is in flight so the manual Refresh
+   * button can show a "Checking…" affordance and disable while
+   * the IPC is round-tripping. AVFoundation / CoreGraphics /
+   * IOKit reads complete in single-digit milliseconds, but the
+   * disabled-flicker is a deliberate hint that the click did
+   * something even on a fast machine.
+   */
+  let macosDiagnosticRefreshing = $state(false);
   async function loadMacosDiagnostic(): Promise<void> {
+    macosDiagnosticRefreshing = true;
     try {
       const res = await invoke<MacosPermissionDiagnostic>(
         "diagnose_macos_permissions",
@@ -257,6 +271,8 @@
       macosDiagnostic = res.canReset ? res : null;
     } catch {
       macosDiagnostic = null;
+    } finally {
+      macosDiagnosticRefreshing = false;
     }
   }
 
@@ -561,6 +577,26 @@
       loadAppOverrides(),
       loadMeetingAutostartMode(),
     ]);
+
+    // Auto-refresh the permissions diagnostic when the Settings
+    // window regains focus. The "Grant in Settings…" button
+    // deep-links the user out to System Settings; while they're
+    // there they may toggle a permission on or off, but the
+    // diagnostic was loaded once on mount and won't notice
+    // unless we re-poll. Window-focus is the natural trigger:
+    // the user has come back to look at Hush, so it's the right
+    // moment to re-check. Cheap (single-digit ms) so re-running
+    // on every focus is fine.
+    //
+    // Only fires on the macOS-capable path (`macosDiagnostic`
+    // is the gate) — non-macOS builds skip the IPC entirely.
+    function handleSettingsFocus() {
+      if (macosDiagnostic !== null && !macosDiagnosticRefreshing) {
+        void loadMacosDiagnostic();
+      }
+    }
+    window.addEventListener("focus", handleSettingsFocus);
+    settingsFocusHandler = handleSettingsFocus;
   });
 
   // Run the manual update probe. The backend returns a tagged
@@ -687,6 +723,10 @@
     unlistenDownloadDone?.();
     unlistenDownloadFailed?.();
     unlistenGotoTab?.();
+    if (settingsFocusHandler) {
+      window.removeEventListener("focus", settingsFocusHandler);
+      settingsFocusHandler = null;
+    }
   });
 </script>
 
@@ -878,7 +918,30 @@
       />
     {:else if active === "permissions"}
       {#if macosDiagnostic}
-        <h2 class="tab-title">Permissions</h2>
+        <div class="permissions-tab-header">
+          <h2 class="tab-title">Permissions</h2>
+          <!--
+            Manual refresh button — belt-and-suspenders for the
+            window-focus auto-refresh wired in onMount. The
+            auto-refresh covers the common case (user toggles a
+            permission in System Settings, switches back to Hush);
+            the button covers the corner cases where focus didn't
+            change (Settings + System Settings side-by-side,
+            keyboard-only navigation, screen reader users) and
+            gives the user a deliberate "re-check now" affordance
+            for when they're not sure if the auto-refresh fired.
+          -->
+          <button
+            type="button"
+            class="ghost"
+            onclick={() => void loadMacosDiagnostic()}
+            disabled={macosDiagnosticRefreshing}
+            aria-label="Re-check macOS permission status"
+            data-testid="perms-refresh"
+          >
+            {macosDiagnosticRefreshing ? "Checking…" : "Refresh"}
+          </button>
+        </div>
         <ul class="perm-status-list" aria-label="Permission status summary">
           {#each [
             { key: "microphone", paneTarget: "microphone" as const, label: "Microphone", status: macosDiagnostic.statuses.microphone, why: "Required for dictation." },
@@ -922,9 +985,10 @@
           {/each}
         </ul>
         <p class="perm-recovery-intro">
-          Stuck? Open the diagnostic below to reset all four TCC
-          entries at once, or learn why a permission row might not
-          appear in System Settings.
+          Stuck? Open the diagnostic below to reset all four
+          permission grants (Microphone, Screen Recording, Input
+          Monitoring, Accessibility) at once, or learn why a
+          permission row might not appear in System Settings.
         </p>
         <MacosDiagnosticPanel
           {macosDiagnostic}
@@ -1166,6 +1230,22 @@
     margin: 0 0 0.75rem;
     font-size: 1.4rem;
     letter-spacing: -0.01em;
+  }
+
+  /* Permissions-tab header: aligns the title with a Refresh
+     button on the right, so the user can re-check the diagnostic
+     without leaving the tab. The auto-refresh on window focus
+     covers the common case; this button covers the edge cases
+     (side-by-side windows, keyboard-only nav). */
+  .permissions-tab-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .permissions-tab-header .tab-title {
+    margin: 0;
   }
 
   .placeholder {
