@@ -128,6 +128,32 @@ The same recipe is wrapped behind a button in Settings → Permissions inside Hu
 
 ---
 
+## Dev-loop: stale Hush.app rows after a re-bundle
+
+Each `npm run tauri:bundle` produces an ad-hoc-signed `.app`. The signing identity isn't stable across rebuilds (it's "ad-hoc" — derived from the binary contents), so macOS may end up with **multiple Hush.app rows in System Settings → Privacy & Security**, one per signing identity it has seen.
+
+When the active build's identity differs from the row that's currently switched **on**, you get the failure mode the in-app reset doesn't catch:
+
+1. macOS prompts the new build for Screen Recording.
+2. You click Allow.
+3. A second `Hush.app` row appears, toggle on.
+4. The original row stays in the list under its old identity, also showing as on, and now both fight for the grant.
+5. Subsequent launches: the wrong row wins, screen recording is silently blocked, no prompt fires because *some* Hush.app row is granted.
+
+`tccutil reset ScreenCapture com.khawkins.hush` only resets entries that match `com.khawkins.hush`. Stale rows from older identities don't go anywhere.
+
+**Recovery:**
+
+1. Hit **Settings → Permissions → Reset permissions** in Hush (or run the four `tccutil reset` commands above by hand).
+2. Open System Settings → Privacy & Security → Screen & System Audio Recording (the per-row "Grant in Settings…" button on the Permissions tab deep-links there).
+3. If a `Hush.app` row is still in the list, **select it and click the `−` button at the bottom of the pane**. Repeat for any `Hush.app` row in Microphone and Input Monitoring.
+4. Quit Hush and relaunch the bundle.
+5. macOS will prompt fresh; clicking Allow now creates a single row that matches the current signing identity.
+
+The same procedure applies if you switch between dev (unsigned `npm run tauri dev`) and bundle (`npm run tauri:bundle`) builds — they sign differently and TCC sees them as different apps even though the bundle id is identical.
+
+---
+
 ## What about Hush's first-run welcome modal?
 
 The welcome modal (the dismissible card on first launch) explains the permissions and links out to the right System Settings panes via the `open_macos_privacy_pane` IPC command. It does **not** trigger the prompts itself — it can't, macOS doesn't expose a programmatic "ask for X" API. The OS prompts already fire from the cpal / rdev / SCK call sites. The modal is an explainer, not a button to grant.

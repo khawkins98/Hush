@@ -61,6 +61,13 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
             "input-monitoring" => {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
             }
+            "screen-recording" => {
+                // Screen & System Audio Recording pane — the one that
+                // governs ScreenCaptureKit (system-audio capture in
+                // meeting mode). Surfaces stale rows after a
+                // `tccutil reset` so the user can `-` them out.
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            }
             "accessibility" => {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
             }
@@ -215,21 +222,31 @@ pub struct MacosPermissionResetResult {
     pub summary: String,
 }
 
-/// Run the three `tccutil reset` commands documented in
+/// Run the four `tccutil reset` commands documented in
 /// `docs/macos-permissions.md` for `com.khawkins.hush`. Microphone,
-/// Input Monitoring (`ListenEvent`), and Accessibility are all reset;
-/// each is independent and a missing-entry on any one is treated as
-/// a soft success (the entry never existed to reset).
+/// Screen Recording (`ScreenCapture` — system-audio capture for
+/// meeting mode), Input Monitoring (`ListenEvent`), and
+/// Accessibility are all reset; each is independent and a
+/// missing-entry on any one is treated as a soft success (the
+/// entry never existed to reset).
 ///
 /// On non-macOS this is a no-op that reports "not applicable".
 ///
 /// The reset takes effect on the *next* launch — the running process
-/// keeps any grants it already had. The frontend surfaces this caveat.
+/// keeps any grants it already had. The summary copy spells out the
+/// follow-up: quit + relaunch, and if a stale row persists in
+/// System Settings (older signing identity, etc.) the `−` button
+/// at the bottom of that pane removes it cleanly.
 #[tauri::command]
 pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> {
     #[cfg(target_os = "macos")]
     {
-        let categories: [&str; 3] = ["Microphone", "ListenEvent", "Accessibility"];
+        // ScreenCapture was previously missing from this list — a
+        // real bug, not just polish: hitting Reset wouldn't actually
+        // clear the Screen Recording grant, so users iterating on
+        // dev builds saw stale "GRANTED" rows survive a reset.
+        let categories: [&str; 4] =
+            ["Microphone", "ScreenCapture", "ListenEvent", "Accessibility"];
         let mut any_reset = false;
         for cat in categories {
             let status = std::process::Command::new("tccutil")
@@ -246,7 +263,13 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
             }
         }
         let summary = if any_reset {
-            "Reset complete. Quit and reopen Hush to re-prompt for permissions.".to_owned()
+            "Reset complete. Quit and reopen Hush so macOS re-prompts on next \
+             use. If a stale Hush.app row still appears in System Settings → \
+             Privacy & Security (older signing identity from a previous build), \
+             select it and click the − button at the bottom of that pane to \
+             remove it — the next prompt will then create a fresh entry that \
+             matches the current build."
+                .to_owned()
         } else {
             "No TCC entries to reset (the bundle id may not be registered, common on \
              unsigned dev builds). If permissions still feel stuck, build a signed \

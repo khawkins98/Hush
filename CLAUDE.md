@@ -144,6 +144,8 @@ For SCK / Screen Recording / system-audio testing, use:
 
 That builds a real `.app` at `src-tauri/target/debug/bundle/macos/Hush.app` and opens it. macOS treats it as a proper app, prompts cleanly with the description from `src-tauri/Info.plist`, and persists the grant across re-bundles of the same path. See `learnings.md` 2026-04-27 entry for the full background.
 
+**Iterating across rebuilds — stale TCC rows.** Each `npm run tauri:bundle` produces an ad-hoc-signed `.app`; the signing identity is derived from the binary contents and changes every rebuild. macOS can end up with multiple `Hush.app` rows in System Settings → Privacy & Security under different identities, and the wrong row may "win" — Hush gets blocked silently with no fresh prompt. Recovery: **Settings → Permissions → Reset permissions** in Hush (resets all four TCC categories: Microphone, ScreenCapture, ListenEvent, Accessibility), then in System Settings click the `−` button at the bottom of any pane that still lists a `Hush.app` row, then relaunch the bundle. The per-row **"Grant in Settings…"** buttons on the Permissions tab deep-link straight to the correct pane. Full recipe: `docs/macos-permissions.md` "Dev-loop: stale Hush.app rows after a re-bundle."
+
 ## Conventions
 
 - **Conventional Commits 1.0.0**: `<type>(<scope>): <subject>`. Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `style`, `perf`, `build`, `ci`, `security`. Scopes: `audio`, `transcription`, `hotkey`, `ui`, `ux`, `dictionary`, `history`, `db`, `ipc`, `tauri`, `updater`, `build`, `e2e`. Subject in imperative mood, no full stop, ≤72 chars.
