@@ -256,10 +256,33 @@ pub fn run() {
 ///
 /// Loop never exits during normal operation; it terminates when
 /// the Tauri runtime tears down at app shutdown.
+/// Production [`meeting::ForegroundAppProbe`] backed by
+/// `active-win-pos-rs`. Returns `None` on no-active-window errors
+/// (lock screen, full-screen game) so the poller treats those as
+/// "no transition" and doesn't churn `last_kind` on transient gaps.
+struct ActiveWinProbe;
+
+impl meeting::ForegroundAppProbe for ActiveWinProbe {
+    fn current_app_name(&self) -> Option<String> {
+        active_win_pos_rs::get_active_window()
+            .ok()
+            .map(|w| w.app_name)
+    }
+}
+
 async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
     use tauri::Manager;
     let mut ticker = tokio::time::interval(MEETING_AUTOSTART_POLL_INTERVAL);
     let mut last_kind: Option<meeting::MeetingAppKind> = None;
+
+    // Classifier table is constant for the life of the process
+    // (default rules don't pick up runtime overrides — that's a
+    // known limitation called out at `manager.rs`'s
+    // `with_overrides` doc-comment). Cache once instead of
+    // allocating ~50 string entries every 3 s.
+    static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> = std::sync::OnceLock::new();
+    let classifier = CLASSIFIER.get_or_init(meeting::AppClassifier::default_table);
+    let probe = ActiveWinProbe;
 
     loop {
         ticker.tick().await;
@@ -274,70 +297,63 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
                 .meeting_autostart_mode
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
-        if mode == meeting::MeetingAutostartMode::Off {
-            // Reset memory so flipping the mode back on later
-            // doesn't auto-start because of a long-stale
-            // verdict. Cheap; the AtomicU8 read is the hot path.
-            last_kind = None;
-            continue;
-        }
-
-        // Snapshot foreground app. `active-win-pos-rs` errors on
-        // no-active-window (lock screen, full-screen game) — treat
-        // that as "no transition this tick" and keep the previous
-        // kind so we don't churn `last_kind` on transient gaps.
-        let Ok(window) = active_win_pos_rs::get_active_window() else {
-            continue;
-        };
-        let app_name = window.app_name;
-        // Classifier table is constant for the life of the process
-        // (default rules don't pick up runtime overrides — that's
-        // a known limitation called out at `manager.rs`'s
-        // `with_overrides` doc-comment). Cache once instead of
-        // allocating ~50 string entries every 3 s.
-        static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> = std::sync::OnceLock::new();
-        let classifier = CLASSIFIER.get_or_init(meeting::AppClassifier::default_table);
-        let kind = classifier.classify(&app_name);
         let session_active = state.meeting_manager.active_session_id().is_some();
 
-        let decision =
-            meeting::AutostartDecision::decide(last_kind, kind, &app_name, mode, session_active);
-        last_kind = Some(kind);
+        let outcome =
+            meeting::evaluate_autostart_tick(&probe, classifier, last_kind, mode, session_active);
 
-        let meeting::AutostartDecision::Start { app_name } = decision else {
-            continue;
-        };
-
-        // Pick the default capture sources. Mic always; system
-        // audio if the platform supports it. Mirrors the panel's
-        // default selection for manual starts.
-        let mic_source = audio::AudioSource::default_microphone();
-        // Linux / Windows builds today have only the mic
-        // source — system-audio capture lands under #106 / #107.
-        // The cfg-gated push below is the only mutator, so on
-        // those platforms `sources` would warn `unused_mut`
-        // (Ubuntu CI runs clippy with `-D warnings`); the
-        // branchless construction sidesteps it.
-        #[cfg(target_os = "macos")]
-        let sources = vec![mic_source, audio::AudioSource::SystemAudio];
-        #[cfg(not(target_os = "macos"))]
-        let sources = vec![mic_source];
-
-        if let Err(e) = state
-            .meeting_manager
-            .start_manual(sources, Some(app_name.clone()))
-            .await
-        {
-            // Most likely cause: mic permission denied. Log and
-            // keep the poller running — flipping the toggle off
-            // is a single-click recovery in Settings → Meeting.
-            tracing::warn!(
+        match outcome {
+            meeting::TickOutcome::ResetMemory => {
+                last_kind = None;
+            }
+            meeting::TickOutcome::NoChange => {
+                // Probe failure or transient gap — keep last_kind
+                // unchanged.
+            }
+            meeting::TickOutcome::UpdateMemory { last_kind: k } => {
+                last_kind = Some(k);
+            }
+            meeting::TickOutcome::Start {
                 app_name,
-                error = ?e,
-                "auto-start meeting session failed"
-            );
-        } else {
-            tracing::info!(app_name, "auto-started meeting session");
+                last_kind: k,
+            } => {
+                last_kind = Some(k);
+
+                // Pick the default capture sources. Mic always;
+                // system audio if the platform supports it.
+                // Mirrors the panel's default selection for
+                // manual starts.
+                let mic_source = audio::AudioSource::default_microphone();
+                // Linux / Windows builds today have only the mic
+                // source — system-audio capture lands under
+                // #106 / #107. The cfg-gated push below is the
+                // only mutator, so on those platforms `sources`
+                // would warn `unused_mut` (Ubuntu CI runs clippy
+                // with `-D warnings`); the branchless
+                // construction sidesteps it.
+                #[cfg(target_os = "macos")]
+                let sources = vec![mic_source, audio::AudioSource::SystemAudio];
+                #[cfg(not(target_os = "macos"))]
+                let sources = vec![mic_source];
+
+                if let Err(e) = state
+                    .meeting_manager
+                    .start_manual(sources, Some(app_name.clone()))
+                    .await
+                {
+                    // Most likely cause: mic permission denied.
+                    // Log and keep the poller running — flipping
+                    // the toggle off is a single-click recovery
+                    // in Settings → Meeting.
+                    tracing::warn!(
+                        app_name,
+                        error = ?e,
+                        "auto-start meeting session failed"
+                    );
+                } else {
+                    tracing::info!(app_name, "auto-started meeting session");
+                }
+            }
         }
     }
 }
