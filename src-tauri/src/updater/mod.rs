@@ -111,12 +111,25 @@ const UPDATE_CHECK_MAX_BYTES: usize = 64 * 1024;
 /// a transport-level error is not a panic-worthy event, the user
 /// just sees "couldn't check, try again."
 pub async fn check_for_updates(client: &reqwest::Client) -> IpcResult<UpdateCheckResult> {
-    let current = env!("CARGO_PKG_VERSION").to_owned();
-
     let url =
         format!("https://api.github.com/repos/{RELEASE_OWNER}/{RELEASE_REPO}/releases/latest");
+    check_for_updates_at(client, &url, env!("CARGO_PKG_VERSION")).await
+}
+
+/// Variant the IPC entry point and tests both call. Splitting it
+/// out lets a wiremock test point `url` at a local server without
+/// needing a network round trip to api.github.com, and lets a unit
+/// test override the "current" version without rebuilding the crate
+/// to flip `CARGO_PKG_VERSION`.
+async fn check_for_updates_at(
+    client: &reqwest::Client,
+    url: &str,
+    current_version: &str,
+) -> IpcResult<UpdateCheckResult> {
+    let current = current_version.to_owned();
+
     let response = match client
-        .get(&url)
+        .get(url)
         .timeout(UPDATE_CHECK_TIMEOUT)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -265,5 +278,271 @@ mod tests {
         assert!(json.contains("\"kind\":\"updateAvailable\""), "got: {json}");
         assert!(json.contains("\"latest\":\"0.2.0\""), "got: {json}");
         assert!(json.contains("releaseUrl"), "got: {json}");
+    }
+
+    // -- HTTP-level wiremock tests ----------------------------------------
+    //
+    // These exercise the whole request/response handling against a
+    // local mock server, complementing the unit tests above (which
+    // cover the pure helpers in isolation). The transport-shape
+    // branches — non-success status, oversize body, malformed JSON —
+    // are nearly impossible to exercise without a fake HTTP endpoint.
+
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Builds the URL the production code would build, but pointed
+    /// at the mock server.
+    fn mock_url(server: &MockServer) -> String {
+        format!(
+            "{}/repos/{}/{}/releases/latest",
+            server.uri(),
+            RELEASE_OWNER,
+            RELEASE_REPO
+        )
+    }
+
+    fn release_json(tag: &str) -> serde_json::Value {
+        serde_json::json!({
+            "tag_name": tag,
+            "html_url": format!("https://github.com/khawkins98/Hush/releases/tag/{tag}"),
+        })
+    }
+
+    #[tokio::test]
+    async fn returns_up_to_date_when_tag_matches_current() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/{RELEASE_OWNER}/{RELEASE_REPO}/releases/latest"
+            )))
+            .and(header("Accept", "application/vnd.github+json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(release_json("v0.2.0")))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            UpdateCheckResult::UpToDate {
+                current: "0.2.0".into()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn returns_update_available_when_tag_is_newer() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(release_json("v0.3.0")))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        match result {
+            UpdateCheckResult::UpdateAvailable {
+                current,
+                latest,
+                release_url,
+            } => {
+                assert_eq!(current, "0.2.0");
+                assert_eq!(latest, "0.3.0");
+                assert!(
+                    release_url.ends_with("/v0.3.0"),
+                    "release_url should carry the tag: {release_url}"
+                );
+            }
+            other => panic!("expected UpdateAvailable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unprefixed_tag_normalises_correctly() {
+        // Tag is "0.3.0" without the leading `v`. Production stripping
+        // logic should still parse it.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(release_json("0.3.0")))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            result,
+            UpdateCheckResult::UpdateAvailable { ref latest, .. } if latest == "0.3.0"
+        ));
+    }
+
+    #[tokio::test]
+    async fn maps_404_to_no_releases_published_yet() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        match result {
+            UpdateCheckResult::CheckFailed { reason } => {
+                assert!(
+                    reason.contains("No releases published"),
+                    "404 should map to the no-releases copy, got: {reason}"
+                );
+            }
+            other => panic!("expected CheckFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn maps_5xx_to_generic_failure_copy() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        match result {
+            UpdateCheckResult::CheckFailed { reason } => {
+                assert!(
+                    reason.contains("503") && reason.contains("Try again"),
+                    "5xx should mention status + retry hint, got: {reason}"
+                );
+            }
+            other => panic!("expected CheckFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_oversize_body() {
+        // Build a JSON payload larger than UPDATE_CHECK_MAX_BYTES so
+        // the cap branch fires. Real GitHub responses are ~5–20 KB;
+        // our cap is 64 KiB, so a 128 KiB filler is comfortably over.
+        let huge_field = "x".repeat(128 * 1024);
+        let body = serde_json::json!({
+            "tag_name": "v0.3.0",
+            "html_url": "https://example.test/",
+            "body": huge_field,
+        });
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        match result {
+            UpdateCheckResult::CheckFailed { reason } => {
+                assert!(
+                    reason.contains("unexpectedly large"),
+                    "oversize body should map to size-cap copy, got: {reason}"
+                );
+            }
+            other => panic!("expected CheckFailed for oversize body, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_json_maps_to_unexpected_shape() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        match result {
+            UpdateCheckResult::CheckFailed { reason } => {
+                assert!(
+                    reason.contains("unexpected response shape"),
+                    "non-JSON body should map to shape copy, got: {reason}"
+                );
+            }
+            other => panic!("expected CheckFailed for non-JSON, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn nonsense_tag_maps_to_unparseable_failure() {
+        // Server says the latest release is tagged "release-2026-spring".
+        // semver can't parse that — the check should land in
+        // CheckFailed with a copy that quotes the original tag.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(release_json("release-2026-spring")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
+            .await
+            .unwrap();
+
+        match result {
+            UpdateCheckResult::CheckFailed { reason } => {
+                assert!(
+                    reason.contains("release-2026-spring"),
+                    "unparseable tag should be quoted in the failure copy, got: {reason}"
+                );
+            }
+            other => panic!("expected CheckFailed for non-semver tag, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_current_version_returns_internal_error() {
+        // The current version doesn't reach the network, but the
+        // probe still fires the HTTP request first. Mock a normal
+        // response so the body is consumed cleanly, then assert the
+        // post-network parse failure surfaces as IpcError::Internal.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(release_json("v0.3.0")))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = check_for_updates_at(&client, &mock_url(&server), "not-a-version").await;
+
+        match result {
+            Err(IpcError::Internal(msg)) => {
+                assert!(
+                    msg.contains("not-a-version"),
+                    "Internal error should quote the bad version, got: {msg}"
+                );
+            }
+            other => panic!("expected IpcError::Internal, got {other:?}"),
+        }
     }
 }
