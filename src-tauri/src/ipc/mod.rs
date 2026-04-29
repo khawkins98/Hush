@@ -647,20 +647,35 @@ impl AppState {
         let transcribe_shared = Arc::new(Mutex::new(transcribe));
         let event_emitter: Arc<dyn crate::meeting::MeetingEventEmitter> =
             Arc::new(AppHandleMeetingEventEmitter { app: app.clone() });
-        // Wire EnergyDiarizer in production (#191 D1). The
-        // silence-gap heuristic alternates Speaker A / Speaker B
-        // when consecutive utterances have a gap > 1.5 s — ~70%
-        // accurate on clean two-speaker meetings, no model
-        // download required. The labels override the pump's
-        // source-derived `"mic"` / `"system"` fallback when the
-        // gap heuristic produces a verdict.
+        // Source-only labels for v1 — every utterance carries
+        // its source-derived `"mic"` / `"system"` tag, which the
+        // frontend renders as "You" / "Remote".
         //
-        // To revert to the pre-D1 source-only labels for a
-        // session, swap `EnergyDiarizer` for `NoopDiarizer` here
-        // and rebuild — `dispatch_utterances` falls back to the
-        // source label when `speaker_label` is None.
+        // Why not the EnergyDiarizer wired previously (#191 D1):
+        // the silence-gap heuristic operates on a single
+        // chronologically-merged stream of utterances. With
+        // mic + system audio captured concurrently (the common
+        // Meeting Mode shape), finals from both sources
+        // interleave with no reliable inter-source gap, so the
+        // heuristic collapses everything into "Speaker A" — a
+        // regression vs the source-only labels it was supposed
+        // to refine. Reproduced 2026-04-29 hands-on: a session
+        // with mic + YouTube system audio rendered every
+        // utterance as "Speaker A" regardless of which side
+        // produced it.
+        //
+        // Within a single source D1 was useful (multiple
+        // speakers sharing the user's mic). Across sources it's
+        // wrong, and cross-source is Meeting Mode's whole point.
+        // Source-only labels are honest: we tell the user which
+        // side of the call produced each utterance without
+        // inventing speaker IDs we can't verify.
+        //
+        // D2 (model-based ONNX speaker embeddings, #111) is the
+        // upgrade path — it can actually distinguish voices
+        // across sources. Until then, NoopDiarizer.
         let diarize: Arc<dyn crate::diarization::Diarize> =
-            Arc::new(crate::diarization::EnergyDiarizer::default());
+            Arc::new(crate::diarization::NoopDiarizer);
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
