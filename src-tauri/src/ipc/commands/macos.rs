@@ -72,7 +72,10 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
             }
             other => {
-                return Err(IpcError::Settings(format!(
+                // Frontend sent a non-whitelisted target — this is
+                // a protocol bug, not a user-configurable setting,
+                // so surface as `Internal` (not `Settings`).
+                return Err(IpcError::Internal(format!(
                     "unknown privacy pane target: {other:?}"
                 )));
             }
@@ -85,7 +88,7 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
         std::process::Command::new("open")
             .arg(url)
             .status()
-            .map_err(|e| IpcError::Settings(format!("open System Settings: {e}")))?;
+            .map_err(|e| IpcError::Internal(format!("open System Settings: {e}")))?;
 
         Ok(())
     }
@@ -134,9 +137,11 @@ pub struct MacosPermissionDiagnostic {
     /// Stays even when `statuses.microphone == Granted` so the user
     /// has the recovery copy if they later need to reset.
     pub microphone_hint: String,
-    /// Human-readable hint about Input Monitoring (PTT). On macOS 26+
-    /// PTT is disabled by default (#69) so this hint covers both the
-    /// "PTT off by default" and "verify in System Settings" paths.
+    /// Human-readable hint about Input Monitoring (PTT). PTT is on
+    /// by default everywhere (#194 — fufesou's `rdev` fork fixed
+    /// the macOS-26 TSM abort, so the listener can spawn cleanly).
+    /// macOS prompts the first time the listener spawns. Disable
+    /// in Settings → General → Hotkeys if the prompt isn't wanted.
     pub input_monitoring_hint: String,
     /// Whether the running platform supports the in-app reset action.
     /// True only on macOS — `reset_macos_permissions` is a no-op
@@ -178,15 +183,14 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
                  launching binary for unsigned dev builds)."
                 .to_owned(),
             input_monitoring_hint:
-                "Required for push-to-talk. PTT is disabled by default on macOS 26+ \
-                 (rdev's CGEventTap callback hits a TSM dispatch-queue assertion that \
-                 hard-aborts the process — see #69), so Hush does NOT request Input \
-                 Monitoring on first launch. That means Hush will not appear in the \
-                 Input Monitoring list at all by default — that's expected on \
-                 macOS 26+, not a bundle-id mismatch. Set HUSH_PTT_ENABLE=1 to opt in \
-                 on older macOS — Hush will then prompt and appear in the list. The \
-                 toggle hotkey (⌃⌥H) does not need Input Monitoring; that's why it \
-                 keeps working without this permission."
+                "Required for push-to-talk. PTT is on by default; macOS prompts the \
+                 first time the listener spawns. Disable in Settings → General → \
+                 Hotkeys if you'd rather skip the prompt — the toggle hotkey \
+                 (⌃⌥H) and the on-screen Start button work either way. Hush will \
+                 appear in the Input Monitoring list under \"com.khawkins.hush\" \
+                 once the listener has spawned at least once (or under the \
+                 launching binary for unsigned dev builds — see CLAUDE.md's \
+                 \"macOS TCC dev-binary quirk\" section)."
                     .to_owned(),
             can_reset: true,
             statuses,
@@ -258,7 +262,7 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
                 .arg(cat)
                 .arg(MACOS_BUNDLE_ID)
                 .status()
-                .map_err(|e| IpcError::Settings(format!("run tccutil reset {cat}: {e}")))?;
+                .map_err(|e| IpcError::Internal(format!("run tccutil reset {cat}: {e}")))?;
             // `tccutil reset` exits 0 on a real reset and non-zero
             // on "no entry to reset". The latter is a soft success
             // for our purposes (the user wanted the slate clean).

@@ -27,14 +27,11 @@
 //! affordance for the entire window between today and #10
 //! landing.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
-use crate::ipc::commands::IpcError;
-
-/// Local alias since `IpcResult` lives behind a private type alias
-/// in `ipc::commands`. Spelling the `Result` shape inline here
-/// keeps the updater module compilable as a sibling.
-type UpdaterResult<T> = std::result::Result<T, IpcError>;
+use crate::ipc::commands::{IpcError, IpcResult};
 
 /// GitHub repo coordinates the manual probe asks about. Hardcoded
 /// rather than configurable because there is exactly one upstream;
@@ -95,16 +92,32 @@ fn map_failure(e: impl std::fmt::Display) -> String {
     }
 }
 
+/// Per-request timeout for the update probe. The shared
+/// [`crate::ipc::AppState::http`] client is configured with a
+/// 600-second timeout for the whisper-model download path
+/// (multi-GB GGUF files). The releases.latest payload is tens of
+/// KB; 15 s is generous and shortens the worst-case slow-loris
+/// hang from ten minutes to one TCP keepalive cycle.
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Maximum response body size we'll consume from GitHub. The
+/// real `/releases/latest` payload is ~5–20 KB; 64 KiB is well
+/// over that. Defends against a MITM holding a valid
+/// `api.github.com` cert who'd otherwise stream multi-GB JSON
+/// to exhaust memory.
+const UPDATE_CHECK_MAX_BYTES: usize = 64 * 1024;
+
 /// Run the probe. Errors propagate as the `CheckFailed` variant —
 /// a transport-level error is not a panic-worthy event, the user
 /// just sees "couldn't check, try again."
-pub async fn check_for_updates(client: &reqwest::Client) -> UpdaterResult<UpdateCheckResult> {
+pub async fn check_for_updates(client: &reqwest::Client) -> IpcResult<UpdateCheckResult> {
     let current = env!("CARGO_PKG_VERSION").to_owned();
 
     let url =
         format!("https://api.github.com/repos/{RELEASE_OWNER}/{RELEASE_REPO}/releases/latest");
     let response = match client
         .get(&url)
+        .timeout(UPDATE_CHECK_TIMEOUT)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
@@ -127,13 +140,37 @@ pub async fn check_for_updates(client: &reqwest::Client) -> UpdaterResult<Update
         let reason = if status == reqwest::StatusCode::NOT_FOUND {
             "No releases published yet on GitHub.".to_owned()
         } else {
-            format!("GitHub returned {status}.")
+            format!("GitHub returned an error ({status}). Try again in a minute.")
         };
         tracing::warn!(?status, "check_for_updates: non-success status");
         return Ok(UpdateCheckResult::CheckFailed { reason });
     }
 
-    let release: GhRelease = match response.json().await {
+    // Read the body with an explicit size cap so a MITM can't push
+    // a multi-GB JSON document through. We deliberately read into a
+    // bounded `Vec<u8>` first and parse JSON ourselves rather than
+    // relying on `response.json()` (which has no body cap).
+    let body_bytes = match response.bytes().await {
+        Ok(b) if b.len() > UPDATE_CHECK_MAX_BYTES => {
+            tracing::warn!(
+                len = b.len(),
+                cap = UPDATE_CHECK_MAX_BYTES,
+                "check_for_updates: response body exceeded cap"
+            );
+            return Ok(UpdateCheckResult::CheckFailed {
+                reason: "GitHub returned an unexpectedly large response.".into(),
+            });
+        }
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = ?e, "check_for_updates: body read failed");
+            return Ok(UpdateCheckResult::CheckFailed {
+                reason: map_failure(e),
+            });
+        }
+    };
+
+    let release: GhRelease = match serde_json::from_slice(&body_bytes) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = ?e, "check_for_updates: JSON decode failed");
@@ -151,9 +188,11 @@ pub async fn check_for_updates(client: &reqwest::Client) -> UpdaterResult<Update
     let current_v = match semver::Version::parse(&current) {
         Ok(v) => v,
         Err(e) => {
-            // Build configuration bug — the bundled CARGO_PKG_VERSION
-            // doesn't parse as semver. Surface it; we'd rather know.
-            return Err(IpcError::Settings(format!(
+            // Build-configuration defect — the bundled
+            // `CARGO_PKG_VERSION` doesn't parse as semver. Surface
+            // as `Internal` (not `Settings`, which would render the
+            // wrong error copy on the frontend); we'd rather know.
+            return Err(IpcError::Internal(format!(
                 "current version {current} is not valid semver: {e}"
             )));
         }

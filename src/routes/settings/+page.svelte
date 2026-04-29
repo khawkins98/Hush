@@ -675,8 +675,17 @@
 </script>
 
 <main class="settings-window">
-  <header class="settings-toolbar" aria-label="Settings categories">
-    {#each tabs as tab (tab.key)}
+  <!--
+    Window header: brand wordmark + tab strip. UX walkthrough flagged
+    the previous bare-tab-strip layout as ambiguous when the user
+    arrives via ⌘, with no animation — it read as a second sidebar
+    rather than a Settings window. Adding "Settings" above the strip
+    anchors the surface.
+  -->
+  <header class="settings-window-header">
+    <h1 class="settings-window-title">Settings</h1>
+    <nav class="settings-toolbar" aria-label="Settings categories">
+      {#each tabs as tab (tab.key)}
       <button
         type="button"
         class="tab-button"
@@ -688,11 +697,12 @@
         {tab.label}
       </button>
     {/each}
+    </nav>
   </header>
 
   <section class="tab-body" aria-live="polite">
     {#if active === "general"}
-      <h1 class="tab-title">General</h1>
+      <h2 class="tab-title">General</h2>
 
       <section class="settings-group" aria-labelledby="settings-startup-heading">
         <h2 id="settings-startup-heading" class="group-heading">Startup</h2>
@@ -748,7 +758,7 @@
           <span class="row-label">Toggle recording</span>
           <span class="row-value">
             <span class="chord"><kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd></span>
-            <span class="row-note">Customisable hotkey UI is future work.</span>
+            <span class="row-note">Not currently editable — the push-to-talk combo below is.</span>
           </span>
         </p>
         <h3 class="subgroup-heading">Push-to-talk</h3>
@@ -809,7 +819,7 @@
         onDelete={deleteReplacement}
       />
     {:else if active === "meeting"}
-      <h1 class="tab-title">Meeting</h1>
+      <h2 class="tab-title">Meeting</h2>
 
       <section class="settings-group" aria-labelledby="settings-autostart-heading">
         <h2 id="settings-autostart-heading" class="group-heading">Auto-start</h2>
@@ -817,10 +827,10 @@
           <label class="select-label" for="settings-meeting-autostart">
             <span class="select-name">When a meeting app focuses</span>
             <span class="select-desc">
-              When set to "Always", Hush opens a Meeting Mode
-              session on its own the moment a known meeting app
-              (Zoom, Teams, Discord, …) comes to focus. Stops
-              manually only. Defaults to Off — opt in here.
+              Off keeps every meeting manual. Always opens a
+              Meeting Mode session whenever a known meeting app
+              (Zoom, Teams, Discord, …) comes to the foreground.
+              Sessions stop manually either way.
             </span>
           </label>
           <select
@@ -852,7 +862,7 @@
       />
     {:else if active === "permissions"}
       {#if macosDiagnostic}
-        <h1 class="tab-title">Permissions</h1>
+        <h2 class="tab-title">Permissions</h2>
         <ul class="perm-status-list" aria-label="Permission status summary">
           {#each [
             { key: "microphone", paneTarget: "microphone" as const, label: "Microphone", status: macosDiagnostic.statuses.microphone, why: "Required for dictation." },
@@ -908,14 +918,14 @@
           onReset={runMacosReset}
         />
       {:else}
-        <h1 class="tab-title">Permissions</h1>
+        <h2 class="tab-title">Permissions</h2>
         <p class="placeholder">
           Permission diagnostics are macOS-only. There's nothing
           actionable to surface on this platform.
         </p>
       {/if}
     {:else if active === "about"}
-      <h1 class="tab-title">About</h1>
+      <h2 class="tab-title">About</h2>
       <section class="about-tab">
         <header class="about-header">
           <h2 class="about-name">{appName}</h2>
@@ -1050,22 +1060,33 @@
     flex-direction: column;
   }
 
-  .settings-toolbar {
-    display: flex;
-    gap: 0.25rem;
-    padding: 0.6rem 0.75rem;
-    background-color: #ececef;
-    border-bottom: 1px solid #d8d8dc;
-    overflow-x: auto;
-    flex-shrink: 0;
-    /* Sticky inside the scrolling page so the tabs stay reachable
-       once a tab body grows past the viewport. The settings window
-       is the canonical case — General + Hotkeys + First-run reach
-       beyond the default 520 px height — but the toolbar is also
-       useful as an anchor on every tab. */
+  /* Window header (sticky) — anchors the surface so the tab strip
+     reads as "tabs inside Settings" rather than "navigation
+     somewhere else in the app." */
+  .settings-window-header {
     position: sticky;
     top: 0;
     z-index: 1;
+    background-color: #ececef;
+    border-bottom: 1px solid #d8d8dc;
+    flex-shrink: 0;
+  }
+  .settings-window-title {
+    margin: 0;
+    padding: 0.85rem 1.1rem 0.25rem;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #1a1a1a;
+    letter-spacing: -0.01em;
+  }
+
+  .settings-toolbar {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.4rem 0.75rem 0.6rem;
+    background-color: transparent;
+    overflow-x: auto;
+    flex-shrink: 0;
   }
 
   .tab-button {
@@ -1568,9 +1589,12 @@
       background-color: #1d1d1f;
       color: #e8e8e8;
     }
-    .settings-toolbar {
+    .settings-window-header {
       background-color: #2a2a2d;
       border-bottom-color: #38383b;
+    }
+    .settings-window-title {
+      color: #f0f0f0;
     }
     .tab-button { color: #d8d8d8; }
     .tab-button:hover { background-color: rgba(255, 255, 255, 0.06); }

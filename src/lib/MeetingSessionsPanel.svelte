@@ -684,13 +684,12 @@
               Also record system audio
               {#if !systemAudio.isSupported}
                 <span class="coming-soon-hint">
-                  (coming soon on this platform — Linux
+                  (macOS only today — Linux/Windows tracked in
                   <a
                     href="https://github.com/khawkins98/Hush/issues/106"
                     target="_blank"
                     rel="noopener noreferrer">#106</a
-                  >, Windows
-                  <a
+                  >/<a
                     href="https://github.com/khawkins98/Hush/issues/107"
                     target="_blank"
                     rel="noopener noreferrer">#107</a
@@ -860,8 +859,7 @@
       <p class="placeholder-tail">
         Streaming partials and Speaker A / B labels both ship today.
         Model-based diarization (so the same person stays "Speaker
-        A" across long meetings rather than the silence-gap
-        heuristic's ~70 % guess) is still upstream — see
+        A" across long meetings) is on the roadmap —
         <a
           href="https://github.com/khawkins98/Hush/issues/111"
           target="_blank"
