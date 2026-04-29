@@ -39,15 +39,25 @@
 //!
 //! ## Production wiring
 //!
-//! [`EnergyDiarizer`] is wired in production as of #201. The pump
-//! runs every batch of finals through it, so meeting transcripts
-//! render Speaker A / Speaker B labels alternating on silence-gap
-//! timing. [`NoopDiarizer`] stays available as a fallback: when
-//! a `Diarize` impl leaves `speaker_label = None`,
-//! `dispatch_utterances` stamps the source-derived
-//! `"mic"` / `"system"` label so the panel still has something to
-//! render. Swap back to `NoopDiarizer` in `lib.rs::build_default`
-//! to restore the pre-#201 source-only behaviour.
+//! [`NoopDiarizer`] is wired in production as of #243. The pump
+//! runs every batch of finals through it, which leaves
+//! `speaker_label = None`; `dispatch_utterances` then stamps the
+//! source-derived `"mic"` / `"system"` tag so the panel renders
+//! the You / Remote split.
+//!
+//! [`EnergyDiarizer`] (D1 silence-gap heuristic) is kept on disk
+//! but not wired. Hands-on testing on a mic + system-audio
+//! Meeting Mode session showed the cross-source merge collapsed
+//! every utterance to "Speaker A" — the heuristic only works on
+//! a single-stream mic recording, and Meeting Mode's whole point
+//! is the multi-source case. The wiring change in `ipc/mod.rs`
+//! has the full reasoning. D2 (model-based ONNX speaker
+//! embeddings, #111) is the upgrade path that can actually
+//! distinguish voices across sources.
+//!
+//! To trial `EnergyDiarizer` on a mic-only flow, swap it back in
+//! at `ipc/mod.rs::AppStateBuilder::build_default` (the comment
+//! there carries the toggle instructions).
 
 use crate::audio::CaptureFormat;
 use crate::transcription::Utterance;

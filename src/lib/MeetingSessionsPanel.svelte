@@ -150,6 +150,16 @@
    * stopping state forever.
    */
   let stopping = $state(false);
+  /**
+   * Set by the watchdog when the backend doesn't clear the
+   * active session within 30 s of `confirmStop`. The Stop pump
+   * normally completes within 10–15 s; 30 s is a wedged-pump
+   * symptom worth surfacing rather than a transient slow path.
+   * Pre-this-fix the watchdog cleared `stopping` and dropped the
+   * user back to the Stop button as if nothing happened — they
+   * had no signal that the original Stop had stalled.
+   */
+  let stoppingTimedOut = $state(false);
   let stoppingWatchdog: number | undefined;
   function requestStop() {
     confirmingStop = true;
@@ -160,11 +170,35 @@
   async function confirmStop() {
     confirmingStop = false;
     stopping = true;
+    stoppingTimedOut = false;
     if (stoppingWatchdog !== undefined) {
       window.clearTimeout(stoppingWatchdog);
     }
     stoppingWatchdog = window.setTimeout(() => {
-      stopping = false;
+      // Backend hasn't reported the session as ended after 30 s —
+      // surface the timeout rather than silently snapping back to
+      // the Stop button. The banner stays visible (so the user
+      // sees the warning) but switches to a help-text state with
+      // a "Try again" affordance.
+      stoppingTimedOut = true;
+    }, 30000);
+    await onStop();
+  }
+  /**
+   * Last-ditch retry from the timeout banner. The original
+   * `meeting_stop_manual` may still be in flight (the pump's
+   * spawn_blocking inference can hold for a long time on a slow
+   * model); a second invocation is idempotent on the backend
+   * side (state machine rejects "stop while not active") so
+   * worst case is a redundant call that returns immediately.
+   */
+  async function retryStop() {
+    stoppingTimedOut = false;
+    if (stoppingWatchdog !== undefined) {
+      window.clearTimeout(stoppingWatchdog);
+    }
+    stoppingWatchdog = window.setTimeout(() => {
+      stoppingTimedOut = true;
     }, 30000);
     await onStop();
   }
@@ -175,6 +209,7 @@
     // appearing.
     if (activeSessionId === null && stopping) {
       stopping = false;
+      stoppingTimedOut = false;
       if (stoppingWatchdog !== undefined) {
         window.clearTimeout(stoppingWatchdog);
         stoppingWatchdog = undefined;
@@ -349,6 +384,17 @@
    */
   let copiedFromSessionId = $state<number | null>(null);
   let copiedTimer: number | undefined;
+  /**
+   * Error sentinel for the most-recent failed clipboard write.
+   * Same indexing as `copiedFromSessionId` (0 = active session,
+   * positive = historical session id). Auto-clears after 4 s
+   * (longer than the success flash so the user has time to read
+   * it). Pre-this-fix the failure path was a silent
+   * `console.warn` and the user got no acknowledgement that
+   * Copy didn't land.
+   */
+  let copyErrorFromSessionId = $state<number | null>(null);
+  let copyErrorTimer: number | undefined;
   function flashCopied(id: number) {
     copiedFromSessionId = id;
     if (copiedTimer !== undefined) {
@@ -357,6 +403,15 @@
     copiedTimer = window.setTimeout(() => {
       copiedFromSessionId = null;
     }, 2000);
+  }
+  function flashCopyError(id: number) {
+    copyErrorFromSessionId = id;
+    if (copyErrorTimer !== undefined) {
+      window.clearTimeout(copyErrorTimer);
+    }
+    copyErrorTimer = window.setTimeout(() => {
+      copyErrorFromSessionId = null;
+    }, 4000);
   }
   async function copyActiveTranscript() {
     if (!activeDetail) return;
@@ -370,6 +425,7 @@
       flashCopied(0);
     } catch (e) {
       console.warn("[hush] copy active transcript failed", e);
+      flashCopyError(0);
     }
   }
   async function copySessionTranscript(sessionId: number) {
@@ -382,6 +438,7 @@
       flashCopied(sessionId);
     } catch (e) {
       console.warn("[hush] copy session transcript failed", e);
+      flashCopyError(sessionId);
     }
   }
 
@@ -744,7 +801,19 @@
           increments don't announce on every chunk; that would
           be intrusive over a 30-minute meeting.
         -->
-        <span class="meeting-active-indicator" role="status" aria-live="polite">
+        <!--
+          aria-live toggles to "off" while `stopping` is true so
+          the polite queue carries one message (the stopping
+          banner below) rather than two — pre-this-fix a screen
+          reader would read both "Session in progress" and
+          "Stopping session…" back-to-back when the user
+          confirmed Stop.
+        -->
+        <span
+          class="meeting-active-indicator"
+          role="status"
+          aria-live={stopping ? "off" : "polite"}
+        >
           <span class="meeting-active-dot" aria-hidden="true"></span>
           Session in progress
         </span>
@@ -823,15 +892,46 @@
           listening pill carry the "still alive, just waiting"
           signal.
         -->
-        <div class="meeting-stopping" role="status" aria-live="polite">
-          <span class="meeting-listening-bar" aria-hidden="true"></span>
-          <div class="meeting-stopping-text">
-            <strong>Stopping session…</strong>
-            <span>
-              Finishing the last 10 s chunk and writing the
-              transcript. This can take up to a minute.
-            </span>
-          </div>
+        <div
+          class="meeting-stopping"
+          class:meeting-stopping-timeout={stoppingTimedOut}
+          role="status"
+          aria-live="polite"
+        >
+          {#if stoppingTimedOut}
+            <!--
+              Watchdog fired — the backend has been holding for
+              30+ s without reporting the session as ended. Surface
+              this as a soft error with a Try again affordance
+              rather than silently snapping back to the Stop
+              button (which was the pre-fix behaviour and read as
+              "Stop just didn't do anything").
+            -->
+            <div class="meeting-stopping-text">
+              <strong>Still stopping — this is taking longer than expected</strong>
+              <span>
+                The pump may be wedged on inference for the last
+                chunk. You can try again, or quit and relaunch
+                Hush if it's been more than a minute total.
+              </span>
+            </div>
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => void retryStop()}
+            >
+              Try again
+            </button>
+          {:else}
+            <span class="meeting-listening-bar" aria-hidden="true"></span>
+            <div class="meeting-stopping-text">
+              <strong>Stopping session…</strong>
+              <span>
+                Finishing the last 10 s chunk and writing the
+                transcript. This can take up to a minute.
+              </span>
+            </div>
+          {/if}
         </div>
       {:else if confirmingStop}
         <div class="meeting-stop-confirm" role="group" aria-label="Confirm stop session">
@@ -965,6 +1065,7 @@
         <button
           type="button"
           class="ghost"
+          class:copy-error={copyErrorFromSessionId === 0}
           onclick={() => void copyActiveTranscript()}
           disabled={activeDetail.utterances.length === 0}
           aria-label="Copy live transcript to clipboard"
@@ -972,6 +1073,8 @@
         >
           {#if copiedFromSessionId === 0}
             Copied!
+          {:else if copyErrorFromSessionId === 0}
+            Copy failed — try again
           {:else}
             Copy transcript
           {/if}
@@ -1237,6 +1340,7 @@
               <button
                 type="button"
                 class="ghost"
+                class:copy-error={copyErrorFromSessionId === session.id}
                 onclick={() => void copySessionTranscript(session.id)}
                 disabled={(expandedDetails.get(session.id)?.utterances.length ?? 0) === 0}
                 aria-label={`Copy transcript from ${session.appName} session to clipboard`}
@@ -1244,6 +1348,8 @@
               >
                 {#if copiedFromSessionId === session.id}
                   Copied!
+                {:else if copyErrorFromSessionId === session.id}
+                  Copy failed
                 {:else}
                   Copy
                 {/if}
@@ -1795,6 +1901,42 @@
   font-weight: 600;
 }
 
+/* Copy-failed transient state on the Copy buttons. Yellow-warn
+   tint matches the stopping-timeout banner — both communicate
+   "the action didn't quite land, here's a soft signal" without
+   escalating to a red-error treatment. Auto-clears after 4 s
+   via flashCopyError. */
+button.copy-error {
+  border-color: #ffd591;
+  background-color: #fff7e6;
+  color: #6a4400;
+}
+@media (prefers-color-scheme: dark) {
+  button.copy-error {
+    border-color: #6b5300;
+    background-color: #3a2c00;
+    color: #ffd591;
+  }
+}
+
+/* Watchdog-fired variant — same shape as the in-progress
+   stopping banner, but in a yellow/warn palette to signal "this
+   is taking longer than expected" without escalating to red
+   (the operation may still complete; we're just nudging). The
+   inner button is the user's escape hatch. */
+.meeting-stopping-timeout {
+  background-color: #fff7e6;
+  border-color: #ffd591;
+  /* Wider since the timeout copy is longer. */
+  max-width: 38rem;
+}
+.meeting-stopping-timeout .meeting-stopping-text strong {
+  color: #6a4400;
+}
+.meeting-stopping-timeout .meeting-stopping-text {
+  color: #5a4400;
+}
+
 @media (prefers-color-scheme: dark) {
   .meeting-listening-pill {
     color: #aaa;
@@ -1817,6 +1959,16 @@
   }
   .meeting-stopping-text strong {
     color: #b6c3f0;
+  }
+  .meeting-stopping-timeout {
+    background-color: #3a2c00;
+    border-color: #6b5300;
+  }
+  .meeting-stopping-timeout .meeting-stopping-text strong {
+    color: #ffd591;
+  }
+  .meeting-stopping-timeout .meeting-stopping-text {
+    color: #f0c87b;
   }
 }
 

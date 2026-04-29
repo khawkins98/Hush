@@ -305,10 +305,42 @@ mod tests {
         assert_eq!(created.app_kind, MeetingAppKind::Meeting);
         assert_eq!(created.utterance_count, 0);
         assert!(created.ended_at.is_none(), "new session is open");
+        assert_eq!(
+            created.sources,
+            Some(vec!["mic".to_owned(), "system".to_owned()]),
+            "sources column round-trips populated input"
+        );
 
         let all = repo.list().await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0], created);
+    }
+
+    /// Legacy-row compatibility for migration 0004 (#244).
+    /// Rows created before the `sources` column existed have NULL
+    /// stored, which the FromRow impl maps to `Option::None`. The
+    /// `create()` path always supplies sources today, so the only
+    /// way to reach this state in production is a database that
+    /// pre-dates the migration. We simulate that by inserting via
+    /// raw SQL that omits the new column.
+    #[tokio::test]
+    async fn legacy_row_with_null_sources_round_trips_as_none() {
+        let repo = fresh_repo().await;
+
+        sqlx::query("INSERT INTO meeting_sessions (app_name, app_kind) VALUES (?, ?)")
+            .bind("legacy.app")
+            .bind("meeting")
+            .execute(repo.db.pool())
+            .await
+            .expect("legacy insert");
+
+        let all = repo.list().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].app_name, "legacy.app");
+        assert!(
+            all[0].sources.is_none(),
+            "NULL sources column maps to None, not Some(vec![])"
+        );
     }
 
     #[tokio::test]
