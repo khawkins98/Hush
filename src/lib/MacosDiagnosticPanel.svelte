@@ -6,7 +6,6 @@
     macosDiagnosticOpen: boolean;
     macosResetMessage: string | null;
     macosResetting: boolean;
-    onOpenPrivacyPane: (target: "microphone" | "input-monitoring") => void | Promise<void>;
     onReset: () => void | Promise<void>;
   };
 
@@ -15,7 +14,6 @@
     macosDiagnosticOpen = $bindable(),
     macosResetMessage,
     macosResetting,
-    onOpenPrivacyPane,
     onReset,
   }: Props = $props();
 </script>
@@ -35,35 +33,23 @@
     </summary>
     <div class="macos-diagnostic-body">
       <!--
-        Action-led layout (walkthrough polish round): the buttons
-        the user came here for sit at the top; the bundle-id
-        forensics + "two reasons Hush might not appear" copy gets
-        tucked under a nested "Why isn't Hush in the list?"
-        toggle. Most users only need the actions; the explainer is
-        for the small minority who hit the dev-build / unrequested-
-        permission edge cases.
+        Per-row "Grant in Settings…" / "Open in Settings" buttons in
+        the parent permission cards now own the deep-link surface;
+        the diagnostic disclosure is just for the actually-stuck-
+        path: reset, plus the bundle-id forensics. The per-permission
+        hint paragraphs that used to live here moved up onto the
+        rows themselves.
       -->
-      <p>
-        <strong>Microphone:</strong> {macosDiagnostic.microphoneHint}
-      </p>
-      <p>
-        <strong>Input Monitoring:</strong> {macosDiagnostic.inputMonitoringHint}
+      <p class="macos-diag-reset-intro">
+        If a permission won't stick after a fresh prompt — or a
+        stale Hush.app row appears under a previous build's signing
+        identity — reset all four TCC entries
+        (<code>Microphone</code>, <code>ScreenCapture</code>,
+        <code>ListenEvent</code>, <code>Accessibility</code>) for
+        <code>com.khawkins.hush</code>. The reset takes effect on
+        next launch.
       </p>
       <div class="macos-diag-actions">
-        <button
-          type="button"
-          class="ghost"
-          onclick={() => onOpenPrivacyPane("microphone")}
-        >
-          Open Microphone settings
-        </button>
-        <button
-          type="button"
-          class="ghost"
-          onclick={() => onOpenPrivacyPane("input-monitoring")}
-        >
-          Open Input Monitoring settings
-        </button>
         <button
           type="button"
           class="primary"
@@ -266,18 +252,6 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button.ghost {
-  padding: 0.3em 0.75em;
-  font-size: 0.8rem;
-  font-weight: 500;
-  background-color: transparent;
-  border: 1px solid #d1d1d1;
-}
-
-button.ghost:hover:not(:disabled) {
-  background-color: #f0f0f0;
-}
-
 button.primary {
   background-color: var(--accent);
   color: white;
@@ -298,13 +272,6 @@ button.primary:hover:not(:disabled) {
   }
   button:hover:not(:disabled) {
     border-color: var(--accent);
-  }
-  button.ghost {
-    border-color: #3a3a3a;
-    color: #f0f0f0;
-  }
-  button.ghost:hover:not(:disabled) {
-    background-color: #353535;
   }
 }
 </style>
