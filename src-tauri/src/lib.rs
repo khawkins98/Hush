@@ -295,8 +295,7 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
         // a known limitation called out at `manager.rs`'s
         // `with_overrides` doc-comment). Cache once instead of
         // allocating ~50 string entries every 3 s.
-        static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> =
-            std::sync::OnceLock::new();
+        static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> = std::sync::OnceLock::new();
         let classifier = CLASSIFIER.get_or_init(meeting::AppClassifier::default_table);
         let kind = classifier.classify(&app_name);
         let session_active = state.meeting_manager.active_session_id().is_some();
