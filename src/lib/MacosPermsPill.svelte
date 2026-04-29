@@ -67,28 +67,79 @@
       pre-emptively asking "Trouble?" reads as "something is
       broken" when nothing actually is.
     -->
-    <p class="permissions-hint" data-testid="perms-hint-yellow">
-      On macOS, dictation needs Microphone access (and Screen
-      Recording for system-audio capture in meetings). Trouble?
+    <!--
+      Banner shape mirrors the "Set up your first model" banner on
+      Dictation: title + body on the left, primary action button
+      on the right. Previously this was an inline link inside body
+      copy, which the UX walkthrough flagged as inconsistent with
+      the no-model banner's filled-button affordance.
+    -->
+    <aside class="permissions-banner" data-testid="perms-hint-yellow" role="status">
+      <div class="permissions-banner-text">
+        <strong>Permission needed</strong>
+        <span>
+          On macOS, dictation needs Microphone access (and Screen
+          Recording for system-audio capture in meetings).
+        </span>
+      </div>
       <button
         type="button"
-        class="link-button"
+        class="primary"
         onclick={() => void onOpenPermissions()}
-      >Open the Permissions diagnostic</button>.
-    </p>
+      >Open Permissions diagnostic</button>
+    </aside>
   {/if}
 {/if}
 
 <style>
-.permissions-hint {
-  margin: 1.25rem auto 0;
-  padding: 0.75rem 1rem;
+/* Action-led banner — same shape as the no-model setup banner
+   in ControlsSection.svelte, just in a yellow palette to match
+   the warning state. The previous implementation used an inline
+   link inside body copy; the UX walkthrough flagged the
+   inconsistency with the setup banner's filled-button affordance. */
+.permissions-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  margin: 1.25rem 0 0;
   background-color: #fff7e6;
   border: 1px solid #ffd591;
   border-radius: 8px;
-  color: #8a5a00;
+}
+.permissions-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 0;
+}
+.permissions-banner-text strong {
+  font-size: 0.95rem;
+  color: #6a4400;
+}
+.permissions-banner-text span {
   font-size: 0.85rem;
-  line-height: 1.5;
+  color: #8a5a00;
+  line-height: 1.4;
+}
+.permissions-banner button {
+  flex-shrink: 0;
+  white-space: nowrap;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  padding: 0.5em 1em;
+  font-size: 0.9em;
+  font-family: inherit;
+  font-weight: 600;
+  background-color: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+.permissions-banner button:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 .permissions-pill {
   margin: 1.25rem auto 0;
@@ -129,10 +180,15 @@
   text-decoration: none;
 }
 @media (prefers-color-scheme: dark) {
-  .permissions-hint {
+  .permissions-banner {
     background-color: #3a2c00;
     border-color: #6b5300;
+  }
+  .permissions-banner-text strong {
     color: #ffd591;
+  }
+  .permissions-banner-text span {
+    color: #f0c87b;
   }
   .permissions-pill {
     background-color: #1a3a23;

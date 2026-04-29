@@ -249,6 +249,50 @@ Each PR template renders the checklist below. The short version:
 
 ---
 
+## Periodic verification cadence
+
+CI catches regressions in the obvious dimensions (Rust compilation, clippy, rustfmt, type check, Path A e2e). It does not catch product-quality drift: copy that contradicts itself across recent PRs, accessibility regressions in newly extracted components, security or design assumptions that decayed since the last review, UX inconsistencies introduced by independent fixes. Run the cadence below every **2–3 substantial PRs** while the project is solo-maintained, or any time several non-trivial UI/IPC PRs have landed without a sweep.
+
+### 1. Multi-agent review
+
+Run four review agents in parallel, each with the same diff scope (e.g. "everything since the last review tag" or "PRs N..M"):
+
+- **writer** — prose / docs / changelog / README / panel copy / error messages. Checks for contradictions, stale references, tone drift, broken doc links.
+- **rust** — backend code health: trait seams, error variants, deferred TODO debt, unsoundness, panicking paths, async cancellation correctness.
+- **ux** — frontend walkthrough across the three windows. Affordance consistency, heading hierarchy, destructive-action confirmation, dark-mode parity, empty/error states.
+- **security** — TCC permission surface, IPC capability allowlists, command injection vectors, dependency posture, network endpoints.
+
+Spawn them in **one message** with multiple `Agent` tool calls so they run concurrently. Ask each for a short, prioritised report: top 3–5 findings with severity + concrete file:line pointers. Synthesize into one fix list — bundle into a single `chore/multi-agent-review-followup` PR rather than splitting per agent (the changes are usually small and orthogonal). File deferred / larger items as GitHub issues.
+
+### 2. UX walkthrough spec
+
+Re-run the Playwright walkthrough that exercises the post-IA-redesign three-window flow:
+
+```bash
+npm run test:e2e -- tests/e2e/walkthrough.spec.ts
+```
+
+This catches the "changed copy in component A, broke an assertion in spec B" class of regression that pure type-check + clippy can't see. If the spec needs updating because copy *intentionally* changed, update it in the same PR as the copy change — never split.
+
+### 3. Mechanical sweep
+
+Before merging the follow-up PR, run the full mechanical pass locally:
+
+```bash
+(cd src-tauri && cargo test --lib --features whisper)
+(cd src-tauri && cargo clippy --all-targets -- -D warnings)
+(cd src-tauri && cargo fmt --all -- --check)
+npm run check
+npm run test:e2e
+npm run tauri dev   # dev-launch smoke if anything in the dev-launch list above changed
+```
+
+### 4. Record the round
+
+Add a one-line entry to `learnings.md` with the date, the PRs in scope, and the headline finding (or "no exploitable findings — code health steady"). The log is the durable record that the cadence ran; future contributors can scan it to know when the last sweep was.
+
+---
+
 ## Cutting a release
 
 Release engineering lives in [`docs/releases.md`](./docs/releases.md). Short version: bump the three version files (`Cargo.toml`, `tauri.conf.json`, `Cargo.lock`), move `[Unreleased]` content to a dated section in `CHANGELOG.md`, push a `v*` tag, review the draft GitHub Release, click Publish. The actual cross-platform build runs in `.github/workflows/release.yml` via `tauri-action`.

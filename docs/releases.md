@@ -66,11 +66,11 @@ The workflow fires on the tag push. Watch progress at the [Actions](https://gith
 ### 5. Review and publish
 
 - Open the [Releases](https://github.com/khawkins98/Hush/releases) page; the new release is in draft.
-- Confirm all four artefact families are present (apple-silicon `.dmg`, intel `.dmg`, `.AppImage` + `.deb`, `.msi` + `.exe`).
+- Confirm all three platform artefacts are present (apple-silicon `.dmg`, `.AppImage` + `.deb`, `.msi` + `.exe`).
 - Paste the CHANGELOG entry into the release body (replacing the placeholder install copy).
 - Click **Publish**.
 
-Optionally, post-publish: download one artefact per platform and smoke-test the install path on a clean machine. Notable failure modes in early releases: macOS `.dmg` failing to mount, Linux `.AppImage` missing exec bit, Windows installer being flagged by AV.
+Optionally, post-publish: download one artefact per platform and smoke-test the install path on a clean machine. Record any platform-specific install failures in `learnings.md` so the next release-cutter can avoid them.
 
 ## Dry-run via workflow_dispatch
 

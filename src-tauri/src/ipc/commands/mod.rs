@@ -156,7 +156,7 @@ pub enum IpcError {
     Internal(String),
 }
 
-type IpcResult<T> = std::result::Result<T, IpcError>;
+pub(crate) type IpcResult<T> = std::result::Result<T, IpcError>;
 
 /// Convert a `PoisonError` into an `IpcError::Internal` so callers can use
 /// the `?` operator instead of `.expect("…mutex")`. Centralised so the

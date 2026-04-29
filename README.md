@@ -48,9 +48,8 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 ### Planned (v1.x)
 
 - 🔊 Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)) system-audio capture (macOS shipped via ScreenCaptureKit)
-- 🧠 Model-based speaker diarization (D2; ONNX speaker-embedding) — replaces D1's heuristic with per-speaker accuracy
-- ⚡ Auto-start Meeting Mode on foreground-app classification (D1 of #112 — manual-start ships today)
-- 🔄 Auto-update channel via the Tauri updater plugin ([#10](https://github.com/khawkins98/Hush/issues/10))
+- 🧠 Model-based speaker diarization (D2; ONNX speaker-embedding) — replaces D1's heuristic with per-speaker accuracy ([#111](https://github.com/khawkins98/Hush/issues/111))
+- 🔄 Auto-update channel via the Tauri updater plugin ([#10](https://github.com/khawkins98/Hush/issues/10)) — manual "Check for updates" ships today; the auto-channel is gated on a signing-key decision
 - 🎯 Parakeet via ONNX as a second engine ([#32](https://github.com/khawkins98/Hush/issues/32))
 
 ---
@@ -63,7 +62,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 | **macOS ≤ 15** | Not directly supported. Code may compile and run, but the maintainer does not test against older macOS, will not gate features on older-macOS APIs, and bug reports against older versions are best-effort. | ❌ Not supported |
 | **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested |
 | **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ❌ Not hands-on tested |
-| **Windows** | Theoretically supported. Was in the original CI matrix but dropped to keep CI fast (PRD §11 — Windows distribution lands at M6). | ❌ Not hands-on tested |
+| **Windows** | Built and published in the release pipeline (`.msi` + `.exe`). Code is cross-platform but the maintainer doesn't run it day-to-day; bug reports against the Windows build are best-effort. | ❌ Not hands-on tested |
 
 **Linux and Windows hands-on contributions are welcome.** If you run Hush on either and something is broken, file an issue with steps to reproduce + your platform version. Build prerequisites are in [`CONTRIBUTING.md`](./CONTRIBUTING.md). PRs that fix platform-specific gaps are exactly the right contribution shape — small, scoped, and address a real reported bug.
 
@@ -181,4 +180,4 @@ Hush is inspired by [VoiceInk](https://github.com/Beingpax/VoiceInk) by [Pax](ht
 
 ## License
 
-Apache-2.0 (pending final licence decision before first public release — see §13.8 of the PRD).
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).

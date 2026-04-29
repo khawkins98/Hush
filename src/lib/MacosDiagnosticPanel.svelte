@@ -43,16 +43,22 @@
       <p class="macos-diag-reset-intro">
         If a permission won't stick after a fresh prompt — or a
         stale Hush.app row appears under a previous build's signing
-        identity — reset all four TCC entries
-        (<code>Microphone</code>, <code>ScreenCapture</code>,
-        <code>ListenEvent</code>, <code>Accessibility</code>) for
-        <code>com.khawkins.hush</code>. The reset takes effect on
-        next launch.
+        identity — reset Hush's grants for Microphone, Screen
+        Recording, Input Monitoring, and Accessibility in one
+        click. The reset takes effect on next launch.
       </p>
       <div class="macos-diag-actions">
+        <!--
+          Reset is a nuclear, last-resort action and lives behind
+          this disclosure precisely because most users don't need
+          it. Style it as a danger-ghost button rather than a
+          filled primary so the eye is drawn to the per-row
+          "Grant in Settings…" CTAs above (which are the actual
+          forward-progress action), not down here.
+        -->
         <button
           type="button"
-          class="primary"
+          class="danger"
           onclick={onReset}
           disabled={macosResetting}
         >
@@ -252,16 +258,18 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button.primary {
-  background-color: var(--accent);
-  color: white;
-  border-color: var(--accent);
-  font-weight: 600;
+button.danger {
+  /* Quiet destructive — outlined red, not filled — so it reads
+     as "this is the last resort" rather than "click me." */
+  background-color: transparent;
+  color: #b03030;
+  border-color: #e1b8b8;
+  font-weight: 500;
 }
 
-button.primary:hover:not(:disabled) {
-  background-color: #4a6cd0;
-  border-color: #4a6cd0;
+button.danger:hover:not(:disabled) {
+  background-color: #fbeaea;
+  border-color: #d83a3a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -272,6 +280,15 @@ button.primary:hover:not(:disabled) {
   }
   button:hover:not(:disabled) {
     border-color: var(--accent);
+  }
+  button.danger {
+    background-color: transparent;
+    color: #ff9090;
+    border-color: #5a2020;
+  }
+  button.danger:hover:not(:disabled) {
+    background-color: #3a1818;
+    border-color: #d83a3a;
   }
 }
 </style>

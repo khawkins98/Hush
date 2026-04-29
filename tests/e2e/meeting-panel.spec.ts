@@ -40,7 +40,7 @@ test.describe("meeting panel — multi-source picker", () => {
     const sysCheckbox = panel.locator('input[type="checkbox"]');
     await expect(sysCheckbox).toBeVisible();
     await expect(sysCheckbox).toBeDisabled();
-    await expect(panel).toContainText(/coming soon/i);
+    await expect(panel).toContainText(/macOS only today/i);
 
     // Hint copy primes the user that the session records on Start
     // (not hotkey-driven) and produces text every ~10 s.

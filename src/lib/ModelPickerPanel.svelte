@@ -128,7 +128,7 @@
             <h3 class="model-name">
               {card.displayName}
               {#if card.isSelected}
-                <span class="badge default-badge">Default</span>
+                <span class="badge default-badge">Selected</span>
               {/if}
             </h3>
             {#if card.isSelected}
