@@ -949,23 +949,40 @@
             { key: "inputMonitoring", paneTarget: "input-monitoring" as const, label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Required for push-to-talk (on by default). Disable PTT in General → Hotkeys if you'd rather skip the prompt." },
           ] as row (row.key)}
             <li class="perm-row" data-perm={row.key} data-status={row.status}>
-              <span class="perm-dot" aria-hidden="true"></span>
-              <span class="perm-name">{row.label}</span>
-              <span class="perm-status-label">
-                {#if row.status === "granted"}Granted
-                {:else if row.status === "denied"}Denied
-                {:else if row.status === "not-determined"}Not yet granted
-                {:else}Not applicable
-                {/if}
-              </span>
-              <span class="perm-why">{row.why}</span>
+              <!--
+                Two-column layout: text block on the left
+                (title-line + why subtitle), action button on the
+                right. Replaces the previous 4-column grid where
+                the status label drifted horizontally between rows
+                and competed with the action button for the right
+                edge of the row. The status now lives as a
+                coloured pill inline with the title — one signal
+                instead of dot + uppercase label, anchored to the
+                row's content rather than floating mid-row. Mirrors
+                System Settings → Privacy & Security's visual
+                idiom (status next to the name; controls flush
+                right).
+              -->
+              <div class="perm-text">
+                <div class="perm-title-line">
+                  <span class="perm-name">{row.label}</span>
+                  <span class="perm-status-pill">
+                    {#if row.status === "granted"}Granted
+                    {:else if row.status === "denied"}Denied
+                    {:else if row.status === "not-determined"}Not yet granted
+                    {:else}Not applicable
+                    {/if}
+                  </span>
+                </div>
+                <span class="perm-why">{row.why}</span>
+              </div>
               <!--
                 Per-row deep-link to the relevant System Settings
-                pane. Renders for every row, not just unblocked ones,
-                because granted rows still need a way to revoke /
-                re-confirm. Copy varies with status so the click
-                target reads as the right next step ("Grant in
-                Settings…" vs "Open in Settings").
+                pane. Renders for every row, not just unblocked
+                ones, because granted rows still need a way to
+                revoke / re-confirm. Copy varies with status so
+                the click target reads as the right next step
+                ("Grant in Settings…" vs "Open in Settings").
               -->
               {#if row.status !== "not-applicable"}
                 <button
@@ -1550,63 +1567,70 @@
   }
   .perm-row {
     display: grid;
-    grid-template-columns: auto 1fr auto auto;
-    grid-template-areas:
-      "dot name   status action"
-      "dot why    why    action";
-    gap: 0.15rem 0.6rem;
+    grid-template-columns: 1fr auto;
+    gap: 0.6rem 1rem;
     align-items: center;
-    padding: 0.65rem 0.85rem;
+    padding: 0.7rem 0.9rem;
     background-color: white;
     border: 1px solid #e1e1e6;
     border-radius: 8px;
   }
-  .perm-dot {
-    grid-area: dot;
-    width: 0.65rem;
-    height: 0.65rem;
-    border-radius: 50%;
-    background-color: #b8b8c0;
-    box-shadow: 0 0 0 2px rgba(184, 184, 192, 0.18);
+  .perm-text {
+    /* min-width:0 lets the text column shrink under flex/grid
+       constraints so a long "why" wraps instead of pushing the
+       button off the row. */
+    min-width: 0;
   }
-  .perm-row[data-status="granted"] .perm-dot {
-    background-color: #2eaa53;
-    box-shadow: 0 0 0 2px rgba(46, 170, 83, 0.18);
-  }
-  .perm-row[data-status="denied"] .perm-dot {
-    background-color: #d83a3a;
-    box-shadow: 0 0 0 2px rgba(216, 58, 58, 0.18);
-  }
-  .perm-row[data-status="not-determined"] .perm-dot {
-    background-color: #e8a72b;
-    box-shadow: 0 0 0 2px rgba(232, 167, 43, 0.18);
+  .perm-title-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
   }
   .perm-name {
-    grid-area: name;
     font-weight: 600;
     color: #222;
   }
-  .perm-status-label {
-    grid-area: status;
-    font-size: 0.78rem;
-    font-weight: 500;
-    color: #666;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+  /* Status pill — replaces the floating uppercase label AND the
+     dot. Background colour carries the state signal that the dot
+     used to carry (one element instead of two), and the inline
+     position next to the title anchors the status to its row's
+     content rather than letting it float in column 3. Mirrors
+     System Settings → Privacy & Security where state lives next
+     to the name and the right edge is reserved for controls. */
+  .perm-status-pill {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: #ececf0;
+    color: #555;
+    line-height: 1.4;
+    white-space: nowrap;
   }
-  .perm-row[data-status="granted"] .perm-status-label { color: #2a6b3c; }
-  .perm-row[data-status="denied"] .perm-status-label { color: #8a1f1f; }
-  .perm-row[data-status="not-determined"] .perm-status-label { color: #8a5a00; }
+  .perm-row[data-status="granted"] .perm-status-pill {
+    background: #e3f5e8;
+    color: #1f6b35;
+  }
+  .perm-row[data-status="not-determined"] .perm-status-pill {
+    background: #fdf1d8;
+    color: #7a4e00;
+  }
+  .perm-row[data-status="denied"] .perm-status-pill {
+    background: #fbe3e3;
+    color: #8a1f1f;
+  }
   .perm-why {
-    grid-area: why;
+    display: block;
+    margin-top: 0.15rem;
     font-size: 0.82rem;
     color: #666;
   }
-  /* Per-row "Grant in Settings…" button. Sits on the right side of
-     the row, vertically centred across both grid rows so the click
-     target is balanced against the name+why stack on the left. */
+  /* Per-row "Grant in Settings…" button. Lives in the second
+     grid column, vertically centred against the text-block on
+     the left so the click target is balanced against the
+     name+why stack. */
   .perm-row-action {
-    grid-area: action;
     align-self: center;
     padding: 0.35rem 0.7rem;
     font-size: 0.82rem;
@@ -1656,6 +1680,22 @@
     }
     .perm-name { color: #e8e8e8; }
     .perm-why { color: #a8a8a8; }
+    .perm-status-pill {
+      background: #3a3a3f;
+      color: #c8c8cc;
+    }
+    .perm-row[data-status="granted"] .perm-status-pill {
+      background: #1d3a26;
+      color: #8fd9a3;
+    }
+    .perm-row[data-status="not-determined"] .perm-status-pill {
+      background: #3d2f12;
+      color: #f0c878;
+    }
+    .perm-row[data-status="denied"] .perm-status-pill {
+      background: #3d1d1d;
+      color: #f0a0a0;
+    }
     .perm-recovery-intro { color: #b0b0b0; }
     .perm-row-action {
       background-color: #1f1f22;
