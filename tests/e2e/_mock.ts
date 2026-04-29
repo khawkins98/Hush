@@ -82,6 +82,7 @@ export async function installMocks(
       "plugin:app|version": () => "0.1.0",
       "plugin:app|tauri_version": () => "2.10.3",
       open_macos_privacy_pane: () => undefined,
+      prime_screen_recording_permission: () => undefined,
       open_settings: () => undefined,
       diagnose_macos_permissions: () => ({
         bundleId: "com.khawkins.hush",

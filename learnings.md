@@ -4,6 +4,24 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-04-29 — macOS adds an app to the Screen Recording list only after the app actively requests SCK
+
+User caught this hands-on after the first end-to-end smoke of the post-#234 build: clicking **Permissions → Screen Recording → Grant in Settings…** deep-linked into System Settings → Privacy & Security → Screen & System Audio Recording, and Hush wasn't in the list. Microphone and Input Monitoring rows were both `GRANTED`, so the app was registered with TCC — just not under Screen Recording.
+
+The cause is a documented macOS behaviour: an app only gets enrolled in a permission's pane the first time it actively requests that permission. Hush requests Microphone on first dictation Start (via cpal's input stream open) and Input Monitoring on first launch (via rdev's listener spawn, default-on since #194). It only requests Screen Recording when starting a Meeting Mode session **with system audio enabled** — and a brand-new install hasn't done that yet. Deep-linking to a list the app isn't in produces a dead end: there's no row to toggle on, and no obvious next action.
+
+**Fix shipped:** the per-row Grant button on the Screen Recording row now calls a new IPC `prime_screen_recording_permission` *before* the deep-link. The backend helper (`audio::prime_screen_recording_permission`) calls `screencapturekit::SCShareableContent::get()` and discards the result. `SCShareableContent::get()` is the lightweight enumeration call SCK uses for "what displays/windows are shareable?" — it has the same TCC check as a full capture stream, but completes in milliseconds and doesn't allocate a stream handle. The side effect is that macOS notices the request and adds Hush to the pane (and fires the standard prompt for not-determined state). The user lands in Settings with the row visible.
+
+**Why not start a synthetic Meeting Mode session.** That would open the DB, spawn the audio pipeline, run diarization briefly, and write a session row — heavy and visible. The shareable-content enumerate is the canonical "warm SCK" call and is what `audio::screencapturekit::ScreenCaptureKitSession::start` already does as its first line.
+
+**Why not auto-prime on app launch.** That would prompt every fresh install with a "Hush wants Screen Recording" dialog even when the user has no intention of touching Meeting Mode. The button click is the explicit consent surface; honouring it lazily keeps the prompt deliberate.
+
+The fix is symmetric with how Microphone "just works" today: clicking Start dictation triggers the prompt at exactly the moment the user has signalled they want the feature. Until the per-row Grant button shipped (#231), we'd been relying on the same lazy-prompt flow for SCK, but the button changed the contract — a user can now ask for the permission *without* starting Meeting Mode, and the priming call closes that gap.
+
+Backend impl is ~5 LOC; the new IPC command is registered alongside `open_macos_privacy_pane` / `reset_macos_permissions` in `commands/macos.rs`. Frontend wires it in front of the deep-link inside `openPrivacyPane("screen-recording")` only — Microphone and Input Monitoring don't need it because their underlying request paths already fire as soon as the user uses Hush at all.
+
+---
+
 ## 2026-04-25 — Project scaffold and stack decisions
 
 **Tauri 2 + Svelte + TypeScript** chosen as the app framework.

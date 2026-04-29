@@ -218,6 +218,42 @@ impl AsByteSlice for screencapturekit::cm::AudioBuffer {
     }
 }
 
+/// Touch SCK's `SCShareableContent::get()` so macOS adds Hush to
+/// the Screen Recording permission list and (if not yet granted)
+/// fires the standard TCC prompt. The result is discarded — we
+/// only care about the side effect of macOS noticing that this
+/// process wants Screen Recording.
+///
+/// Why this exists: macOS only shows an app under "Screen &
+/// System Audio Recording" once the app actively requests the
+/// permission. A user who hasn't started a Meeting Mode session
+/// yet doesn't have a Hush row to toggle on; the per-row "Grant
+/// in Settings…" button on the Permissions tab deep-links them
+/// to a list that doesn't include Hush. Calling this function
+/// before deep-linking guarantees the row is there.
+///
+/// Lightweight (single-millisecond range) and idempotent —
+/// calling it on a process that already has the permission is a
+/// no-op as far as the user's concerned. Only ever invoked from
+/// the explicit "Grant in Settings…" click; we deliberately do
+/// **not** auto-call this on app launch (that would prompt every
+/// fresh-install user, even those who'll never use Meeting Mode).
+///
+/// Returns `Ok(())` on either "permission granted" or
+/// "permission denied / not-determined" (both are valid outcomes
+/// of the priming call). Returns `Err` only when the SCK
+/// framework itself errored — which on a healthy system shouldn't
+/// happen.
+pub fn prime_screen_recording_permission() -> Result<()> {
+    // We don't need the content; we just need macOS to register
+    // that this process tried to query it. The error variant from
+    // `SCShareableContent::get()` typically means "user hasn't
+    // granted Screen Recording" — that's the very state we're
+    // priming, so swallow it.
+    let _ = SCShareableContent::get();
+    Ok(())
+}
+
 impl ScreenCaptureKitSession {
     /// Start an SCK capture session against the system's first display
     /// (which is what the audio mixer is bound to). The first call on
