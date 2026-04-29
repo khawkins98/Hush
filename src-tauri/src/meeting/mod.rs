@@ -36,6 +36,7 @@
 
 pub mod app_overrides;
 pub mod autostart;
+pub mod autostart_poller;
 pub mod manager;
 pub mod sqlite;
 
@@ -44,6 +45,7 @@ pub use app_overrides::{
     SqliteMeetingAppOverrideRepository,
 };
 pub use autostart::{AutostartDecision, MeetingAutostartMode};
+pub use autostart_poller::{evaluate_autostart_tick, ForegroundAppProbe, TickOutcome};
 pub use manager::{AppClassifier, MeetingEventEmitter, NoopMeetingEventEmitter, SessionManager};
 pub use sqlite::SqliteMeetingSessionRepository;
 
