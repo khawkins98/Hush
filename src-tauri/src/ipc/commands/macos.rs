@@ -104,6 +104,39 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
     }
 }
 
+/// Touch ScreenCaptureKit so macOS adds Hush to the Screen
+/// Recording permission list (and fires the standard TCC prompt
+/// if not yet determined). Called from the Permissions tab's
+/// "Grant in Settings…" button on the Screen Recording row,
+/// immediately before deep-linking to System Settings.
+///
+/// Without this priming step, a user who hasn't yet started a
+/// Meeting Mode session lands in the Screen & System Audio
+/// Recording pane only to find Hush isn't listed — macOS only
+/// enrolls an app once it actively requests the permission.
+/// `audio::prime_screen_recording_permission` calls
+/// `SCShareableContent::get()` and discards the result; the side
+/// effect is that the Hush row appears in the list.
+///
+/// No-op on non-macOS. Errors at the SCK layer (rare on a healthy
+/// system) surface as `IpcError::Internal` — but since the
+/// "permission denied" case is the very state we're priming, the
+/// underlying helper swallows it and returns `Ok(())`.
+#[tauri::command]
+pub async fn prime_screen_recording_permission() -> IpcResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::audio::prime_screen_recording_permission()
+            .map_err(|e| IpcError::Internal(format!("prime SCK permission: {e:#}")))?;
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
+}
+
 /// Bundle identifier this binary registers with macOS TCC. Hard-coded
 /// because `tauri.conf.json`'s `identifier` is the source of truth and
 /// reading it back through `AppHandle::config().identifier()` would
