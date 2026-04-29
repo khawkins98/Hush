@@ -278,6 +278,77 @@
   }
 
   /**
+   * Build a clipboard-friendly transcript string. One block per
+   * utterance, with the (mapped) speaker label and `mm:ss`
+   * offset on the first line and the text on the next, blank
+   * line between blocks. Plain text — meeting transcripts get
+   * pasted into Slack, email, Notion, etc., where rich
+   * formatting tends to clash with the destination's styling.
+   *
+   * Partials are deliberately excluded — they're still
+   * revising; a copy that includes "I think we should — wait,
+   * let me — actually, no…" mid-sentence is more confusing than
+   * useful. Only finals make it.
+   */
+  function buildTranscriptText(
+    utterances: { speakerLabel: string | null; startedAtMs: number; text: string }[],
+  ): string {
+    return utterances
+      .filter((u) => u.text.trim().length > 0)
+      .map((u) => {
+        const label = speakerLabel(u);
+        const time = formatOffset(u.startedAtMs);
+        return `${label} (${time})\n${u.text.trim()}`;
+      })
+      .join("\n\n");
+  }
+
+  /**
+   * Copy state — `null` when idle, the session id (or 0 for the
+   * active session) when a copy just landed. Used by the
+   * "Copied!" affordance on each Copy button so the user gets a
+   * confirmation that the clipboard write actually succeeded.
+   * Auto-clears after 2 s so a stale "Copied!" doesn't linger.
+   */
+  let copiedFromSessionId = $state<number | null>(null);
+  let copiedTimer: number | undefined;
+  function flashCopied(id: number) {
+    copiedFromSessionId = id;
+    if (copiedTimer !== undefined) {
+      window.clearTimeout(copiedTimer);
+    }
+    copiedTimer = window.setTimeout(() => {
+      copiedFromSessionId = null;
+    }, 2000);
+  }
+  async function copyActiveTranscript() {
+    if (!activeDetail) return;
+    const text = buildTranscriptText(activeDetail.utterances);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      // 0 is a sentinel for "the active session" since session
+      // ids start at 1 — keeps the same `copiedFromSessionId`
+      // state usable for both flows without a separate flag.
+      flashCopied(0);
+    } catch (e) {
+      console.warn("[hush] copy active transcript failed", e);
+    }
+  }
+  async function copySessionTranscript(sessionId: number) {
+    const detail = expandedDetails.get(sessionId);
+    if (!detail) return;
+    const text = buildTranscriptText(detail.utterances);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopied(sessionId);
+    } catch (e) {
+      console.warn("[hush] copy session transcript failed", e);
+    }
+  }
+
+  /**
    * Format a wall-clock time of day for an utterance, computed
    * from the session's `startedAt` plus the utterance's
    * `startedAtMs` offset. Used in the historical/expanded view
@@ -721,12 +792,38 @@
       Live transcript view (#122 PR4). The parent polls the
       `meeting_session_get` IPC every ~3 s while a session is in
       flight; new utterances render here as they finalise. Each
-      row carries a speaker badge — "Speaker A" / "Speaker B" from
-      D1 diarization (#201) when the silence-gap heuristic
-      produced a verdict, otherwise the source-derived "You"
-      (mic) / "Remote" (system) fallback.
+      row carries a speaker badge derived from the source label:
+      "You" for the microphone, "Remote" for system audio. D1
+      diarization (#201) was wired briefly but collapsed
+      cross-source utterances into a single "Speaker A"; reverted
+      to source-only labels until D2 (#111, model-based ONNX
+      embeddings) lands.
     -->
     {#if activeDetail && (activeDetail.utterances.length > 0 || (activeDetail.currentPartials?.length ?? 0) > 0)}
+      <!--
+        Copy-transcript affordance for the live session. Sits
+        above the transcript so it's discoverable without
+        scrolling, and stays out of the way (ghost button) so it
+        doesn't compete with Stop session for attention. Disabled
+        while the session has only partials — a partial-only
+        clipboard write would be a confusing artefact.
+      -->
+      <div class="live-transcript-toolbar">
+        <button
+          type="button"
+          class="ghost"
+          onclick={() => void copyActiveTranscript()}
+          disabled={activeDetail.utterances.length === 0}
+          aria-label="Copy live transcript to clipboard"
+          data-testid="meeting-copy-active-transcript"
+        >
+          {#if copiedFromSessionId === 0}
+            Copied!
+          {:else}
+            Copy transcript
+          {/if}
+        </button>
+      </div>
       <!--
         No `aria-live` on the transcript list itself: a meeting can
         produce dozens of utterances, and a "polite" live region
@@ -954,6 +1051,30 @@
                 Show transcript
               {/if}
             </button>
+            <!--
+              Copy historical transcript. Only enabled when the
+              detail is loaded (i.e. the user has already expanded
+              the row at least once) — keeps the implementation
+              simple by reusing the existing detail cache, and
+              avoids a second IPC round-trip that could surprise
+              the user with a delay on click.
+            -->
+            {#if expandedDetails.get(session.id)}
+              <button
+                type="button"
+                class="ghost"
+                onclick={() => void copySessionTranscript(session.id)}
+                disabled={(expandedDetails.get(session.id)?.utterances.length ?? 0) === 0}
+                aria-label={`Copy transcript from ${session.appName} session to clipboard`}
+                data-testid="meeting-copy-session-{session.id}"
+              >
+                {#if copiedFromSessionId === session.id}
+                  Copied!
+                {:else}
+                  Copy
+                {/if}
+              </button>
+            {/if}
             <button
               type="button"
               class="ghost danger"
@@ -1187,6 +1308,12 @@
   push older ones up; an explicit max-height lets long meetings
   remain scannable without taking over the whole window.
 */
+.live-transcript-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0.5rem 0 -0.25rem;
+}
+
 .live-transcript {
   list-style: none;
   margin: 0.5rem 0 1rem;
