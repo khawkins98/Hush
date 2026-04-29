@@ -1263,6 +1263,22 @@
               </span>
             {/if}
           </div>
+          <!--
+            App-title subtitle (#242 follow-up). Renders the
+            active window's title at session-open when present
+            and distinct from the app name — useful for
+            browser-hosted sessions where the bundle id
+            ("Vivaldi") is uninformative but the title carries
+            the actually-meaningful context (the YouTube video
+            name, the Meet meeting topic, the Notion page
+            heading). Suppressed when the title duplicates the
+            app name (native meeting apps that set
+            CFBundleName == window title) so we don't show
+            redundant text.
+          -->
+          {#if session.appTitle && session.appTitle !== session.appName}
+            <p class="session-app-title">{session.appTitle}</p>
+          {/if}
           {#if session.notes}
             <p class="session-notes">{session.notes}</p>
           {/if}
@@ -2112,6 +2128,26 @@ button.copy-error {
   background-color: rgba(74, 108, 208, 0.12);
 }
 
+/* App-title subtitle line (#242 follow-up). Lightweight prose,
+   slightly indented from the meta row so it reads as
+   secondary-but-relevant context (the actual subject of the
+   recording) rather than another chip. Single-line truncation
+   keeps long YouTube video titles from blowing out the row;
+   the user can expand the row for the full transcript anyway. */
+.session-app-title {
+  margin: 0.25rem 0 0;
+  font-size: 0.88rem;
+  color: #444;
+  line-height: 1.35;
+  font-style: italic;
+  /* Truncate gracefully on long titles. Browser-window titles
+     can run hundreds of chars on YouTube / Notion. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 .session-notes {
   margin: 0.5rem 0 0;
   padding: 0.4rem 0.6rem;
@@ -2381,6 +2417,9 @@ button:disabled {
   .session-sources {
     color: #b6c3f0;
     background-color: rgba(140, 168, 240, 0.18);
+  }
+  .session-app-title {
+    color: #c8c8d0;
   }
   .session-notes {
     background-color: rgba(255, 235, 150, 0.1);

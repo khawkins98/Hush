@@ -39,7 +39,7 @@ impl Repository<MeetingSession, NewMeetingSession, i64> for SqliteMeetingSession
         // just finished, not the meeting they had three weeks ago.
         sqlx::query_as::<_, MeetingSession>(
             "SELECT id, app_name, app_kind, started_at, ended_at, \
-                    speaker_count, utterance_count, notes, sources \
+                    speaker_count, utterance_count, notes, sources, app_title \
              FROM meeting_sessions \
              ORDER BY started_at DESC",
         )
@@ -63,14 +63,15 @@ impl Repository<MeetingSession, NewMeetingSession, i64> for SqliteMeetingSession
             Some(new.sources.join(","))
         };
         let row: MeetingSession = sqlx::query_as(
-            "INSERT INTO meeting_sessions (app_name, app_kind, sources) \
-             VALUES (?, ?, ?) \
+            "INSERT INTO meeting_sessions (app_name, app_kind, sources, app_title) \
+             VALUES (?, ?, ?, ?) \
              RETURNING id, app_name, app_kind, started_at, ended_at, \
-                       speaker_count, utterance_count, notes, sources",
+                       speaker_count, utterance_count, notes, sources, app_title",
         )
         .bind(&new.app_name)
         .bind(kind_str)
         .bind(sources_csv)
+        .bind(&new.app_title)
         .fetch_one(self.db.pool())
         .await
         .context("insert meeting session")?;
@@ -257,6 +258,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for MeetingSession {
             utterance_count: row.try_get("utterance_count")?,
             notes: row.try_get("notes")?,
             sources,
+            app_title: row.try_get("app_title")?,
         })
     }
 }
@@ -293,6 +295,7 @@ mod tests {
             app_name: "us.zoom.xos".into(),
             app_kind: MeetingAppKind::Meeting,
             sources: vec!["mic".into(), "system".into()],
+            app_title: Some("Q3 Standup".into()),
         }
     }
 
@@ -309,6 +312,11 @@ mod tests {
             created.sources,
             Some(vec!["mic".to_owned(), "system".to_owned()]),
             "sources column round-trips populated input"
+        );
+        assert_eq!(
+            created.app_title,
+            Some("Q3 Standup".to_owned()),
+            "app_title column round-trips populated input"
         );
 
         let all = repo.list().await.unwrap();
@@ -340,6 +348,10 @@ mod tests {
         assert!(
             all[0].sources.is_none(),
             "NULL sources column maps to None, not Some(vec![])"
+        );
+        assert!(
+            all[0].app_title.is_none(),
+            "NULL app_title column maps to None"
         );
     }
 

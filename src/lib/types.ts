@@ -89,6 +89,14 @@ export type MeetingSession = {
   /// Persisted via migration 0004; `null` for legacy rows
   /// created before the migration ran.
   sources: string[] | null;
+  /// Active window's title at session-open (#242 follow-up).
+  /// Useful when `appName` is uninformative (e.g. a browser
+  /// hosting YouTube / Meet / Notion); the panel renders this
+  /// as a subtitle when distinct from `appName`. `null` when
+  /// the OS query couldn't resolve a title (lock screen,
+  /// fullscreen game) or when the row pre-dates migration
+  /// 0005.
+  appTitle: string | null;
 };
 
 export type PersistedUtterance = {
