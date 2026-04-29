@@ -776,9 +776,18 @@
 
       <section class="settings-group" aria-labelledby="settings-autostart-heading">
         <h2 id="settings-autostart-heading" class="group-heading">Auto-start</h2>
-        <label class="select-row">
-          <span class="row-label">When a meeting app focuses</span>
+        <div class="select-row">
+          <label class="select-label" for="settings-meeting-autostart">
+            <span class="select-name">When a meeting app focuses</span>
+            <span class="select-desc">
+              When set to "Always", Hush opens a Meeting Mode
+              session on its own the moment a known meeting app
+              (Zoom, Teams, Discord, …) comes to focus. Stops
+              manually only. Defaults to Off — opt in here.
+            </span>
+          </label>
           <select
+            id="settings-meeting-autostart"
             data-testid="settings-meeting-autostart"
             disabled={meetingAutostartBusy}
             value={meetingAutostartMode}
@@ -787,13 +796,7 @@
             <option value="off">Off — start manually</option>
             <option value="always">Always start a session</option>
           </select>
-        </label>
-        <p class="row-note">
-          When set to "Always", Hush opens a Meeting Mode session
-          on its own the moment a known meeting app (Zoom, Teams,
-          Discord, …) comes to focus. Stops manually only.
-          Defaults to Off — opt in here.
-        </p>
+        </div>
         {#if meetingAutostartError}
           <p class="settings-error">{meetingAutostartError}</p>
         {/if}
@@ -834,8 +837,7 @@
           {/each}
         </ul>
         <p class="perm-recovery-intro">
-          Need to fix something? The diagnostic below has the
-          recovery details and a one-click <code>tccutil reset</code>.
+          Need to fix something? Open the recovery details below.
         </p>
         <MacosDiagnosticPanel
           {macosDiagnostic}
@@ -1154,6 +1156,44 @@
     line-height: 1.4;
   }
 
+  /* Select-shaped settings row — same bordered-card pattern as
+     `.toggle-row` so the visual rhythm across General, Interface,
+     and Meeting auto-start stays consistent. Label + description
+     above, dropdown right-aligned. */
+  .select-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.65rem 0.85rem;
+    background-color: white;
+    border: 1px solid #e1e1e6;
+    border-radius: 8px;
+  }
+  .select-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex: 1;
+    min-width: 0;
+  }
+  .select-name {
+    font-weight: 600;
+    color: #222;
+  }
+  .select-desc {
+    font-size: 0.82rem;
+    color: #666;
+    line-height: 1.4;
+  }
+  .select-row select {
+    flex-shrink: 0;
+    align-self: flex-start;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+  }
+
   .settings-row {
     display: flex;
     justify-content: space-between;
@@ -1298,14 +1338,6 @@
     color: #555;
     max-width: 44rem;
   }
-  .perm-recovery-intro code {
-    background-color: #f0f0f3;
-    padding: 0.1em 0.35em;
-    border-radius: 4px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-    font-size: 0.92em;
-  }
-
   @media (prefers-color-scheme: dark) {
     .perm-row {
       background-color: #2a2a2d;
@@ -1314,10 +1346,6 @@
     .perm-name { color: #e8e8e8; }
     .perm-why { color: #a8a8a8; }
     .perm-recovery-intro { color: #b0b0b0; }
-    .perm-recovery-intro code {
-      background-color: #38383b;
-      color: #d8d8d8;
-    }
   }
 
   kbd {
@@ -1348,12 +1376,20 @@
     }
     .placeholder { color: #a8a8a8; }
     .toggle-row,
+    .select-row,
     .settings-row {
       background-color: #2a2a2d;
       border-color: #38383b;
     }
-    .toggle-name { color: #e8e8e8; }
-    .toggle-desc { color: #a8a8a8; }
+    .toggle-name,
+    .select-name { color: #e8e8e8; }
+    .toggle-desc,
+    .select-desc { color: #a8a8a8; }
+    .select-row select {
+      background-color: #1f1f22;
+      color: #e8e8e8;
+      border-color: #38383b;
+    }
     .row-label { color: #d8d8d8; }
     .row-value { color: #b0b0b0; }
     .row-note { color: #888; }
