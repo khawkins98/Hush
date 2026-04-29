@@ -8,10 +8,11 @@ A `v*` tag push (or a manual `workflow_dispatch`) runs the build matrix on three
 
 | Platform | Args | Artefacts |
 |---|---|---|
-| macOS (Apple Silicon) | `--target aarch64-apple-darwin` | `Hush_<version>_aarch64.dmg` |
-| macOS (Intel) | `--target x86_64-apple-darwin` | `Hush_<version>_x64.dmg` |
+| macOS (Apple Silicon, macOS 26+) | `--target aarch64-apple-darwin` | `Hush_<version>_aarch64.dmg` |
 | Linux (Ubuntu) | — | `hush_<version>_amd64.AppImage`, `hush_<version>_amd64.deb` |
 | Windows | — | `Hush_<version>_x64.msi`, `Hush_<version>_x64-setup.exe` |
+
+Intel macOS is not in the matrix. macOS 26 (Tahoe) is the project's primary target per CLAUDE.md, and 26 is Apple-Silicon-only — there's nothing for an Intel binary to run on inside the supported window. The workflow's `MACOSX_DEPLOYMENT_TARGET=26.0` env enforces the floor at the Tauri build step.
 
 `tauri-action` attaches all of them to a single GitHub Release, named after the tag. The release is created as a **draft** so you can review the artefact list before publishing.
 
