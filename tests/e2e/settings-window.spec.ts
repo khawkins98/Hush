@@ -352,6 +352,62 @@ test.describe("settings window — About tab", () => {
     ).toBeVisible();
   });
 
+  test("Check for updates — up-to-date branch", async ({ page }) => {
+    await installMocks(page, {
+      check_for_updates: () => ({ kind: "upToDate", current: "0.1.0" }),
+    });
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-about"]').click();
+
+    await page.locator('[data-testid="settings-check-updates"]').click();
+    await expect(page.locator(".about-update-ok")).toContainText(
+      /You're on 0\.1\.0/,
+    );
+  });
+
+  test("Check for updates — update-available branch renders the link", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      check_for_updates: () => ({
+        kind: "updateAvailable",
+        current: "0.1.0",
+        latest: "0.2.0",
+        releaseUrl: "https://github.com/khawkins98/Hush/releases/tag/v0.2.0",
+      }),
+    });
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-about"]').click();
+
+    await page.locator('[data-testid="settings-check-updates"]').click();
+    await expect(page.locator(".about-update-available")).toContainText(
+      /Update available.*0\.2\.0/,
+    );
+    await expect(
+      page.locator(
+        '.about-update-available a[href$="releases/tag/v0.2.0"]',
+      ),
+    ).toBeVisible();
+  });
+
+  test("Check for updates — failed branch surfaces the reason", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      check_for_updates: () => ({
+        kind: "checkFailed",
+        reason: "GitHub is rate-limiting the request. Try again in a few minutes.",
+      }),
+    });
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-about"]').click();
+
+    await page.locator('[data-testid="settings-check-updates"]').click();
+    await expect(page.locator(".about-update-failed")).toContainText(
+      /rate-limiting/,
+    );
+  });
+
   test("falls back to static copy when app-info plugin throws", async ({
     page,
   }) => {

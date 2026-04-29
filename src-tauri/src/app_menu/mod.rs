@@ -60,6 +60,7 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // group are HIG-canonical; missing any of them feels off.
     let app_submenu = SubmenuBuilder::new(app, "Hush")
         .about(None)
+        .item(&MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(app)?)
         .separator()
         .item(
             &MenuItemBuilder::with_id("settings", "Settings…")
@@ -129,6 +130,20 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "settings" => {
                 if let Err(e) = crate::settings_window::show(app) {
                     tracing::error!(error = ?e, "menu: open settings");
+                }
+            }
+            "check-for-updates" => {
+                // Open Settings on the About tab. The user clicks the
+                // "Check for updates" button there to fire the IPC.
+                // We deliberately don't auto-run the check from the
+                // menu: a manual click signals genuine intent and
+                // sidesteps GitHub-rate-limit edge cases on a user
+                // who alt-tabs the menu by accident.
+                if let Err(e) = crate::settings_window::show(app) {
+                    tracing::error!(error = ?e, "menu: open settings (check-for-updates)");
+                }
+                if let Err(e) = app.emit("settings:goto-tab", "about") {
+                    tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
             }
             id if id.starts_with("goto-") => {
