@@ -34,34 +34,15 @@
       macOS permissions — diagnostic and reset
     </summary>
     <div class="macos-diagnostic-body">
-      <p class="macos-diag-bundle">
-        <strong>Bundle id:</strong>
-        <code>{macosDiagnostic.bundleId}</code>
-        — this is what System Settings → Privacy &amp; Security keys
-        against. <strong>Two reasons Hush might not appear in the
-        permission lists:</strong>
-      </p>
-      <ul class="macos-diag-bundle-list">
-        <li>
-          <strong>Hush hasn't asked for that permission yet.</strong>
-          macOS only adds an app to a permission list once the app
-          actively requests it. Hush requests Microphone the first
-          time you click Start recording — until then it won't show
-          under Microphone. Hush requests Input Monitoring on first
-          launch (PTT is on by default since #194); if you've
-          disabled PTT in Settings → General → Hotkeys, the listener
-          never spawns and Hush won't show under Input Monitoring.
-        </li>
-        <li>
-          <strong>Bundle-id mismatch on dev builds.</strong> When
-          running via <code>npm run tauri dev</code>, the binary at
-          <code>target/debug/hush</code> is unsigned, so macOS may key
-          the permission entry against the launching shell (iTerm /
-          Terminal) rather than under <code>com.khawkins.hush</code>.
-          Production-signed builds register under the bundle id
-          cleanly.
-        </li>
-      </ul>
+      <!--
+        Action-led layout (walkthrough polish round): the buttons
+        the user came here for sit at the top; the bundle-id
+        forensics + "two reasons Hush might not appear" copy gets
+        tucked under a nested "Why isn't Hush in the list?"
+        toggle. Most users only need the actions; the explainer is
+        for the small minority who hit the dev-build / unrequested-
+        permission edge cases.
+      -->
       <p>
         <strong>Microphone:</strong> {macosDiagnostic.microphoneHint}
       </p>
@@ -97,9 +78,41 @@
           {macosResetMessage}
         </p>
       {/if}
+
+      <details class="macos-diag-why">
+        <summary>Why isn't Hush in the list?</summary>
+        <p class="macos-diag-bundle">
+          <strong>Bundle id:</strong>
+          <code>{macosDiagnostic.bundleId}</code>
+          — this is what System Settings → Privacy &amp; Security
+          keys against. Two reasons Hush might not appear in the
+          permission lists:
+        </p>
+        <ul class="macos-diag-bundle-list">
+          <li>
+            <strong>Hush hasn't asked for that permission yet.</strong>
+            macOS only adds an app to a permission list once the app
+            actively requests it. Hush requests Microphone the first
+            time you click Start recording — until then it won't show
+            under Microphone. Hush requests Input Monitoring on first
+            launch (PTT is on by default since #194); if you've
+            disabled PTT in Settings → General → Hotkeys, the listener
+            never spawns and Hush won't show under Input Monitoring.
+          </li>
+          <li>
+            <strong>Bundle-id mismatch on dev builds.</strong> When
+            running via <code>npm run tauri dev</code>, the binary at
+            <code>target/debug/hush</code> is unsigned, so macOS may key
+            the permission entry against the launching shell (iTerm /
+            Terminal) rather than under <code>com.khawkins.hush</code>.
+            Production-signed builds register under the bundle id
+            cleanly.
+          </li>
+        </ul>
+      </details>
+
       <p class="macos-diag-doc-pointer">
-        Full troubleshooting recipe (including the
-        <code>tccutil</code> commands this button wraps) is in
+        Full troubleshooting recipe is in
         <a
           href="https://github.com/khawkins98/Hush/blob/main/docs/macos-permissions.md"
           target="_blank"
@@ -183,15 +196,27 @@
   font-size: 0.9rem;
 }
 
+.macos-diag-why {
+  margin-top: 0.25rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid #e1e1e1;
+  border-radius: 6px;
+  background-color: rgba(0, 0, 0, 0.015);
+}
+.macos-diag-why summary {
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: #444;
+  user-select: none;
+}
+.macos-diag-why[open] summary {
+  margin-bottom: 0.5rem;
+}
+
 .macos-diag-doc-pointer {
   font-size: 0.85rem;
   color: #555;
-}
-
-.macos-diag-doc-pointer code {
-  background-color: rgba(0, 0, 0, 0.06);
-  padding: 0.05em 0.3em;
-  border-radius: 3px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -200,12 +225,18 @@
     background-color: rgba(255, 255, 255, 0.03);
   }
   .macos-diag-bundle code,
-  .macos-diag-bundle-list code,
-  .macos-diag-doc-pointer code {
+  .macos-diag-bundle-list code {
     background-color: rgba(255, 255, 255, 0.08);
   }
   .macos-diag-doc-pointer {
     color: #aaa;
+  }
+  .macos-diag-why {
+    border-color: #3a3a3a;
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+  .macos-diag-why summary {
+    color: #ccc;
   }
 }
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
-  import type { HistoryEntry } from "./types";
+  import type { HistoryEntry, ModelCard } from "./types";
 
   type Props = {
     historyEntries: HistoryEntry[];
@@ -14,6 +14,12 @@
     /// copy. Different from `historyEntries.length` when the user
     /// has a search query active.
     historyTotalCount: number;
+    /// Model catalog. Used to render a friendly display name in
+    /// each row's meta line ("Whisper Base") instead of the raw
+    /// filename ("ggml-base.bin"); the latter leaks implementation
+    /// detail to end users. Empty array is fine — the lookup
+    /// falls back to the stored filename.
+    models: ModelCard[];
     formatTimestamp: (iso: string) => string;
     onSearchInput: (e: Event) => void;
     onCopy: (entry: HistoryEntry) => void | Promise<void>;
@@ -32,12 +38,24 @@
     historyError,
     historyVersion,
     historyTotalCount,
+    models,
     formatTimestamp,
     onSearchInput,
     onCopy,
     onDelete,
     onClearAll,
   }: Props = $props();
+
+  // Render `entry.model` (the stored GGUF filename) as the
+  // friendly display name from the catalog. Fall back to the raw
+  // filename if no catalog match — better to show the truth than
+  // a confusing blank.
+  function displayModelName(filename: string | null): string | null {
+    if (!filename) return null;
+    return (
+      models.find((m) => m.filename === filename)?.displayName ?? filename
+    );
+  }
 
   // Click-to-confirm state for the "Clear all" button. Same shape
   // as the meeting-mode Stop session confirmation: first click
@@ -184,7 +202,7 @@
             {formatTimestamp(entry.createdAt)}
             {#if formatDuration(entry.durationMs)}· {formatDuration(entry.durationMs)}{/if}
             {#if entry.appName}· {entry.appName}{/if}
-            {#if entry.model}· {entry.model}{/if}
+            {#if entry.model}· {displayModelName(entry.model)}{/if}
           </p>
           <div class="history-actions">
             <button class="ghost" onclick={() => onCopy(entry)}>

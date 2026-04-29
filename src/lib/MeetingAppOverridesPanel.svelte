@@ -54,19 +54,6 @@
     }, 5000);
   }
 
-  // Display copy for the kind enum. The Rust serde repr is
-  // kebab-case ("meeting" / "media" / "other"); this mapping is
-  // the user-facing label.
-  function kindLabel(kind: MeetingAppKind): string {
-    switch (kind) {
-      case "meeting":
-        return "Meeting";
-      case "media":
-        return "Media";
-      case "other":
-        return "Ignore";
-    }
-  }
 </script>
 
 <section
@@ -137,7 +124,6 @@
             <option value="media">Media</option>
             <option value="other">Ignore</option>
           </select>
-          <span class="override-meta">{kindLabel(override.kind)}</span>
           <button
             class="ghost danger"
             class:confirming={confirmingAppName === override.appName}
@@ -249,7 +235,11 @@
 
 .override-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  /* Three columns: app name, kind dropdown, remove button. The
+     redundant static-label column shipped earlier was dropped in
+     the walkthrough polish round — the dropdown's selected value
+     was already visible. */
+  grid-template-columns: 1fr auto auto;
   align-items: center;
   gap: 0.6rem;
   padding: 0.6rem 0.85rem;
@@ -269,12 +259,6 @@
 .override-kind {
   padding: 0.25em 0.5em;
   font-size: 0.85rem;
-}
-
-.override-meta {
-  font-size: 0.78rem;
-  color: #777;
-  min-width: 4rem;
 }
 
 .empty-history {
@@ -364,9 +348,6 @@ button.ghost.danger.confirming {
   .override-row {
     background-color: #2a2a2a;
     border-color: #3a3a3a;
-  }
-  .override-meta {
-    color: #999;
   }
   .empty-history {
     background-color: #1f1f1f;
