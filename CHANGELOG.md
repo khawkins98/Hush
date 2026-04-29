@@ -15,19 +15,57 @@ single flat list was hard to navigate.
 
 ### Added
 
-#### Release pipeline + manual update probe (#222, #223)
+#### Meeting Mode auto-start lifecycle (#221, #219)
 
-Hush now ships pre-built cross-platform binaries via GitHub
-Releases. A new `.github/workflows/release.yml` fires on `v*`
-tag pushes (or manual `workflow_dispatch`), runs the build
-matrix on macOS / Linux / Windows runners via
+Auto-start a meeting session when a known meeting app comes to
+focus — the open piece of #112's per-app classifier. Settings →
+Meeting → Auto-start dropdown (Off / Always; "Ask" reserved for
+the future prompt UI). A 3 s foreground poller spawned at boot
+watches `active-win-pos-rs::get_active_window`, classifies via
+`AppClassifier::default_table()`, and fires
+`start_manual` on a transition into a Meeting verdict. The
+classifier table itself expanded under #219 to cover macOS bundle
+ids, Linux process names, and Windows .exe basenames for the
+top meeting + media apps (Zoom, Teams, Discord, Slack, Webex,
+Skype, GoToMeeting, BlueJeans, Loom, YouTube, Spotify, Apple
+Music, iTunes, Apple TV, Podcasts, VLC, Plex / Plexamp).
+Manual-start unchanged; auto-stop on app blur deferred. Off by
+default — auto-recording the mic without an explicit opt-in is a
+trust-loser.
+
+#### Recording HUD on/off toggle (#218, #220)
+
+Settings → General → Interface → "Show recording HUD" lets users
+suppress the floating pill for both dictation and meeting mode.
+Default on. Backend uses an `AtomicBool` mirror so the sync
+`start_dictation` hot path reads the flag without locking. #220
+added focused Rust unit tests for the IPC + the boot-time
+persistence parse.
+
+#### Meetings search filter (#216)
+
+A `<input type="search">` in the Meetings panel header (visible
+once at least one session exists) filters historical sessions
+against `appName` and `notes` — frontend-only substring filter,
+no FTS round-trip. Mirrors the History panel's affordance.
+
+#### Manual "Check for updates" + release pipeline (#222, #223, #226, #227)
+
+Hush now ships pre-built binaries via GitHub Releases. A new
+`.github/workflows/release.yml` fires on `v*` tag pushes (or
+manual `workflow_dispatch`), runs the build matrix on
+macos-latest / ubuntu-latest / windows-latest via
 [`tauri-action`](https://github.com/tauri-apps/tauri-action), and
-attaches `.dmg` (Apple Silicon + Intel), `.AppImage`, `.deb`,
+attaches `.dmg` (Apple Silicon, macOS 26+), `.AppImage`, `.deb`,
 `.msi`, and `.exe` artefacts to a draft GitHub Release.
 Maintainer recipe in [`docs/releases.md`](./docs/releases.md).
+Intel macOS not in the matrix — macOS 26 is Apple-Silicon-only
+per project policy. macOS deployment target is 14.0 (the
+Xcode 16.4 / macOS 15 SDK ceiling on `macos-latest`); design
+target stays macOS 26.
 
 Alongside the pipeline, a manual "Check for updates" probe
-(#223) lets users find out when a new release is published —
+(#223 / #227) lets users find out when a new release is published —
 Settings → About → "Check for updates" or
 `Hush → Check for Updates…` from the macOS menu bar. Hush does
 **not** auto-check on launch; every check is a click. The
@@ -42,6 +80,64 @@ First-wave releases ship unsigned: macOS users see a Gatekeeper
 warning on first launch, Windows users see SmartScreen.
 Code-signing (Developer ID + notarisation, EV cert) is on the
 roadmap.
+
+#### UX walkthrough polish round (#225) + macOS Permissions smoothing (#231)
+
+A Playwright screenshot pass (`tests/e2e/zz-uxwalk.spec.ts`)
+captured every screen / state and surfaced 9 visual / structural
+fixes shipped under #225: active-model chip moved into the
+section header (right-aligned status badge, no longer floating
+mid-page), Settings → Meeting Auto-start group cardified to
+match other settings rows, App-classification rows lose the
+redundant kind-label `<span>`, Meeting-Mode panel guidance
+de-duplicated (the "Click Start to begin recording…" sentence
+folded into the "How it works" disclosure), session "MEETING"
+chip softened from uppercase blue to sentence-case quiet variant,
+History rows show model display names ("Whisper Base") instead
+of raw filenames, Settings → Permissions restructured to be
+action-led (3 buttons + "Why isn't Hush in the list?"
+disclosure for the bundle-id forensics), `tccutil` mention
+dropped from end-user copy, FirstRunModal section divider
+strengthened.
+
+The Permissions surface got a follow-up under #231:
+
+- **Real bug fix:** the Reset button silently skipped Screen
+  Recording (it ran `tccutil reset` for Microphone +
+  ListenEvent + Accessibility but not ScreenCapture). Now resets
+  all four.
+- **Per-row "Grant in Settings…" buttons** on each permission
+  card deep-link to the right System Settings pane.
+- **Better post-reset copy** spells out the `−` button cleanup
+  step for stale Hush.app rows that survive a `tccutil reset`
+  (different signing identity from a previous build).
+- **Dev-loop docs** in `docs/macos-permissions.md` explain the
+  ad-hoc-signing identity churn that produces multiple
+  `Hush.app` rows in System Settings, plus the canonical
+  recovery procedure.
+
+#### Refactor wave: state-layer extractions and event centralisation
+
+The post-IA-redesign cleanup wave landed across several PRs:
+
+- **FirstRunModal + MacosPermsPill extracted** from `+page.svelte`
+  (#212), dropping the page from ~1.5k → ~1.15k LOC.
+- **`lib/events.ts`** centralises Tauri event names (#214) so a
+  typo on one side becomes a TypeScript error rather than a
+  silent listener that never fires.
+- **ModelFetch state bundled** in the Settings window (#215) —
+  six `$state` declarations collapsed into one `modelFetch`
+  struct, Map-mutation patterns simplified.
+- **Active-model chip on Meetings + ModelPicker hint refresh**
+  (#213) — Meetings get the same status chip Dictation has;
+  picker hint copy aligned with the auto-download UX.
+- **Click-to-confirm consistency** on ModelPicker Remove +
+  AppOverrides Remove (#211) brings them under the same
+  destructive-action pattern as History / Vocabulary /
+  Replacements.
+- **Drift round 2 docs** (#210) — sweep of stale comments and
+  copy after a string of recent shipping (Phase C/D/E framing,
+  `formatError` switch references, etc.).
 
 #### IA redesign — sidebar + ⌘, Settings window + native macOS menu (#163, #164, #165, #167, #176)
 

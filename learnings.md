@@ -711,3 +711,185 @@ For mic + system meetings (the canonical Zoom-style config) the Speaker A label 
 **Takeaway:** when shipping a heuristic that runs on a per-shard pipeline (per-source here), the labels it produces are scoped to its shard. If the user-facing display merges shards (the meeting timeline does), the labels need cross-shard context — either provided to the heuristic or composed at a higher layer. The primitive is fine; the wiring needed the cross-shard awareness.
 
 **Update 2026-04-28 (#206):** fix landed via the third bullet from the maintainability review: the pump now collects per-source utterances into `TickBucket`s for the tick, calls `diarize_and_dispatch_merged` once over the chronologically-merged batch, then splits the labelled result back into per-source slices for the existing `dispatch_utterances` path. The trait surface didn't move; the wiring carries the cross-source coordination. Tail flush uses the same shape so a single-tick edge case can't bypass it. EnergyDiarizer now sees the true mic + system sequence — "Speaker A" means the same person regardless of which side it came from. Tests `diarize_and_dispatch_merged_runs_diarizer_in_chronological_order` + `..._is_a_no_op_for_empty_buckets` pin the new contract.
+
+---
+
+## 2026-04-29 — Release pipeline smoke caught a deployment-target tarpit
+
+The release workflow (`.github/workflows/release.yml`, #226) ships
+`tauri-action`-built artefacts on `v*` tag pushes. A
+`workflow_dispatch` smoke run was the first time we'd actually
+exercised it. Three iterations produced concrete learnings worth
+writing down — the macOS leg is the tarpit, the rest worked clean.
+
+### Smoke #1: Intel and Apple Silicon both fail with `<filesystem>`
+
+```
+error: '~directory_iterator' is unavailable: introduced in macOS 10.15 unknown
+fatal error: too many errors emitted, stopping now
+```
+
+whisper.cpp's GGML uses C++17 `<filesystem>` (`directory_iterator`,
+`exists`, `path`, etc.), all marked unavailable below macOS 10.15.
+Tauri's release-build path defaults the deployment target somewhere
+older than that. `ci.yml` doesn't catch this because cargo-test goes
+through a different build path that doesn't bake in a deployment
+target — `tauri-action`'s bundler does.
+
+### Smoke #2 (#229): drop Intel + bump deployment target via $GITHUB_ENV
+
+Two things at once:
+- macOS 26 (Tahoe) is the project's primary target per CLAUDE.md.
+  26 is Apple-Silicon-only; an Intel build leg has nothing to run
+  on inside the supported window. Dropped from the matrix.
+- Set `MACOSX_DEPLOYMENT_TARGET=26.0` in `$GITHUB_ENV` for the
+  Apple Silicon leg, expecting the cc crate's deployment-target
+  logic (which reads this env via `deployment_from_env`) to
+  return 26.0.
+
+The Apple Silicon leg **still failed with the same error**. Logs
+showed the env was set:
+
+```
+MACOSX_DEPLOYMENT_TARGET: 26.0
+```
+
+…but the actual cc command had:
+
+```
+cc ... --target=arm64-apple-macosx -mmacosx-version-min=10.13 \
+   -w -march=armv8.6-a -mmacosx-version-min=14.0 \   # the $CFLAGS we set
+   ... -arch arm64 -mmacosx-version-min=10.13 ...
+```
+
+Three `-mmacosx-version-min` flags, last-wins is 10.13.
+
+### Smoke #3 (#230): pass via CFLAGS, hit the same wall
+
+We tried `-mmacosx-version-min=14.0` directly through `CFLAGS` and
+`CXXFLAGS`, plus `MACOSX_DEPLOYMENT_TARGET=14.0` (a value the GH
+runner's macOS 15 SDK actually accepts — Xcode 16.4 can't deploy-
+target above 15). Same triple-flag situation in the cc command,
+same 10.13 winning. The cmake configure log showed where the
+flags came from:
+
+```
+-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections -fPIC \
+                --target=arm64-apple-macosx -mmacosx-version-min=10.13 \
+                -w -march=armv8.6-a -mmacosx-version-min=14.0
+```
+
+**The 10.13 is being injected by cmake-rs (or the cc crate it asks
+for compile flags) before our user CFLAGS get appended.** Then
+cmake itself appends another `-mmacosx-version-min=10.13` after
+our flags as a `-arch` companion pair. We're sandwiched.
+
+### Where 10.13 actually comes from (best current understanding)
+
+- The `cc` crate at v1.2.61 has logic that reads
+  `MACOSX_DEPLOYMENT_TARGET` env, and if absent falls through to
+  `default_deployment_from_sdk()` (runs `xcrun --show-sdk-version`)
+  and finally a hardcoded 11.0 for `aarch64`. Our env *is* set to
+  14.0; cc *should* return 14.0.
+- But it doesn't — cmake-rs ends up emitting flags with 10.13.
+  Where 10.13 comes from is still unclear from a code-only audit:
+  it's not in cmake-rs's source, not in cc's, not in whisper.cpp's
+  CMakeLists, not in whisper-rs-sys's build.rs. Likely a deeper
+  cmake auto-detection path that fires during the configure step,
+  but I burned three smoke runs trying to find it without
+  resolution.
+
+### Three things to try next (none of them attempted yet)
+
+1. **Bump whisper-rs.** We're on 0.13.1; a newer whisper.cpp
+   pin in a newer whisper-rs may have removed the `<filesystem>`
+   call site or fixed the deployment-target plumbing in its
+   `cmake::Config` invocation by adding an explicit
+   `.define("CMAKE_OSX_DEPLOYMENT_TARGET", "14.0")`.
+2. **Vendor / patch.** Add a `[patch.crates-io]` entry that
+   points whisper-rs-sys at a fork with the explicit
+   `.define()`.
+3. **Build macOS locally.** The release pipeline produces clean
+   Linux + Windows artefacts; the maintainer attaches the macOS
+   `.dmg` produced by `npm run tauri:bundle` by hand.
+
+### Takeaways
+
+- **The smoke caught a real bug.** Three iterations of "fix and
+  re-run" were not wasted runner minutes — they progressively
+  narrowed down where the deployment-target string was coming from.
+  The discipline is: read the actual cc command line in the failing
+  log before writing the next fix.
+- **Design target ≠ deployment target.** macOS 26 is the *design*
+  target (what we hands-on test on) per CLAUDE.md. The deployment
+  target is the *technical* lower-bound the binary is compatible
+  with — constrained by the runner's SDK version (Xcode 16.4 →
+  macOS 15 SDK ceiling). 14.0 is the realistic floor that's
+  Apple-Silicon-supported, above whisper.cpp's `<filesystem>` need,
+  and below the SDK ceiling. Bumping the deployment target to 26.0
+  has to wait for GH runners to ship Xcode 26.x.
+- **Linux + Windows worked first try.** The pipeline is real; the
+  macOS leg is one targeted upstream fix away from being green
+  too. `docs/releases.md` documents the maintainer recipe so the
+  release-cutting happy path doesn't need this learnings entry.
+- **Tracking issue:** the cmake-rs flag-construction propagation
+  would benefit from a focused ticket (try option 1 above first
+  since it's free, then option 2 if needed). For now the workflow
+  ships in a "Linux + Windows artefacts attach cleanly, macOS leg
+  needs an upstream poke" state.
+
+---
+
+## 2026-04-29 — TCC Reset bug + dev-loop polish (#231)
+
+Two related lessons from the dev iteration after first
+`npm run tauri:bundle`:
+
+### The Reset button silently skipped Screen Recording
+
+`reset_macos_permissions` ran `tccutil reset` for `Microphone`,
+`ListenEvent`, and `Accessibility` — but not `ScreenCapture`. We
+caught it hands-on: clicked Reset, saw the Screen Recording entry
+still in System Settings under "GRANTED". Trivial bug (one missing
+string in an array), worth noting because it sat in production for
+weeks: an in-app "Reset all" affordance that visibly looks like it
+did all four things but actually did three. Test coverage for IPC
+commands would have caught this; we have unit tests for some
+commands (HUD toggle gained tests under #220) but not for the
+macOS-specific ones because they shell out to `tccutil`. A test
+that mocks the command runner would be cheap.
+
+### Stale Hush.app rows survive `tccutil reset`
+
+`npm run tauri:bundle` ad-hoc-signs the `.app`. The signing identity
+is derived from binary contents, so it changes every rebuild.
+macOS keys TCC entries by signing identity, **not** bundle id, when
+the identity differs. Two consequences:
+
+1. Multiple Hush.app rows accumulate in System Settings →
+   Privacy & Security under different identities.
+2. `tccutil reset ScreenCapture com.khawkins.hush` resets the entry
+   that matches the bundle id but the *other* row(s) under different
+   identities don't go anywhere. They keep their grants.
+
+The user-visible failure: macOS doesn't prompt on the next
+recording attempt because *some* Hush.app row is granted, but the
+running build's identity matches none of those rows, so it's
+blocked anyway. Silent block, no prompt, no grant.
+
+**Recovery procedure documented in `docs/macos-permissions.md`
+"Dev-loop":** reset → click `−` on each Hush.app row in System
+Settings → relaunch → re-grant. The Settings → Permissions Reset
+button's success copy now spells this out explicitly so the user
+doesn't have to grep docs.
+
+### Takeaway
+
+Iteration on macOS apps that fall under TCC has an OS-level state
+that doesn't go away when our app does. Any "reset our state"
+affordance has to either a) cover every TCC service the app
+touches (we now do — fixed the bug), and b) tell the user about the
+out-of-band cleanup steps that the OS API can't do for us (the `−`
+button case). The post-reset summary is a good place for the
+latter; a GUI button can't do it because reaching into System
+Settings requires user consent.
