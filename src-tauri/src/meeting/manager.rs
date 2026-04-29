@@ -1359,8 +1359,8 @@ impl AppClassifier {
                 ("us.zoom.xos", MeetingAppKind::Meeting), // macOS bundle
                 ("Zoom", MeetingAppKind::Meeting),        // Linux / display name
                 ("Zoom Meetings", MeetingAppKind::Meeting),
-                ("zoom", MeetingAppKind::Meeting),         // Linux process
-                ("Zoom.exe", MeetingAppKind::Meeting),     // Windows
+                ("zoom", MeetingAppKind::Meeting), // Linux process
+                ("Zoom.exe", MeetingAppKind::Meeting), // Windows
                 ("zoom.exe", MeetingAppKind::Meeting),
                 // Microsoft Teams
                 ("Microsoft Teams", MeetingAppKind::Meeting),
@@ -1407,7 +1407,6 @@ impl AppClassifier {
                 // recording surface is the same)
                 ("Loom", MeetingAppKind::Meeting),
                 ("Loom.exe", MeetingAppKind::Meeting),
-
                 // ---- Media apps ----
                 // Auto-start (when shipped) defaults to "no" for
                 // these — most users don't want a YouTube watch-
