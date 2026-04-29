@@ -12,7 +12,9 @@ A `v*` tag push (or a manual `workflow_dispatch`) runs the build matrix on three
 | Linux (Ubuntu) | — | `hush_<version>_amd64.AppImage`, `hush_<version>_amd64.deb` |
 | Windows | — | `Hush_<version>_x64.msi`, `Hush_<version>_x64-setup.exe` |
 
-Intel macOS is not in the matrix. macOS 26 (Tahoe) is the project's primary target per CLAUDE.md, and 26 is Apple-Silicon-only — there's nothing for an Intel binary to run on inside the supported window. The workflow's `MACOSX_DEPLOYMENT_TARGET=26.0` env enforces the floor at the Tauri build step.
+Intel macOS is not in the matrix. macOS 26 (Tahoe) is the project's primary target per CLAUDE.md, and 26 is Apple-Silicon-only — there's nothing for an Intel binary to run on inside the supported window.
+
+The actual deployment target the binary is built against is `MACOSX_DEPLOYMENT_TARGET=14.0`, **not 26.0**: GitHub's `macos-latest` runner uses Xcode 16.4 with the macOS 15 SDK, so we can't deploy-target a version higher than the SDK supports. 14.0 (Sonoma) is the practical floor — well above whisper.cpp's C++17 `<filesystem>` requirement (≥ 10.15), Apple-Silicon-supported (≥ 11.0), comfortably below the SDK ceiling. **macOS 26 remains the *design target* we hands-on test on**; the deployment target is just the technical lower-bound. To bump the deployment target to macOS 26 specifically we'd need to wait for GitHub's runners to ship Xcode 26.x.
 
 `tauri-action` attaches all of them to a single GitHub Release, named after the tag. The release is created as a **draft** so you can review the artefact list before publishing.
 
