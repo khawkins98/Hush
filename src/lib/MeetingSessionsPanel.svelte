@@ -657,6 +657,30 @@
         return "Other";
     }
   }
+
+  /**
+   * Render the persisted source-kind labels (`"mic"`, `"system"`)
+   * as a single human-readable chip. The backend writes the kind
+   * tags verbatim; the panel maps them to friendlier names so a
+   * session reads as "Mic + System audio" rather than the
+   * opaque "mic,system" CSV that lives in the database.
+   *
+   * Unknown values pass through unchanged so a future source kind
+   * still surfaces something rather than getting silently dropped.
+   */
+  function sourceLabel(kind: string): string {
+    switch (kind) {
+      case "mic":
+        return "Mic";
+      case "system":
+        return "System audio";
+      default:
+        return kind;
+    }
+  }
+  function sourceListLabel(kinds: string[]): string {
+    return kinds.map(sourceLabel).join(" + ");
+  }
 </script>
 
 <section class="meetings panel-meetings" aria-labelledby="meetings-heading">
@@ -1114,6 +1138,27 @@
             <span class="session-utterances">
               {session.utteranceCount} utterance{session.utteranceCount === 1 ? "" : "s"}
             </span>
+            <!--
+              Source-list metadata (#242). When the foreground app
+              at session-open was a browser or generic productivity
+              app, the classifier verdict ("Other") and app name
+              ("manual") are uninformative — but the user usually
+              cares more about *what was recorded* than which
+              window had focus at the moment of clicking Start.
+              Surface the captured sources so a session with mic +
+              system audio reads as "Mic + System audio" even when
+              app classification gave up.
+
+              Only rendered when the row has at least one source —
+              legacy rows from before migration 0004 lack the
+              column, and we'd rather show nothing than a confusing
+              blank chip.
+            -->
+            {#if session.sources && session.sources.length > 0}
+              <span class="session-sources" aria-label="Audio sources">
+                {sourceListLabel(session.sources)}
+              </span>
+            {/if}
           </div>
           {#if session.notes}
             <p class="session-notes">{session.notes}</p>
@@ -1900,6 +1945,21 @@
   color: #777;
 }
 
+/* Source-list chip (#242). Filled background to read as
+   concrete metadata ("this is what was actually captured") in
+   contrast to the muted .session-kind chip ("this is the
+   classifier's guess at what kind of app was running"). The
+   classifier is uninformative for browsers / generic apps;
+   sources never are. */
+.session-sources {
+  padding: 0.05em 0.5em;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #2a4690;
+  background-color: rgba(74, 108, 208, 0.12);
+}
+
 .session-notes {
   margin: 0.5rem 0 0;
   padding: 0.4rem 0.6rem;
@@ -2165,6 +2225,10 @@ button:disabled {
   }
   .session-kind-other {
     color: #aaa;
+  }
+  .session-sources {
+    color: #b6c3f0;
+    background-color: rgba(140, 168, 240, 0.18);
   }
   .session-notes {
     background-color: rgba(255, 235, 150, 0.1);
