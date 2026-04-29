@@ -84,6 +84,11 @@ export type MeetingSession = {
   speakerCount: number | null;
   utteranceCount: number;
   notes: string | null;
+  /// Audio sources captured at session-open time (#242). Kind
+  /// labels in pick order — currently `"mic"` and/or `"system"`.
+  /// Persisted via migration 0004; `null` for legacy rows
+  /// created before the migration ran.
+  sources: string[] | null;
 };
 
 export type PersistedUtterance = {
