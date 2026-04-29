@@ -15,6 +15,34 @@ single flat list was hard to navigate.
 
 ### Added
 
+#### Release pipeline + manual update probe (#222, #223)
+
+Hush now ships pre-built cross-platform binaries via GitHub
+Releases. A new `.github/workflows/release.yml` fires on `v*`
+tag pushes (or manual `workflow_dispatch`), runs the build
+matrix on macOS / Linux / Windows runners via
+[`tauri-action`](https://github.com/tauri-apps/tauri-action), and
+attaches `.dmg` (Apple Silicon + Intel), `.AppImage`, `.deb`,
+`.msi`, and `.exe` artefacts to a draft GitHub Release.
+Maintainer recipe in [`docs/releases.md`](./docs/releases.md).
+
+Alongside the pipeline, a manual "Check for updates" probe
+(#223) lets users find out when a new release is published —
+Settings → About → "Check for updates" or
+`Hush → Check for Updates…` from the macOS menu bar. Hush does
+**not** auto-check on launch; every check is a click. The
+backend's single read-only request to GitHub's
+`/repos/khawkins98/Hush/releases/latest` returns one of three
+results: up-to-date, an update is available (with a release-page
+link), or the check failed (offline / rate-limited). The full
+auto-update channel via `tauri-plugin-updater` (#10) is the
+natural follow-up — gated on a signing-key decision.
+
+First-wave releases ship unsigned: macOS users see a Gatekeeper
+warning on first launch, Windows users see SmartScreen.
+Code-signing (Developer ID + notarisation, EV cert) is on the
+roadmap.
+
 #### IA redesign — sidebar + ⌘, Settings window + native macOS menu (#163, #164, #165, #167, #176)
 
 The main window grew a left sidebar (Dictation / Meetings / History)

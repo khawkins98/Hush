@@ -88,6 +88,17 @@ The first release wave is unsigned, so:
 
 Code-signing (Developer ID + notarisation on macOS, EV certificate on Windows) is on the roadmap — once those land, the warnings go away.
 
+### Updates
+
+Hush does **not** check for updates automatically. There is no background poll, no startup probe, no analytics ping that compares your version to anything. Auto-update is on the roadmap ([#10](https://github.com/khawkins98/Hush/issues/10)) and will ship as an opt-in.
+
+To check manually:
+
+- Open **Settings → About** and click **Check for updates**, or
+- On macOS, **Hush → Check for Updates…** from the menu bar.
+
+The check makes a single read-only request to `api.github.com/repos/khawkins98/Hush/releases/latest`, compares the tag to your installed version, and tells you one of: you're up to date, an update is available (with a link to the release page), or the check failed (offline / rate-limited). If an update is available, you download and install it the same way you did the first time.
+
 ---
 
 ## Quick start (development)
@@ -139,8 +150,10 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md#testing) for the layered breakdown —
 ## Privacy posture
 
 - **No audio leaves the device.** Transcription is whisper.cpp running locally; there is no cloud round-trip.
-- **No telemetry.** The updater plugin is currently stubbed. If telemetry is ever added it will be opt-in with a separate privacy review.
-- **One outbound network surface:** the Whisper model download from Hugging Face when you click Download in the model picker. The HTTP client redirects only within `huggingface.co` (host-restricted, hop-cap 4) and verifies SHA-256 on every download. Once the model is cached locally, transcription is fully offline.
+- **No telemetry, no analytics, no startup beacon.** Auto-update is not enabled — Hush does not phone home unprompted. If telemetry or auto-update ever ships, it will be opt-in with a separate privacy review.
+- **Two outbound network surfaces, both user-initiated:**
+  - **Whisper model download** from Hugging Face when you click Download in the model picker. The HTTP client redirects only within `huggingface.co` (host-restricted, hop-cap 4) and verifies SHA-256 on every download. Once cached, transcription is fully offline.
+  - **Manual update check** when you click "Check for updates" in Settings → About (or `Hush → Check for Updates…` on macOS). Single read-only request to `api.github.com`. No identifying headers beyond the default reqwest user agent and the GitHub-recommended `Accept: application/vnd.github+json`.
 
 ---
 
