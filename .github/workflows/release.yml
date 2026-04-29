@@ -1,0 +1,171 @@
+# Tag-driven cross-platform build + GitHub Release publication.
+#
+# Triggers on a `v*` tag push. Each platform builds in parallel via
+# `tauri-action`, which produces a .dmg / .AppImage / .deb / .msi /
+# .exe and attaches it to a draft GitHub Release named after the tag.
+# We deliberately ship the release as a draft on first creation so a
+# maintainer can review the artefact list before flipping it to
+# Published.
+#
+# ## What's signed (or not)
+#
+# - **macOS**: ad-hoc signed only for v1. The first time a user
+#   downloads, macOS will show the standard "downloaded from
+#   internet" Gatekeeper warning; right-click → Open opens it once,
+#   subsequent launches are silent. Developer ID + notarisation is
+#   the right next step (#222 follow-up); needs an `APPLE_*`
+#   secrets bundle.
+# - **Windows**: unsigned. SmartScreen warning on first run.
+#   EV cert + signtool is the follow-up.
+# - **Linux**: AppImage / .deb don't sign artefacts the same way;
+#   shipped as-is.
+#
+# ## How to cut a release
+#
+# 1. Bump `version` in `src-tauri/tauri.conf.json` and
+#    `src-tauri/Cargo.toml`.
+# 2. Update CHANGELOG.md.
+# 3. `git tag v0.2.0 && git push origin v0.2.0`.
+# 4. Wait for the workflow. Each matrix leg takes ~10–20 min depending
+#    on cache state. The whisper.cpp build is the slow part.
+# 5. Open the draft release on GitHub, review artefacts, paste the
+#    CHANGELOG entry into the body, click Publish.
+#
+# To dry-run without tagging: trigger via the "Run workflow" button
+# (workflow_dispatch). The artefacts upload to a draft release named
+# after the dispatch run; delete the release after inspection.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Allow manual runs from the Actions UI for dry-run / smoke testing
+  # the build matrix without cutting an actual tag. The workflow
+  # publishes to a draft release tagged with the run id so accidental
+  # dispatches don't pollute the release list.
+  workflow_dispatch:
+
+# One release per ref. Cancel an in-flight run if the same tag is
+# re-pushed (force-push of a moving tag, etc.).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build (${{ matrix.label }})
+    permissions:
+      # tauri-action needs `contents: write` to create / update the
+      # release and attach artefacts. No other permissions required.
+      contents: write
+    strategy:
+      # Don't abort the other platforms when one fails — a
+      # macOS-Apple-Silicon failure shouldn't kill the Linux + Windows
+      # artefacts a maintainer can still ship.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            label: macOS (Apple Silicon)
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            label: macOS (Intel)
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-latest
+            label: Linux
+            args: ''
+          - platform: windows-latest
+            label: Windows
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev libxi-dev libxtst-dev libx11-dev \
+            libasound2-dev \
+            cmake pkg-config patchelf
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Add both Apple Silicon and Intel targets when building on
+          # macOS so the per-arch matrix legs each have what they need
+          # cached. On Linux / Windows the host triple is already
+          # installed by the toolchain action.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          # Distinguish the two macOS legs so they don't fight over
+          # the same cache key — each Apple Silicon vs Intel build
+          # has its own target dir entries.
+          key: ${{ matrix.label }}
+
+      # Same i8mm workaround as ci.yml — whisper.cpp's GGML uses
+      # vmmlaq_s32 unconditionally on aarch64. Apple Silicon supports
+      # i8mm but the default macOS clang invocation doesn't enable
+      # the target feature, so the build fails without an explicit
+      # `-march=armv8.6-a` (which baselines i8mm).
+      - name: Set whisper.cpp arch flags (macOS arm64)
+        if: matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')
+        shell: bash
+        run: |
+          echo "CFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Push the actual build through tauri-action. It runs
+      # `npm run tauri build -- ${args}`, then walks the bundle
+      # output dir, finds the platform-specific artefacts, and
+      # attaches them to a GitHub Release. The release is created on
+      # the first matrix leg and re-used by the others — the action
+      # de-duplicates on the resolved tag name.
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref_name }}
+          releaseName: ${{ github.event_name == 'workflow_dispatch' && format('Dispatch run {0}', github.run_id) || format('Hush {0}', github.ref_name) }}
+          releaseBody: |
+            See [CHANGELOG.md](https://github.com/khawkins98/Hush/blob/main/CHANGELOG.md) for the human-readable change log.
+
+            ### Install
+
+            - **macOS**: download the `.dmg`, open it, drag Hush.app
+              to Applications. First launch will show a Gatekeeper
+              warning — right-click Hush.app → Open to bypass.
+              (Notarisation is on the roadmap.)
+            - **Windows**: download the `.msi` or `.exe`. SmartScreen
+              will warn on first run; click "More info" → "Run
+              anyway." (Code signing is on the roadmap.)
+            - **Linux**: `.AppImage` (any distro) or `.deb`
+              (Debian/Ubuntu).
+          # Ship as draft so a maintainer can review the attached
+          # artefacts before publishing — first-time release plumbing
+          # is the kind of thing that benefits from a manual gate.
+          releaseDraft: true
+          prerelease: false
+          # Args land between `tauri build` and the platform's
+          # native bundler — currently used to fan out per-arch
+          # macOS builds.
+          args: ${{ matrix.args }}
