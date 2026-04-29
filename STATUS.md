@@ -1,6 +1,6 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-04-28, post-IA-redesign + multi-agent review
+**Snapshot:** 2026-04-29, post-release-pipeline + manual update probe + perms-smoothing
 **Author:** Claude (working async on Ken's behalf)
 
 A working hand-off doc; not the canonical CHANGELOG or PRD. The goal:
@@ -13,8 +13,12 @@ pickup, don't try to keep it incrementally up-to-date.
 ## Where the project stands
 
 **Daily-usable on macOS 26.** v0.1.0 was tagged with the dictation
-hot-path; ~85 PRs since (the pivot to Meeting Mode and a full IA
-redesign) have brought the app to the shape it ships in today.
+hot-path; ~100 PRs since have brought the app to the shape it ships
+in today. The post-IA-redesign stretch (Settings window, native
+menu, status-bar icon) landed first; more recently the focus has been
+on shipping the install / update path (release workflow + manual
+update probe), polishing a UX walkthrough into a coherent set of
+fixes, and closing dev-iteration friction around macOS permissions.
 
 What's in the build right now:
 
@@ -29,45 +33,75 @@ What's in the build right now:
   `Right Ctrl` elsewhere.
 - **Meeting Mode** — long-running multi-source capture (mic + macOS
   system-audio in parallel via ScreenCaptureKit), live partial-utterance
-  rendering, You/Remote-tagged transcripts, searchable session history.
-  Streaming Whisper sliding-window powers the live partials.
+  rendering, Speaker A / B-tagged transcripts (D1 silence-gap
+  diarizer #191/#201), searchable session history (#216 search
+  filter), per-app classifier with cross-platform defaults (#219:
+  Zoom/Teams/Discord/Slack/Webex/Skype + media apps across macOS
+  bundle ids, Linux process names, Windows .exe basenames).
+  **Auto-start** when a classified meeting app focuses (#221) —
+  opt-in via Settings → Meeting → Auto-start (Off / Always);
+  manual-start unchanged.
 - **Settings window** — model picker (auto-download from Hugging Face,
-  SHA-256 verified), vocabulary terms, find/replace rules, macOS
-  permissions diagnostic, autostart toggle, hotkey display, first-run
-  welcome reset.
+  SHA-256 verified, friendly display names in History rows #225),
+  vocabulary terms, find/replace rules, **per-app meeting overrides
+  with click-to-confirm Remove**, macOS permissions diagnostic with
+  per-row "Grant in Settings…" deep-links and **all-four** TCC
+  reset (#231 — fixed a bug where the previous reset skipped
+  ScreenCapture), autostart toggle, **HUD-show toggle** (#218),
+  hotkey display, first-run welcome reset, **manual "Check for
+  updates"** probe (#227 — Settings → About + macOS menu bar).
 - **macOS niceties** — native menu bar (⌘1/⌘2/⌘3 sidebar shortcuts,
-  ⌘, opens Settings), status-bar icon (Show / Toggle Recording /
-  Quit), live TCC permission detection (green "Permissions OK" pill on
-  Dictation when mic + Screen Recording are granted), HUD drag +
+  ⌘, opens Settings, **Hush → Check for Updates…**), status-bar icon
+  (Show / Toggle Recording / Quit), live TCC permission detection
+  (green "Permissions OK" pill on Dictation when granted), HUD drag +
   dismiss, system font stack + native form-control rendering.
 - **Library** — SQLite history with FTS5 + recording duration,
   vocabulary + replacements CRUD.
+- **Release pipeline** (#226) — `.github/workflows/release.yml`
+  fires on `v*` tags or `workflow_dispatch`, builds via
+  `tauri-action` on macos-latest / ubuntu-latest / windows-latest,
+  attaches `.dmg` (Apple Silicon, macOS 26), `.AppImage`, `.deb`,
+  `.msi`, `.exe` to a draft GitHub Release. Maintainer recipe in
+  [`docs/releases.md`](./docs/releases.md). Smoke-tested via
+  `gh workflow run release.yml` 2026-04-29; Linux + Windows legs
+  produce clean artefacts, the macOS leg has an open issue with
+  `cmake-rs`'s deployment-target propagation through whisper-rs-sys
+  (`learnings.md` 2026-04-29).
 
 What's deferred:
 
 - **Auto-update** ([#10](https://github.com/khawkins98/Hush/issues/10))
   — needs a pubkey decision before the updater plugin can wire up.
+  The release pipeline is now in place to feed it artefacts. Manual
+  "Check for updates" (#223 / #227) ships in the meantime.
 - **Parakeet ONNX backend** (#32) — green-lit on 2026-04-25; multi-PR.
 - **Per-platform system audio**: Linux ([#106](https://github.com/khawkins98/Hush/issues/106))
   and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)).
   Need hands-on testing on those platforms; no maintainer machine for
-  either.
+  either. Classifier defaults (#219) already cover the per-OS app
+  names so the moment system-audio capture lands the meeting auto-
+  start path will recognise Zoom/Teams/etc. there too.
 - **D2 model-based speaker diarization** ([#111](https://github.com/khawkins98/Hush/issues/111))
   — D1 silence-gap heuristic shipped under #191/#201 (renders Speaker
   A/B in meeting transcripts); D2 (ONNX speaker-embedding) needs a
-  model decision. Known D1 caveat: per-source pump runs the
-  diarizer independently — see `learnings.md` 2026-04-28.
-- **Auto-start Meeting Mode on foreground-app detection**
-  ([#112](https://github.com/khawkins98/Hush/issues/112)) — per-app
-  override storage + Settings UI shipped under #112/#192;
-  auto-start lifecycle still pending (manual-start works today).
+  model decision.
 - **Mac App Store distribution** ([#114](https://github.com/khawkins98/Hush/issues/114))
   — needs Ken's call.
+- **Permissions-as-its-own-dialog** ([#232](https://github.com/khawkins98/Hush/issues/232))
+  — extract the per-row UI into a reusable dialog so first-run +
+  ad-hoc launches share the same surface as Settings.
+- **MCP server** ([#224](https://github.com/khawkins98/Hush/issues/224))
+  — expose transcripts/meetings/vocab/replacements as MCP resources
+  + opt-in tools for start/stop. Off by default, localhost-only,
+  per-install token.
 
 The last multi-agent review (writer / Rust / UX / security) ran on
-2026-04-28 against #182. Every critical finding is fixed; the deferred
-items are tracked in the relevant issues. Security found nothing
-exploitable.
+2026-04-28 against #182. Every critical finding is fixed; the
+deferred items are tracked in the relevant issues. Security found
+nothing exploitable. A subsequent UX walkthrough (Playwright
+screenshot pass, spec at `tests/e2e/zz-uxwalk.spec.ts`) produced 9
+visual / structural fixes (#225) and a Permissions surface refactor
+(#231).
 
 ---
 
@@ -207,12 +241,12 @@ These can't be exercised by CI:
 
 ### d) Automated suites
 
-- `cd src-tauri && cargo test --lib` — 214 unit tests, fast
+- `cd src-tauri && cargo test --lib` — 263+ unit tests, fast
 - `cd src-tauri && cargo clippy --all-targets -- -D warnings` —
   must be clean
 - `cd src-tauri && cargo fmt --all -- --check` — must be clean
 - `npm run check` — svelte-check, must be clean
-- `npm run test:e2e` — 41 Path A specs (Playwright + Chromium,
+- `npm run test:e2e` — 70+ Path A specs (Playwright + Chromium,
   mocked IPC)
 - `npm run test:e2e:tauri` — Path B (tauri-driver, real binary).
   Scaffold + smoke spec landed under #202 (refs #57); CI is
@@ -249,14 +283,13 @@ These can't be exercised by CI:
   diarization. **D1 shipped** (silence-gap `EnergyDiarizer`,
   #191/#201, in production); **D2 deferred** (model-based ONNX
   speaker-embedding, needs a model decision).
-- [#112](https://github.com/khawkins98/Hush/issues/112) — Per-app
-  classifier policy. **Override storage + Settings UI shipped**
-  under #112/#192; auto-start-on-classify lifecycle still pending
-  (manual-start works today).
 - [#173](https://github.com/khawkins98/Hush/issues/173) — Layer 2
   native UI (per-OS class + targeted CSS overrides).
   Deferred until macOS-only hands-on coverage stops being a liability
   for sight-unseen Windows/Linux work.
+- [#224](https://github.com/khawkins98/Hush/issues/224) — Hush as
+  MCP server (transcripts as resources, opt-in tools for start/stop).
+  Off by default, localhost-only, per-install token.
 
 ### Polish, deferred-on-purpose
 
@@ -267,14 +300,26 @@ These can't be exercised by CI:
   until tauri-driver's macOS path stabilises; spec coverage grows
   as Path A's mock-shaped gaps surface.
 - [#156](https://github.com/khawkins98/Hush/issues/156) —
-  `+page.svelte` state-layer refactor. Phase 3 lifted ~158 LOC; the
-  file is still ~1.5k. Worth more extraction (meeting state into a
-  composable) when next a contributor reports navigation friction.
+  `+page.svelte` state-layer refactor. Multiple extractions landed
+  (#212 FirstRunModal + MacosPermsPill); the file is now ~1.1k.
+  Further extraction (meeting state into a composable) is the next
+  natural step if a contributor reports navigation friction.
+- [#232](https://github.com/khawkins98/Hush/issues/232) — extract
+  Permissions UI into a reusable dialog so first-run + ad-hoc
+  launches share the surface with Settings.
 
 ### Recently shipped, removed from this list
 
 - #55 (rtrb SPSC ring buffer) — landed #193.
 - #116 (AppState DataServices grouping) — landed #190.
+- #112 (per-app classifier policy + auto-start lifecycle) — both
+  halves shipped: overrides under #192, auto-start under #221.
+- #217 (cross-platform classifier defaults) — landed #219.
+- #218 (HUD-show toggle), #220 (HUD IPC unit tests).
+- #222 (release pipeline), #223 (manual update probe).
+- #225 (UX walkthrough polish — 9 visual/structural fixes).
+- #231 (perms smoothing — fixed Reset bug, per-row Grant buttons,
+  dev-loop docs).
 
 ---
 
