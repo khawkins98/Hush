@@ -470,6 +470,22 @@
     target: "microphone" | "input-monitoring" | "screen-recording",
   ) {
     try {
+      // For Screen Recording: macOS only adds Hush to the Screen
+      // & System Audio Recording list once Hush has actively
+      // queried SCK. A user who hasn't started a Meeting Mode
+      // session yet would land on the pane with no Hush row to
+      // toggle. Prime the permission first so the row appears
+      // (and the standard TCC prompt fires for not-determined
+      // state). Fire-and-forget — we don't block deep-linking on
+      // it, and the helper internally swallows the typical
+      // "denied" return.
+      if (target === "screen-recording") {
+        try {
+          await invoke("prime_screen_recording_permission");
+        } catch (primeErr) {
+          console.warn("[hush] prime SCK permission failed", primeErr);
+        }
+      }
       await invoke("open_macos_privacy_pane", { target });
     } catch (e) {
       console.warn("[hush] open privacy pane failed", e);
