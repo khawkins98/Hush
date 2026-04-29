@@ -1399,4 +1399,31 @@ mod tests {
         assert!(parse_hud_enabled_setting(Some("True".into())));
         assert!(parse_hud_enabled_setting(Some("FALSE".into())));
     }
+
+    #[test]
+    fn autostart_mode_round_trips_through_atomic_encoding() {
+        use crate::meeting::MeetingAutostartMode;
+        // Every defined variant must encode + decode back to itself.
+        for mode in [MeetingAutostartMode::Off, MeetingAutostartMode::Always] {
+            let byte = encode_autostart_mode(mode);
+            assert_eq!(decode_autostart_mode(byte), mode, "round-trip for {mode:?}");
+        }
+    }
+
+    #[test]
+    fn autostart_mode_decode_falls_back_to_off_for_unknown_bytes() {
+        use crate::meeting::MeetingAutostartMode;
+        // A future variant added to the enum but not yet known to a
+        // stale build (or a corrupted atomic from some unforeseen
+        // path) must read as `Off` — the safer default. Nobody wants
+        // their mic to spontaneously turn on because of a byte the
+        // decoder didn't recognise.
+        for byte in [2u8, 3, 7, 42, 99, 255] {
+            assert_eq!(
+                decode_autostart_mode(byte),
+                MeetingAutostartMode::Off,
+                "unknown byte {byte} should decode to Off"
+            );
+        }
+    }
 }

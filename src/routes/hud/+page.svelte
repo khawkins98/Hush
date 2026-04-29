@@ -200,15 +200,15 @@
     align-items: center;
     justify-content: center;
     border: none;
-    background-color: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.6);
+    background-color: rgba(255, 255, 255, 0.18);
+    color: rgba(255, 255, 255, 0.85);
     border-radius: 50%;
     cursor: pointer;
     transition: background-color 0.12s, color 0.12s;
   }
   .hud-dismiss:hover {
-    background-color: rgba(255, 255, 255, 0.18);
-    color: rgba(255, 255, 255, 0.95);
+    background-color: rgba(255, 255, 255, 0.32);
+    color: rgba(255, 255, 255, 1);
   }
   .hud-dismiss:focus-visible {
     outline: 2px solid rgba(255, 255, 255, 0.6);
