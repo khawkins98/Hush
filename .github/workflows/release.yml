@@ -65,12 +65,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS 26 (Tahoe) is the project's declared primary
+          # target (CLAUDE.md, "macOS 26 only"). 26 is Apple-
+          # Silicon-only, so an Intel build leg has nothing to
+          # run on that we ship for. Dropped accordingly. If a
+          # future need for Intel arises, add the leg back AND
+          # lower MACOSX_DEPLOYMENT_TARGET to whatever the oldest
+          # supported Intel macOS is.
           - platform: macos-latest
             label: macOS (Apple Silicon)
             args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            label: macOS (Intel)
-            args: --target x86_64-apple-darwin
           - platform: ubuntu-latest
             label: Linux
             args: ''
@@ -97,11 +101,10 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Add both Apple Silicon and Intel targets when building on
-          # macOS so the per-arch matrix legs each have what they need
-          # cached. On Linux / Windows the host triple is already
-          # installed by the toolchain action.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          # Apple Silicon target on macOS legs. Intel was dropped
+          # alongside the matrix entry — see the comment on the
+          # matrix above.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -123,6 +126,19 @@ jobs:
         run: |
           echo "CFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
+
+      # macOS 26 (Tahoe) is the project's primary target — see
+      # CLAUDE.md. Setting `MACOSX_DEPLOYMENT_TARGET=26.0` aligns
+      # the Tauri release build with the policy (no backwards-
+      # compat shims for older macOS) AND sidesteps the Intel-era
+      # bug we caught in the first smoke run, where whisper.cpp's
+      # GGML uses C++17 `<filesystem>` symbols marked unavailable
+      # below macOS 10.15. We're well past that floor.
+      - name: Set macOS deployment target
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=26.0" >> "$GITHUB_ENV"
 
       - name: Setup Node
         uses: actions/setup-node@v4
