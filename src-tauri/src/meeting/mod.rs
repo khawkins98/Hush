@@ -104,6 +104,15 @@ pub struct MeetingSession {
     /// User-editable freeform note. The panel renders an "add notes"
     /// affordance when empty.
     pub notes: Option<String>,
+    /// Audio sources captured during the session — kind labels
+    /// (`"mic"` / `"system"`) in the order the user picked them.
+    /// Persisted at session-open via migration 0004 (#242). The
+    /// panel renders these as metadata chips so a session whose
+    /// app classification is "Other / manual" still shows what
+    /// audio was actually captured.
+    ///
+    /// `None` for legacy rows created before migration 0004.
+    pub sources: Option<Vec<String>>,
 }
 
 /// Fields the caller supplies when opening a session. Separate from
@@ -113,6 +122,10 @@ pub struct MeetingSession {
 pub struct NewMeetingSession {
     pub app_name: String,
     pub app_kind: MeetingAppKind,
+    /// Source kind labels in pick order ("mic", "system"). The
+    /// SqliteMeetingSessionRepository persists these as a
+    /// comma-separated string in the `sources` column.
+    pub sources: Vec<String>,
 }
 
 /// Persisted utterance row. Mirrors migration 0002's `utterances`
@@ -247,6 +260,7 @@ mod tests {
             speaker_count: None,
             utterance_count: 0,
             notes: None,
+            sources: Some(vec!["mic".into(), "system".into()]),
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""appName":"us.zoom.xos""#), "got: {json}");

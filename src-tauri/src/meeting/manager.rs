@@ -523,11 +523,23 @@ impl SessionManager {
             .unwrap_or(&self.classifier)
             .classify(&app_name);
 
+        // Snapshot the source-kind labels for persistence (#242).
+        // The panel reads these back to render "Mic + System audio"
+        // metadata even when the app classification is "Other"
+        // (browser tab, generic productivity app). Stored as a
+        // separate Vec rather than shadowing `sources` because the
+        // streaming-session loop below still iterates the original
+        // `Vec<AudioSource>`.
+        let source_labels: Vec<String> = sources
+            .iter()
+            .map(|src| src.kind_label().to_owned())
+            .collect();
         let session = match self
             .repo
             .create(NewMeetingSession {
                 app_name: app_name.clone(),
                 app_kind,
+                sources: source_labels,
             })
             .await
         {

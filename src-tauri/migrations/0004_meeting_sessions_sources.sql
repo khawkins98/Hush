@@ -1,0 +1,22 @@
+-- Add `sources` column to meeting_sessions (#242).
+--
+-- Stores the list of audio sources captured during the session, as
+-- a comma-separated string (e.g. "mic", "system", "mic,system").
+-- Read by the panel to surface "what was actually recorded" as
+-- session metadata — addresses the "manual / Other" trip-hazard
+-- where the foreground-app classification is uninformative
+-- (e.g. browser tab, generic productivity app) but the source
+-- breakdown is.
+--
+-- NULL allowed for legacy rows created before this migration; the
+-- panel falls back to the no-info case for those.
+--
+-- Why a comma-separated string and not a JOIN table:
+-- - The set is small (today: "mic" / "system"; future: a single-
+--   digit count of named sources).
+-- - We never query "find sessions that used source X" — sources
+--   are display-only metadata; a JOIN table would add machinery
+--   for no real query workload.
+-- - SQLite has no native array type, and JSON-typed columns add
+--   ceremony without the indexability JSON would unlock.
+ALTER TABLE meeting_sessions ADD COLUMN sources TEXT;
