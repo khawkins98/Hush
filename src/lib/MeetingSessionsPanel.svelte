@@ -134,6 +134,23 @@
    * confirmation state.
    */
   let confirmingStop = $state(false);
+  /**
+   * Tracks the "stop in flight" window — between the user
+   * confirming Stop and the backend finishing the pump's
+   * final-chunk drain (which can take up to ~10 s while whisper
+   * inference completes on the last 10-s window). Without this,
+   * the panel snaps from "Stop session" to a long visual silence
+   * with no indication anything is happening, and the user reads
+   * it as a hang.
+   *
+   * Cleared by an effect (below) when `activeSessionId` flips to
+   * `null` — i.e. when the backend reports the session has
+   * actually ended. Belt-and-braces: also cleared after a 30 s
+   * watchdog so a backend hang doesn't strand the UI in the
+   * stopping state forever.
+   */
+  let stopping = $state(false);
+  let stoppingWatchdog: number | undefined;
   function requestStop() {
     confirmingStop = true;
   }
@@ -142,8 +159,28 @@
   }
   async function confirmStop() {
     confirmingStop = false;
+    stopping = true;
+    if (stoppingWatchdog !== undefined) {
+      window.clearTimeout(stoppingWatchdog);
+    }
+    stoppingWatchdog = window.setTimeout(() => {
+      stopping = false;
+    }, 30000);
     await onStop();
   }
+  $effect(() => {
+    // Backend cleared the active session — drop the stopping
+    // banner and the watchdog. Leaving stopping=true after the
+    // session ends would block the next Start button from
+    // appearing.
+    if (activeSessionId === null && stopping) {
+      stopping = false;
+      if (stoppingWatchdog !== undefined) {
+        window.clearTimeout(stoppingWatchdog);
+        stoppingWatchdog = undefined;
+      }
+    }
+  });
 
   // Per-row click-to-confirm for session Delete. Stop-session got
   // a confirm in #131; Delete-historical-session was still
@@ -438,6 +475,49 @@
       .map((p) => `${p.speakerLabel ?? ""}:${p.text}`)
       .join("|"),
   );
+
+  /**
+   * Wall-clock-ms snapshot of the last time the live transcript
+   * grew (a final landed, or a partial revised). Drives the
+   * "listening • Ns since last update" indicator so the user can
+   * tell the difference between "Hush is alive but the room is
+   * quiet" and "Hush has hung." Initialised to session-start time
+   * (mounted via $effect when activeSessionId flips from null) so
+   * a fresh session shows "listening • 3 s" rather than a misleading
+   * "0 s" or "—".
+   */
+  let lastUpdateMs = $state<number>(0);
+  let nowMs = $state<number>(Date.now());
+  let listeningTickHandle: number | undefined;
+  $effect(() => {
+    // Reset the timer when a session opens; clear when it closes.
+    if (activeSessionId !== null) {
+      lastUpdateMs = Date.now();
+      if (listeningTickHandle === undefined) {
+        // 1 Hz tick is plenty — the indicator reads in seconds.
+        // We avoid sub-second updates so the text doesn't flicker
+        // and so reduced-motion users get a stable reading.
+        listeningTickHandle = window.setInterval(() => {
+          nowMs = Date.now();
+        }, 1000);
+      }
+    } else if (listeningTickHandle !== undefined) {
+      window.clearInterval(listeningTickHandle);
+      listeningTickHandle = undefined;
+    }
+  });
+  $effect(() => {
+    // Bump `lastUpdateMs` whenever the count grows or a partial
+    // text revises. Reads both deps so $effect tracks them.
+    void liveUtteranceCount;
+    void livePartialFingerprint;
+    lastUpdateMs = Date.now();
+  });
+  let secondsSinceUpdate = $derived(
+    activeSessionId === null
+      ? 0
+      : Math.max(0, Math.floor((nowMs - lastUpdateMs) / 1000)),
+  );
   $effect(() => {
     // Touch both deps so $effect tracks them.
     void liveUtteranceCount;
@@ -580,6 +660,34 @@
               : "s"} so far
           </span>
         {/if}
+        <!--
+          Listening pill — a low-key alive signal between
+          utterances. Whisper inference on a 10-s chunk can take
+          several seconds on a slow machine or larger model, so
+          the gap between "you stopped speaking" and "the partial
+          appears" is sometimes long enough that the user reads it
+          as a hang. The pulsing gradient bar makes "alive but
+          waiting" visible; the seconds-counter gives a concrete
+          number to anchor the wait.
+
+          aria-live="off" so the screen reader doesn't announce
+          every 1-s tick over a 30-minute meeting; the
+          session-progress indicator above already announces the
+          alive state once.
+        -->
+        <span
+          class="meeting-listening-pill"
+          aria-live="off"
+          data-testid="meeting-listening-pill"
+        >
+          <span class="meeting-listening-bar" aria-hidden="true"></span>
+          {#if liveUtteranceCount === 0 && (activeDetail?.currentPartials?.length ?? 0) === 0}
+            Listening — first utterance can take ~10 s while the
+            chunk window fills.
+          {:else}
+            Listening — last update {secondsSinceUpdate} s ago.
+          {/if}
+        </span>
         <p class="meeting-dictate-prompt">
           <strong>Recording</strong> from
           {#each activeSources as src, i (src.kind)}
@@ -609,7 +717,28 @@
         already uses, so the destructive action stops looking like
         a primary CTA.
       -->
-      {#if confirmingStop}
+      {#if stopping}
+        <!--
+          Wind-down state. `meeting_stop_manual` awaits the pump's
+          final-chunk drain, which can take 10–15 s while whisper
+          inference completes on the last 10-s window. Without a
+          banner here, the panel reads as hung. We swap the Stop
+          button for a disabled "Stopping…" affordance + an
+          explanatory hint, and let the pulsing-bar style from the
+          listening pill carry the "still alive, just waiting"
+          signal.
+        -->
+        <div class="meeting-stopping" role="status" aria-live="polite">
+          <span class="meeting-listening-bar" aria-hidden="true"></span>
+          <div class="meeting-stopping-text">
+            <strong>Stopping session…</strong>
+            <span>
+              Finishing the last 10 s chunk and writing the
+              transcript. This can take up to a minute.
+            </span>
+          </div>
+        </div>
+      {:else if confirmingStop}
         <div class="meeting-stop-confirm" role="group" aria-label="Confirm stop session">
           <span class="meeting-stop-confirm-prompt">
             End session?
@@ -1404,6 +1533,118 @@
 @media (prefers-reduced-motion: reduce) {
   .meeting-active-dot {
     animation: none;
+  }
+}
+
+/* Listening pill — sits below the utterance counter, before the
+   recording-source line. Subtle by design: this is an "alive" hint,
+   not a primary affordance. The pulsing gradient bar is the visual
+   carrier; the text just labels it. */
+.meeting-listening-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+  color: #6a6a6a;
+  line-height: 1.4;
+  /* Wrap the text on narrow widths instead of pushing past the
+     panel edge — the bar stays at fixed width so the pulse rhythm
+     reads consistently across viewport sizes. */
+  flex-wrap: wrap;
+}
+
+/* Pulsing gradient bar — the visual proxy for "Hush is alive,
+   waiting for the next chunk". A short bar with a sliding
+   highlight, similar to the indeterminate-progress idiom but
+   muted (low contrast, slow tempo) so it doesn't compete with
+   the red recording dot above it.
+
+   Reused by the .meeting-stopping banner — same visual idiom for
+   "still working, just hold on". */
+.meeting-listening-bar {
+  display: inline-block;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    rgba(74, 108, 208, 0.15) 0%,
+    rgba(74, 108, 208, 0.6) 50%,
+    rgba(74, 108, 208, 0.15) 100%
+  );
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  animation: meeting-listen-shimmer 2.2s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes meeting-listen-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meeting-listening-bar {
+    /* Static gradient — same shape, no motion. The text label
+       still conveys the "listening" state. */
+    animation: none;
+    background-position: 50% 0;
+  }
+}
+
+/* Stopping banner — replaces the Stop button while
+   meeting_stop_manual's pump drain is in flight. Same shimmer bar
+   on the left, two-line text on the right (title + helper). Sized
+   to roughly match the Stop button's footprint so the layout
+   doesn't reflow dramatically when the user confirms. */
+.meeting-stopping {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  background-color: #f5f7fc;
+  border: 1px solid #d8e0f2;
+  border-radius: 8px;
+  max-width: 28rem;
+}
+
+.meeting-stopping-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #444;
+}
+
+.meeting-stopping-text strong {
+  color: #2a4690;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .meeting-listening-pill {
+    color: #aaa;
+  }
+  .meeting-listening-bar {
+    background: linear-gradient(
+      90deg,
+      rgba(140, 168, 240, 0.15) 0%,
+      rgba(140, 168, 240, 0.6) 50%,
+      rgba(140, 168, 240, 0.15) 100%
+    );
+    background-size: 200% 100%;
+  }
+  .meeting-stopping {
+    background-color: #1f2540;
+    border-color: #2e3a64;
+  }
+  .meeting-stopping-text {
+    color: #cfd4e6;
+  }
+  .meeting-stopping-text strong {
+    color: #b6c3f0;
   }
 }
 
