@@ -115,30 +115,45 @@ jobs:
           # has its own target dir entries.
           key: ${{ matrix.label }}
 
-      # Same i8mm workaround as ci.yml — whisper.cpp's GGML uses
-      # vmmlaq_s32 unconditionally on aarch64. Apple Silicon supports
-      # i8mm but the default macOS clang invocation doesn't enable
-      # the target feature, so the build fails without an explicit
-      # `-march=armv8.6-a` (which baselines i8mm).
-      - name: Set whisper.cpp arch flags (macOS arm64)
-        if: matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')
-        shell: bash
-        run: |
-          echo "CFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
-          echo "CXXFLAGS=-march=armv8.6-a" >> "$GITHUB_ENV"
-
-      # macOS 26 (Tahoe) is the project's primary target — see
-      # CLAUDE.md. Setting `MACOSX_DEPLOYMENT_TARGET=26.0` aligns
-      # the Tauri release build with the policy (no backwards-
-      # compat shims for older macOS) AND sidesteps the Intel-era
-      # bug we caught in the first smoke run, where whisper.cpp's
-      # GGML uses C++17 `<filesystem>` symbols marked unavailable
-      # below macOS 10.15. We're well past that floor.
-      - name: Set macOS deployment target
+      # Combined macOS clang flags (i8mm + deployment target).
+      #
+      # i8mm: whisper.cpp's GGML uses `vmmlaq_s32` unconditionally on
+      # aarch64. Apple Silicon supports it but the default macOS
+      # clang doesn't enable the target feature, so the build fails
+      # with "requires target feature 'i8mm'" without
+      # `-march=armv8.6-a` (which baselines i8mm). Same flag as
+      # ci.yml.
+      #
+      # Deployment target: the previous attempt set
+      # `MACOSX_DEPLOYMENT_TARGET=26.0` via $GITHUB_ENV, but
+      # whisper-rs-sys's build script doesn't honour the env var,
+      # so clang ended up with no deployment target and emitted
+      # `'~directory_iterator' is unavailable: introduced in
+      # macOS 10.15 unknown` for whisper.cpp's C++17 `<filesystem>`
+      # use. Passing `-mmacosx-version-min=` directly through
+      # CFLAGS/CXXFLAGS bypasses the build script entirely — clang
+      # always honours its own command-line flags.
+      #
+      # Why 14.0 and not 26.0:
+      # - GitHub's macos-latest runner uses Xcode 16.4, which ships
+      #   the macOS 15 SDK. We can't deploy-target a version
+      #   higher than the SDK supports.
+      # - 14.0 (Sonoma) is well above 10.15 (so whisper.cpp's
+      #   <filesystem> compiles), is Apple-Silicon-supported
+      #   (>= 11.0), and is comfortably below the SDK ceiling.
+      # - The project's *design* target is macOS 26 — that's the
+      #   surface we hands-on test on. The binary's deployment
+      #   target is the lower-bound technical floor; users on
+      #   macOS 14 / 15 will probably have most things work but
+      #   we don't promise anything for that window.
+      - name: Set macOS clang flags (i8mm + deployment target)
         if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
-          echo "MACOSX_DEPLOYMENT_TARGET=26.0" >> "$GITHUB_ENV"
+          FLAGS="-march=armv8.6-a -mmacosx-version-min=14.0"
+          echo "CFLAGS=$FLAGS" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=$FLAGS" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
 
       - name: Setup Node
         uses: actions/setup-node@v4
