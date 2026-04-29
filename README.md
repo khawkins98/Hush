@@ -71,6 +71,25 @@ The maintainer's focus is macOS 26; older macOS is explicitly out of scope, and 
 
 ---
 
+## Install
+
+Pre-built binaries are published from the [GitHub Releases page](https://github.com/khawkins98/Hush/releases) — pick the latest `v*` tag, scroll to **Assets**, and download the file for your platform:
+
+- **macOS** — `.dmg` (Apple Silicon and Intel ship as separate artefacts; pick the one matching your Mac).
+- **Linux** — `.AppImage` (works on any distro) or `.deb` (Debian / Ubuntu).
+- **Windows** — `.msi` (recommended) or `.exe`.
+
+### First-launch warnings
+
+The first release wave is unsigned, so:
+
+- **macOS** shows a Gatekeeper warning ("Hush can't be opened because Apple cannot check it for malicious software"). Right-click `Hush.app` → **Open** the first time; subsequent launches are silent.
+- **Windows** shows a SmartScreen warning. Click **More info** → **Run anyway**.
+
+Code-signing (Developer ID + notarisation on macOS, EV certificate on Windows) is on the roadmap — once those land, the warnings go away.
+
+---
+
 ## Quick start (development)
 
 ### Prerequisites
