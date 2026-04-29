@@ -15,6 +15,56 @@ single flat list was hard to navigate.
 
 ### Added
 
+#### Meeting Mode UX polish: listening pill, stopping banner, Copy transcript, source chips (#241, #243, #244)
+
+Hands-on testing surfaced a cluster of visible-silence / missing-affordance gaps in the active-session UX:
+
+- **Listening pill** (#241) — pulsing-shimmer indicator below the utterance counter that shows "Listening — last update *N*s ago" between utterances, or "first utterance can take ~10 s while the chunk window fills" before the first one. Whisper inference on a 10-s chunk takes several seconds on slower machines / larger models; the gap was reading as a hang.
+- **Stopping banner** (#241) — replaces the Stop button between confirmation and the backend reporting `activeSessionId === null`. Same shimmer-bar visual idiom carries the "still working, just hold on" signal during the 10–15 s pump-drain window. 30-s watchdog clears the banner if the backend genuinely hangs.
+- **You / Remote source labels** (#243) — replaces the broken D1 EnergyDiarizer wiring. The silence-gap heuristic collapsed cross-source utterances into "Speaker A" everywhere; reverted to source-only labels routed through `AudioSource::speaker_tag()` which the panel maps to "You" for mic and "Remote" for system audio.
+- **Copy transcript** (#243) — button on the active session and on each historical session row (after expand). Plain-text format (one block per utterance, speaker + offset + text) lands in the clipboard via `navigator.clipboard.writeText`. Flashes "Copied!" for 2 s on success.
+- **Source chips on session rows** (#244) — migration `0004_meeting_sessions_sources.sql` adds a CSV column persisting the captured sources at session-open. Renders "Mic + System audio" / "Mic" / "System audio" alongside the existing app-classification chip so a session whose foreground was a browser (classifier returns "Other") still shows what was actually recorded.
+
+#### macOS permissions UX: SCK priming, auto-refresh, de-jargoned copy (#240, #245)
+
+Two trip-hazards on the Permissions tab:
+
+- **SCK priming on Grant click** (#240) — the per-row "Grant in Settings…" button on Screen Recording was deep-linking into a System Settings list that didn't yet contain Hush, because macOS only enrols an app once it actively requests the permission. New `prime_screen_recording_permission` IPC calls `SCShareableContent::get()` (lightweight enumeration that triggers the same TCC check as a full capture stream) before the deep-link, guaranteeing the row appears.
+- **Auto-refresh + manual Refresh button** (#245) — the diagnostic was loaded once on mount and never re-checked, so the panel stayed frozen on "NOT YET GRANTED" after the user toggled a permission in System Settings. Now re-reads on Settings-window focus + a manual button covers side-by-side / keyboard-only cases.
+- **De-jargoned recovery copy** (#245) — "reset all four TCC entries" replaced with "reset all four permission grants (Microphone, Screen Recording, Input Monitoring, Accessibility)".
+
+#### Autostart poller: injectable probe trait + 9 wiring tests (#237)
+
+The meeting auto-start poller (`run_meeting_autostart_poller`) had untested wiring around `active-win-pos-rs::get_active_window` → classifier → `AutostartDecision::decide`. Extracted the pure logic into `meeting::autostart_poller::evaluate_autostart_tick`, gated the OS call behind a `ForegroundAppProbe` trait, and added 9 tests covering off-mode reset, probe-failure no-change, transition-into-meeting Start, steady-state silence, session-active block, and classifier-override propagation.
+
+#### Updater HTTP coverage: 9 wiremock tests (#236)
+
+`updater::check_for_updates` had 5 unit tests (helpers + serialisation) but no HTTP-level coverage. Added `check_for_updates_at(client, url, current_version)` that tests can point at a local wiremock server, plus 9 tests covering up-to-date / update-available / 404 / 5xx / oversize body / malformed JSON / non-semver tag / unprefixed-tag normalisation / malformed `CARGO_PKG_VERSION`.
+
+### Changed
+
+#### Diarization wiring: `EnergyDiarizer` → `NoopDiarizer` (#243)
+
+D1 silence-gap heuristic was reverted to `NoopDiarizer` after hands-on testing showed it collapsed cross-source utterances into a single "Speaker A". The heuristic operates on a chronologically-merged stream; with mic + system audio finals interleaving, there's no reliable inter-source gap for the heuristic to lock onto. `EnergyDiarizer` impl + tests stay on disk for the mic-only path; D2 (model-based ONNX, #111) is the upgrade.
+
+#### HUD capability tightened: `core:default` → minimum needed (closes #238 partial, #239)
+
+The HUD window's `capabilities/hud.json` granted `core:default` (a bundle of nine permission subsets). The HUD's actual API surface is two calls (`listen('audio:level', …)` + `getCurrentWebviewWindow().hide()`); replaced the umbrella with `core:event:default` + `core:window:allow-hide` so unused subsets are no longer dead surface area an attacker would inherit. Settings + main window tightening tracked separately in #238.
+
+#### GitHub Actions SHA-pinned (#235)
+
+Replaced floating-tag refs (`@v4`, `@v0`, `@stable`) across both workflow files with full commit SHAs + tag-name comments. Floating tags are mutable — a compromised action release pipeline can push a malicious commit under an existing tag. SHAs are immutable.
+
+### Documentation
+
+#### Periodic verification cadence in CONTRIBUTING.md (#234)
+
+CONTRIBUTING gains a "Periodic verification cadence" section covering the multi-agent review pattern (writer / Rust / UX / security agents in parallel), UX walkthrough re-run, mechanical sweep, and the `learnings.md` round-record step. Cadence: every 2–3 substantial PRs while solo-maintained.
+
+#### Multi-agent review follow-ups round 1 (#234)
+
+First sweep using the cadence above. Synthesised findings shipped as a single PR: `IpcResult` promoted crate-public, updater 15 s timeout + 64 KiB body cap, action-led permissions banner, Settings header hierarchy fix, Model picker "Default" → "Selected" badge, HUD dismiss visibility bumped, Meeting panel "(coming soon)" → "(macOS only today, #106/#107)".
+
 #### Meeting Mode auto-start lifecycle (#221, #219)
 
 Auto-start a meeting session when a known meeting app comes to

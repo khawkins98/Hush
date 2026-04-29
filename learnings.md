@@ -4,6 +4,22 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-04-29 — D1 EnergyDiarizer reverted to NoopDiarizer (cross-source heuristic collapses to "Speaker A")
+
+**Supersedes the 2026-04-28 (#206) "EnergyDiarizer wired in production" entry below.**
+
+Hands-on testing of a Meeting Mode session capturing mic + YouTube system audio showed every utterance rendering as "Speaker A", regardless of which source produced it. Investigation: `EnergyDiarizer` operates on a chronologically-merged stream of utterances with a silence-gap heuristic. With concurrent mic + system finals interleaving and no reliable inter-source gap, the heuristic collapses everything into a single label — a regression vs the source-only "You" / "Remote" labels it was supposed to refine.
+
+Within a single source (multiple speakers sharing the user's mic), D1 was useful. Across sources it's wrong, and cross-source is Meeting Mode's whole point — Hush ships system-audio capture so the user can transcribe both sides of a Zoom / Meet / Teams call.
+
+Shipped #243: swap production wiring to `NoopDiarizer`. The dispatch fallback in `dispatch_utterances` writes the source-derived `"mic"` / `"system"` tag, which the frontend already maps to "You" / "Remote". Source-only labels are honest: we tell the user which side of the call produced each utterance without inventing speaker IDs we can't verify.
+
+`EnergyDiarizer` impl + tests stay on disk (still useful as a mic-only path or D1-level reference). D2 (model-based ONNX speaker embeddings, #111) is the upgrade path that can actually distinguish voices across sources.
+
+**Lesson for future diarization work.** Single-stream diarization heuristics don't generalise to multi-stream input. The merge-then-label approach assumed the silence pattern in the merged stream would mirror what a single-microphone recording would produce; in practice the second stream fills the "silence" between the first stream's utterances, and the heuristic loses its signal. D2 needs to be source-aware (per-source embedding extraction, then matching across the union) — or run independently per source and accept that "Speaker A on mic" and "Speaker A on system" are different speakers.
+
+---
+
 ## 2026-04-29 — macOS adds an app to the Screen Recording list only after the app actively requests SCK
 
 User caught this hands-on after the first end-to-end smoke of the post-#234 build: clicking **Permissions → Screen Recording → Grant in Settings…** deep-linked into System Settings → Privacy & Security → Screen & System Audio Recording, and Hush wasn't in the list. Microphone and Input Monitoring rows were both `GRANTED`, so the app was registered with TCC — just not under Screen Recording.
@@ -709,6 +725,8 @@ PTT stays opt-in via `HUSH_PTT_ENABLE=1` even with the abort fixed: enabling tri
 ---
 
 ## 2026-04-28 — D1 EnergyDiarizer wired: multi-source caveat is structural, not tunable
+
+> **Superseded by the 2026-04-29 entry above — `EnergyDiarizer` was reverted to `NoopDiarizer` in #243 after hands-on testing showed it collapsed cross-source utterances to a single "Speaker A". The structural caveat called out in this entry turned out to be the load-bearing problem rather than a refinement to layer on top.**
 
 #191 shipped the `Diarize` trait + an `EnergyDiarizer` impl that alternates Speaker A / Speaker B based on inter-utterance silence gaps. #201 (this entry) flipped the production wiring from `NoopDiarizer` → `EnergyDiarizer::default()`.
 

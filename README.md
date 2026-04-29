@@ -28,7 +28,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 **Meeting Mode**
 - 🎤 Long-running multi-source capture (mic + macOS system-audio in parallel via ScreenCaptureKit) with You/Remote-tagged transcripts
 - ⚡ Streaming Whisper sliding-window transcription with live partials + final utterances
-- 🗣️ Speaker diarization (D1: silence-gap heuristic, "Speaker A / Speaker B"; `EnergyDiarizer`, #191/#201)
+- 🗣️ Source-tagged You / Remote labels (D2 cross-source diarization tracked in #111)
 - 🤖 Per-app classifier with user-editable overrides (Settings → Meeting tab; #112/#192)
 - 📜 Searchable session history; in-app diagnostic for revoked permissions
 
