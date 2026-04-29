@@ -26,13 +26,15 @@
 //!
 //! Each persisted utterance carries a `speaker_label`. The pump
 //! runs every batch of finals through the configured `Diarize`
-//! impl (production: `EnergyDiarizer`, D1 silence-gap heuristic
-//! from #201) which produces `"Speaker A"` / `"Speaker B"`. When
-//! the diarizer abstains (`NoopDiarizer` in tests, or a future
-//! impl that emits None for low-confidence cases),
-//! `dispatch_utterances` falls back to the source-derived
-//! `"mic"` / `"system"` tag. D2 (model-based) is still upstream
-//! ([#111]).
+//! impl (production: `NoopDiarizer` since #243 — D1
+//! `EnergyDiarizer` collapsed cross-source utterances into a
+//! single "Speaker A"; reverted until D2 model-based diarization
+//! lands in #111). With `NoopDiarizer` every diarized label is
+//! `None`, so `dispatch_utterances` stamps the source-derived
+//! `"mic"` / `"system"` tag from `AudioSource::speaker_tag()`
+//! (the single source of truth for the persistence-layer label
+//! shape); the panel maps that to "You" / "Remote" when
+//! rendering.
 //!
 //! ## Streaming (post-#108)
 //!
@@ -281,13 +283,15 @@ pub struct SessionManager {
     /// the frontend. Production wires this to a `tauri::AppHandle`
     /// emitter; tests use [`NoopMeetingEventEmitter`].
     event_emitter: Arc<dyn MeetingEventEmitter>,
-    /// Speaker diarization (#191/#201). Production wires
-    /// [`crate::diarization::EnergyDiarizer`] (D1 silence-gap
-    /// heuristic). The pump dispatches every batch of finals
-    /// through this before stamping the source-derived label;
-    /// `dispatch_utterances` only writes the `"mic"` / `"system"`
-    /// fallback when the diarizer leaves `speaker_label = None`
-    /// (e.g. swapped back to `NoopDiarizer`).
+    /// Speaker diarization. Production wires
+    /// [`crate::diarization::NoopDiarizer`] as of #243 — the
+    /// `EnergyDiarizer` D1 silence-gap heuristic collapsed
+    /// cross-source utterances into a single "Speaker A" when
+    /// mic + system audio were both captured (the common Meeting
+    /// Mode shape). `dispatch_utterances` then falls back to the
+    /// source-derived `"mic"` / `"system"` tag from
+    /// `AudioSource::speaker_tag()`. D2 (#111) is the upgrade
+    /// path that can distinguish voices across sources.
     diarize: Arc<dyn crate::diarization::Diarize>,
 }
 
@@ -523,16 +527,22 @@ impl SessionManager {
             .unwrap_or(&self.classifier)
             .classify(&app_name);
 
-        // Snapshot the source-kind labels for persistence (#242).
+        // Snapshot the source-kind tags for persistence (#242).
         // The panel reads these back to render "Mic + System audio"
         // metadata even when the app classification is "Other"
         // (browser tab, generic productivity app). Stored as a
         // separate Vec rather than shadowing `sources` because the
         // streaming-session loop below still iterates the original
         // `Vec<AudioSource>`.
+        //
+        // Uses `speaker_tag()` (the persistence-layer short form)
+        // not `kind_label()` (the structured-logging long form) so
+        // the CSV in `meeting_sessions.sources` agrees with the
+        // per-utterance `speaker_label` set in the dispatch loop —
+        // see `AudioSource::speaker_tag` for the invariant.
         let source_labels: Vec<String> = sources
             .iter()
-            .map(|src| src.kind_label().to_owned())
+            .map(|src| src.speaker_tag().to_owned())
             .collect();
         let session = match self
             .repo
@@ -980,12 +990,19 @@ async fn run_pump(mut ctx: PumpContext) {
             // Take the session out so we can move it into
             // spawn_blocking. The `Option` slot stays None until we
             // put it back at the bottom of this iteration.
-            let session = ctx.streaming_sessions[i].take().unwrap();
-            let samples = std::mem::take(&mut drain_buffers[i]);
-            let source_label = match &ctx.sources[i] {
-                AudioSource::Microphone(_) => "mic".to_owned(),
-                AudioSource::SystemAudio => "system".to_owned(),
+            // Defensive take: pre-#246 this was `.unwrap()`, but
+            // a future refactor that drains in a different order
+            // would panic the pump task. Skip the source for this
+            // tick if the slot was already taken.
+            let Some(session) = ctx.streaming_sessions[i].take() else {
+                tracing::warn!(
+                    source_kind = ctx.sources[i].speaker_tag(),
+                    "meeting pump: streaming session slot already empty; skipping tick"
+                );
+                continue;
             };
+            let samples = std::mem::take(&mut drain_buffers[i]);
+            let source_label = ctx.sources[i].speaker_tag().to_owned();
             let session_id = ctx.session_id;
 
             // Spawn-blocking: returns (session, samples_buf,
@@ -1095,10 +1112,7 @@ async fn run_pump(mut ctx: PumpContext) {
         let Some(session) = ctx.streaming_sessions[i].take() else {
             continue;
         };
-        let source_label = match &ctx.sources[i] {
-            AudioSource::Microphone(_) => "mic".to_owned(),
-            AudioSource::SystemAudio => "system".to_owned(),
-        };
+        let source_label = ctx.sources[i].speaker_tag().to_owned();
         let session_id = ctx.session_id;
         let join = tokio::task::spawn_blocking(move || session.finish()).await;
         let finals = match join {

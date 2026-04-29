@@ -143,9 +143,12 @@ pub struct PersistedUtterance {
     pub session_id: i64,
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
-    /// Set by the diarizer (D1 `EnergyDiarizer` ships "Speaker A" /
-    /// "Speaker B"; #201). Falls back to the source-derived
-    /// `"mic"` / `"system"` tag when the diarizer abstains.
+    /// Source-derived `"mic"` / `"system"` tag (set via
+    /// `AudioSource::speaker_tag()`); the panel maps that to
+    /// "You" / "Remote" when rendering. Production runs
+    /// `NoopDiarizer` since #243, so the diarizer-set path only
+    /// applies if a future build re-wires `EnergyDiarizer` (or
+    /// the D2 model-based diarizer in #111).
     pub speaker_label: Option<String>,
     pub text: String,
     /// Reserved. v1 only persists `is_final = true` utterances; the

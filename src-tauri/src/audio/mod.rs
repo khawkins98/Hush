@@ -147,6 +147,32 @@ impl AudioSource {
             AudioSource::SystemAudio => "system-audio",
         }
     }
+
+    /// Short tag the persistence + dispatch layers use to label
+    /// utterances and sessions by source: `"mic"` / `"system"`.
+    /// Distinct from [`kind_label`] (for logs / error strings)
+    /// because that flavour is wordy for in-line transcript
+    /// metadata — the frontend's `sourceListLabel` maps
+    /// `"mic"` → "Mic" and `"system"` → "System audio".
+    ///
+    /// **Internal-protocol invariant.** Single source of truth for:
+    /// - `MeetingSession.sources` CSV (migration 0004, #244).
+    /// - The source-derived `Utterance.speaker_label` fallback in
+    ///   `meeting::manager::run_pump` and `dispatch_utterances`.
+    ///
+    /// All four sites must agree. #244 introduced a drift where
+    /// the new sources column used `kind_label`'s long form while
+    /// the dispatch sites used hand-rolled `"mic"` / `"system"`,
+    /// so the frontend chip rendered the literal long-form
+    /// strings through its default case. Routing every site
+    /// through this method prevents the next reviewer from
+    /// re-discovering the bug.
+    pub fn speaker_tag(&self) -> &'static str {
+        match self {
+            AudioSource::Microphone(_) => "mic",
+            AudioSource::SystemAudio => "system",
+        }
+    }
 }
 
 /// Frontend-facing listing of one audio source the user can pick from.

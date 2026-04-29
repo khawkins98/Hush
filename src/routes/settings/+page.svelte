@@ -1154,10 +1154,14 @@
   .settings-window-title {
     margin: 0;
     padding: 0.85rem 1.1rem 0.25rem;
-    font-size: 1.15rem;
-    font-weight: 600;
+    /* H1 must outsize H2 (`.tab-title` is 1.4rem). The previous
+       1.15rem inverted the visual hierarchy and the eye landed
+       on the tab title instead of the Settings anchor — defeated
+       the whole point of adding the H1. */
+    font-size: 1.55rem;
+    font-weight: 700;
     color: #1a1a1a;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.015em;
   }
 
   .settings-toolbar {
