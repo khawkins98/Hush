@@ -75,7 +75,7 @@ The maintainer's focus is macOS 26; older macOS is explicitly out of scope, and 
 
 Pre-built binaries are published from the [GitHub Releases page](https://github.com/khawkins98/Hush/releases) — pick the latest `v*` tag, scroll to **Assets**, and download the file for your platform:
 
-- **macOS** — `.dmg` (Apple Silicon and Intel ship as separate artefacts; pick the one matching your Mac).
+- **macOS** — `.dmg` (Apple Silicon only; macOS 26 / Tahoe is the supported target).
 - **Linux** — `.AppImage` (works on any distro) or `.deb` (Debian / Ubuntu).
 - **Windows** — `.msi` (recommended) or `.exe`.
 
