@@ -466,7 +466,9 @@
     }
   }
 
-  async function openPrivacyPane(target: "microphone" | "input-monitoring") {
+  async function openPrivacyPane(
+    target: "microphone" | "input-monitoring" | "screen-recording",
+  ) {
     try {
       await invoke("open_macos_privacy_pane", { target });
     } catch (e) {
@@ -853,9 +855,9 @@
         <h1 class="tab-title">Permissions</h1>
         <ul class="perm-status-list" aria-label="Permission status summary">
           {#each [
-            { key: "microphone", label: "Microphone", status: macosDiagnostic.statuses.microphone, why: "Required for dictation." },
-            { key: "screenRecording", label: "Screen Recording", status: macosDiagnostic.statuses.screenRecording, why: "Required for system-audio capture in meetings." },
-            { key: "inputMonitoring", label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Required for push-to-talk (on by default). Disable PTT in General → Hotkeys if you'd rather skip the prompt." },
+            { key: "microphone", paneTarget: "microphone" as const, label: "Microphone", status: macosDiagnostic.statuses.microphone, why: "Required for dictation." },
+            { key: "screenRecording", paneTarget: "screen-recording" as const, label: "Screen Recording", status: macosDiagnostic.statuses.screenRecording, why: "Required for system-audio capture in meetings." },
+            { key: "inputMonitoring", paneTarget: "input-monitoring" as const, label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Required for push-to-talk (on by default). Disable PTT in General → Hotkeys if you'd rather skip the prompt." },
           ] as row (row.key)}
             <li class="perm-row" data-perm={row.key} data-status={row.status}>
               <span class="perm-dot" aria-hidden="true"></span>
@@ -868,18 +870,41 @@
                 {/if}
               </span>
               <span class="perm-why">{row.why}</span>
+              <!--
+                Per-row deep-link to the relevant System Settings
+                pane. Renders for every row, not just unblocked ones,
+                because granted rows still need a way to revoke /
+                re-confirm. Copy varies with status so the click
+                target reads as the right next step ("Grant in
+                Settings…" vs "Open in Settings").
+              -->
+              {#if row.status !== "not-applicable"}
+                <button
+                  type="button"
+                  class="perm-row-action"
+                  data-testid="perm-action-{row.key}"
+                  onclick={() => openPrivacyPane(row.paneTarget)}
+                >
+                  {#if row.status === "granted"}
+                    Open in Settings
+                  {:else}
+                    Grant in Settings…
+                  {/if}
+                </button>
+              {/if}
             </li>
           {/each}
         </ul>
         <p class="perm-recovery-intro">
-          Need to fix something? Open the recovery details below.
+          Stuck? Open the diagnostic below to reset all four TCC
+          entries at once, or learn why a permission row might not
+          appear in System Settings.
         </p>
         <MacosDiagnosticPanel
           {macosDiagnostic}
           bind:macosDiagnosticOpen
           {macosResetMessage}
           {macosResetting}
-          onOpenPrivacyPane={openPrivacyPane}
           onReset={runMacosReset}
         />
       {:else}
@@ -1404,10 +1429,10 @@
   }
   .perm-row {
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto 1fr auto auto;
     grid-template-areas:
-      "dot name status"
-      "dot why  why";
+      "dot name   status action"
+      "dot why    why    action";
     gap: 0.15rem 0.6rem;
     align-items: center;
     padding: 0.65rem 0.85rem;
@@ -1456,6 +1481,47 @@
     font-size: 0.82rem;
     color: #666;
   }
+  /* Per-row "Grant in Settings…" button. Sits on the right side of
+     the row, vertically centred across both grid rows so the click
+     target is balanced against the name+why stack on the left. */
+  .perm-row-action {
+    grid-area: action;
+    align-self: center;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    border: 1px solid #d1d1d8;
+    background-color: white;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #2c3e8f;
+    white-space: nowrap;
+    transition: background-color 0.12s, border-color 0.12s;
+  }
+  .perm-row-action:hover {
+    background-color: #f0f4ff;
+    border-color: #4a6cd0;
+  }
+  .perm-row-action:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  /* On not-yet-granted rows the button is the primary path forward;
+     give it a hint of weight so the user reads it as the actionable
+     element. Granted rows render the same button in the quieter
+     variant above. */
+  .perm-row[data-status="not-determined"] .perm-row-action,
+  .perm-row[data-status="denied"] .perm-row-action {
+    background-color: #eef2ff;
+    border-color: #c7d2fe;
+    color: #1e1b4b;
+    font-weight: 600;
+  }
+  .perm-row[data-status="not-determined"] .perm-row-action:hover,
+  .perm-row[data-status="denied"] .perm-row-action:hover {
+    background-color: #e0e7ff;
+    border-color: var(--accent);
+  }
   .perm-recovery-intro {
     margin: 0 0 1rem;
     font-size: 0.85rem;
@@ -1470,6 +1536,21 @@
     .perm-name { color: #e8e8e8; }
     .perm-why { color: #a8a8a8; }
     .perm-recovery-intro { color: #b0b0b0; }
+    .perm-row-action {
+      background-color: #1f1f22;
+      border-color: #38383b;
+      color: #c0d0ff;
+    }
+    .perm-row-action:hover {
+      background-color: #28283a;
+      border-color: var(--accent);
+    }
+    .perm-row[data-status="not-determined"] .perm-row-action,
+    .perm-row[data-status="denied"] .perm-row-action {
+      background-color: #1e1b4b;
+      border-color: #4338ca;
+      color: #e0e7ff;
+    }
   }
 
   kbd {

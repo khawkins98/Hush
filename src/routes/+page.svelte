@@ -494,7 +494,9 @@
     }
   }
 
-  async function openPrivacyPane(target: "microphone" | "input-monitoring") {
+  async function openPrivacyPane(
+    target: "microphone" | "input-monitoring" | "screen-recording",
+  ) {
     try {
       await invoke("open_macos_privacy_pane", { target });
     } catch (e) {
