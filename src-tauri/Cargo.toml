@@ -48,12 +48,17 @@ rtrb = "0.3"
 # binary builds on macOS, Linux, and Windows. `stream` enables the
 # byte-stream API used for chunk-by-chunk progress events without
 # buffering the whole response.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 
 # SHA-256 verification for downloaded model files. Hand-rolled hashing
 # would be a security footgun; `sha2` is the well-vetted RustCrypto
 # implementation.
 sha2 = "0.11"
+
+# Semantic-version comparison for the manual "Check for updates"
+# probe (#223). Compares the bundled `CARGO_PKG_VERSION` to the
+# tag returned by GitHub's releases API.
+semver = "1"
 
 # `Stream` trait + adaptors used to consume reqwest's response body.
 # Tiny, no transitive deps beyond `futures-core`.
