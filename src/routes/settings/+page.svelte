@@ -165,6 +165,13 @@
   let soundCuesBusy = $state(false);
   let soundCuesError = $state<string | null>(null);
 
+  // Diarization (#111). Foundation PR ships the toggle only — the
+  // production diarizer is still NoopDiarizer until PR-B lands the
+  // ONNX model + download pipeline. Default off.
+  let diarizationEnabled = $state(false);
+  let diarizationBusy = $state(false);
+  let diarizationError = $state<string | null>(null);
+
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
   let vocabularyLoaded = $state(false);
@@ -623,6 +630,7 @@
       loadAppMetadata(),
       loadAppOverrides(),
       loadMeetingAutostartMode(),
+      loadDiarizationEnabled(),
     ]);
 
     // Auto-refresh the permissions diagnostic when the Settings
@@ -769,6 +777,31 @@
       await loadSoundCuesEnabled();
     } finally {
       soundCuesBusy = false;
+    }
+  }
+
+  async function loadDiarizationEnabled(): Promise<void> {
+    try {
+      diarizationEnabled = await invoke<boolean>("get_diarization_enabled");
+      diarizationError = null;
+    } catch (e) {
+      diarizationError = "Couldn't read diarization setting.";
+      console.warn("[hush] get_diarization_enabled failed", e);
+    }
+  }
+
+  async function onDiarizationToggle(e: Event) {
+    const checked = (e.target as HTMLInputElement).checked;
+    diarizationBusy = true;
+    diarizationError = null;
+    try {
+      await invoke("set_diarization_enabled", { enabled: checked });
+      diarizationEnabled = checked;
+    } catch (err) {
+      diarizationError = formatErrorMessage(err);
+      await loadDiarizationEnabled();
+    } finally {
+      diarizationBusy = false;
     }
   }
 
@@ -1004,6 +1037,39 @@
         </div>
         {#if meetingAutostartError}
           <p class="settings-error">{meetingAutostartError}</p>
+        {/if}
+      </section>
+
+      <!--
+        Diarization toggle (#111). Foundation PR ships the user-
+        visible toggle + persistence; the production diarizer is
+        still NoopDiarizer until PR-B lands the ONNX model + the
+        download pipeline. Copy reflects that status — the toggle
+        works (it persists) but transcripts won't carry per-speaker
+        labels yet.
+      -->
+      <section class="settings-group" aria-labelledby="settings-diarization-heading">
+        <h2 id="settings-diarization-heading" class="group-heading">Speakers</h2>
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            data-testid="settings-diarization-toggle"
+            disabled={diarizationBusy}
+            checked={diarizationEnabled}
+            onchange={onDiarizationToggle}
+          />
+          <span class="toggle-label">
+            <span class="toggle-name">Label speakers in meeting transcripts</span>
+            <span class="toggle-desc">
+              Groups utterances by who spoke (Speaker 1, Speaker 2, …)
+              instead of just tagging mic vs. system audio. The
+              speaker model downloads the first time you turn this
+              on. Off keeps the simpler mic / system labels.
+            </span>
+          </span>
+        </label>
+        {#if diarizationError}
+          <p class="settings-error">{diarizationError}</p>
         {/if}
       </section>
 
