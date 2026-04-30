@@ -49,6 +49,8 @@ export async function installMocks(
       // override per-test.
       get_hud_enabled: () => true,
       set_hud_enabled: () => undefined,
+      get_sound_cues_enabled: () => false,
+      set_sound_cues_enabled: () => undefined,
       // Meeting auto-start mode (Settings → Meeting). Default
       // matches the backend's "off" default; specs that exercise
       // the dropdown override per-test.

@@ -62,4 +62,11 @@ export const Events = {
   /// probe was triggered from the menu rather than the in-tab
   /// button.
   UpdaterResult: "updater:result",
+  /// Backend → HUD window: lifecycle state for the recording
+  /// HUD overlay (#291). Payload is `"recording"` or
+  /// `"processing"`. Drives the HUD's render branch so the user
+  /// sees a continuous "still working" signal across the
+  /// transcription gap, instead of the HUD vanishing before
+  /// the clipboard is updated.
+  HudState: "hud:state",
 } as const;

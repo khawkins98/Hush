@@ -2385,6 +2385,7 @@ dependencies = [
  "hound",
  "log",
  "objc2",
+ "objc2-foundation",
  "rdev",
  "reqwest 0.12.28",
  "rtrb",
