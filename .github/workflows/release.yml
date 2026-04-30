@@ -158,10 +158,22 @@ jobs:
         if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
+          # Two deployment-target env vars are required (#288 /
+          # 2026-04-30 learnings update). The `cc` crate reads
+          # `MACOSX_DEPLOYMENT_TARGET`; cmake-rs reads
+          # `CMAKE_OSX_DEPLOYMENT_TARGET`. Each crate contributes
+          # compile flags to whisper-rs-sys's build, and missing
+          # either re-introduces a `-mmacosx-version-min=10.13`
+          # injection that whisper.cpp's C++17 `<filesystem>` use
+          # doesn't tolerate. Pre-fix only `MACOSX_DEPLOYMENT_TARGET`
+          # was set; that's why smoke runs #1–#3 of release.yml all
+          # failed on the macOS leg with "fs::exists has been
+          # explicitly marked unavailable".
           FLAGS="-march=armv8.6-a -mmacosx-version-min=14.0"
           echo "CFLAGS=$FLAGS" >> "$GITHUB_ENV"
           echo "CXXFLAGS=$FLAGS" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
+          echo "CMAKE_OSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
