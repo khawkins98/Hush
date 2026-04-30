@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Capability for the standalone Hush Settings window. Phase 3 widens this from the empty Phase-2 shell to allow the IPC commands the moved panels invoke: Model picker (model_*), Vocabulary, Replacements, and the macOS Permissions diagnostic. Strictly tighter than the main window's capability — no dictation IPC, no clipboard, no notifications. Add permissions deliberately; every grant widens the settings window's blast radius.",
+  "description": "Capability for the standalone Hush Settings window. Tightened (#238) from the previous `core:default` umbrella to the minimum the window actually uses: `core:event:default` for the model-download progress + settings:goto-tab listeners, `core:app:default` for `getName` / `getVersion` / `getTauriVersion` on the About tab, and the three explicit autostart plugin grants for the General → Startup toggle. Strictly tighter than the main window — no clipboard, no notifications, no shortcut registration. Add permissions deliberately; every grant widens the settings window's blast radius.",
   "windows": ["settings"],
   "permissions": [
-    "core:default",
+    "core:event:default",
+    "core:app:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled"
