@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window — dictation pipeline access.",
+  "description": "Capability for the main window — dictation pipeline access. Tightened (#238) from the previous `core:default` umbrella to the minimum the main window actually uses: `core:event:default` for the `audio:level` listener + `meeting:source-failed` / `model:download-*` events + the `hotkey:toggle` emit, plus the per-feature plugin grants (clipboard write, notifications, global shortcuts). The main window never opens / manipulates other windows, never reads paths or app metadata, never accesses tray / menu / image / resource APIs — granting those was dead surface area an attacker would inherit if a malicious script ever ran in this window. New permissions should be deliberate.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:event:default",
     "clipboard-manager:allow-write-text",
     "notification:default",
     "global-shortcut:default"
