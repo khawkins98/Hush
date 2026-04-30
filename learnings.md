@@ -4,6 +4,24 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-04-30 — D2 diarization decisions (#111 chain)
+
+Six PRs (#295–#300) shipped the initial chain and three follow-ups (#303–#305) closed audit findings. Capturing the non-obvious calls so future-Claude doesn't re-derive them from the diff.
+
+**ort over candle for the ONNX runtime.** `candle-onnx` (HF's pure-Rust path) was tempting for binary size (~5 MB vs ~50 MB) and dep transparency, but it has incomplete operator coverage and is 3–5× slower on CPU than ort. CoreML acceleration on Apple Silicon — the project's design target — is the load-bearing reason to take ort: it lets us hand inference to the Neural Engine on supported Macs. Hush already ships whisper.cpp at ~50 MB, so the incremental ORT cost is real but not prohibitive. Trade-off accepted.
+
+**Why pump-side rolling audio buffer, not a `StreamingTranscribeSession` API extension.** D2 needs each utterance's audio to embed. The streaming session owns its sliding window internally; surfacing per-utterance audio at finals time would have meant adding a method to `StreamingTranscribeSession` and forcing every backend + test mock to grow it. We kept an independent `meeting::audio_buffer::AudioRollingBuffer` per source instead — bounded at 30 s (matches the streaming window), zeroized on drop, slices by absolute-session-time `[started_at_ms, ended_at_ms)`. Smaller diff, cleaner trait surface, mirrors the pattern `transcription::streaming::SlidingWindowState` already established for the same kind of data.
+
+**Online 1-NN with threshold, not per-tick agglomerative.** Initial PR-D wired `cluster::cluster_with_threshold` (offline complete-link agglomerative) on each pump tick. Audit caught that this resets cluster IDs every tick — "Speaker 1" in tick N could be a different person from "Speaker 1" in tick N+1. Fixed in #303 by replacing per-tick clustering with `OnnxDiarizer::SessionClusterState`: keeps every embedding + label seen in the session, assigns each new embedding to the closest existing one within threshold (else allocates a new ID). Cluster IDs are stable for the diarizer's lifetime. Memory: ~100 KB at typical 100-utterance meetings — negligible. The offline `cluster_with_threshold` stays for one-shot use cases; the streaming matcher is what production uses.
+
+**Mel-FB matches `torchaudio.compliance.kaldi.fbank` defaults but not bit-exact.** `diarization::features` mirrors the kaldi config wespeaker was trained on (Povey window, 25 ms / 10 ms, HTK mel scale, 80 bins, no dither for determinism). Module docstring is explicit about the gap — we trade exact reference fidelity for fewer deps and a simpler test story. End-to-end correctness (does the model emit sane embeddings?) is verified hands-on against real meetings, not against a numpy reference vector.
+
+**SHA-256 verification both at download and at load.** Catalog has a one-line entry; download path SHA-verifies the bytes that land on disk; `OnnxDiarizer::new` re-hashes on load. Defends against a sibling app sharing the macOS account substituting the model file. ~80 ms per app boot — cheap.
+
+**Hot-swap via `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>`.** AppState owns the slot; `FlagGatedDiarizer` reads from a clone every pump tick; the IPC `download_diarizer_model` writes a fresh `OnnxDiarizer` after a successful download. RwLock (not Mutex) because reads happen on every meeting tick and writes are rare. Recovery via `unwrap_or_else(into_inner)` mirrors the pattern `OnnxDiarizer::Mutex<Session>` uses — a transient panic shouldn't kill diarization for the rest of the session.
+
+---
+
 ## 2026-04-29 — D1 EnergyDiarizer reverted to NoopDiarizer (cross-source heuristic collapses to "Speaker A")
 
 **Supersedes the 2026-04-28 (#206) "EnergyDiarizer wired in production" entry below.**
