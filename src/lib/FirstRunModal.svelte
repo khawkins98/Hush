@@ -24,7 +24,9 @@
   type Props = {
     show: boolean;
     onDismiss: () => void | Promise<void>;
-    onOpenPrivacyPane: (target: "microphone" | "input-monitoring") => void | Promise<void>;
+    onOpenPrivacyPane: (
+      target: "microphone" | "input-monitoring" | "screen-recording",
+    ) => void | Promise<void>;
   };
 
   let { show, onDismiss, onOpenPrivacyPane }: Props = $props();
@@ -141,6 +143,35 @@
         </p>
         <button class="ghost" onclick={() => onOpenPrivacyPane("input-monitoring")}>
           Open Input Monitoring settings
+        </button>
+      </section>
+
+      <!--
+        Screen Recording — required for Meeting Mode (#269). Without
+        this section, users hit an unexpected TCC prompt the first
+        time they try Meeting Mode and many reflexively dismiss it,
+        silently breaking system-audio capture with no clear error.
+        The copy explicitly addresses the counterintuitive name —
+        macOS bundles system-audio capture under "Screen Recording"
+        even though Hush captures no pixels.
+      -->
+      <section class="first-run-section">
+        <h3>Screen Recording (macOS — system audio for Meeting Mode)</h3>
+        <p>
+          Meeting Mode records the other side of a Zoom / Teams /
+          Meet call alongside your microphone. macOS bundles
+          system-audio capture under the <em>Screen Recording</em>
+          permission category — despite the name, Hush
+          <strong>never captures pixels</strong>; only audio. The
+          prompt fires the first time you start a Meeting Mode
+          session with system audio enabled, or when you click
+          <em>Grant in Settings…</em> on the Permissions tab.
+          Microphone-only Meeting Mode sessions (and dictation)
+          don't need this — only the system-audio capture path
+          does.
+        </p>
+        <button class="ghost" onclick={() => onOpenPrivacyPane("screen-recording")}>
+          Open Screen Recording settings
         </button>
       </section>
 
