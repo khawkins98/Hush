@@ -126,6 +126,7 @@
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenDownloadFailed: UnlistenFn | null = null;
   let unlistenGotoTab: UnlistenFn | null = null;
+  let unlistenUpdaterResult: UnlistenFn | null = null;
   /// Handle for the window-focus listener wired in onMount. Stored
   /// so onDestroy can remove it; without removal a closed-then-
   /// reopened Settings window would accumulate listeners.
@@ -551,6 +552,19 @@
     // diagnostic" link / future menu items. Payload is the tab key
     // — silently ignored if it isn't one we know, so future tabs
     // added on the main window don't crash a stale settings build.
+    // Menu-driven Check for Updates lands here as an event
+    // (#265) — the macOS menu fires the probe directly and emits
+    // the result to all windows. Stash it in the same state
+    // the in-tab button uses so the About tab renders the
+    // outcome whether the user clicked the menu or the button.
+    unlistenUpdaterResult = await listen<UpdateCheckResult>(
+      Events.UpdaterResult,
+      (e) => {
+        updateCheck = e.payload;
+        updateChecking = false;
+      },
+    );
+
     unlistenGotoTab = await listen<string>(Events.SettingsGotoTab, (e) => {
       const target = e.payload;
       if (
@@ -723,6 +737,7 @@
     unlistenDownloadDone?.();
     unlistenDownloadFailed?.();
     unlistenGotoTab?.();
+    unlistenUpdaterResult?.();
     if (settingsFocusHandler) {
       window.removeEventListener("focus", settingsFocusHandler);
       settingsFocusHandler = null;

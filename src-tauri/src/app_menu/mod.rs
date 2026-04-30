@@ -133,18 +133,45 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 }
             }
             "check-for-updates" => {
-                // Open Settings on the About tab. The user clicks the
-                // "Check for updates" button there to fire the IPC.
-                // We deliberately don't auto-run the check from the
-                // menu: a manual click signals genuine intent and
-                // sidesteps GitHub-rate-limit edge cases on a user
-                // who alt-tabs the menu by accident.
+                // One-click semantics (#265). Pre-fix the menu
+                // opened Settings → About and waited for a second
+                // click on the in-tab "Check for updates" button.
+                // Every polished macOS app (Slack, 1Password,
+                // Xcode, Safari) fires the check on the menu click
+                // directly. We do the same: spawn the probe, emit
+                // the result as `updater:result`. The About tab
+                // subscribes to that event and renders the outcome
+                // — same UI, just driven by event instead of
+                // button. Opening Settings → About in parallel
+                // gives the user a place to read the result; if
+                // they have Settings open already this is a no-op.
+                let app_handle = app.clone();
                 if let Err(e) = crate::settings_window::show(app) {
                     tracing::error!(error = ?e, "menu: open settings (check-for-updates)");
                 }
                 if let Err(e) = app.emit("settings:goto-tab", "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Manager as _;
+                    let state = app_handle.state::<crate::ipc::AppState>();
+                    match crate::updater::check_for_updates(&state.http).await {
+                        Ok(result) => {
+                            if let Err(e) = app_handle.emit("updater:result", &result) {
+                                tracing::warn!(
+                                    error = ?e,
+                                    "menu check-for-updates: emit result failed"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = ?e,
+                                "menu check-for-updates: probe failed"
+                            );
+                        }
+                    }
+                });
             }
             id if id.starts_with("goto-") => {
                 let section = id.trim_start_matches("goto-").to_owned();
