@@ -110,6 +110,23 @@ pub fn run() {
             let ptt_combo_for_listener = std::sync::Arc::clone(&state.ptt_combo);
             let ptt_active_for_listener = std::sync::Arc::clone(&state.ptt_active);
             let ptt_spawned_for_listener = std::sync::Arc::clone(&state.ptt_listener_spawned);
+
+            // Orphan-session reconciliation (#249). Sessions left
+            // open by a previous process that exited without
+            // `stop_manual` (kill, OS crash, panic) get their
+            // `ended_at` stamped now so the panel doesn't render
+            // them as still-active. Best-effort: a DB failure here
+            // is logged inside the manager and doesn't block
+            // startup.
+            //
+            // Done before `app.manage(state)` so the meeting
+            // manager's own boot path completes before any IPC
+            // command can land on it. block_on is acceptable here
+            // for the same reason `build_default` was — we're in
+            // the synchronous Tauri `setup` hook and the cost is
+            // a single SELECT + zero-or-more UPDATE statements.
+            tauri::async_runtime::block_on(state.meeting_manager.reconcile_orphan_sessions());
+
             app.manage(state);
 
             // HUD level-meter pump (#21). Reads the latest RMS from the
