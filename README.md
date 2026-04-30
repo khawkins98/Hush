@@ -40,10 +40,11 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 **Platform polish (macOS)**
 - 🪟 Three-window architecture: main app + standalone Settings (⌘,) + transparent HUD
 - ⌨️ Native macOS menu bar — Hush → Settings…, View → Dictation/Meetings/History (⌘1/⌘2/⌘3)
-- 📍 Status-bar icon (Windows system tray / Linux notification area too) — Show Hush / Toggle Recording / Quit
-- 🟢 Live TCC permission detection (Microphone, Screen Recording, Input Monitoring) without triggering OS prompts; green "Permissions OK" pill on the Dictation surface when everything is granted
-- ⚙️ Autostart toggle (Launch Hush at login)
-- 👋 First-run welcome that explains Microphone + Input Monitoring permissions, with a "Show welcome on next launch" reset button
+- 📍 Status-bar icon (Windows system tray / Linux notification area too) — Show Hush / Toggle Recording / Open Settings / Quit. Monochrome template glyph adapts to dark/light menu bars.
+- 🟢 Live TCC permission detection (Microphone, Screen Recording, Input Monitoring) without triggering OS prompts; green "Permissions OK" pill on the Dictation surface when everything is granted. Settings → Permissions auto-refreshes when the user comes back from System Settings.
+- ⚙️ Autostart toggle (Launch Hush at login). Launches silently into the menu bar — no main-window pop-up.
+- 🪟 Closing the main / Settings windows hides them; tray stays alive. ⌘Q (or tray Quit) actually exits.
+- 👋 First-run welcome that explains Microphone + Input Monitoring + Screen Recording permissions, with a "Show welcome on next launch" reset button
 
 ### Planned (v1.x)
 

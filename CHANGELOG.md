@@ -42,6 +42,12 @@ Outcomes from the second review cycle plus the colleague-issue triage:
 
 Adds a third permissions section to the first-run modal between Input Monitoring and the footer. Walks the user through Meeting Mode's Screen Recording requirement (macOS bundles system-audio capture under that TCC category despite the name; Hush captures no pixels) and provides a deep-link to the Screen & System Audio Recording pane. Pre-fix users hit an unexpected TCC prompt the first time they tried Meeting Mode and reflexive dismissals silently broke the feature. Closes #269.
 
+#### Multi-agent review #4 follow-ups + small fixes (#284, #285, #286)
+
+- **Review #4 follow-ups (#284)** — `lib.rs::setup` hide-on-close had a redundant `prevent_close()` call in the failure branch (dropped); menu Check for Updates `PROBE_INFLIGHT` now uses an `InflightGuard` RAII struct so a panicking probe doesn't permanently disable the menu item; `is_background_launch` extracted to a testable helper with four unit tests; About-tab `updater:result` listener gated on `!updateChecking` to prevent double-announce; CLAUDE.md / learnings.md / CHANGELOG drift caught up.
+- **Tray template icon (#285)** — pre-fix the tray builder fed `default_window_icon()` (full-colour RGBA) to `icon_as_template(true)`, producing a black blob on light menu bars. Generated `src-tauri/icons/tray-icon@2x.png` (32×32) by alpha-extracting the brand mark with `magick`; loaded via `Image::from_bytes` (gated behind a new `image-png` Tauri feature). Closes #275.
+- **Plugin-os swap (#286)** — replaced the deprecated `navigator.platform` regex match in `+page.svelte` and `settings/+page.svelte` with `platform()` from `@tauri-apps/plugin-os`. New JS dep + Rust crate + plugin registration in `lib.rs`. Closes #272 (the part #282 had deferred).
+
 #### Meeting Mode UX polish: listening pill, stopping banner, Copy transcript, source chips (#241, #243, #244)
 
 Hands-on testing surfaced a cluster of visible-silence / missing-affordance gaps in the active-session UX:
