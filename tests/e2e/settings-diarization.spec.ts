@@ -177,7 +177,7 @@ test.describe("settings window — Speakers (#302)", () => {
     await expect.poll(() => downloadCalls).toBe(1);
   });
 
-  test("model-ready state shows the verification line and enables the toggle", async ({
+  test("model-ready state shows the installed line and enables the toggle", async ({
     page,
   }) => {
     // Default mock has `downloaded: true`, so this test exercises
@@ -198,5 +198,91 @@ test.describe("settings window — Speakers (#302)", () => {
     await expect(
       page.locator('[data-testid="diarizer-model-not-installed"]'),
     ).toHaveCount(0);
+  });
+
+  test("cancel button appears during download and fires model_cancel_download", async ({
+    page,
+  }) => {
+    const cancelCalls: Array<{ id: string }> = [];
+    await page.exposeFunction("__hush_record_cancel", (args: unknown) => {
+      cancelCalls.push(args as { id: string });
+    });
+    await installMocks(page, {
+      get_diarizer_model_status: () => ({
+        downloaded: false,
+        sizeMb: 26,
+        sha256:
+          "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
+        expectedPath: "/test/models/voxceleb_resnet34_LM.onnx",
+      }),
+      // Slow promise so we observe the busy state long enough to
+      // see + click the cancel button.
+      download_diarizer_model: () =>
+        new Promise((resolve) => setTimeout(resolve, 5_000)),
+      model_cancel_download: (args) => {
+        const { id } = (args ?? {}) as { id: string };
+        (
+          window as unknown as {
+            __hush_record_cancel: (a: { id: string }) => void;
+          }
+        ).__hush_record_cancel({ id });
+        return undefined;
+      },
+    });
+
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    // Cancel button isn't visible until a download is running.
+    await expect(
+      page.locator('[data-testid="diarizer-cancel-button"]'),
+    ).toHaveCount(0);
+
+    await page
+      .locator('[data-testid="diarizer-download-button"]')
+      .click();
+
+    const cancelBtn = page.locator(
+      '[data-testid="diarizer-cancel-button"]',
+    );
+    await expect(cancelBtn).toBeVisible();
+    await cancelBtn.click();
+
+    await expect.poll(() => cancelCalls.length).toBe(1);
+    expect(cancelCalls[0]).toEqual({ id: "wespeaker-resnet34-lm" });
+  });
+
+  test("manual-install details surface the expected path and SHA", async ({
+    page,
+  }) => {
+    // Corp-network escape hatch: a user blocked from
+    // huggingface.co should be able to find the path + SHA in
+    // the UI without grep'ing the catalog. The <details> element
+    // hides the technical fluff from the default view.
+    await installMocks(page, {
+      get_diarizer_model_status: () => ({
+        downloaded: false,
+        sizeMb: 26,
+        sha256:
+          "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
+        expectedPath: "/test/models/voxceleb_resnet34_LM.onnx",
+      }),
+    });
+
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    const summary = page.getByText("Or install manually", { exact: false });
+    await expect(summary).toBeVisible();
+    // Expand the details so the content is in the accessible tree.
+    await summary.click();
+    await expect(
+      page.getByText("/test/models/voxceleb_resnet34_LM.onnx"),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
+      ),
+    ).toBeVisible();
   });
 });
