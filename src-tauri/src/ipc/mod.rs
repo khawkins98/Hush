@@ -346,6 +346,13 @@ pub struct AppState {
     /// `OnnxDiarizer` and reads this flag at dispatch to decide
     /// whether to run inference.
     pub diarization_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Hot-swappable diarizer slot (#301). The `FlagGatedDiarizer`
+    /// constructed in `build_default` holds an `Arc::clone` of
+    /// this slot; the IPC `download_diarizer_model` path replaces
+    /// the inner Arc after a successful wespeaker download so the
+    /// new `OnnxDiarizer` takes effect on the next meeting tick
+    /// — no app restart required.
+    pub diarize_slot: crate::diarization::DiarizeSlot,
 }
 
 /// Encode [`crate::meeting::MeetingAutostartMode`] into the
@@ -418,6 +425,15 @@ pub struct AppStateBuilder {
     /// `build` constructs a fresh Arc seeded from
     /// [`Self::diarization_enabled`].
     diarization_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Pre-built [`crate::diarization::DiarizeSlot`] for hot-swap
+    /// support (#301). Set via
+    /// [`AppStateBuilder::diarize_slot`] when the production
+    /// wiring needs to share the same slot with the
+    /// `FlagGatedDiarizer` so the post-download swap propagates.
+    /// When unset, `build` constructs a fresh slot seeded with a
+    /// `NoopDiarizer` — fine for tests that don't exercise the
+    /// download / swap path.
+    diarize_slot: Option<crate::diarization::DiarizeSlot>,
 }
 
 impl AppStateBuilder {
@@ -537,6 +553,15 @@ impl AppStateBuilder {
         self
     }
 
+    /// Set the pre-built [`crate::diarization::DiarizeSlot`] (#301).
+    /// The `FlagGatedDiarizer` holds an `Arc::clone` of the same
+    /// slot, so the IPC `download_diarizer_model` path can
+    /// hot-swap the inner diarizer post-download.
+    pub fn diarize_slot(mut self, slot: crate::diarization::DiarizeSlot) -> Self {
+        self.diarize_slot = Some(slot);
+        self
+    }
+
     /// Construct the [`AppState`], or return a descriptive error naming
     /// the first required field that wasn't set.
     pub fn build(self) -> Result<AppState> {
@@ -643,6 +668,12 @@ impl AppStateBuilder {
             diarization_enabled: self.diarization_enabled_arc.unwrap_or_else(|| {
                 Arc::new(std::sync::atomic::AtomicBool::new(
                     self.diarization_enabled.unwrap_or(false),
+                ))
+            }),
+            diarize_slot: self.diarize_slot.unwrap_or_else(|| {
+                Arc::new(std::sync::RwLock::new(
+                    Arc::new(crate::diarization::NoopDiarizer)
+                        as Arc<dyn crate::diarization::Diarize>,
                 ))
             }),
         })
@@ -869,13 +900,20 @@ impl AppState {
         let diarization_enabled_arc = Arc::new(std::sync::atomic::AtomicBool::new(
             diarization_enabled_initial,
         ));
-        let diarize_inner = build_diarizer_inner(&models_dir);
+        // Hot-swappable inner-diarizer slot (#301). Owned by
+        // AppState; cloned into the FlagGatedDiarizer below; cloned
+        // again into the IPC `download_diarizer_model` writer so a
+        // post-download swap propagates to the meeting pump on the
+        // next tick — no restart needed.
+        let diarize_inner_initial = build_diarizer_inner(&models_dir);
+        let diarize_slot: crate::diarization::DiarizeSlot =
+            Arc::new(std::sync::RwLock::new(diarize_inner_initial));
         let diarize_fallback: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
         let diarize: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::FlagGatedDiarizer::new(
                 Arc::clone(&diarization_enabled_arc),
-                diarize_inner,
+                Arc::clone(&diarize_slot),
                 Arc::clone(&diarize_fallback),
             ));
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
@@ -974,6 +1012,7 @@ impl AppState {
             .sound_cues_enabled(sound_cues_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
             .diarization_enabled_arc(diarization_enabled_arc)
+            .diarize_slot(diarize_slot)
             .build()
     }
 }

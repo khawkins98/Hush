@@ -1025,6 +1025,214 @@ pub(crate) async fn set_diarization_enabled_inner(
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Status of the diarizer model file (#301). The Settings →
+/// Speakers panel reads this on mount + after every download
+/// progress event so the UI can render "model not installed",
+/// "downloading", or "ready" states accurately.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizeModelStatus {
+    /// Whether the wespeaker `.onnx` file is present in
+    /// `models_dir`. Frontend uses this to grey out the toggle and
+    /// show the download affordance when `false`.
+    pub downloaded: bool,
+    /// Catalog-declared on-disk size (~26 MB). Surfaced in the UI
+    /// so the user knows what they're committing to before
+    /// clicking Download.
+    pub size_mb: u32,
+    /// Catalog-declared SHA-256 (hex). Returned alongside the
+    /// status so the UI can show a "verified file" indicator
+    /// post-download. Not user-facing per se, but useful for
+    /// support / troubleshooting.
+    pub sha256: String,
+    /// Absolute path the user can copy-and-cd-into to drop the
+    /// file manually if they prefer (or to verify the download
+    /// landed where expected). Mirrors the same affordance as the
+    /// Whisper picker.
+    pub expected_path: String,
+}
+
+/// Read the diarizer model's status (#301). Cheap — single
+/// filesystem stat. Called by Settings → Speakers on mount and
+/// after each `model:download-done` / `model:download-failed`
+/// Tauri event.
+#[tauri::command]
+pub fn get_diarizer_model_status(state: State<'_, AppState>) -> IpcResult<DiarizeModelStatus> {
+    let model = crate::diarization::catalog::default_diarizer_model();
+    let path = state.models_dir.join(&model.filename);
+    Ok(DiarizeModelStatus {
+        downloaded: path.exists(),
+        size_mb: model.size_mb,
+        sha256: model.sha256,
+        expected_path: path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Begin downloading the wespeaker speaker-embedding model (#301).
+/// Mirrors the `model_download` shape: returns immediately, the
+/// download runs on a tokio task, progress is reported via Tauri
+/// events. After a successful download we hot-swap the diarizer
+/// slot so the new `OnnxDiarizer` takes effect on the next meeting
+/// tick — no app restart needed.
+///
+/// Three Tauri events fan out the lifecycle, namespaced under the
+/// existing `model:` prefix the Whisper picker uses:
+/// - `model:download-progress` — `{ id, bytesReceived, bytesTotal }`
+/// - `model:download-done` — `{ id, message: null }`
+/// - `model:download-failed` — `{ id, message }`
+///
+/// `id` is always `"wespeaker-resnet34-lm"` for the diarizer
+/// (matches `catalog::WESPEAKER_RESNET34_LM_ID`).
+#[tauri::command]
+pub async fn download_diarizer_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> IpcResult<()> {
+    let model = crate::diarization::catalog::default_diarizer_model();
+    let id = model.id.clone();
+    let dest = state.models_dir.join(&model.filename);
+    if dest.exists() {
+        return Err(IpcError::Settings(format!(
+            "{} is already downloaded",
+            model.display_name
+        )));
+    }
+
+    // Register a cancel handle. Reuses `AppState::downloads` —
+    // same store the Whisper download path uses, keyed by id, so
+    // the existing `model_cancel_download` IPC works for the
+    // diarizer model with no extra wiring.
+    let cancel = crate::transcription::download::CancelHandle::new();
+    {
+        let mut guard = state.downloads.lock().map_err(poisoned)?;
+        if guard.contains_key(&id) {
+            return Err(IpcError::Settings(format!(
+                "{} is already downloading",
+                model.display_name
+            )));
+        }
+        guard.insert(id.clone(), cancel.clone());
+    }
+
+    let app_for_task = app.clone();
+    let id_for_task = id.clone();
+    let url = model.download_url.clone();
+    let sha = model.sha256.clone();
+    let http = state.http.clone();
+    let dest_for_task = dest.clone();
+    // Hold an Arc-clone of the slot for post-download swap.
+    let diarize_slot = std::sync::Arc::clone(&state.diarize_slot);
+    let downloads_app = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        use tauri::{Emitter, Manager};
+        let app_for_progress = app_for_task.clone();
+        let id_for_progress = id_for_task.clone();
+        let progress: Box<crate::transcription::download::ProgressCallback> =
+            Box::new(move |update| {
+                let _ = app_for_progress.emit(
+                    "model:download-progress",
+                    crate::ipc::commands::models::DownloadProgress {
+                        id: id_for_progress.clone(),
+                        bytes_received: update.bytes_received,
+                        bytes_total: update.bytes_total,
+                    },
+                );
+            });
+
+        let result = crate::transcription::download::download_with_progress(
+            &http,
+            &url,
+            &dest_for_task,
+            &sha,
+            &cancel,
+            &progress,
+        )
+        .await;
+
+        // Drop the cancel handle on the way out, success or
+        // failure. Same pattern the Whisper download uses.
+        if let Some(state) = downloads_app.try_state::<AppState>() {
+            if let Ok(mut guard) = state.downloads.lock() {
+                guard.remove(&id_for_task);
+            }
+        }
+
+        match result {
+            Ok(()) => {
+                // Hot-swap the diarizer. If OnnxDiarizer::new
+                // succeeds, write it into the slot — the next
+                // pump tick that runs with diarization_enabled=on
+                // will use it. If it fails (build_in feature
+                // off, or some other load error), leave Noop in
+                // place; emit the failure so the UI can show a
+                // useful diagnostic. The successful-download
+                // case still emits `model:download-done` so the
+                // UI badge flips to "ready" — load failure is a
+                // separate concern from download failure.
+                if let Err(e) = swap_diarizer_after_download(&diarize_slot, &dest_for_task) {
+                    tracing::warn!(
+                        error = %e,
+                        path = %dest_for_task.display(),
+                        "diarizer download succeeded but model load failed; \
+                         file is on disk but diarization will use Noop until restart"
+                    );
+                }
+                let _ = app_for_task.emit(
+                    "model:download-done",
+                    crate::ipc::commands::models::DownloadStatus {
+                        id: id_for_task,
+                        message: None,
+                    },
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = ?e,
+                    model_id = %id_for_task,
+                    "diarizer download failed"
+                );
+                let _ = app_for_task.emit(
+                    "model:download-failed",
+                    crate::ipc::commands::models::DownloadStatus {
+                        id: id_for_task,
+                        message: Some(format!("{e:#}")),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Build a fresh `OnnxDiarizer` from the just-downloaded file and
+/// swap it into the slot. Pulled out as a helper so the inline
+/// download closure stays readable + so the cfg-gating around the
+/// `diarization-onnx` feature lives in one spot.
+fn swap_diarizer_after_download(
+    slot: &crate::diarization::DiarizeSlot,
+    model_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    #[cfg(feature = "diarization-onnx")]
+    {
+        let onnx = crate::diarization::onnx::OnnxDiarizer::new(model_path)?;
+        let mut guard = slot
+            .write()
+            .map_err(|e| anyhow::anyhow!("slot poisoned: {e}"))?;
+        *guard = std::sync::Arc::new(onnx);
+        Ok(())
+    }
+    #[cfg(not(feature = "diarization-onnx"))]
+    {
+        let _ = slot;
+        let _ = model_path;
+        Err(anyhow::anyhow!(
+            "diarization-onnx feature not enabled in this build"
+        ))
+    }
+}
+
 /// Read the current Meeting-Mode auto-start mode. The Settings
 /// → Meeting tab calls this on mount so the dropdown renders the
 /// persisted value.

@@ -176,6 +176,25 @@
   let diarizationBusy = $state(false);
   let diarizationError = $state<string | null>(null);
 
+  // Diarizer model status (#301). When the wespeaker .onnx is
+  // missing, the toggle is informational only — the runtime falls
+  // back to source-only labels. Settings → Speakers reads this on
+  // mount + after each download lifecycle event so the UI can
+  // render "model not installed", "downloading", or "ready".
+  type DiarizerModelStatus = {
+    downloaded: boolean;
+    sizeMb: number;
+    sha256: string;
+    expectedPath: string;
+  };
+  let diarizerModelStatus = $state<DiarizerModelStatus | null>(null);
+  let diarizerDownloadBusy = $state(false);
+  let diarizerDownloadProgress = $state<{ received: number; total: number | null } | null>(null);
+  let diarizerDownloadError = $state<string | null>(null);
+  let unlistenDiarizerProgress: (() => void) | null = null;
+  let unlistenDiarizerDone: (() => void) | null = null;
+  let unlistenDiarizerFailed: (() => void) | null = null;
+
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
   let vocabularyLoaded = $state(false);
@@ -635,7 +654,45 @@
       loadAppOverrides(),
       loadMeetingAutostartMode(),
       loadDiarizationEnabled(),
+      loadDiarizerModelStatus(),
     ]);
+
+    // Wire up diarizer-download lifecycle listeners (#301). The
+    // backend reuses the existing `model:` events the Whisper
+    // download path emits, but we filter by `id` so the diarizer
+    // download doesn't get confused with a Whisper download in
+    // flight at the same time.
+    const isDiarizerEvent = (id: string) => id === "wespeaker-resnet34-lm";
+    unlistenDiarizerProgress = await listen<DownloadProgressEvent>(
+      "model:download-progress",
+      (event) => {
+        if (!isDiarizerEvent(event.payload.id)) return;
+        diarizerDownloadProgress = {
+          received: event.payload.bytesReceived,
+          total: event.payload.bytesTotal,
+        };
+      },
+    );
+    unlistenDiarizerDone = await listen<{ id: string }>(
+      "model:download-done",
+      async (event) => {
+        if (!isDiarizerEvent(event.payload.id)) return;
+        diarizerDownloadBusy = false;
+        diarizerDownloadProgress = null;
+        diarizerDownloadError = null;
+        await loadDiarizerModelStatus();
+      },
+    );
+    unlistenDiarizerFailed = await listen<{ id: string; message: string | null }>(
+      "model:download-failed",
+      async (event) => {
+        if (!isDiarizerEvent(event.payload.id)) return;
+        diarizerDownloadBusy = false;
+        diarizerDownloadProgress = null;
+        diarizerDownloadError = event.payload.message ?? "Download failed.";
+        await loadDiarizerModelStatus();
+      },
+    );
 
     // Auto-refresh the permissions diagnostic when the Settings
     // window regains focus. The "Grant in Settings…" button
@@ -809,6 +866,33 @@
     }
   }
 
+  async function loadDiarizerModelStatus(): Promise<void> {
+    try {
+      diarizerModelStatus = await invoke<DiarizerModelStatus>(
+        "get_diarizer_model_status",
+      );
+    } catch (e) {
+      console.warn("[hush] get_diarizer_model_status failed", e);
+      diarizerModelStatus = null;
+    }
+  }
+
+  async function onDiarizerDownload() {
+    if (diarizerDownloadBusy) return;
+    diarizerDownloadBusy = true;
+    diarizerDownloadProgress = null;
+    diarizerDownloadError = null;
+    try {
+      await invoke("download_diarizer_model");
+      // The actual completion is signalled via the
+      // `model:download-done` listener — that handler clears
+      // diarizerDownloadBusy + refreshes the status.
+    } catch (err) {
+      diarizerDownloadBusy = false;
+      diarizerDownloadError = formatErrorMessage(err);
+    }
+  }
+
   async function onResetFirstRun() {
     firstRunResetBusy = true;
     try {
@@ -833,6 +917,9 @@
     unlistenDownloadFailed?.();
     unlistenGotoTab?.();
     unlistenUpdaterResult?.();
+    unlistenDiarizerProgress?.();
+    unlistenDiarizerDone?.();
+    unlistenDiarizerFailed?.();
     if (settingsFocusHandler) {
       window.removeEventListener("focus", settingsFocusHandler);
       settingsFocusHandler = null;
@@ -1045,20 +1132,64 @@
       </section>
 
       <!--
-        Diarization toggle (#111). When on AND the wespeaker model
-        is present in the models directory, the meeting pump's
-        FlagGatedDiarizer routes utterances through OnnxDiarizer
-        instead of the Noop fallback. Copy in the toggle row
-        below describes the user-visible effect; the model-status
-        + download affordance lives in #301.
+        Diarization toggle + model status (#111, #301). When the
+        wespeaker model is present AND the toggle is on, the
+        meeting pump routes utterances through OnnxDiarizer; if
+        the model is missing the toggle is informational only
+        (FlagGatedDiarizer's inner is NoopDiarizer until the
+        download lands), so the download affordance appears
+        before the toggle.
       -->
       <section class="settings-group" aria-labelledby="settings-diarization-heading">
         <h2 id="settings-diarization-heading" class="group-heading">Speakers</h2>
+
+        {#if diarizerModelStatus && !diarizerModelStatus.downloaded}
+          <div class="diarizer-model-status" data-testid="diarizer-model-not-installed">
+            <p class="settings-row-name">Speaker model not installed</p>
+            <p class="settings-row-desc">
+              Per-speaker labels need a {diarizerModelStatus.sizeMb} MB ONNX
+              model. Hush downloads it once and verifies the
+              SHA-256; the toggle below has no effect until this
+              completes.
+            </p>
+            <button
+              type="button"
+              class="diarizer-download-button"
+              data-testid="diarizer-download-button"
+              disabled={diarizerDownloadBusy}
+              onclick={onDiarizerDownload}
+            >
+              {#if diarizerDownloadBusy}
+                {#if diarizerDownloadProgress?.total}
+                  Downloading… {Math.round(
+                    (100 * diarizerDownloadProgress.received) /
+                      diarizerDownloadProgress.total,
+                  )}%
+                {:else}
+                  Downloading…
+                {/if}
+              {:else}
+                Download speaker model ({diarizerModelStatus.sizeMb} MB)
+              {/if}
+            </button>
+            {#if diarizerDownloadError}
+              <p class="settings-error" data-testid="diarizer-download-error">
+                {diarizerDownloadError}
+              </p>
+            {/if}
+          </div>
+        {:else if diarizerModelStatus?.downloaded}
+          <p class="settings-row-desc" data-testid="diarizer-model-ready">
+            Speaker model installed and verified.
+          </p>
+        {/if}
+
         <label class="toggle-row">
           <input
             type="checkbox"
             data-testid="settings-diarization-toggle"
-            disabled={diarizationBusy}
+            disabled={diarizationBusy ||
+              (diarizerModelStatus !== null && !diarizerModelStatus.downloaded)}
             checked={diarizationEnabled}
             onchange={onDiarizationToggle}
           />
@@ -1066,9 +1197,8 @@
             <span class="toggle-name">Label speakers in meeting transcripts</span>
             <span class="toggle-desc">
               Groups utterances by who spoke (Speaker 1, Speaker 2, …)
-              instead of just tagging mic vs. system audio. The
-              speaker model downloads the first time you turn this
-              on. Off keeps the simpler mic / system labels.
+              instead of just tagging mic vs. system audio. Off
+              keeps the simpler mic / system labels.
             </span>
           </span>
         </label>

@@ -112,28 +112,46 @@ pub trait Diarize: Send + Sync {
 /// for sessions where the user prefers source-only labels.
 pub struct NoopDiarizer;
 
+/// Hot-swappable diarizer slot (#301). AppState owns one of these
+/// and hands an `Arc::clone` to [`FlagGatedDiarizer`]; the IPC
+/// `download_diarizer_model` path replaces the inner Arc after a
+/// successful download so the new `OnnxDiarizer` takes effect on
+/// the next meeting tick — no app restart.
+///
+/// `RwLock<Arc<dyn Diarize>>` rather than `Mutex` because reads
+/// happen on every meeting-pump tick and writes happen at most a
+/// couple of times per app session (download / re-load). Reader
+/// concurrency matters; writer contention doesn't.
+pub type DiarizeSlot = std::sync::Arc<std::sync::RwLock<std::sync::Arc<dyn Diarize>>>;
+
 /// Composite diarizer that routes to one of two inner impls based
 /// on the `diarization_enabled` settings flag (#111).
 ///
 /// The `AppState`'s `Arc<AtomicBool>` is shared with this struct,
 /// so flips of the toggle in Settings → Meeting → Speakers take
 /// effect on the *next* meeting tick — no session restart needed.
+/// The `inner` slot is itself a [`DiarizeSlot`] so the IPC
+/// download path can hot-swap the diarizer without rebuilding the
+/// FlagGatedDiarizer.
 ///
 /// Constructed in `AppStateBuilder::build_default`:
 /// - `enabled` → `Arc::clone(&app_state.diarization_enabled)`
-/// - `inner` → `OnnxDiarizer` if the wespeaker model is on disk and
-///   the `diarization-onnx` feature is built in, else `NoopDiarizer`
-/// - `fallback` → `NoopDiarizer` (always the safe default)
+/// - `inner` → `Arc::clone(&app_state.diarize_slot)`. Initial
+///   value is `OnnxDiarizer` if the wespeaker model is on disk +
+///   the `diarization-onnx` feature is built in, else
+///   `NoopDiarizer`.
+/// - `fallback` → `NoopDiarizer` (always the safe default for the
+///   off-state branch)
 pub struct FlagGatedDiarizer {
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    inner: std::sync::Arc<dyn Diarize>,
+    inner: DiarizeSlot,
     fallback: std::sync::Arc<dyn Diarize>,
 }
 
 impl FlagGatedDiarizer {
     pub fn new(
         enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        inner: std::sync::Arc<dyn Diarize>,
+        inner: DiarizeSlot,
         fallback: std::sync::Arc<dyn Diarize>,
     ) -> Self {
         Self {
@@ -152,8 +170,11 @@ impl Diarize for FlagGatedDiarizer {
         format: CaptureFormat,
     ) {
         if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
-            self.inner
-                .label_utterances(utterances, audio_chunks, format);
+            // Recover from poison rather than killing diarization
+            // for the rest of the session — same shape as
+            // OnnxDiarizer's session-mutex recovery.
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            inner.label_utterances(utterances, audio_chunks, format);
         } else {
             self.fallback
                 .label_utterances(utterances, audio_chunks, format);
@@ -398,7 +419,9 @@ mod tests {
         let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let diarizer = FlagGatedDiarizer::new(
             enabled,
-            inner.clone() as std::sync::Arc<dyn Diarize>,
+            std::sync::Arc::new(std::sync::RwLock::new(
+                inner.clone() as std::sync::Arc<dyn Diarize>
+            )),
             fallback.clone() as std::sync::Arc<dyn Diarize>,
         );
         let mut us = vec![utt(0, 1000, "x")];
@@ -424,7 +447,9 @@ mod tests {
         let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let diarizer = FlagGatedDiarizer::new(
             enabled,
-            inner.clone() as std::sync::Arc<dyn Diarize>,
+            std::sync::Arc::new(std::sync::RwLock::new(
+                inner.clone() as std::sync::Arc<dyn Diarize>
+            )),
             fallback.clone() as std::sync::Arc<dyn Diarize>,
         );
         let mut us = vec![utt(0, 1000, "x")];
@@ -454,7 +479,9 @@ mod tests {
         let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let diarizer = FlagGatedDiarizer::new(
             std::sync::Arc::clone(&enabled),
-            inner.clone() as std::sync::Arc<dyn Diarize>,
+            std::sync::Arc::new(std::sync::RwLock::new(
+                inner.clone() as std::sync::Arc<dyn Diarize>
+            )),
             fallback.clone() as std::sync::Arc<dyn Diarize>,
         );
 

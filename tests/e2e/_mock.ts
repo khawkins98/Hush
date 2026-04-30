@@ -57,11 +57,23 @@ export async function installMocks(
       get_meeting_autostart_mode: () => "off",
       set_meeting_autostart_mode: () => undefined,
       // Diarization toggle (Settings → Meeting → Speakers, #111).
-      // Default matches the backend's "off" default; the foundation
-      // PR ships the toggle only — production diarizer is still
-      // NoopDiarizer until PR-B.
+      // Default matches the backend's "off" default; specs that
+      // exercise the toggle override per-test.
       get_diarization_enabled: () => false,
       set_diarization_enabled: () => undefined,
+      // Diarizer model status (#301). Default is "downloaded" so
+      // the toggle is interactable in specs that don't care about
+      // the missing-model state. Specs that exercise the download
+      // affordance flip this to `downloaded: false`.
+      get_diarizer_model_status: () => ({
+        downloaded: true,
+        sizeMb: 26,
+        sha256:
+          "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
+        expectedPath:
+          "/Users/test/Library/Application Support/com.hush.dev/models/voxceleb_resnet34_LM.onnx",
+      }),
+      download_diarizer_model: () => undefined,
       // Manual update probe (#223). Default to "up to date" so
       // specs that don't override get a stable result if the
       // user clicks the button.
