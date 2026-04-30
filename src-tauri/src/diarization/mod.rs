@@ -504,4 +504,79 @@ mod tests {
             "after flipping flag on, fallback is skipped"
         );
     }
+
+    #[test]
+    fn flag_gated_observes_slot_swap_mid_session() {
+        // Audit-2 caught the gap: we tested the *flag* flip is
+        // live, but never tested the *slot* swap path that #301's
+        // download IPC actually exercises. Pre-PR-G the inner was
+        // owned by FlagGatedDiarizer directly; post-#304 it's a
+        // shared `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` so
+        // a write through the shared slot must propagate to the
+        // FlagGatedDiarizer's read on the next call. This test
+        // pins that behaviour.
+        let initial = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let replacement = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let fallback = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let slot: DiarizeSlot = std::sync::Arc::new(std::sync::RwLock::new(
+            initial.clone() as std::sync::Arc<dyn Diarize>
+        ));
+        let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let diarizer = FlagGatedDiarizer::new(
+            enabled,
+            std::sync::Arc::clone(&slot),
+            fallback.clone() as std::sync::Arc<dyn Diarize>,
+        );
+
+        // Pre-swap: initial sees the call.
+        let mut us = vec![utt(0, 1000, "x")];
+        diarizer.label_utterances(&mut us, &[], fmt());
+        assert!(
+            initial.called.load(std::sync::atomic::Ordering::Relaxed),
+            "before swap, initial diarizer should be called"
+        );
+        assert!(
+            !replacement
+                .called
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "before swap, replacement should not have been called"
+        );
+
+        // Swap: write a new Arc into the slot. This is the move
+        // the IPC `download_diarizer_model` makes after a
+        // successful download + load.
+        {
+            let mut guard = slot.write().expect("slot write lock");
+            *guard = replacement.clone() as std::sync::Arc<dyn Diarize>;
+        }
+
+        // Reset the initial recorder so we can prove it does NOT
+        // get called this time.
+        initial
+            .called
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // Post-swap: replacement sees the call, initial does not.
+        diarizer.label_utterances(&mut us, &[], fmt());
+        assert!(
+            replacement
+                .called
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "after swap, replacement diarizer should be called"
+        );
+        assert!(
+            !initial.called.load(std::sync::atomic::Ordering::Relaxed),
+            "after swap, the previous diarizer should NOT be called"
+        );
+        assert!(
+            !fallback.called.load(std::sync::atomic::Ordering::Relaxed),
+            "fallback should never be called while the flag is on"
+        );
+    }
 }
