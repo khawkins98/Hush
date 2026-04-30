@@ -231,6 +231,14 @@ pub trait MeetingSessionRepository:
     /// Update a session's freeform notes. The panel calls this on
     /// blur of the notes textarea.
     async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()>;
+
+    /// Single-row lookup by primary key. Replaces the previous
+    /// `list().find()` pattern in `meeting_session_get` (#253) —
+    /// the panel's "show transcript" path was loading every
+    /// session row to find one, which scales O(N) over the user's
+    /// meeting history. SQLite's PK is indexed, so this is a
+    /// single B-tree probe.
+    async fn get_by_id(&self, id: i64) -> Result<Option<MeetingSession>>;
 }
 
 #[cfg(test)]

@@ -196,6 +196,23 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
             .context("set meeting session notes")?;
         Ok(())
     }
+
+    async fn get_by_id(&self, id: i64) -> Result<Option<MeetingSession>> {
+        // Single B-tree probe via the PK index. Mirrors the
+        // column list in `list()` so a future column add (e.g.
+        // migration 0006) only needs to touch one place — both
+        // queries fail loud at compile time if they drift.
+        sqlx::query_as::<_, MeetingSession>(
+            "SELECT id, app_name, app_kind, started_at, ended_at, \
+                    speaker_count, utterance_count, notes, sources, app_title \
+             FROM meeting_sessions \
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(self.db.pool())
+        .await
+        .context("get meeting session by id")
+    }
 }
 
 /// String form for the `app_kind` column. Kept in one place so the

@@ -52,13 +52,23 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 # SHA-256 verification for downloaded model files. Hand-rolled hashing
 # would be a security footgun; `sha2` is the well-vetted RustCrypto
-# implementation.
-sha2 = "0.11"
+# implementation. Pinned to 0.10 (current stable line) rather than
+# tracking the 0.11 pre-release — pre-releases can have unstable APIs
+# and we don't need any 0.11-only features. See #256.
+sha2 = "0.10"
 
 # Semantic-version comparison for the manual "Check for updates"
 # probe (#223). Compares the bundled `CARGO_PKG_VERSION` to the
 # tag returned by GitHub's releases API.
 semver = "1"
+
+# Volatile-write zeroing of in-memory PCM windows + transcript
+# fragments at session end (#250). Manual `iter_mut`/`= 0.0`
+# loops are legally elidable by LLVM in `Drop` impls on release
+# builds — `zeroize` uses a volatile write + compiler fence that
+# the optimizer cannot remove, which is what actually delivers
+# the privacy property the audio-pipeline doc-comments claim.
+zeroize = "1"
 
 # `Stream` trait + adaptors used to consume reqwest's response body.
 # Tiny, no transitive deps beyond `futures-core`.

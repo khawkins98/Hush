@@ -429,6 +429,15 @@ impl Drop for SlidingWindowState {
         // reads the swap file, those samples are still on disk
         // unless we overwrite them.
         //
+        // Uses `zeroize` rather than a manual `iter_mut` loop
+        // (#250). LLVM is permitted to elide stores it can prove
+        // are unobservable after the function returns — exactly
+        // the case in a `Drop` impl on an `opt-level = 3`
+        // release build. The `zeroize` crate uses a volatile
+        // write + compiler fence that the optimizer cannot
+        // legally remove, which is the only way to actually
+        // guarantee the property the comment above claims.
+        //
         // Cost is O(n) over the window contents (≤ ~30 s of 16 kHz
         // mono = 480 000 floats), once per session end. Negligible
         // alongside whisper inference. The slide-forward path that
@@ -437,13 +446,17 @@ impl Drop for SlidingWindowState {
         // samples or compact under shrink_to_fit; the bigger window
         // of exposure is here, at session end, where the full
         // window sits live until Drop.
-        for sample in self.window.iter_mut() {
-            *sample = 0.0;
-        }
+        use zeroize::Zeroize;
+        self.window.zeroize();
         // Drop the last-partial text too — it's not raw audio, but
         // it's the most recent transcript fragment for this
         // session, and a future change adding partial-PII handling
         // would expect this to be cleared by the same discipline.
+        // String contents get zeroized via the same mechanism
+        // when present.
+        if let Some(text) = self.last_partial_text.as_mut() {
+            text.zeroize();
+        }
         self.last_partial_text = None;
     }
 }
