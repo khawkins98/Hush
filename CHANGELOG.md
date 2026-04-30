@@ -38,6 +38,10 @@ Outcomes from the second review cycle plus the colleague-issue triage:
 - **Window lifecycle (#280)** — `CloseRequested` on main + Settings now hides instead of destroying. Autostart launches with `--background` and switches to Accessory activation policy so the LaunchAgent doesn't pop the main window at every login.
 - **Tray + menu (#281)** — fix tray accelerator (was ⌘⌥H, the macOS "Hide All Other Apps" shortcut; now ⌃⌥H, matching the actually-registered hotkey). Menu "Check for Updates…" fires the probe directly and emits `Events.UpdaterResult` for the Settings About tab to render — one-click instead of two.
 
+#### Onboarding: Screen Recording explainer in the first-run modal (#283)
+
+Adds a third permissions section to the first-run modal between Input Monitoring and the footer. Walks the user through Meeting Mode's Screen Recording requirement (macOS bundles system-audio capture under that TCC category despite the name; Hush captures no pixels) and provides a deep-link to the Screen & System Audio Recording pane. Pre-fix users hit an unexpected TCC prompt the first time they tried Meeting Mode and reflexive dismissals silently broke the feature. Closes #269.
+
 #### Meeting Mode UX polish: listening pill, stopping banner, Copy transcript, source chips (#241, #243, #244)
 
 Hands-on testing surfaced a cluster of visible-silence / missing-affordance gaps in the active-session UX:

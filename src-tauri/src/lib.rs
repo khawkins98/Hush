@@ -20,6 +20,16 @@ pub mod updater;
 
 use tauri::{Emitter, Manager};
 
+/// Did the LaunchAgent fire us with `--background`? Returns true if
+/// any arg in the iterator is exactly `"--background"`. Extracted
+/// to a testable helper (review #4 R-5) so the policy — case-
+/// sensitive, exact match, no `=value` form — has a unit test
+/// pinning it. Pre-fix this lived inline in `setup` and was only
+/// reachable via dev-launch smoke.
+fn is_background_launch(mut args: impl Iterator<Item = String>) -> bool {
+    args.any(|a| a == "--background")
+}
+
 /// Filename for the app's SQLite database, stored in the platform's
 /// per-app data directory (e.g. `~/Library/Application Support/Hush/`
 /// on macOS).
@@ -157,14 +167,26 @@ pub fn run() {
                     let win_clone = window.clone();
                     window.on_window_event(move |event| {
                         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            // Always prevent the destroy. If the
+                            // subsequent `hide()` fails the window
+                            // stays visible — that's a strictly
+                            // better failure mode than letting
+                            // Tauri destroy the only surface the
+                            // user has for the window. The user
+                            // can quit Hush entirely via tray /
+                            // menu / ⌘Q if they actually wanted
+                            // out. Pre-fix this had a
+                            // belt-and-braces second
+                            // `prevent_close()` in the failure
+                            // arm; the second call is a no-op
+                            // (#286 review #4 finding).
                             api.prevent_close();
                             if let Err(e) = win_clone.hide() {
                                 tracing::warn!(
                                     label = %win_clone.label(),
                                     error = ?e,
-                                    "hide-on-close failed; falling through to default destroy"
+                                    "hide-on-close failed; window remains visible"
                                 );
-                                api.prevent_close(); // belt-and-braces
                             }
                         }
                     });
@@ -189,7 +211,7 @@ pub fn run() {
             // `Some(vec!["--background"])` registration argument
             // (see the `tauri_plugin_autostart::init` call above).
             #[cfg(target_os = "macos")]
-            if std::env::args().any(|a| a == "--background") {
+            if is_background_launch(std::env::args()) {
                 if let Some(main_win) = app.get_webview_window("main") {
                     let _ = main_win.hide();
                 }
@@ -464,3 +486,45 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
 /// hitting (`active-win-pos-rs::get_active_window`) are a single
 /// IPC each.
 const MEETING_AUTOSTART_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_background_launch_recognises_flag() {
+        let args = vec![
+            "/Applications/Hush.app".to_owned(),
+            "--background".to_owned(),
+        ];
+        assert!(is_background_launch(args.into_iter()));
+    }
+
+    #[test]
+    fn is_background_launch_rejects_missing_flag() {
+        let args = vec!["/Applications/Hush.app".to_owned()];
+        assert!(!is_background_launch(args.into_iter()));
+    }
+
+    #[test]
+    fn is_background_launch_rejects_partial_match() {
+        // A flag like `--background-frobulator` shouldn't trigger
+        // background mode by accident — the match is exact.
+        let args = vec![
+            "/Applications/Hush.app".to_owned(),
+            "--background-frobulator".to_owned(),
+        ];
+        assert!(!is_background_launch(args.into_iter()));
+    }
+
+    #[test]
+    fn is_background_launch_rejects_equals_form() {
+        // We deliberately don't accept `--background=true` —
+        // the autostart plugin always passes the bare flag.
+        let args = vec![
+            "/Applications/Hush.app".to_owned(),
+            "--background=true".to_owned(),
+        ];
+        assert!(!is_background_launch(args.into_iter()));
+    }
+}
