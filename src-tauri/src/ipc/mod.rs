@@ -318,6 +318,13 @@ pub struct AppState {
     /// `set_hud_enabled` IPC command, which also persists to the
     /// `hud_enabled` settings row.
     pub hud_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether to play short macOS system sounds at the
+    /// recording-start ("Tink") and transcription-complete
+    /// ("Glass") transitions (#292). Default off; opt-in via
+    /// Settings → General → Audio cues. Stored as an
+    /// `AtomicBool` so the dictation hot path reads without
+    /// locking. Mirrored on the `sound_cues_enabled` settings row.
+    pub sound_cues_enabled: Arc<std::sync::atomic::AtomicBool>,
     /// User-chosen Meeting-Mode auto-start mode (Off / Always).
     /// Read by the foreground poller every tick; flipped by the
     /// `set_meeting_autostart_mode` IPC. Encoded as an
@@ -387,6 +394,7 @@ pub struct AppStateBuilder {
     ptt_combo: Option<crate::hotkey::ptt::PttCombo>,
     ptt_active: Option<bool>,
     hud_enabled: Option<bool>,
+    sound_cues_enabled: Option<bool>,
     meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
 }
 
@@ -480,6 +488,11 @@ impl AppStateBuilder {
 
     pub fn hud_enabled(mut self, enabled: bool) -> Self {
         self.hud_enabled = Some(enabled);
+        self
+    }
+
+    pub fn sound_cues_enabled(mut self, enabled: bool) -> Self {
+        self.sound_cues_enabled = Some(enabled);
         self
     }
 
@@ -582,6 +595,9 @@ impl AppStateBuilder {
             hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
                 self.hud_enabled.unwrap_or(true),
             )),
+            sound_cues_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                self.sound_cues_enabled.unwrap_or(false),
+            )),
             meeting_autostart_mode: Arc::new(std::sync::atomic::AtomicU8::new(
                 encode_autostart_mode(
                     self.meeting_autostart_mode
@@ -645,6 +661,15 @@ impl crate::meeting::MeetingEventEmitter for AppHandleMeetingEventEmitter {
 /// shouldn't silently turn it off).
 pub(crate) fn parse_hud_enabled_setting(raw: Option<String>) -> bool {
     !matches!(raw.as_deref(), Some("false"))
+}
+
+/// Parse the persisted [`crate::settings::keys::SOUND_CUES_ENABLED`]
+/// row (#292). Encoding is the literal string `"true"` / `"false"`;
+/// absent rows + any other value fall back to `false` (audio cues
+/// are off by default — they'd be intrusive in shared spaces /
+/// meeting rooms, opt-in is the right shape).
+pub(crate) fn parse_sound_cues_setting(raw: Option<String>) -> bool {
+    matches!(raw.as_deref(), Some("true"))
 }
 
 impl AppState {
@@ -792,6 +817,16 @@ impl AppState {
                 .flatten(),
         );
 
+        // Audio cues — off by default (#292). Reads the same
+        // settings table the IPC commands write through.
+        let sound_cues_enabled = parse_sound_cues_setting(
+            settings
+                .get(crate::settings::keys::SOUND_CUES_ENABLED)
+                .await
+                .ok()
+                .flatten(),
+        );
+
         // Meeting auto-start mode. Off by default; absent or
         // garbage rows fall through to Off (the safer default —
         // a corrupted row should not silently make the mic
@@ -820,6 +855,7 @@ impl AppState {
             .ptt_combo(ptt_combo)
             .ptt_active(ptt_active)
             .hud_enabled(hud_enabled)
+            .sound_cues_enabled(sound_cues_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
             .build()
     }

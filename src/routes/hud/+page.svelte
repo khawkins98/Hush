@@ -36,8 +36,18 @@
   // slow (silence between words shouldn't drop the bar to 0).
   let displayLevel = $state(0);
 
+  // HUD lifecycle state (#291). Backend emits `hud:state` with
+  // `"recording"` or `"processing"`. Recording is the existing
+  // visual (pulsing dot + level meter); Processing replaces the
+  // meter with a static label so the user knows transcription is
+  // in flight and pasting too early would be premature. Defaults
+  // to recording — start_dictation always fires the explicit
+  // recording state too, so this is just a safe initial render.
+  let hudState = $state<"recording" | "processing">("recording");
+
   onMount(() => {
-    let unlisten: UnlistenFn | undefined;
+    let unlistenLevel: UnlistenFn | undefined;
+    let unlistenState: UnlistenFn | undefined;
     let raf: number | undefined;
 
     const ATTACK = 0.6;
@@ -53,13 +63,31 @@
     listen<number>(Events.AudioLevel, (event) => {
       rms = event.payload ?? 0;
     }).then((fn) => {
-      unlisten = fn;
+      unlistenLevel = fn;
+    });
+
+    listen<string>(Events.HudState, (event) => {
+      const next = event.payload;
+      if (next === "recording" || next === "processing") {
+        hudState = next;
+        // Freeze the level meter on transition into Processing
+        // so a stray late-arriving `audio:level` event (the pump
+        // ticks at ~30 Hz and may have one in flight) doesn't
+        // briefly relight the bar after capture has stopped.
+        if (next === "processing") {
+          rms = 0;
+          displayLevel = 0;
+        }
+      }
+    }).then((fn) => {
+      unlistenState = fn;
     });
 
     raf = requestAnimationFrame(tick);
 
     return () => {
-      unlisten?.();
+      unlistenLevel?.();
+      unlistenState?.();
       if (raf !== undefined) cancelAnimationFrame(raf);
     };
   });
@@ -99,10 +127,13 @@
 -->
 <div
   class="hud-root"
+  class:hud-processing={hudState === "processing"}
   data-tauri-drag-region
   role="status"
   aria-live="polite"
-  aria-label="Recording in progress"
+  aria-label={hudState === "processing"
+    ? "Processing transcription"
+    : "Recording in progress"}
 >
   <!--
     Subtle 6-dot grip glyph at the leading edge. The whole pill is a
@@ -124,10 +155,26 @@
     </svg>
   </span>
   <span class="hud-dot"></span>
-  <span class="hud-label">Recording</span>
-  <div class="hud-meter" role="presentation">
-    <div class="hud-meter-fill" style="width: {barWidth}%"></div>
-  </div>
+  <span class="hud-label">
+    {hudState === "processing" ? "Processing…" : "Recording"}
+  </span>
+  {#if hudState === "recording"}
+    <div class="hud-meter" role="presentation">
+      <div class="hud-meter-fill" style="width: {barWidth}%"></div>
+    </div>
+  {:else}
+    <!--
+      Processing state: replace the level meter with a slim
+      shimmer bar — same width / position as the meter so the
+      pill doesn't reflow on transition. The shimmer reuses the
+      same gradient pattern as the Meeting panel's listening
+      pill so the visual idiom is consistent ("Hush is still
+      working but isn't capturing audio right now").
+    -->
+    <div class="hud-shimmer" role="presentation">
+      <div class="hud-shimmer-fill"></div>
+    </div>
+  {/if}
   <button
     type="button"
     class="hud-dismiss"
@@ -284,6 +331,51 @@
   @media (prefers-reduced-motion: reduce) {
     .hud-dot {
       animation: none;
+    }
+  }
+
+  /* Processing state (#291). The pill stays the same size and
+     shape; the dot stops pulsing (transcription isn't capturing
+     anything new) and the level meter is replaced with a calm
+     shimmer bar so the user knows Hush is still working. The
+     dismiss button + drag region stay live. */
+  .hud-processing .hud-dot {
+    animation: none;
+    background-color: #ffb84a;
+    box-shadow: 0 0 6px rgba(255, 184, 74, 0.5);
+  }
+
+  .hud-shimmer {
+    width: 60px;
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .hud-shimmer-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.15) 0%,
+      rgba(255, 255, 255, 0.6) 50%,
+      rgba(255, 255, 255, 0.15) 100%
+    );
+    background-size: 200% 100%;
+    background-position: 100% 0;
+    animation: hud-shimmer 1.6s linear infinite;
+  }
+
+  @keyframes hud-shimmer {
+    0% { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hud-shimmer-fill {
+      animation: none;
+      background-position: 50% 0;
     }
   }
 

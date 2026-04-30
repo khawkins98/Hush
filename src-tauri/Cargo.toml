@@ -173,4 +173,7 @@ screencapturekit = "1.5.4"
 # IOKit (Input Monitoring) are reached via plain `extern "C"` and
 # don't need a binding crate.
 objc2 = "0.6"
+# `NSString` constructor for the audio_cues `NSSound soundNamed:`
+# call (#292). Same family as `objc2` above; trivial dep weight.
+objc2-foundation = "0.3"
 
