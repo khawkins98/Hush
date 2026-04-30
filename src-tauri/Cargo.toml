@@ -23,6 +23,13 @@ tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+# Platform detection for the frontend (#272). Replaces the deprecated
+# `navigator.platform` reads in `+page.svelte` / `settings/+page.svelte`
+# with the plugin's `platform()` call. The Rust crate registration
+# below is what makes the JS `@tauri-apps/plugin-os` package
+# functional — without it the plugin commands return permission
+# errors at runtime.
+tauri-plugin-os = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -81,6 +81,11 @@ export async function installMocks(
       "plugin:app|name": () => "Hush",
       "plugin:app|version": () => "0.1.0",
       "plugin:app|tauri_version": () => "2.10.3",
+      // `@tauri-apps/plugin-os::platform()` — drives the PTT
+      // modifier-glyph copy in `+page.svelte` and
+      // `settings/+page.svelte`. Tests run macOS-flavoured copy
+      // since that's the project's design target.
+      "plugin:os|platform": () => "macos",
       open_macos_privacy_pane: () => undefined,
       prime_screen_recording_permission: () => undefined,
       open_settings: () => undefined,

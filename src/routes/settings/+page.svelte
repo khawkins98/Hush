@@ -31,6 +31,7 @@
   import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { platform } from "@tauri-apps/plugin-os";
   import {
     disable as disableAutostart,
     enable as enableAutostart,
@@ -81,8 +82,12 @@
   // Same heuristic the main window uses — drives Right ⌘ vs Right
   // Ctrl in the PTT hotkey display, since the backend default
   // varies by platform (see `hotkey/ptt.rs::DEFAULT_PTT_KEY`).
-  const isMacOS = typeof navigator !== "undefined"
-    && /Mac|iPhone|iPad/i.test(navigator.platform);
+  // Resolved asynchronously via `@tauri-apps/plugin-os` (#272) —
+  // replaces a deprecated `navigator.platform` regex match. Defaults
+  // to `false` until the IPC round-trip lands in onMount; only
+  // affects the modifier-glyph copy in the PTT hotkey display, so
+  // a one-frame default-then-correct flicker is imperceptible.
+  let isMacOS = $state(false);
 
   const tabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
     { key: "general", label: "General", testId: "settings-tab-general" },
@@ -527,6 +532,15 @@
   // ---- Lifecycle ---------------------------------------------------------
 
   onMount(async () => {
+    // Platform glyph (#272). Resolves via `plugin-os`; failure
+    // leaves the default `false` (Right Ctrl glyph in the PTT
+    // hint), same fallback `navigator.platform` would have given.
+    try {
+      isMacOS = (await platform()) === "macos";
+    } catch (e) {
+      console.warn("[hush] platform() probe failed; defaulting to non-macOS glyph", e);
+    }
+
     type DownloadProgressEvent = { id: string; bytesReceived: number; bytesTotal: number | null };
     type DownloadStatusEvent = { id: string; message: string | null };
 
