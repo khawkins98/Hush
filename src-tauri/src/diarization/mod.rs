@@ -62,6 +62,7 @@
 use crate::audio::CaptureFormat;
 use crate::transcription::Utterance;
 
+pub mod catalog;
 pub mod cluster;
 pub mod features;
 #[cfg(feature = "diarization-onnx")]
@@ -103,6 +104,55 @@ pub trait Diarize: Send + Sync {
 /// production wiring; post-#201 it stays as the swap-back option
 /// for sessions where the user prefers source-only labels.
 pub struct NoopDiarizer;
+
+/// Composite diarizer that routes to one of two inner impls based
+/// on the `diarization_enabled` settings flag (#111).
+///
+/// The `AppState`'s `Arc<AtomicBool>` is shared with this struct,
+/// so flips of the toggle in Settings → Meeting → Speakers take
+/// effect on the *next* meeting tick — no session restart needed.
+///
+/// Constructed in `AppStateBuilder::build_default`:
+/// - `enabled` → `Arc::clone(&app_state.diarization_enabled)`
+/// - `inner` → `OnnxDiarizer` if the wespeaker model is on disk and
+///   the `diarization-onnx` feature is built in, else `NoopDiarizer`
+/// - `fallback` → `NoopDiarizer` (always the safe default)
+pub struct FlagGatedDiarizer {
+    enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    inner: std::sync::Arc<dyn Diarize>,
+    fallback: std::sync::Arc<dyn Diarize>,
+}
+
+impl FlagGatedDiarizer {
+    pub fn new(
+        enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        inner: std::sync::Arc<dyn Diarize>,
+        fallback: std::sync::Arc<dyn Diarize>,
+    ) -> Self {
+        Self {
+            enabled,
+            inner,
+            fallback,
+        }
+    }
+}
+
+impl Diarize for FlagGatedDiarizer {
+    fn label_utterances(
+        &self,
+        utterances: &mut [Utterance],
+        audio_chunks: &[Vec<f32>],
+        format: CaptureFormat,
+    ) {
+        if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            self.inner
+                .label_utterances(utterances, audio_chunks, format);
+        } else {
+            self.fallback
+                .label_utterances(utterances, audio_chunks, format);
+        }
+    }
+}
 
 impl Diarize for NoopDiarizer {
     fn label_utterances(
@@ -309,5 +359,115 @@ mod tests {
         EnergyDiarizer::default().label_utterances(&mut us, &[], fmt());
         assert_eq!(us[0].speaker_label.as_deref(), Some("Speaker A"));
         assert_eq!(us[1].speaker_label.as_deref(), Some("Speaker A"));
+    }
+
+    /// Sentinel diarizer that records whether it was called. Lets the
+    /// FlagGatedDiarizer tests verify routing without standing up a
+    /// real ONNX session.
+    struct RecordingDiarizer {
+        called: std::sync::atomic::AtomicBool,
+    }
+
+    impl Diarize for RecordingDiarizer {
+        fn label_utterances(
+            &self,
+            _utterances: &mut [Utterance],
+            _audio_chunks: &[Vec<f32>],
+            _format: CaptureFormat,
+        ) {
+            self.called
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn flag_gated_routes_to_inner_when_enabled() {
+        let inner = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let fallback = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let diarizer = FlagGatedDiarizer::new(
+            enabled,
+            inner.clone() as std::sync::Arc<dyn Diarize>,
+            fallback.clone() as std::sync::Arc<dyn Diarize>,
+        );
+        let mut us = vec![utt(0, 1000, "x")];
+        diarizer.label_utterances(&mut us, &[], fmt());
+        assert!(
+            inner.called.load(std::sync::atomic::Ordering::Relaxed),
+            "inner should have been called when flag is on"
+        );
+        assert!(
+            !fallback.called.load(std::sync::atomic::Ordering::Relaxed),
+            "fallback should NOT have been called when flag is on"
+        );
+    }
+
+    #[test]
+    fn flag_gated_routes_to_fallback_when_disabled() {
+        let inner = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let fallback = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let diarizer = FlagGatedDiarizer::new(
+            enabled,
+            inner.clone() as std::sync::Arc<dyn Diarize>,
+            fallback.clone() as std::sync::Arc<dyn Diarize>,
+        );
+        let mut us = vec![utt(0, 1000, "x")];
+        diarizer.label_utterances(&mut us, &[], fmt());
+        assert!(
+            !inner.called.load(std::sync::atomic::Ordering::Relaxed),
+            "inner should NOT have been called when flag is off"
+        );
+        assert!(
+            fallback.called.load(std::sync::atomic::Ordering::Relaxed),
+            "fallback should have been called when flag is off"
+        );
+    }
+
+    #[test]
+    fn flag_gated_observes_runtime_flips() {
+        // The whole point of an Arc<AtomicBool>: a single diarizer
+        // instance must respect the flag changing across calls
+        // without being rebuilt. Settings → toggle → next meeting
+        // tick uses the new value.
+        let inner = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let fallback = std::sync::Arc::new(RecordingDiarizer {
+            called: std::sync::atomic::AtomicBool::new(false),
+        });
+        let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let diarizer = FlagGatedDiarizer::new(
+            std::sync::Arc::clone(&enabled),
+            inner.clone() as std::sync::Arc<dyn Diarize>,
+            fallback.clone() as std::sync::Arc<dyn Diarize>,
+        );
+
+        let mut us = vec![utt(0, 1000, "x")];
+        diarizer.label_utterances(&mut us, &[], fmt());
+        assert!(fallback.called.load(std::sync::atomic::Ordering::Relaxed));
+        // Reset the recorder for the second pass.
+        fallback
+            .called
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        enabled.store(true, std::sync::atomic::Ordering::Relaxed);
+        diarizer.label_utterances(&mut us, &[], fmt());
+        assert!(
+            inner.called.load(std::sync::atomic::Ordering::Relaxed),
+            "after flipping flag on, inner takes over"
+        );
+        assert!(
+            !fallback.called.load(std::sync::atomic::Ordering::Relaxed),
+            "after flipping flag on, fallback is skipped"
+        );
     }
 }
