@@ -213,6 +213,25 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         .await
         .context("get meeting session by id")
     }
+
+    async fn list_open_sessions(&self) -> Result<Vec<MeetingSession>> {
+        // Sessions left open from a crashed / killed previous
+        // run (#249). The `ended_at IS NULL` predicate mirrors
+        // the shape `close_session`'s COALESCE guard checks, so
+        // the two paths stay consistent: a row that's already
+        // closed won't reappear here, and reconciliation only
+        // touches genuinely-orphaned rows.
+        sqlx::query_as::<_, MeetingSession>(
+            "SELECT id, app_name, app_kind, started_at, ended_at, \
+                    speaker_count, utterance_count, notes, sources, app_title \
+             FROM meeting_sessions \
+             WHERE ended_at IS NULL \
+             ORDER BY started_at DESC",
+        )
+        .fetch_all(self.db.pool())
+        .await
+        .context("list open meeting sessions")
+    }
 }
 
 /// String form for the `app_kind` column. Kept in one place so the
@@ -392,6 +411,25 @@ mod tests {
         repo.close_session(s.id).await.unwrap();
         let after_second = repo.list().await.unwrap()[0].clone();
         assert_eq!(after_second.ended_at, after_first.ended_at);
+    }
+
+    #[tokio::test]
+    async fn list_open_sessions_returns_only_unclosed_rows() {
+        // Orphan-reconciliation primitive (#249). The query
+        // filters `ended_at IS NULL`; a row that's been closed
+        // must not appear, and a freshly-created row must.
+        let repo = fresh_repo().await;
+        let open = repo.create(sample_new()).await.unwrap();
+        let closed = repo.create(sample_new()).await.unwrap();
+        repo.close_session(closed.id).await.unwrap();
+
+        let still_open = repo.list_open_sessions().await.unwrap();
+        assert_eq!(still_open.len(), 1, "only the unclosed row is open");
+        assert_eq!(still_open[0].id, open.id);
+
+        // After closing the remaining row, the list is empty.
+        repo.close_session(open.id).await.unwrap();
+        assert!(repo.list_open_sessions().await.unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -1192,6 +1192,9 @@ mod tests {
         ) -> anyhow::Result<Option<crate::meeting::MeetingSession>> {
             Ok(None)
         }
+        async fn list_open_sessions(&self) -> anyhow::Result<Vec<crate::meeting::MeetingSession>> {
+            Ok(vec![])
+        }
     }
 
     /// Test mock for the meeting-app overrides repo (#112). Returns
