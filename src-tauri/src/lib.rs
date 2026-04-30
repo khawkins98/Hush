@@ -337,9 +337,21 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
                 #[cfg(not(target_os = "macos"))]
                 let sources = vec![mic_source];
 
+                // Snapshot the foreground window's title for
+                // #242 — second active-win call instead of
+                // extending the `ForegroundAppProbe` trait keeps
+                // the trait minimal (the autostart-decision logic
+                // genuinely only needs the app name; title is
+                // pure metadata for the persisted row). The OS
+                // call is single-millisecond synchronous, paid
+                // only when we're about to start a session.
+                let app_title = active_win_pos_rs::get_active_window()
+                    .ok()
+                    .map(|w| w.title.trim().to_owned())
+                    .filter(|t| !t.is_empty());
                 if let Err(e) = state
                     .meeting_manager
-                    .start_manual(sources, Some(app_name.clone()))
+                    .start_manual(sources, Some(app_name.clone()), app_title)
                     .await
                 {
                     // Most likely cause: mic permission denied.

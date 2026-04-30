@@ -219,10 +219,13 @@ pub fn meeting_active_session(state: State<'_, AppState>) -> ActiveMeetingSessio
 /// source, evolving to mic + system-audio under Phase 3 of #122.
 ///
 /// `app_name` is the bundle id / process name the session should be
-/// attributed to. Frontend captures this from the foreground app
-/// via `active-win-pos-rs` at the moment of click; if the user
-/// declines or the call fails, `None` falls through to a "manual"
-/// label.
+/// attributed to. Frontend doesn't have direct access to
+/// `active-win-pos-rs` so it usually passes `None`; the backend
+/// queries the foreground window itself and uses that for both
+/// the `app_name` (when unsupplied) and the `app_title` metadata
+/// (#242 follow-up — captures the active window's title so a
+/// browser-hosted session reads as "Vivaldi — <video title>"
+/// rather than just "Vivaldi").
 ///
 /// Errors with `IpcError::MeetingSessions` if a session is already
 /// active — the user must close the existing one first.
@@ -235,9 +238,19 @@ pub async fn meeting_start_manual(
 ) -> IpcResult<crate::meeting::MeetingSession> {
     let sources = sanitise_meeting_sources(sources)
         .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e:#}")))?;
+
+    // Snapshot the foreground app once at click time. The
+    // `active-win-pos-rs` call is single-millisecond synchronous,
+    // so we do it here rather than complicate the frontend with a
+    // second IPC. Failure is non-fatal — manual sessions still
+    // work without metadata, they just render as "manual / Other"
+    // until the user adds notes.
+    let (probed_app_name, app_title) = capture_foreground_app();
+    let resolved_app_name = app_name.or(probed_app_name);
+
     let session = state
         .meeting_manager
-        .start_manual(sources, app_name)
+        .start_manual(sources, resolved_app_name, app_title)
         .await
         .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e:#}")))?;
     // Show the recording HUD so the user has the same at-a-glance
@@ -276,6 +289,31 @@ const MAX_MEETING_SOURCES: usize = 4;
 /// Mic("b")]` collapses to `[Mic("a"), Mic("b")]`. SystemAudio is
 /// keyed by its variant alone (there's only one system-audio
 /// stream per host).
+/// Single-shot snapshot of the active window's app name + title at
+/// IPC-entry time, for #242's browser-title surfacing. Returns
+/// `(None, None)` when `active-win-pos-rs` errors (lock screen,
+/// fullscreen game, no permission to introspect) — manual sessions
+/// continue to work without metadata in that case.
+///
+/// Title is normalised to `None` when empty/whitespace so the panel
+/// can render purely on truthiness — many platforms return empty
+/// strings rather than absent titles for chrome-less windows
+/// (browser pop-ups, PIP video players, etc.).
+fn capture_foreground_app() -> (Option<String>, Option<String>) {
+    match active_win_pos_rs::get_active_window() {
+        Ok(w) => {
+            let title = w.title.trim();
+            let title_opt = if title.is_empty() {
+                None
+            } else {
+                Some(title.to_owned())
+            };
+            (Some(w.app_name), title_opt)
+        }
+        Err(_) => (None, None),
+    }
+}
+
 fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource>, String> {
     if sources.is_empty() {
         return Err("at least one audio source is required".to_owned());

@@ -1,0 +1,17 @@
+-- Add `app_title` column to meeting_sessions (#242 follow-up).
+--
+-- Captures the active window's title at session-open time
+-- alongside the existing `app_name` (bundle id / process name).
+-- The two are usually the same for native meeting apps (Zoom,
+-- Teams, Discord), but diverge for browser-hosted content where
+-- the bundle id reads as "Vivaldi" / "Safari" / "Chrome" while
+-- the title carries the actually-meaningful context — the video
+-- name, the Meet meeting topic, the page heading.
+--
+-- Renders as a subtitle on the session row when distinct from
+-- `app_name` so a YouTube session reads as
+-- "Vivaldi — <video title>" rather than "Vivaldi" alone.
+--
+-- NULL allowed for legacy rows created before this migration; the
+-- panel falls back to "no subtitle" when the column is empty.
+ALTER TABLE meeting_sessions ADD COLUMN app_title TEXT;

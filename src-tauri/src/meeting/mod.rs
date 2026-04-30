@@ -113,6 +113,17 @@ pub struct MeetingSession {
     ///
     /// `None` for legacy rows created before migration 0004.
     pub sources: Option<Vec<String>>,
+    /// Active window's title at session-open. For native meeting
+    /// apps this is usually the same as / a duplicate of
+    /// `app_name`; for browser-hosted content it carries the
+    /// only useful context — the YouTube video name, the Meet
+    /// meeting topic, etc. The panel renders this as a subtitle
+    /// when distinct from `app_name`.
+    ///
+    /// `None` for sessions opened before migration 0005, and
+    /// when `active-win-pos-rs` couldn't resolve a title (lock
+    /// screen, fullscreen game).
+    pub app_title: Option<String>,
 }
 
 /// Fields the caller supplies when opening a session. Separate from
@@ -126,6 +137,10 @@ pub struct NewMeetingSession {
     /// SqliteMeetingSessionRepository persists these as a
     /// comma-separated string in the `sources` column.
     pub sources: Vec<String>,
+    /// Active window's title at session-open (#242 follow-up).
+    /// `None` when the caller couldn't resolve one — lock screen,
+    /// fullscreen game, or `active-win-pos-rs` failure.
+    pub app_title: Option<String>,
 }
 
 /// Persisted utterance row. Mirrors migration 0002's `utterances`
@@ -264,6 +279,7 @@ mod tests {
             utterance_count: 0,
             notes: None,
             sources: Some(vec!["mic".into(), "system".into()]),
+            app_title: Some("Demo Standup".into()),
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""appName":"us.zoom.xos""#), "got: {json}");
