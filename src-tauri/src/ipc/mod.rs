@@ -410,6 +410,14 @@ pub struct AppStateBuilder {
     sound_cues_enabled: Option<bool>,
     meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
     diarization_enabled: Option<bool>,
+    /// Pre-built `Arc<AtomicBool>` for the diarization-enabled
+    /// flag. Set via [`AppStateBuilder::diarization_enabled_arc`]
+    /// when the production wiring (`build_default`) needs to
+    /// share the same Arc with the meeting pump's
+    /// [`crate::diarization::FlagGatedDiarizer`]. When unset,
+    /// `build` constructs a fresh Arc seeded from
+    /// [`Self::diarization_enabled`].
+    diarization_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl AppStateBuilder {
@@ -520,6 +528,15 @@ impl AppStateBuilder {
         self
     }
 
+    /// Set the pre-built `Arc<AtomicBool>` that the FlagGatedDiarizer
+    /// already holds. The AppState's `diarization_enabled` field
+    /// becomes that same Arc, so the IPC `set_diarization_enabled`
+    /// path flips both views with one atomic store.
+    pub fn diarization_enabled_arc(mut self, arc: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.diarization_enabled_arc = Some(arc);
+        self
+    }
+
     /// Construct the [`AppState`], or return a descriptive error naming
     /// the first required field that wasn't set.
     pub fn build(self) -> Result<AppState> {
@@ -623,9 +640,11 @@ impl AppStateBuilder {
                         .unwrap_or(crate::meeting::MeetingAutostartMode::Off),
                 ),
             )),
-            diarization_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
-                self.diarization_enabled.unwrap_or(false),
-            )),
+            diarization_enabled: self.diarization_enabled_arc.unwrap_or_else(|| {
+                Arc::new(std::sync::atomic::AtomicBool::new(
+                    self.diarization_enabled.unwrap_or(false),
+                ))
+            }),
         })
     }
 }
@@ -705,6 +724,49 @@ pub(crate) fn parse_diarization_enabled_setting(raw: Option<String>) -> bool {
     matches!(raw.as_deref(), Some("true"))
 }
 
+/// Build the "inner" diarizer for the FlagGatedDiarizer (#111).
+///
+/// When the `diarization-onnx` feature is built in AND the wespeaker
+/// model file is present at `models_dir/<filename>`, returns an
+/// `OnnxDiarizer`. Otherwise (feature off, model not downloaded
+/// yet, or load failure) returns `NoopDiarizer` so the boot path
+/// stays resilient — a user without the model file still gets a
+/// working app, just with source-only labels.
+///
+/// Errors loading the model are logged at `warn` level and treated
+/// as "fall back to Noop" — same as missing-file.
+fn build_diarizer_inner(_models_dir: &Path) -> Arc<dyn crate::diarization::Diarize> {
+    #[cfg(feature = "diarization-onnx")]
+    {
+        let model_path =
+            _models_dir.join(crate::diarization::catalog::WESPEAKER_RESNET34_LM_FILENAME);
+        if model_path.exists() {
+            match crate::diarization::onnx::OnnxDiarizer::new(&model_path) {
+                Ok(d) => {
+                    tracing::info!(
+                        path = %model_path.display(),
+                        "diarization: loaded OnnxDiarizer (wespeaker)"
+                    );
+                    return Arc::new(d);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %model_path.display(),
+                        "diarization: OnnxDiarizer load failed; falling back to Noop"
+                    );
+                }
+            }
+        } else {
+            tracing::info!(
+                path = %model_path.display(),
+                "diarization: model file not found; using NoopDiarizer (manual download required)"
+            );
+        }
+    }
+    Arc::new(crate::diarization::NoopDiarizer)
+}
+
 impl AppState {
     /// Build the state used in production: the cpal audio backend, the
     /// SQLite-backed history repository at `db_path`, plus (when the
@@ -778,23 +840,44 @@ impl AppState {
         // interleave with no reliable inter-source gap, so the
         // heuristic collapses everything into "Speaker A" — a
         // regression vs the source-only labels it was supposed
-        // to refine. Reproduced 2026-04-29 hands-on: a session
-        // with mic + YouTube system audio rendered every
-        // utterance as "Speaker A" regardless of which side
-        // produced it.
-        //
-        // Within a single source D1 was useful (multiple
-        // speakers sharing the user's mic). Across sources it's
-        // wrong, and cross-source is Meeting Mode's whole point.
-        // Source-only labels are honest: we tell the user which
-        // side of the call produced each utterance without
-        // inventing speaker IDs we can't verify.
+        // to refine.
         //
         // D2 (model-based ONNX speaker embeddings, #111) is the
-        // upgrade path — it can actually distinguish voices
-        // across sources. Until then, NoopDiarizer.
-        let diarize: Arc<dyn crate::diarization::Diarize> =
+        // upgrade path. The wespeaker ResNet34-LM model can
+        // distinguish voices across sources. The wiring here is:
+        //
+        // 1. Read the persisted `diarization_enabled` flag and
+        //    build an `Arc<AtomicBool>` so the IPC `set_*` path
+        //    and the FlagGatedDiarizer share the same view.
+        // 2. If the `diarization-onnx` feature is built in AND
+        //    the wespeaker .onnx file is present in models_dir,
+        //    instantiate `OnnxDiarizer`. Otherwise use Noop.
+        // 3. Wrap the inner diarizer in FlagGatedDiarizer with
+        //    Noop as the off-state fallback. Settings → toggle
+        //    flips routing between the two without restart.
+        //
+        // The model-on-disk gate keeps the boot path resilient:
+        // a user who hasn't downloaded the model yet still gets
+        // a working app (just with source-only labels).
+        let diarization_enabled_initial = parse_diarization_enabled_setting(
+            settings
+                .get(crate::settings::keys::DIARIZATION_ENABLED)
+                .await
+                .ok()
+                .flatten(),
+        );
+        let diarization_enabled_arc = Arc::new(std::sync::atomic::AtomicBool::new(
+            diarization_enabled_initial,
+        ));
+        let diarize_inner = build_diarizer_inner(&models_dir);
+        let diarize_fallback: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
+        let diarize: Arc<dyn crate::diarization::Diarize> =
+            Arc::new(crate::diarization::FlagGatedDiarizer::new(
+                Arc::clone(&diarization_enabled_arc),
+                diarize_inner,
+                Arc::clone(&diarize_fallback),
+            ));
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
@@ -873,19 +956,6 @@ impl AppState {
                 .as_deref(),
         );
 
-        // Diarization — off by default (#111). Foundation PR ships
-        // the toggle + plumbing only; the production diarizer is
-        // still NoopDiarizer, so even a `true` row results in
-        // source-derived "mic"/"system" labels until PR-B wires the
-        // ONNX backend.
-        let diarization_enabled = parse_diarization_enabled_setting(
-            settings
-                .get(crate::settings::keys::DIARIZATION_ENABLED)
-                .await
-                .ok()
-                .flatten(),
-        );
-
         AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
@@ -903,7 +973,7 @@ impl AppState {
             .hud_enabled(hud_enabled)
             .sound_cues_enabled(sound_cues_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
-            .diarization_enabled(diarization_enabled)
+            .diarization_enabled_arc(diarization_enabled_arc)
             .build()
     }
 }
