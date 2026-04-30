@@ -557,11 +557,23 @@
     // the result to all windows. Stash it in the same state
     // the in-tab button uses so the About tab renders the
     // outcome whether the user clicked the menu or the button.
+    //
+    // Gate on `!updateChecking` (review #4 UX-1): if the user
+    // clicked the in-tab button and *also* clicked the menu mid-
+    // probe, the broadcast event would clobber `updateChecking`
+    // and double-mutate `updateCheck`, causing a screen-reader
+    // double-announce on the `role="status"` paragraph and a
+    // potential UI race when the in-flight invoke returns. The
+    // locally-issued probe is the source of truth; menu events
+    // fired *outside* an active local probe still land
+    // (the common case is "I clicked the menu and nothing else").
     unlistenUpdaterResult = await listen<UpdateCheckResult>(
       Events.UpdaterResult,
       (e) => {
+        if (updateChecking) {
+          return;
+        }
         updateCheck = e.payload;
-        updateChecking = false;
       },
     );
 

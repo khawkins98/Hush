@@ -18,6 +18,10 @@ Post-IA-redesign (#163–#167), the app runs three windows:
 
 Each window has its own capability file in `src-tauri/capabilities/` (`default.json` for main, `settings.json`, `hud.json`). On macOS the native menu bar lives in `src-tauri/src/app_menu/` — `Hush → Settings…` (⌘,), `View → Dictation/Meetings/History` (⌘1/⌘2/⌘3). Menu events emit `menu:goto-section` to the main window or call `settings_window::show` directly.
 
+**Window lifecycle (#280):** main + Settings intercept `WindowEvent::CloseRequested` in `lib.rs::setup` and call `window.hide()` instead of letting Tauri destroy. Closing the red ✕ on either window hides it without quitting; the tray icon stays alive and ⌘, reopens Settings. The HUD has the standard show/hide pair. To actually quit Hush, use ⌘Q (macOS), `Hush → Quit Hush` from the menu, or `Quit Hush` from the tray.
+
+**Background launch (#280):** the autostart plugin is registered with `Some(vec!["--background"])`, so the LaunchAgent fires Hush at login with that arg. The setup hook checks `std::env::args()` and, when `--background` is present, hides the main window and switches activation policy to `Accessory` (no Dock icon). User-initiated launches (Finder / Spotlight) don't pass the flag and show the main window normally.
+
 ## Common commands
 
 ```bash
@@ -144,7 +148,7 @@ For SCK / Screen Recording / system-audio testing, use:
 
 That builds a real `.app` at `src-tauri/target/debug/bundle/macos/Hush.app` and opens it. macOS treats it as a proper app, prompts cleanly with the description from `src-tauri/Info.plist`, and persists the grant across re-bundles of the same path. See `learnings.md` 2026-04-27 entry for the full background.
 
-**Iterating across rebuilds — stale TCC rows.** Each `npm run tauri:bundle` produces an ad-hoc-signed `.app`; the signing identity is derived from the binary contents and changes every rebuild. macOS can end up with multiple `Hush.app` rows in System Settings → Privacy & Security under different identities, and the wrong row may "win" — Hush gets blocked silently with no fresh prompt. Recovery: **Settings → Permissions → Reset permissions** in Hush (resets all four TCC categories: Microphone, ScreenCapture, ListenEvent, Accessibility), then in System Settings click the `−` button at the bottom of any pane that still lists a `Hush.app` row, then relaunch the bundle. The per-row **"Grant in Settings…"** buttons on the Permissions tab deep-link straight to the correct pane. Full recipe: `docs/macos-permissions.md` "Dev-loop: stale Hush.app rows after a re-bundle."
+**Iterating across rebuilds — stale TCC rows.** Each `npm run tauri:bundle` produces an ad-hoc-signed `.app`; the signing identity is derived from the binary contents and changes every rebuild. macOS can end up with multiple `Hush.app` rows in System Settings → Privacy & Security under different identities, and the wrong row may "win" — Hush gets blocked silently with no fresh prompt. Recovery: **Settings → Permissions → Reset permissions** in Hush (resets the three TCC categories Hush actually requests: Microphone, ScreenCapture, ListenEvent — Accessibility was previously included but Hush legitimately doesn't request it, removed in #273), then in System Settings click the `−` button at the bottom of any pane that still lists a `Hush.app` row, then relaunch the bundle. The per-row **"Grant in Settings…"** buttons on the Permissions tab deep-link straight to the correct pane. Full recipe: `docs/macos-permissions.md` "Dev-loop: stale Hush.app rows after a re-bundle."
 
 ## Conventions
 
