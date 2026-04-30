@@ -1091,20 +1091,30 @@ pub async fn download_diarizer_model(
     let model = crate::diarization::catalog::default_diarizer_model();
     let id = model.id.clone();
     let dest = state.models_dir.join(&model.filename);
-    if dest.exists() {
-        return Err(IpcError::Settings(format!(
-            "{} is already downloaded",
-            model.display_name
-        )));
-    }
 
-    // Register a cancel handle. Reuses `AppState::downloads` —
+    // Register a cancel handle + re-check on-disk presence inside
+    // the same critical section. Reuses `AppState::downloads` —
     // same store the Whisper download path uses, keyed by id, so
     // the existing `model_cancel_download` IPC works for the
     // diarizer model with no extra wiring.
+    //
+    // The exists-check moved inside the lock to close a TOCTOU
+    // race (audit-2): two rapid clicks could both pass the
+    // exists-check before either took the lock. Holding the lock
+    // for the existence test means a concurrent download that
+    // just finished is observable as either "file exists now" or
+    // "cancel handle still in flight" — caller gets a clean error
+    // either way and we never start a duplicate download on top
+    // of a freshly-finalized file.
     let cancel = crate::transcription::download::CancelHandle::new();
     {
         let mut guard = state.downloads.lock().map_err(poisoned)?;
+        if dest.exists() {
+            return Err(IpcError::Settings(format!(
+                "{} is already downloaded",
+                model.display_name
+            )));
+        }
         if guard.contains_key(&id) {
             return Err(IpcError::Settings(format!(
                 "{} is already downloading",
@@ -1163,28 +1173,49 @@ pub async fn download_diarizer_model(
                 // Hot-swap the diarizer. If OnnxDiarizer::new
                 // succeeds, write it into the slot — the next
                 // pump tick that runs with diarization_enabled=on
-                // will use it. If it fails (build_in feature
-                // off, or some other load error), leave Noop in
-                // place; emit the failure so the UI can show a
-                // useful diagnostic. The successful-download
-                // case still emits `model:download-done` so the
-                // UI badge flips to "ready" — load failure is a
-                // separate concern from download failure.
-                if let Err(e) = swap_diarizer_after_download(&diarize_slot, &dest_for_task) {
-                    tracing::warn!(
-                        error = %e,
-                        path = %dest_for_task.display(),
-                        "diarizer download succeeded but model load failed; \
-                         file is on disk but diarization will use Noop until restart"
-                    );
+                // will use it.
+                //
+                // If the load fails (corrupted ONNX, ort init
+                // error, feature compiled out), the file is on
+                // disk but useless. Pre-audit-2 we emitted
+                // `model:download-done` regardless — the UI then
+                // showed "installed and verified" while the
+                // diarizer was still Noop, leaving the user with
+                // a feature that quietly didn't work. Now we
+                // delete the bad file (so retry isn't blocked by
+                // the `dest.exists()` guard at the top of
+                // `download_diarizer_model`) and emit
+                // `model:download-failed` with the load error,
+                // so the UI surfaces it the same way as a
+                // network or SHA-mismatch failure.
+                match swap_diarizer_after_download(&diarize_slot, &dest_for_task) {
+                    Ok(()) => {
+                        let _ = app_for_task.emit(
+                            "model:download-done",
+                            crate::ipc::commands::models::DownloadStatus {
+                                id: id_for_task,
+                                message: None,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %dest_for_task.display(),
+                            "diarizer download succeeded but model load failed; \
+                             deleting bad file and emitting download-failed so \
+                             retry isn't blocked"
+                        );
+                        let _ = std::fs::remove_file(&dest_for_task);
+                        let _ = app_for_task.emit(
+                            "model:download-failed",
+                            crate::ipc::commands::models::DownloadStatus {
+                                id: id_for_task,
+                                message: Some(format!("model load failed: {e:#}")),
+                            },
+                        );
+                    }
                 }
-                let _ = app_for_task.emit(
-                    "model:download-done",
-                    crate::ipc::commands::models::DownloadStatus {
-                        id: id_for_task,
-                        message: None,
-                    },
-                );
             }
             Err(e) => {
                 tracing::error!(
