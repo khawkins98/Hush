@@ -1,11 +1,20 @@
 //! ONNX-backed speaker-embedding diarizer (#111).
 //!
 //! Runs the wespeaker ResNet34-LM model over each utterance's audio
-//! to produce a 256-dimensional speaker embedding, then hands the
-//! per-utterance embeddings to [`super::cluster::cluster_with_threshold`]
-//! to discover speaker turns. Final output: each utterance gets a
-//! `"Speaker N"` label where utterances from the same speaker share
-//! the same `N`, assigned in first-appearance order.
+//! to produce a 256-dimensional speaker embedding, then assigns
+//! each new embedding to a session-stable cluster ID via
+//! [`SessionClusterState`]'s online 1-NN-with-threshold matcher.
+//! Final output: each utterance gets a `"Speaker N"` label where
+//! utterances from the same speaker share the same `N`, assigned
+//! in first-appearance order. Cluster IDs are stable across pump
+//! ticks for the lifetime of the diarizer — the speaker that gets
+//! "Speaker 1" early in a meeting keeps it for the whole meeting.
+//!
+//! The batch [`super::cluster::cluster_with_threshold`] function
+//! still exists for one-shot offline use cases, but the streaming
+//! meeting pump uses the session-state matcher because per-tick
+//! agglomerative clustering produced unstable IDs across ticks
+//! (audit finding from PR-F review).
 //!
 //! ## Pipeline
 //!
@@ -14,11 +23,11 @@
 //! `crate::audio::downmix_to_mono` from the Whisper preprocessing
 //! path), compute 80-dim Mel-FB features via
 //! [`super::features::MelExtractor`], feed `(1, num_frames, 80)` to
-//! the ONNX session, and read the `(1, 256)` embedding back. Then
-//! once across the whole batch: cluster via
-//! [`super::cluster::cluster_with_threshold`] on the model's tuned
-//! cosine threshold, and stamp each utterance `"Speaker {N+1}"` from
-//! its 1-indexed cluster ID.
+//! the ONNX session, and read the `(1, 256)` embedding back. Hand
+//! the embedding to `SessionClusterState::assign` to get a stable
+//! cluster ID, and stamp the utterance `"Speaker {N+1}"`. Cluster
+//! state persists for the lifetime of the diarizer, so cluster
+//! IDs are stable across pump ticks.
 //!
 //! ## Why a separate `Diarize` impl rather than swapping algorithms
 //!
@@ -43,16 +52,19 @@
 //! we currently use the default CPU provider; CoreML wiring is
 //! tracked separately.
 
+use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
-use ndarray::{Array2, Array3};
+use ndarray::Array3;
 use ort::session::Session;
 use ort::value::Value;
+use sha2::{Digest, Sha256};
 
 use crate::audio::CaptureFormat;
-use crate::diarization::cluster::{cluster_with_threshold, DEFAULT_DISTANCE_THRESHOLD};
+use crate::diarization::catalog::default_diarizer_model;
+use crate::diarization::cluster::{cosine_distance, DEFAULT_DISTANCE_THRESHOLD};
 use crate::diarization::features::{MelExtractor, NUM_MEL_BINS, SAMPLE_RATE_HZ};
 use crate::diarization::Diarize;
 use crate::transcription::Utterance;
@@ -70,8 +82,72 @@ pub const EMBEDDING_DIM: usize = 256;
 /// than that and we'd be embedding silence + breath.
 const MIN_FRAMES_FOR_EMBEDDING: usize = 25;
 
-/// Production diarizer: ONNX speaker-embedding model + agglomerative
-/// clustering. See module-level doc.
+/// Per-utterance memory keeping cluster IDs stable across meeting
+/// pump ticks. Pre-PR-G the diarizer ran agglomerative clustering
+/// over each tick's batch in isolation, so "Speaker 1" in tick N
+/// could be a different person from "Speaker 1" in tick N+1 — a
+/// correctness bug that surfaces immediately on real meetings.
+///
+/// Algorithm: 1-NN with threshold. For each new embedding, find the
+/// closest previously-seen embedding (cosine distance). If within
+/// `DEFAULT_DISTANCE_THRESHOLD`, reuse that embedding's cluster
+/// ID; otherwise allocate the next cluster ID. Single-link in
+/// spirit, but bounded by an absolute distance threshold so it
+/// doesn't chain like classical single-link agglomerative.
+///
+/// Memory: every embedding (256 f32 = 1 KB) lives until the
+/// session ends. A 100-utterance meeting holds ~100 KB of state —
+/// negligible.
+struct SessionClusterState {
+    /// Per-utterance `(embedding, cluster_id)`. Append-only over
+    /// the session.
+    history: Vec<(Vec<f32>, usize)>,
+    /// Next cluster ID to allocate when no existing centroid is
+    /// within threshold. Equal to `unique cluster count` — IDs are
+    /// dense and assigned in first-appearance order so labels read
+    /// "Speaker 1, 2, …" the way the user expects.
+    next_id: usize,
+    /// Maximum cosine distance at which two embeddings are still
+    /// considered the same speaker.
+    distance_threshold: f32,
+}
+
+impl SessionClusterState {
+    fn new(distance_threshold: f32) -> Self {
+        Self {
+            history: Vec::new(),
+            next_id: 0,
+            distance_threshold,
+        }
+    }
+
+    /// Assign a cluster ID to `embedding`. Appends to history;
+    /// returns the assigned ID (0-indexed).
+    fn assign(&mut self, embedding: Vec<f32>) -> usize {
+        let mut best: Option<(usize, f32)> = None;
+        for (e, id) in &self.history {
+            let d = cosine_distance(embedding.as_slice(), e.as_slice());
+            match best {
+                None => best = Some((*id, d)),
+                Some((_, current)) if d < current => best = Some((*id, d)),
+                _ => {}
+            }
+        }
+        let assigned_id = match best {
+            Some((id, d)) if d <= self.distance_threshold => id,
+            _ => {
+                let id = self.next_id;
+                self.next_id += 1;
+                id
+            }
+        };
+        self.history.push((embedding, assigned_id));
+        assigned_id
+    }
+}
+
+/// Production diarizer: ONNX speaker-embedding model + online
+/// 1-NN-with-threshold clustering. See module-level doc.
 pub struct OnnxDiarizer {
     /// `ort` session loaded from the user's downloaded model file.
     /// Wrapped in a `Mutex` because `Session::run` takes `&mut self`
@@ -79,16 +155,22 @@ pub struct OnnxDiarizer {
     /// calls. The lock is held only for the duration of one
     /// inference call (~50–100 ms on CPU), and the meeting pump is
     /// the sole caller, so contention isn't a concern in practice.
+    /// We recover from poison by extracting the inner Session
+    /// (`PoisonError::into_inner`) — a transient panic in one
+    /// inference call shouldn't kill diarization for the rest of
+    /// the meeting.
     session: Mutex<Session>,
     /// Reusable Mel-FB extractor — holds the planned 512-pt FFT,
     /// Povey window, and 80-bin filterbank. Constructed once per
     /// `OnnxDiarizer`.
     mel: MelExtractor,
-    /// Cosine-distance threshold passed to the clustering pass. The
-    /// constructor seeds this with [`DEFAULT_DISTANCE_THRESHOLD`];
-    /// kept on the struct so future tuning can flow through a
-    /// settings row without changing the public API.
-    distance_threshold: f32,
+    /// Persistent cluster state across pump ticks. See
+    /// [`SessionClusterState`] for the algorithm. `Mutex` because
+    /// `Diarize::label_utterances` takes `&self` but the cluster
+    /// state mutates on each call. Lock is held for the duration
+    /// of a single batch's labelling — sub-millisecond at typical
+    /// batch sizes.
+    clusters: Mutex<SessionClusterState>,
     /// Name of the input tensor declared by the wespeaker model.
     /// Cached at construction so `run` doesn't re-allocate the
     /// string on every utterance.
@@ -101,6 +183,18 @@ impl OnnxDiarizer {
     /// ONNX model, or has an input shape we don't recognise.
     pub fn new(model_path: impl AsRef<Path>) -> Result<Self> {
         let model_path = model_path.as_ref();
+
+        // Defence-in-depth: verify the file's SHA-256 against the
+        // catalog before handing it to ort (#111 audit). The
+        // download path verifies SHA at fetch time, but a sibling
+        // app sharing the user's macOS account can write into the
+        // models dir afterwards — re-checking at load means a
+        // substituted ONNX (potentially crafted to exploit ort's
+        // parser) is rejected before parsing. ~80 ms one-time cost
+        // per app boot for the 26 MB wespeaker model.
+        verify_model_sha256(model_path)
+            .with_context(|| format!("verify SHA-256 of model at {}", model_path.display()))?;
+
         let mut builder = Session::builder().context("ort: build session")?;
         let session = builder
             .commit_from_file(model_path)
@@ -121,7 +215,7 @@ impl OnnxDiarizer {
         Ok(Self {
             session: Mutex::new(session),
             mel: MelExtractor::new(),
-            distance_threshold: DEFAULT_DISTANCE_THRESHOLD,
+            clusters: Mutex::new(SessionClusterState::new(DEFAULT_DISTANCE_THRESHOLD)),
             input_name,
         })
     }
@@ -153,11 +247,13 @@ impl OnnxDiarizer {
 
         // The lock is held for the duration of one inference call
         // (~50–100 ms on CPU). The meeting pump is the sole caller
-        // so there's no real contention surface.
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|e| anyhow!("ort: session mutex poisoned: {e}"))?;
+        // so there's no real contention surface. Recover from
+        // poison via `into_inner` so a transient panic in one call
+        // doesn't kill diarization for the rest of the session;
+        // ort's run path is C++ behind a Result-returning shim, so
+        // poisoning is unlikely in practice but cheap to defend
+        // against.
+        let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         let outputs = session
             .run(ort::inputs![self.input_name.as_str() => input_value])
             .context("ort: session.run")?;
@@ -199,68 +295,56 @@ impl Diarize for OnnxDiarizer {
             return;
         }
 
-        // Compute one embedding per utterance. Errors (audio too
-        // short, ort failure) leave that utterance with `None` —
-        // the dispatch path then falls back to the source-derived
-        // "mic" / "system" label. We collect all embeddings even
-        // if some are missing, with parallel indices, so the
-        // clustering pass can ignore the gaps cleanly.
-        let mut embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(utterances.len());
-        for chunk in audio_chunks.iter() {
-            // Resample / downmix to 16 kHz mono if needed. The mel
-            // extractor refuses anything else by construction
-            // (SAMPLE_RATE_HZ is a const); keeps the boundary
-            // checking honest.
+        // Embed each utterance and assign a session-stable cluster
+        // ID. Stable across pump ticks: a speaker that gets ID 0
+        // in tick 0 keeps ID 0 throughout the meeting because
+        // `SessionClusterState::assign` matches against the full
+        // session history, not just the current batch.
+        //
+        // Errors on `embed` (audio too short, ort failure) leave
+        // the utterance unlabelled — the dispatch path then falls
+        // through to the source-derived "mic" / "system" stamp.
+        let mut session_clusters = self.clusters.lock().unwrap_or_else(|e| e.into_inner());
+        for (i, chunk) in audio_chunks.iter().enumerate() {
             let resampled = prepare_audio_for_embedding(chunk, format);
-            embeddings.push(match self.embed(&resampled) {
-                Ok(v) => Some(v),
+            match self.embed(&resampled) {
+                Ok(emb) => {
+                    let cluster_id = session_clusters.assign(emb);
+                    // 1-indexed for human display; "Speaker 1, 2, …".
+                    utterances[i].speaker_label = Some(format!("Speaker {}", cluster_id + 1));
+                }
                 Err(e) => {
                     tracing::debug!(error = %e, "OnnxDiarizer: skip utterance");
-                    None
                 }
-            });
-        }
-
-        // Clustering needs a packed `&[Vec<f32>]`. Build a packed
-        // slice of just the successful embeddings + a parallel
-        // index map so we can scatter the cluster IDs back to the
-        // right utterance positions.
-        let mut packed: Vec<Vec<f32>> = Vec::with_capacity(embeddings.len());
-        let mut idx_map: Vec<usize> = Vec::with_capacity(embeddings.len());
-        for (i, opt) in embeddings.iter().enumerate() {
-            if let Some(v) = opt {
-                idx_map.push(i);
-                packed.push(v.clone());
             }
-        }
-        if packed.is_empty() {
-            return;
-        }
-        let labels = cluster_with_threshold(&packed, self.distance_threshold);
-        for (cluster_id, utt_idx) in labels.iter().zip(idx_map.iter()) {
-            // 1-indexed for human display; "Speaker 1, 2, …".
-            utterances[*utt_idx].speaker_label = Some(format!("Speaker {}", cluster_id + 1));
         }
     }
 }
 
-/// Mean-pool an `(N, EMBEDDING_DIM)` ndarray along axis 0 into a
-/// flat `Vec<f32>` of length `EMBEDDING_DIM`. Exposed as a free
-/// function so future variants of the diarizer (e.g. one that
-/// chops long utterances into overlapping windows and averages
-/// the per-window embeddings) can share the helper.
-pub fn mean_pool_axis0(array: Array2<f32>) -> Vec<f32> {
-    let n = array.shape()[0];
-    if n == 0 {
-        return vec![0.0; EMBEDDING_DIM];
+/// Hash the file at `path` and reject if its SHA-256 doesn't match
+/// the catalog's expected value. Streams the file in 64 KB chunks
+/// so we don't allocate a 26 MB scratch buffer.
+fn verify_model_sha256(path: &Path) -> Result<()> {
+    use std::io::Read;
+    let expected = default_diarizer_model().sha256;
+    let mut file =
+        fs::File::open(path).with_context(|| format!("open model file at {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).context("read model file")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
     }
-    let mean = array.mean_axis(ndarray::Axis(0)).unwrap_or_else(|| {
-        // `mean_axis` returns None only on a zero-length axis,
-        // which we already handled above. The fallback is a
-        // belt-and-suspenders for an unreachable branch.
-        ndarray::Array1::zeros(EMBEDDING_DIM)
-    });
-    mean.to_vec()
+    let got = format!("{:x}", hasher.finalize());
+    if got != expected {
+        return Err(anyhow!(
+            "model SHA-256 mismatch (got {got}, expected {expected}) — refusing to load"
+        ));
+    }
+    Ok(())
 }
 
 /// Convert a captured chunk into the `f32 16 kHz mono` shape the
@@ -283,33 +367,74 @@ fn prepare_audio_for_embedding(chunk: &[f32], format: CaptureFormat) -> Vec<f32>
 mod tests {
     use super::*;
 
-    #[test]
-    fn mean_pool_empty_axis_returns_zero_vector() {
-        // An empty (0, 256) array shouldn't panic; mean is 0.
-        let a: Array2<f32> = Array2::zeros((0, EMBEDDING_DIM));
-        let pooled = mean_pool_axis0(a);
-        assert_eq!(pooled.len(), EMBEDDING_DIM);
-        assert!(pooled.iter().all(|&x| x == 0.0));
+    /// Build an embedding pointing along a single axis. Shared
+    /// helper across the SessionClusterState tests; keeps the
+    /// test data trivial and the assertions focused on the
+    /// cluster-assignment logic, not on numerical noise.
+    fn axis(idx: usize) -> Vec<f32> {
+        let mut v = vec![0.0_f32; EMBEDDING_DIM];
+        v[idx] = 1.0;
+        v
     }
 
     #[test]
-    fn mean_pool_single_row_returns_that_row() {
-        let mut a: Array2<f32> = Array2::zeros((1, EMBEDDING_DIM));
-        a[[0, 0]] = 1.0;
-        a[[0, 5]] = 0.5;
-        let pooled = mean_pool_axis0(a);
-        assert_eq!(pooled[0], 1.0);
-        assert_eq!(pooled[5], 0.5);
-        assert_eq!(pooled[1], 0.0);
+    fn session_cluster_state_assigns_first_embedding_id_zero() {
+        let mut s = SessionClusterState::new(DEFAULT_DISTANCE_THRESHOLD);
+        assert_eq!(s.assign(axis(0)), 0);
     }
 
     #[test]
-    fn mean_pool_two_rows_averages() {
-        let mut a: Array2<f32> = Array2::zeros((2, EMBEDDING_DIM));
-        a[[0, 0]] = 1.0;
-        a[[1, 0]] = 3.0;
-        let pooled = mean_pool_axis0(a);
-        assert!((pooled[0] - 2.0).abs() < 1e-6);
+    fn session_cluster_state_groups_similar_embeddings() {
+        let mut s = SessionClusterState::new(DEFAULT_DISTANCE_THRESHOLD);
+        // Two identical embeddings → same cluster.
+        let id_a = s.assign(axis(0));
+        let id_b = s.assign(axis(0));
+        assert_eq!(id_a, id_b);
+    }
+
+    #[test]
+    fn session_cluster_state_separates_distinct_embeddings() {
+        let mut s = SessionClusterState::new(DEFAULT_DISTANCE_THRESHOLD);
+        // Orthogonal embeddings (cosine distance 1.0) exceed the
+        // 0.6 default threshold → distinct clusters.
+        let id_a = s.assign(axis(0));
+        let id_b = s.assign(axis(1));
+        assert_ne!(id_a, id_b);
+    }
+
+    #[test]
+    fn session_cluster_state_cluster_ids_are_stable_across_ticks() {
+        // The whole point of moving from per-tick agglomerative to
+        // session-state matching: the speaker who got ID 0 on the
+        // first call must still get ID 0 on the third, even after
+        // a different speaker has appeared in between.
+        //
+        // Pre-PR-G this test would have failed because each tick's
+        // `cluster_with_threshold` call started fresh.
+        let mut s = SessionClusterState::new(DEFAULT_DISTANCE_THRESHOLD);
+        let alice = axis(0);
+        let bob = axis(1);
+        // Tick 1: Alice speaks → ID 0
+        assert_eq!(s.assign(alice.clone()), 0);
+        // Tick 2: Bob speaks → ID 1
+        assert_eq!(s.assign(bob.clone()), 1);
+        // Tick 3: Alice speaks again → must still be ID 0
+        assert_eq!(s.assign(alice.clone()), 0);
+        // Tick 4: Bob again → still ID 1
+        assert_eq!(s.assign(bob), 1);
+    }
+
+    #[test]
+    fn session_cluster_state_first_appearance_order() {
+        // ID 0 goes to the first speaker, 1 to the second, etc. —
+        // matches how end-users will read "Speaker 1, 2, 3" in
+        // transcripts.
+        let mut s = SessionClusterState::new(DEFAULT_DISTANCE_THRESHOLD);
+        assert_eq!(s.assign(axis(2)), 0); // first speaker is ID 0 regardless of axis
+        assert_eq!(s.assign(axis(0)), 1);
+        assert_eq!(s.assign(axis(1)), 2);
+        // Returning to first speaker reuses ID 0.
+        assert_eq!(s.assign(axis(2)), 0);
     }
 
     #[test]
@@ -359,6 +484,32 @@ mod tests {
             (out.len() as i64 - 32).abs() <= 1,
             "expected ~32 samples, got {}",
             out.len()
+        );
+    }
+
+    #[test]
+    fn verify_model_sha256_rejects_unknown_file() {
+        // Write a tiny scratch file whose SHA-256 cannot match
+        // the catalog's expected wespeaker hash, then confirm
+        // `OnnxDiarizer::new` refuses to load it before ort sees
+        // it. This is the "sibling app substituted the model"
+        // defence-in-depth path from the audit.
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("not-wespeaker.onnx");
+        let mut f = fs::File::create(&path).expect("create temp file");
+        f.write_all(b"definitely not a wespeaker model")
+            .expect("write");
+        drop(f);
+
+        let err = match OnnxDiarizer::new(&path) {
+            Ok(_) => panic!("OnnxDiarizer::new accepted a wrong-SHA file"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("SHA-256 mismatch"),
+            "expected SHA-256 mismatch error, got: {msg}"
         );
     }
 

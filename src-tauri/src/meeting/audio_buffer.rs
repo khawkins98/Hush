@@ -42,6 +42,8 @@
 
 use std::collections::VecDeque;
 
+use zeroize::Zeroize;
+
 use crate::audio::CaptureFormat;
 use crate::transcription::resample::resample_to_mono;
 
@@ -57,6 +59,18 @@ pub const CANONICAL_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const MAX_BUFFER_MS: u64 = 30_000;
 
 /// Rolling 16 kHz mono buffer with absolute-session-time addressing.
+///
+/// **Privacy: scrubbed on Drop.** Like
+/// [`crate::transcription::streaming::SlidingWindowState`] the
+/// buffer holds raw PCM that's exactly the audio the user just
+/// said. We zeroize the in-flight samples + reset the dropped-ms
+/// counter when the buffer is destroyed (session end / pump
+/// shutdown) so the bytes don't survive in process memory beyond
+/// their useful lifetime. The `zeroize` crate uses a volatile
+/// write + compiler fence the optimiser cannot elide; a hand-
+/// rolled `iter_mut` zero-loop in `Drop` is legally elidable on
+/// release builds. See `Cargo.toml` for the rationale already
+/// recorded against the `zeroize` dep.
 pub struct AudioRollingBuffer {
     /// Mono 16 kHz f32 samples. Front is oldest. `VecDeque` so
     /// front-dropping is O(1) amortised — `Vec::drain(0..n)` would
@@ -71,6 +85,21 @@ pub struct AudioRollingBuffer {
 impl Default for AudioRollingBuffer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for AudioRollingBuffer {
+    fn drop(&mut self) {
+        // VecDeque stores its elements in a ring buffer split
+        // across (up to) two contiguous slices; `as_mut_slices`
+        // exposes both. Zeroize each one explicitly. After the
+        // zero-pass the deque's logical length and capacity are
+        // unchanged, but the bytes the OS would dump on swap-out
+        // / core-dump are scrubbed.
+        let (head, tail) = self.samples.as_mut_slices();
+        head.zeroize();
+        tail.zeroize();
+        self.dropped_ms = 0;
     }
 }
 
@@ -326,5 +355,20 @@ mod tests {
             assert!(back <= ms);
             assert!(ms.saturating_sub(back) <= 1, "ms={ms} back={back}");
         }
+    }
+
+    #[test]
+    fn drop_runs_without_panicking_when_buffer_has_data() {
+        // Smoke: the Drop impl zeroizes both halves of the
+        // VecDeque's ring buffer. That zeroization itself is
+        // covered by the `zeroize` crate's own test suite — same
+        // shape as `transcription::streaming::SlidingWindowState`
+        // (which also doesn't unit-test the actual zeroization).
+        // This test pins that the Drop wiring exists and doesn't
+        // panic on a populated buffer.
+        let mut b = AudioRollingBuffer::new();
+        b.append(&ramp(16_000), fmt_canonical());
+        assert_eq!(b.len(), 16_000);
+        drop(b);
     }
 }
