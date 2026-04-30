@@ -991,6 +991,19 @@ async fn run_pump(mut ctx: PumpContext) {
     // parallel to `handles` / `sources`.
     let mut drain_buffers: Vec<Vec<f32>> = (0..ctx.handles.len()).map(|_| Vec::new()).collect();
 
+    // Per-source rolling audio buffer in canonical 16 kHz mono
+    // (#111 PR-F). The diarizer needs each utterance's audio to
+    // run its embedding model; the streaming session doesn't
+    // surface that, so we keep an independent buffer here. Drained
+    // tick samples are appended every iteration; when finals come
+    // out, each utterance's `[started_at_ms, ended_at_ms)` is
+    // sliced out of the buffer for the diarize call. Bounded at
+    // 30 s (matches the streaming session's window).
+    let mut audio_buffers: Vec<crate::meeting::audio_buffer::AudioRollingBuffer> =
+        (0..ctx.handles.len())
+            .map(|_| crate::meeting::audio_buffer::AudioRollingBuffer::new())
+            .collect();
+
     // Per-tick scratch for the merge-sort-label-split pattern (#206).
     // Accumulates `(source_label, utterances)` pairs from each
     // source's inference, then `diarize_and_dispatch_merged` runs the
@@ -1023,16 +1036,20 @@ async fn run_pump(mut ctx: PumpContext) {
         // inference window has matured. Splitting the loop bounds
         // each source's audio buffer to the tick window plus the
         // few-ms drain.
+        let mut tick_formats: Vec<Option<CaptureFormat>> = vec![None; ctx.handles.len()];
         for (i, handle) in ctx.handles.iter().enumerate() {
             let buf = &mut drain_buffers[i];
             buf.clear();
-            if let Err(e) = handle.drain_into(buf) {
-                tracing::warn!(
-                    error = ?e,
-                    source_kind = ctx.sources[i].kind_label(),
-                    session_id = ctx.session_id,
-                    "meeting pump: drain_into failed for tick"
-                );
+            match handle.drain_into(buf) {
+                Ok(format) => tick_formats[i] = Some(format),
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        source_kind = ctx.sources[i].kind_label(),
+                        session_id = ctx.session_id,
+                        "meeting pump: drain_into failed for tick"
+                    );
+                }
             }
         }
 
@@ -1075,6 +1092,15 @@ async fn run_pump(mut ctx: PumpContext) {
             let samples = std::mem::take(&mut drain_buffers[i]);
             let source_label = ctx.sources[i].speaker_tag().to_owned();
             let session_id = ctx.session_id;
+
+            // Mirror the drained samples into the diarizer's rolling
+            // buffer (#111 PR-F). Done before the `samples` move so
+            // we don't have to clone — `audio_buffer::append` does
+            // its own resample/downmix copy. Skip if drain_into
+            // failed and we don't know the format for this tick.
+            if let Some(format) = tick_formats[i] {
+                audio_buffers[i].append(&samples, format);
+            }
 
             // Spawn-blocking: returns (session, samples_buf,
             // Result<Vec<Utterance>>). The buffer round-trips so we
@@ -1148,6 +1174,16 @@ async fn run_pump(mut ctx: PumpContext) {
                 }
             };
 
+            // Slice each utterance's audio out of the rolling
+            // buffer for the diarizer (#111 PR-F). Parallel to
+            // `utterances`. Empty `Vec` if the utterance's audio
+            // dropped past the buffer horizon (very rare — would
+            // require a >30 s utterance + late drain).
+            let audio: Vec<Vec<f32>> = utterances
+                .iter()
+                .map(|u| audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
+                .collect();
+
             // Accumulate this source's utterances into the tick
             // bucket. The per-tick `diarize_and_dispatch_merged`
             // call below runs the diarizer once over the merged +
@@ -1156,6 +1192,7 @@ async fn run_pump(mut ctx: PumpContext) {
             tick_buckets.push(TickBucket {
                 source_label,
                 utterances,
+                audio,
             });
         }
 
@@ -1206,9 +1243,14 @@ async fn run_pump(mut ctx: PumpContext) {
                 continue;
             }
         };
+        let tail_audio: Vec<Vec<f32>> = finals
+            .iter()
+            .map(|u| audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
+            .collect();
         tail_buckets.push(TickBucket {
             source_label,
             utterances: finals,
+            audio: tail_audio,
         });
     }
 
@@ -1240,6 +1282,14 @@ async fn run_pump(mut ctx: PumpContext) {
 struct TickBucket {
     source_label: String,
     utterances: Vec<Utterance>,
+    /// Per-utterance audio in canonical 16 kHz mono — parallel to
+    /// `utterances`. `audio[i]` is the slice of audio that
+    /// produced `utterances[i]`. Empty `Vec` for an utterance
+    /// whose audio dropped out of the pump's rolling buffer
+    /// horizon (very rare: requires a 30+ second utterance).
+    /// Threaded into [`diarize_and_dispatch_merged`] so the
+    /// diarizer trait gets real audio chunks instead of `&[]`.
+    audio: Vec<Vec<f32>>,
 }
 
 /// Diarize + dispatch a tick's worth of utterances across all
@@ -1276,13 +1326,32 @@ async fn diarize_and_dispatch_merged(
     // bucket vec.
     let source_labels: Vec<String> = buckets.iter().map(|b| b.source_label.clone()).collect();
 
-    // Tag each utterance with its source bucket index, then move
-    // into a flat `(idx, utterance)` vec. Owning move avoids the
-    // double-clone shape the naive version had.
-    let mut tagged: Vec<(usize, Utterance)> = Vec::new();
+    // Tag each utterance with its source bucket index AND its
+    // per-utterance audio chunk, then move into a flat
+    // `(idx, utterance, audio)` vec. Audio comes from the pump's
+    // rolling per-source buffer (#111 PR-F) — already in
+    // canonical 16 kHz mono so the diarizer sees a homogeneous
+    // batch.
+    let mut tagged: Vec<(usize, Utterance, Vec<f32>)> = Vec::new();
     for (idx, bucket) in buckets.into_iter().enumerate() {
-        for u in bucket.utterances {
-            tagged.push((idx, u));
+        // bucket.audio is parallel to bucket.utterances; if the
+        // pump drifted we'd see a length mismatch — log and
+        // continue with empty audio chunks so the diarizer falls
+        // through to source-only labels rather than panicking.
+        let bucket_audio = if bucket.audio.len() == bucket.utterances.len() {
+            bucket.audio
+        } else {
+            tracing::warn!(
+                source = %bucket.source_label,
+                utterances = bucket.utterances.len(),
+                audio_chunks = bucket.audio.len(),
+                "diarize_and_dispatch_merged: bucket audio/utterance length mismatch; \
+                 falling back to empty audio for this bucket"
+            );
+            vec![Vec::new(); bucket.utterances.len()]
+        };
+        for (u, audio) in bucket.utterances.into_iter().zip(bucket_audio) {
+            tagged.push((idx, u, audio));
         }
     }
 
@@ -1295,18 +1364,21 @@ async fn diarize_and_dispatch_merged(
     // arrival order — important when mic + system happen to
     // produce simultaneous finals and we don't want a race-y
     // re-ordering on every tick.
-    tagged.sort_by_key(|(_, u)| u.started_at_ms);
+    tagged.sort_by_key(|(_, u, _)| u.started_at_ms);
 
     // Split tags from utterances (move out, no clones). Diarizer
     // takes `&mut [Utterance]` so it sees the chronological
-    // sequence and labels accordingly.
+    // sequence and labels accordingly. Audio chunks are parallel
+    // to the utterance vec.
     let mut bucket_indices: Vec<usize> = Vec::with_capacity(tagged.len());
     let mut chronological: Vec<Utterance> = Vec::with_capacity(tagged.len());
-    for (idx, u) in tagged {
+    let mut chronological_audio: Vec<Vec<f32>> = Vec::with_capacity(tagged.len());
+    for (idx, u, audio) in tagged {
         bucket_indices.push(idx);
         chronological.push(u);
+        chronological_audio.push(audio);
     }
-    diarize.label_utterances(&mut chronological, &[], CANONICAL_FORMAT);
+    diarize.label_utterances(&mut chronological, &chronological_audio, CANONICAL_FORMAT);
 
     // Re-split the labelled vec back into per-source buckets,
     // preserving original source order so the dispatch order
@@ -2202,23 +2274,29 @@ mod tests {
 
     /// Recording diarizer for the merged-dispatch test (#206). Saves
     /// the chronological sequence of `started_at_ms` values it
-    /// receives, then writes deterministic `"Speaker A"` labels so
-    /// the test can assert order without relying on the real
-    /// `EnergyDiarizer` heuristic.
+    /// receives + the audio chunk lengths (#111 PR-F), then writes
+    /// deterministic `"Speaker A"` labels so the test can assert
+    /// order without relying on the real `EnergyDiarizer`
+    /// heuristic.
     struct RecordingDiarizer {
         seen_starts: Mutex<Vec<u64>>,
+        seen_audio_lens: Mutex<Vec<usize>>,
     }
 
     impl crate::diarization::Diarize for RecordingDiarizer {
         fn label_utterances(
             &self,
             utterances: &mut [crate::transcription::Utterance],
-            _audio: &[Vec<f32>],
+            audio: &[Vec<f32>],
             _format: crate::audio::CaptureFormat,
         ) {
             let mut seen = self.seen_starts.lock().unwrap();
             for u in utterances.iter() {
                 seen.push(u.started_at_ms);
+            }
+            let mut seen_audio = self.seen_audio_lens.lock().unwrap();
+            for chunk in audio.iter() {
+                seen_audio.push(chunk.len());
             }
             for u in utterances.iter_mut() {
                 u.speaker_label = Some("Speaker A".to_owned());
@@ -2243,6 +2321,7 @@ mod tests {
 
         let recorder = Arc::new(RecordingDiarizer {
             seen_starts: Mutex::new(Vec::new()),
+            seen_audio_lens: Mutex::new(Vec::new()),
         });
         let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
 
@@ -2256,6 +2335,7 @@ mod tests {
                 make_final("mic-200", 200, 280, "mic"),
                 make_final("mic-400", 400, 480, "mic"),
             ],
+            audio: vec![Vec::new(), Vec::new()],
         };
         let sys_bucket = TickBucket {
             source_label: "system".to_owned(),
@@ -2263,6 +2343,7 @@ mod tests {
                 make_final("sys-100", 100, 180, "system"),
                 make_final("sys-300", 300, 380, "system"),
             ],
+            audio: vec![Vec::new(), Vec::new()],
         };
 
         diarize_and_dispatch_merged(
@@ -2309,6 +2390,7 @@ mod tests {
             vec![TickBucket {
                 source_label: "mic".into(),
                 utterances: vec![],
+                audio: vec![],
             }],
             &diarize,
             &mgr.partials,
@@ -2317,6 +2399,113 @@ mod tests {
         .await;
         // No assertions needed beyond "didn't panic"; mgr.repo is
         // empty so the existing list_utterances path covers it.
+    }
+
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_threads_per_utterance_audio() {
+        // #111 PR-F: the dispatch path must hand each utterance's
+        // audio chunk to the diarizer in the same chronological
+        // order as the utterances. Without this, OnnxDiarizer's
+        // length-mismatch guard short-circuits and the feature is
+        // a no-op.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .await
+            .unwrap();
+
+        let recorder = Arc::new(RecordingDiarizer {
+            seen_starts: Mutex::new(Vec::new()),
+            seen_audio_lens: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+
+        // Two source buckets, distinct audio sizes per utterance so
+        // the assertion is unambiguous.
+        let mic_bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![
+                make_final("mic-200", 200, 280, "mic"),
+                make_final("mic-400", 400, 480, "mic"),
+            ],
+            // 200 and 400 samples respectively — distinct from the
+            // system bucket so we can verify ordering.
+            audio: vec![vec![0.0; 200], vec![0.0; 400]],
+        };
+        let sys_bucket = TickBucket {
+            source_label: "system".to_owned(),
+            utterances: vec![
+                make_final("sys-100", 100, 180, "system"),
+                make_final("sys-300", 300, 380, "system"),
+            ],
+            audio: vec![vec![0.0; 100], vec![0.0; 300]],
+        };
+
+        diarize_and_dispatch_merged(
+            session.id,
+            vec![mic_bucket, sys_bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        // The diarizer received audio chunks in chronological order
+        // (sys-100 → mic-200 → sys-300 → mic-400), so the recorded
+        // lengths must be [100, 200, 300, 400].
+        let lens = recorder.seen_audio_lens.lock().unwrap().clone();
+        assert_eq!(
+            lens,
+            vec![100, 200, 300, 400],
+            "audio chunks must be threaded in same chronological order as utterances"
+        );
+    }
+
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_recovers_from_audio_length_mismatch() {
+        // Defensive: if the pump and dispatch fall out of sync (a
+        // bug or a future refactor), the dispatch path falls back
+        // to empty audio chunks rather than panicking. The diarizer
+        // still runs (just without signal); source-only labels
+        // stand. This is the "we'd rather degrade than crash" path.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .await
+            .unwrap();
+
+        let recorder = Arc::new(RecordingDiarizer {
+            seen_starts: Mutex::new(Vec::new()),
+            seen_audio_lens: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+
+        // Bucket has 2 utterances but only 1 audio chunk — the
+        // mismatch should trigger the fallback to empty chunks.
+        let bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![
+                make_final("a", 100, 200, "mic"),
+                make_final("b", 300, 400, "mic"),
+            ],
+            audio: vec![vec![0.0; 50]],
+        };
+
+        diarize_and_dispatch_merged(
+            session.id,
+            vec![bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        let lens = recorder.seen_audio_lens.lock().unwrap().clone();
+        assert_eq!(
+            lens,
+            vec![0, 0],
+            "length-mismatch fallback should hand the diarizer empty audio chunks"
+        );
     }
 
     #[tokio::test]
