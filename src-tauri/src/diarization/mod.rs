@@ -63,6 +63,7 @@ use crate::audio::CaptureFormat;
 use crate::transcription::Utterance;
 
 pub mod cluster;
+pub mod features;
 
 /// Tag a batch of utterances with speaker labels in place.
 ///
