@@ -33,14 +33,17 @@ What's in the build right now:
   `Right Ctrl` elsewhere.
 - **Meeting Mode** — long-running multi-source capture (mic + macOS
   system-audio in parallel via ScreenCaptureKit), live partial-utterance
-  rendering, Speaker A / B-tagged transcripts (D1 silence-gap
-  diarizer #191/#201), searchable session history (#216 search
-  filter), per-app classifier with cross-platform defaults (#219:
-  Zoom/Teams/Discord/Slack/Webex/Skype + media apps across macOS
-  bundle ids, Linux process names, Windows .exe basenames).
-  **Auto-start** when a classified meeting app focuses (#221) —
-  opt-in via Settings → Meeting → Auto-start (Off / Always);
-  manual-start unchanged.
+  rendering, **model-based speaker diarization** (#111, #295–#308) via
+  the wespeaker ResNet34-LM ONNX embedding model + online clustering,
+  routed through `FlagGatedDiarizer`; opt-in via the Speakers tab with
+  in-app model download (#301/#304). Falls back to source-tag labels
+  (You / Remote) when the toggle is off or the model isn't loaded.
+  Searchable session history (#216 search filter), per-app classifier
+  with cross-platform defaults (#219: Zoom/Teams/Discord/Slack/Webex/
+  Skype + media apps across macOS bundle ids, Linux process names,
+  Windows .exe basenames). **Auto-start** when a classified meeting
+  app focuses (#221) — opt-in via Settings → Meeting → Auto-start
+  (Off / Always); manual-start unchanged.
 - **Settings window** — model picker (auto-download from Hugging Face,
   SHA-256 verified, friendly display names in History rows #225),
   vocabulary terms, find/replace rules, **per-app meeting overrides
@@ -81,10 +84,6 @@ What's deferred:
   either. Classifier defaults (#219) already cover the per-OS app
   names so the moment system-audio capture lands the meeting auto-
   start path will recognise Zoom/Teams/etc. there too.
-- **D2 model-based speaker diarization** ([#111](https://github.com/khawkins98/Hush/issues/111))
-  — D1 silence-gap heuristic shipped under #191/#201 (renders Speaker
-  A/B in meeting transcripts); D2 (ONNX speaker-embedding) needs a
-  model decision.
 - **Mac App Store distribution** ([#114](https://github.com/khawkins98/Hush/issues/114))
   — needs Ken's call.
 - **Permissions-as-its-own-dialog** ([#232](https://github.com/khawkins98/Hush/issues/232))
@@ -279,10 +278,6 @@ These can't be exercised by CI:
 
 ### Multi-PR roadmap
 
-- [#111](https://github.com/khawkins98/Hush/issues/111) — Speaker
-  diarization. **D1 shipped** (silence-gap `EnergyDiarizer`,
-  #191/#201, in production); **D2 deferred** (model-based ONNX
-  speaker-embedding, needs a model decision).
 - [#173](https://github.com/khawkins98/Hush/issues/173) — Layer 2
   native UI (per-OS class + targeted CSS overrides).
   Deferred until macOS-only hands-on coverage stops being a liability
@@ -299,11 +294,11 @@ These can't be exercised by CI:
   `wdio.conf.ts`, smoke spec, README. CI integration deferred
   until tauri-driver's macOS path stabilises; spec coverage grows
   as Path A's mock-shaped gaps surface.
-- [#156](https://github.com/khawkins98/Hush/issues/156) —
-  `+page.svelte` state-layer refactor. Multiple extractions landed
-  (#212 FirstRunModal + MacosPermsPill); the file is now ~1.1k.
-  Further extraction (meeting state into a composable) is the next
-  natural step if a contributor reports navigation friction.
+- `+page.svelte` state-layer refactor (#156, closed 2026-04-27).
+  Multiple extractions landed (#212 FirstRunModal + MacosPermsPill);
+  the file is now ~1.2k. Further extraction (meeting state into a
+  composable) is the next natural step if a contributor reports
+  navigation friction — open a fresh issue if so.
 - [#232](https://github.com/khawkins98/Hush/issues/232) — extract
   Permissions UI into a reusable dialog so first-run + ad-hoc
   launches share the surface with Settings.
