@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { platform } from "@tauri-apps/plugin-os";
   import { onDestroy, onMount } from "svelte";
   import AppSidebar from "$lib/AppSidebar.svelte";
   import type { AppSection } from "$lib/types";
@@ -160,8 +161,15 @@
   // shortcut hint (Right ⌘ on macOS, Right Ctrl elsewhere). PTT is
   // on by default everywhere as of #194; this flag isn't gating
   // visibility anymore, just glyph copy.
-  let isMacOS = typeof navigator !== "undefined"
-    && /Mac|iPhone|iPad/i.test(navigator.platform);
+  //
+  // Resolved asynchronously via `@tauri-apps/plugin-os` (#272) —
+  // replaces a deprecated `navigator.platform` regex match.
+  // Defaults to `false` until the IPC round-trip lands; the only
+  // visible consequence of the brief default is a single re-render
+  // of the modifier-glyph kbd when the IPC resolves, which is
+  // imperceptible in practice (the `onMount` runs before the
+  // hotkey hint section paints in any non-pathological case).
+  let isMacOS = $state(false);
 
   // Open Settings → Model. Used by the "Set up your first model"
   // banner and the click-through on the transcription-unavailable
@@ -194,6 +202,16 @@
   });
 
   onMount(async () => {
+    // Platform glyph (#272). Resolves quickly; the kbd render
+    // gates on the resulting bool. Failure leaves the default
+    // `false` (Right Ctrl glyph) — same fallback `navigator.platform`
+    // would have produced on a non-macOS host anyway.
+    try {
+      isMacOS = (await platform()) === "macos";
+    } catch (e) {
+      console.warn("[hush] platform() probe failed; defaulting to non-macOS glyph", e);
+    }
+
     // Check the first-run flag BEFORE the Promise.all — round-7 UX
     // reviewer caught a real timing bug: when the flag fetch raced
     // against `Promise.all`, a fresh-install user could see the

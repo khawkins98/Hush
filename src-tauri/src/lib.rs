@@ -92,6 +92,12 @@ pub fn run() {
         // plugin is registered.
         //.plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        // Platform detection (#272). Frontend uses `platform()`
+        // from `@tauri-apps/plugin-os` to decide macOS-specific
+        // UI affordances; replaces the deprecated
+        // `navigator.platform` reads in `+page.svelte` and
+        // `settings/+page.svelte`.
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             // The platform app-data directory is only resolvable from a
             // Tauri `App` handle, so state construction has to live in
