@@ -48,7 +48,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' tauri:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost tauri: https://api.github.com"
     }
   },
   "bundle": {

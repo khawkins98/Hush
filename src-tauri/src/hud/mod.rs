@@ -126,14 +126,16 @@ fn show_without_activating<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Resu
     {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
-        // SAFETY: `ns_window()` returns a valid NSWindow pointer for
-        // the duration of the window's lifetime. We don't store the
-        // pointer beyond this scope; we just message it once to
-        // order it front without activating. AppKit's
-        // `orderFrontRegardless` (selector
-        // `orderFrontRegardless:`) is the standard primitive for
-        // "show in window list without making key" — same call
-        // status-bar apps and floating palettes use.
+        // SAFETY: `ns_window()` returns a valid NSWindow pointer
+        // for the lifetime of the `WebviewWindow`. We don't store
+        // or escape the pointer; we send exactly one synchronous
+        // `orderFront:` message and discard it. The call runs on
+        // the main thread (Tauri command path) so it can't race
+        // with AppKit's main-thread teardown. `orderFront:` is
+        // the AppKit primitive for "show in window list without
+        // making key/active" — same call status-bar apps and
+        // floating palettes use to surface their windows without
+        // stealing focus from the foreground app.
         let ns_window_ptr = window.ns_window().context("retrieve NSWindow pointer")?;
         let ns_window = ns_window_ptr as *mut AnyObject;
         if ns_window.is_null() {

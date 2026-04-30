@@ -44,8 +44,8 @@
         If a permission won't stick after a fresh prompt — or a
         stale Hush.app row appears under a previous build's signing
         identity — reset Hush's grants for Microphone, Screen
-        Recording, Input Monitoring, and Accessibility in one
-        click. The reset takes effect on next launch.
+        Recording, and Input Monitoring in one click. The reset
+        takes effect on next launch.
       </p>
       <div class="macos-diag-actions">
         <!--

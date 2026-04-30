@@ -53,5 +53,21 @@
 
     <key>NSInputMonitoringUsageDescription</key>
     <string>Hush watches for the push-to-talk hotkey (Right Control by default) so you can hold-to-record without focusing the Hush window.</string>
+
+    <!--
+      Minimum supported macOS version (#272). The release pipeline
+      sets MACOSX_DEPLOYMENT_TARGET=14.0 at compile time but Tauri
+      doesn't propagate that into Info.plist automatically — without
+      this key, macOS Gatekeeper has no way to do the pre-launch
+      compatibility check, and a user on an older system gets a
+      cryptic "app is damaged" or instant-crash dialog instead of
+      a clean "requires macOS 14 or later" message.
+
+      14.0 matches the deployment target in release.yml + the
+      project's policy of macOS 26 design target / 14.0 deployment
+      floor. Bump in lockstep when the release pipeline does.
+    -->
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
 </dict>
 </plist>

@@ -1277,7 +1277,15 @@
             redundant text.
           -->
           {#if session.appTitle && session.appTitle !== session.appName}
-            <p class="session-app-title">{session.appTitle}</p>
+            <!--
+              `title` attribute exposes the full string on hover —
+              CSS truncates with ellipsis at .session-app-title's
+              max-width, and YouTube / Notion titles routinely run
+              long enough to hit it. Keyboard users can read the
+              full title via the row's expanded-detail view; the
+              hover affordance is for mouse users on collapsed rows.
+            -->
+            <p class="session-app-title" title={session.appTitle}>{session.appTitle}</p>
           {/if}
           {#if session.notes}
             <p class="session-notes">{session.notes}</p>
