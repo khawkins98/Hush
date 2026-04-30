@@ -89,20 +89,46 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let _tray = TrayIconBuilder::with_id("hush-tray")
         .menu(&menu)
-        // Reuse the bundled app icon (the same one shown in the
-        // sidebar brand chip). On macOS the menu-bar renders this
-        // as a 16-22 px square; the existing icon is high-enough
-        // resolution that it scales cleanly.
-        .icon(app.default_window_icon().cloned().unwrap_or_else(|| {
-            // Fallback: macOS treats `Image::default()` as an empty
-            // icon which still installs a clickable region but is
-            // visually empty. Better than failing the whole build.
-            tauri::image::Image::new_owned(Vec::new(), 0, 0)
-        }))
+        // macOS template image (#275). macOS menu-bar template
+        // images MUST be flat monochrome — black shapes on
+        // transparent — for `icon_as_template(true)` to work.
+        // Pre-fix this used `default_window_icon()` (full-color
+        // RGBA) which produced a black blob with no recognisable
+        // shape on light menu bars. The dedicated `tray-icon.png`
+        // (16×16) + `tray-icon@2x.png` (32×32) assets are
+        // alpha-extracted silhouettes of the brand mark.
+        //
+        // `Image::from_bytes` parses the PNGs at compile time via
+        // `include_bytes!`; the assets ship alongside the source
+        // so they don't need a `bundle.resources` entry. macOS
+        // picks the @2x variant on retina displays automatically
+        // when both are present in `Image`'s pixel data — but
+        // Tauri's `Image::from_bytes` only takes one PNG, so we
+        // load the @2x variant directly and let macOS down-scale
+        // for non-retina (the 32px source halves cleanly to 16px
+        // with no aliasing issues for a high-contrast silhouette).
+        //
+        // Fallback chain on errors:
+        // 1. Tray icon decode failure → `default_window_icon()`
+        //    (looks wrong in dark mode but at least visible).
+        // 2. That also failing → empty image (clickable region,
+        //    no glyph — still better than failing the whole build).
+        .icon({
+            const TRAY_ICON_2X: &[u8] = include_bytes!("../../icons/tray-icon@2x.png");
+            tauri::image::Image::from_bytes(TRAY_ICON_2X).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = ?e,
+                    "tray: failed to decode tray-icon@2x.png; falling back to app icon"
+                );
+                app.default_window_icon()
+                    .cloned()
+                    .unwrap_or_else(|| tauri::image::Image::new_owned(Vec::new(), 0, 0))
+            })
+        })
         // macOS: render as a tinted "template" image so it adapts
-        // to dark/light menu bar. Without this, a coloured icon
-        // looks wrong in dark mode. Other platforms ignore this
-        // hint.
+        // to dark/light menu bar. Now actually correct because the
+        // input is monochrome with a real alpha channel; pre-#275
+        // this flag was wired but the input was wrong.
         .icon_as_template(true)
         // On macOS the tray is a true "menu extra" — left-click
         // opens the menu. On Windows / Linux some users expect
