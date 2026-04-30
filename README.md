@@ -151,7 +151,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md#testing) for the layered breakdown —
 - **No audio leaves the device.** Transcription is whisper.cpp running locally; there is no cloud round-trip.
 - **No telemetry, no analytics, no startup beacon.** Auto-update is not enabled — Hush does not phone home unprompted. If telemetry or auto-update ever ships, it will be opt-in with a separate privacy review.
 - **Two outbound network surfaces, both user-initiated:**
-  - **Whisper model download** from Hugging Face when you click Download in the model picker. The HTTP client redirects only within `huggingface.co` (host-restricted, hop-cap 4) and verifies SHA-256 on every download. Once cached, transcription is fully offline.
+  - **Whisper model download** from Hugging Face when you click Download in the model picker. The HTTP client only follows redirects originating from an HF host (`huggingface.co` / `*.hf.co`); HF's CDN can redirect to a signed object-storage URL on a third-party CDN, and that one signed-URL hop is allowed because the previous URL was on HF. HTTPS-only, hop-cap 4. SHA-256 verified on every download. Once cached, transcription is fully offline.
   - **Manual update check** when you click "Check for updates" in Settings → About (or `Hush → Check for Updates…` on macOS). Single read-only request to `api.github.com`. No identifying headers beyond the default reqwest user agent and the GitHub-recommended `Accept: application/vnd.github+json`.
 
 ---

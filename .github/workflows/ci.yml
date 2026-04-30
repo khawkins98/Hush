@@ -30,6 +30,29 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # Version-agreement check (#270). The version number lives in
+      # three places that have to be edited together:
+      # `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and
+      # `package.json`. Per `docs/releases.md` they're hand-bumped
+      # in lockstep; without this guard a stale one silently produces
+      # a release where the binary's `CARGO_PKG_VERSION` disagrees
+      # with the About-tab `getVersion()` (which reads
+      # `tauri.conf.json`) and the DMG metadata. Cheap; runs on
+      # every PR.
+      - name: Verify version files agree
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          CARGO_VER=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          TAURI_VER=$(jq -r '.version' src-tauri/tauri.conf.json)
+          PKG_VER=$(jq -r '.version' package.json)
+          echo "Cargo=$CARGO_VER  tauri.conf=$TAURI_VER  package.json=$PKG_VER"
+          if [ "$CARGO_VER" != "$TAURI_VER" ] || [ "$CARGO_VER" != "$PKG_VER" ]; then
+            echo "::error::Version mismatch — these three files must agree."
+            echo "Update all three together when bumping (see docs/releases.md)."
+            exit 1
+          fi
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-01)
         with:

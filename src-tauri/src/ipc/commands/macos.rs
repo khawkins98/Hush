@@ -15,8 +15,10 @@
 //!   [`crate::macos_perms::read_all`]. Side-effect-free; doesn't
 //!   trigger OS prompts.
 //! - [`reset_macos_permissions`] runs `tccutil reset` for the
-//!   three TCC categories Hush touches (Microphone,
-//!   ListenEvent / Input Monitoring, Accessibility).
+//!   three TCC categories Hush actually touches (Microphone,
+//!   ScreenCapture, ListenEvent / Input Monitoring).
+//!   Accessibility was previously included but Hush never
+//!   requests it (#273).
 //!
 //! Extracted from `commands/mod.rs` under #82 to give the macOS
 //! permissions surface its own module — already cfg-gated by
@@ -68,9 +70,10 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
                 // `tccutil reset` so the user can `-` them out.
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
             }
-            "accessibility" => {
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            }
+            // "accessibility" target intentionally absent — Hush
+            // doesn't request Accessibility (#273). Removed from
+            // the whitelist here so a stale frontend can't deep-
+            // link the user to a pane that will never list Hush.
             other => {
                 // Frontend sent a non-whitelisted target — this is
                 // a protocol bug, not a user-configurable setting,
@@ -259,13 +262,21 @@ pub struct MacosPermissionResetResult {
     pub summary: String,
 }
 
-/// Run the four `tccutil reset` commands documented in
-/// `docs/macos-permissions.md` for `com.khawkins.hush`. Microphone,
+/// Run the three `tccutil reset` commands documented in
+/// `docs/macos-permissions.md` for `com.khawkins.hush`: Microphone,
 /// Screen Recording (`ScreenCapture` — system-audio capture for
-/// meeting mode), Input Monitoring (`ListenEvent`), and
-/// Accessibility are all reset; each is independent and a
-/// missing-entry on any one is treated as a soft success (the
-/// entry never existed to reset).
+/// meeting mode), and Input Monitoring (`ListenEvent`). Each is
+/// independent and a missing-entry on any one is treated as a
+/// soft success (the entry never existed to reset).
+///
+/// **Why no Accessibility reset (#273):** Hush's PTT path uses
+/// `kIOHIDRequestTypeListenEvent` (the listen-only event tap,
+/// covered by Input Monitoring), not the event-modification tap
+/// that requires Accessibility. `Info.plist` has no
+/// `NSAccessibilityUsageDescription` because the app legitimately
+/// never asks for that permission. Resetting it was vestigial
+/// noise from earlier prototypes — harmless but surprising in
+/// `tccutil` output.
 ///
 /// On non-macOS this is a no-op that reports "not applicable".
 ///
@@ -282,12 +293,9 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
         // real bug, not just polish: hitting Reset wouldn't actually
         // clear the Screen Recording grant, so users iterating on
         // dev builds saw stale "GRANTED" rows survive a reset.
-        let categories: [&str; 4] = [
-            "Microphone",
-            "ScreenCapture",
-            "ListenEvent",
-            "Accessibility",
-        ];
+        // Accessibility was previously included but Hush never
+        // requests it (#273); removed.
+        let categories: [&str; 3] = ["Microphone", "ScreenCapture", "ListenEvent"];
         let mut any_reset = false;
         for cat in categories {
             let status = std::process::Command::new("tccutil")

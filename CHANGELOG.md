@@ -15,6 +15,29 @@ single flat list was hard to navigate.
 
 ### Added
 
+#### Permissions tab redesign + active-window title metadata (#247, #259)
+
+- **Permission row redesign (#247)** — status moves from a floating uppercase label into a sentence-case coloured pill inline with the title (System Settings → Privacy & Security idiom). Right edge belongs solely to the action button. The dot is dropped; the pill's background carries the colour signal.
+- **App-title subtitle on session rows (#259)** — captures the active window's title at session-open and renders it as an italic subtitle when distinct from `appName`. A YouTube-in-Vivaldi session reads as `Vivaldi — <video title>` rather than "Vivaldi" alone. Migration `0005_meeting_sessions_app_title.sql` adds nullable `app_title` column. Backend captures via `active-win-pos-rs` at the IPC entry / autostart-poller `Start` outcome — frontend doesn't need direct OS access.
+
+#### Resilience: orphan-session reconciliation + double-close guard (#277)
+
+`SessionManager::reconcile_orphan_sessions` runs at boot via `lib.rs::setup`. Sessions left open by a previous process that exited via kill / OS crash / panic now get `ended_at` stamped on next launch instead of staying as ghost "in-progress" rows. New `MeetingSessionRepository::list_open_sessions()` is the underlying primitive. Pairs with a `close_attempted: bool` flag on `ActiveSession` so a `stop_manual` retry after a transient SQLite failure goes straight to retrying the DB write instead of cycling pump-shutdown work that already completed. +2 lib tests.
+
+#### Updater redirect policy: HF→signed-CDN chains (#278)
+
+The model-download redirect closure used a per-hop `huggingface.co` / `hf.co` allowlist; HF's CDN now sometimes redirects to signed S3/R2 URLs whose hosts aren't on those zones. Browser-like trust model: a hop is allowed if the destination is on an HF host **or** the immediately-previous URL was. HTTPS-only enforced regardless. Hop-cap fires before host checks. Logic extracted to a pure `redirect_decision()` and pinned with seven cases.
+
+#### Multi-agent review #2 follow-ups + small fixes (#260, #276, #279, #280, #281)
+
+Outcomes from the second review cycle plus the colleague-issue triage:
+
+- **Capability tightening (#260)** — main + Settings windows downsized from `core:default` (9 subsets) to the actual minimum (`core:event`, `core:app` for Settings). Closes #238.
+- **Source-label drift fix (#276)** — `AudioSource::speaker_tag()` is now the single source of truth for the persistence-layer short form (`"mic"` / `"system"`). Pre-fix, #244's sources column used `kind_label()` (`"microphone"` / `"system-audio"`) while the dispatch sites used hand-rolled short forms; the frontend chip rendered the literal long forms through its default case. + zeroize on `SlidingWindowState::Drop` (#250), `get_by_id()` for O(1) session lookup + dead `session_started_at` removal (#253), `sha2 = "0.10"` pin (#256 part 3).
+- **HUD UX trio (#279)** — `acceptFirstMouse: true` (one-click dismiss), `orderFront:` instead of `makeKeyAndOrderFront:` so the HUD doesn't steal keyboard focus, cursor-monitor lookup so the HUD lands on the active display.
+- **Window lifecycle (#280)** — `CloseRequested` on main + Settings now hides instead of destroying. Autostart launches with `--background` and switches to Accessory activation policy so the LaunchAgent doesn't pop the main window at every login.
+- **Tray + menu (#281)** — fix tray accelerator (was ⌘⌥H, the macOS "Hide All Other Apps" shortcut; now ⌃⌥H, matching the actually-registered hotkey). Menu "Check for Updates…" fires the probe directly and emits `Events.UpdaterResult` for the Settings About tab to render — one-click instead of two.
+
 #### Meeting Mode UX polish: listening pill, stopping banner, Copy transcript, source chips (#241, #243, #244)
 
 Hands-on testing surfaced a cluster of visible-silence / missing-affordance gaps in the active-session UX:

@@ -45,11 +45,19 @@ on:
   # dispatches don't pollute the release list.
   workflow_dispatch:
 
-# One release per ref. Cancel an in-flight run if the same tag is
-# re-pushed (force-push of a moving tag, etc.).
+# One release per ref. If the same tag is re-pushed (a moving tag
+# corrected mid-build, an amend before the build completes), cancel
+# the in-flight run so the second run's artefacts are the only
+# ones attached to the release. Pre-#274 this was `false`, which
+# allowed the old run to finish and double-upload artefacts under
+# the same tag — the resulting release listed two .dmgs / .msis
+# at slightly different versions. The user-facing damage of a
+# cancelled-mid-upload run (incomplete artefacts on the draft
+# release) is smaller than the damage of a confused user pulling
+# a stale binary from a duplicate-listed release.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   publish:
