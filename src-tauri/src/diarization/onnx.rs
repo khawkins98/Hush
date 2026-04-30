@@ -123,6 +123,22 @@ impl SessionClusterState {
 
     /// Assign a cluster ID to `embedding`. Appends to history;
     /// returns the assigned ID (0-indexed).
+    ///
+    /// Known limitation (1-NN single-link chaining): nearest-
+    /// neighbour matching against the full session history can
+    /// chain a slowly-drifting voice (microphone position change,
+    /// vocal fatigue) into an adjacent speaker's cluster — each
+    /// new utterance latches onto the most-recent neighbour, and
+    /// after enough small drifts the chain crosses the threshold
+    /// into a different cluster while still being labeled the
+    /// original one. Acceptable for v1: the pre-PR-G alternative
+    /// (per-tick agglomerative re-clustering) was demonstrably
+    /// worse because cluster IDs themselves were unstable across
+    /// ticks. A future iteration could match against per-cluster
+    /// centroids (medoids) instead of all past embeddings, or
+    /// re-run a global agglomerative pass periodically. Leaving
+    /// the chain risk documented here so a future contributor
+    /// re-deriving the design choice doesn't have to from scratch.
     fn assign(&mut self, embedding: Vec<f32>) -> usize {
         let mut best: Option<(usize, f32)> = None;
         for (e, id) in &self.history {
