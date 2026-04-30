@@ -2,6 +2,7 @@
 // IPC layer can address them by their public surface.
 pub mod app_menu;
 pub mod audio;
+pub mod audio_cues;
 pub mod db;
 pub mod diarization;
 pub mod dictionary;
@@ -343,6 +344,8 @@ pub fn run() {
             ipc::commands::reset_first_run,
             ipc::commands::get_hud_enabled,
             ipc::commands::set_hud_enabled,
+            ipc::commands::get_sound_cues_enabled,
+            ipc::commands::set_sound_cues_enabled,
             ipc::commands::get_meeting_autostart_mode,
             ipc::commands::set_meeting_autostart_mode,
             ipc::commands::check_for_updates,

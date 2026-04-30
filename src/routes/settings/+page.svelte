@@ -159,6 +159,12 @@
   let hudBusy = $state(false);
   let hudError = $state<string | null>(null);
 
+  // Audio cues (#292). Default off — opt-in only. Same load /
+  // optimistic-update / error-snap-back shape as hudEnabled.
+  let soundCuesEnabled = $state(false);
+  let soundCuesBusy = $state(false);
+  let soundCuesError = $state<string | null>(null);
+
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
   let vocabularyLoaded = $state(false);
@@ -613,6 +619,7 @@
       loadMacosDiagnostic(),
       loadAutostartState(),
       loadHudEnabled(),
+      loadSoundCuesEnabled(),
       loadAppMetadata(),
       loadAppOverrides(),
       loadMeetingAutostartMode(),
@@ -740,6 +747,31 @@
     }
   }
 
+  async function loadSoundCuesEnabled(): Promise<void> {
+    try {
+      soundCuesEnabled = await invoke<boolean>("get_sound_cues_enabled");
+      soundCuesError = null;
+    } catch (e) {
+      soundCuesError = "Couldn't read audio-cues setting.";
+      console.warn("[hush] get_sound_cues_enabled failed", e);
+    }
+  }
+
+  async function onSoundCuesToggle(e: Event) {
+    const checked = (e.target as HTMLInputElement).checked;
+    soundCuesBusy = true;
+    soundCuesError = null;
+    try {
+      await invoke("set_sound_cues_enabled", { enabled: checked });
+      soundCuesEnabled = checked;
+    } catch (err) {
+      soundCuesError = formatErrorMessage(err);
+      await loadSoundCuesEnabled();
+    } finally {
+      soundCuesBusy = false;
+    }
+  }
+
   async function onResetFirstRun() {
     firstRunResetBusy = true;
     try {
@@ -846,6 +878,35 @@
         </label>
         {#if hudError}
           <p class="settings-error">{hudError}</p>
+        {/if}
+
+        <!--
+          Audio cues toggle (#292). Sits in the Interface group
+          alongside the HUD toggle since both are sensory-feedback
+          settings the user calibrates to their environment. Off by
+          default — opt-in deliberately because cues are intrusive
+          in shared spaces / meeting rooms / focus modes.
+        -->
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            data-testid="settings-sound-cues-toggle"
+            disabled={soundCuesBusy}
+            checked={soundCuesEnabled}
+            onchange={onSoundCuesToggle}
+          />
+          <span class="toggle-label">
+            <span class="toggle-name">Audio cues</span>
+            <span class="toggle-desc">
+              Plays a short macOS system sound when recording
+              starts (Tink) and when transcription completes
+              (Glass — "safe to paste"). Honours your system
+              volume and Do Not Disturb. Off keeps Hush silent.
+            </span>
+          </span>
+        </label>
+        {#if soundCuesError}
+          <p class="settings-error">{soundCuesError}</p>
         {/if}
       </section>
 

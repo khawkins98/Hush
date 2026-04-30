@@ -229,3 +229,41 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     }
     Ok(())
 }
+
+/// HUD lifecycle state — drives the frontend's render branch
+/// (#291). The HUD stays visible across `recording` → `processing`
+/// → hidden so the user has a continuous "Hush is still working"
+/// signal during the transcription gap; pre-#291 the HUD vanished
+/// the instant audio capture stopped, leading users to switch
+/// apps and paste before the clipboard had been written.
+#[derive(Debug, Clone, Copy)]
+pub enum HudState {
+    /// Audio capture is active. Pulsing dot + level meter.
+    Recording,
+    /// Audio capture stopped, transcription + clipboard write in
+    /// flight. Static dot, "Processing…" label, no level meter.
+    Processing,
+}
+
+impl HudState {
+    /// Wire-format string the frontend matches on. Lowercase to
+    /// keep the JSON payload tidy.
+    fn as_str(self) -> &'static str {
+        match self {
+            HudState::Recording => "recording",
+            HudState::Processing => "processing",
+        }
+    }
+}
+
+/// Tell the HUD to render a particular lifecycle state. Emits the
+/// `hud:state` Tauri event with the state name as a JSON string;
+/// the HUD page listens on that event and switches its visual.
+/// Best-effort: a missing emitter is logged and swallowed because
+/// a HUD-event-emit failure shouldn't fail the dictation hot path.
+pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: HudState) -> Result<()> {
+    use tauri::Emitter as _;
+    app.emit("hud:state", state.as_str())
+        .context("emit hud:state")?;
+    Ok(())
+}

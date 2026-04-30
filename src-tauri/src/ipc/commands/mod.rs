@@ -215,7 +215,25 @@ pub fn start_dictation(
         if let Err(e) = crate::hud::show(&app) {
             tracing::error!(error = ?e, "failed to show recording HUD");
         }
+        // Default the HUD to the Recording state. Pre-#291 the
+        // HUD didn't carry an explicit state — Recording was the
+        // only visual. The set_state call here is a no-op when
+        // the HUD page hasn't subscribed to the event yet but
+        // costs nothing; it's the symmetric counterpart to the
+        // Processing transition in stop_dictation below.
+        if let Err(e) = crate::hud::set_state(&app, crate::hud::HudState::Recording) {
+            tracing::warn!(error = ?e, "emit hud:state(recording) failed");
+        }
     }
+    // Audio cue: short "Tink" so the user knows the mic is hot
+    // without having to glance at the HUD (#292). Off by default;
+    // fired only when the user has opted in.
+    crate::audio_cues::play_if_enabled(
+        state
+            .sound_cues_enabled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        crate::audio_cues::CUE_RECORDING_START,
+    );
     Ok(())
 }
 
@@ -311,15 +329,22 @@ pub async fn stop_dictation(
             .clone()
     };
 
-    // The user pressed Stop; the HUD should hide whether or not the
-    // backend stop succeeds. Errors from the audio backend are
-    // surfaced to the caller, but only after the HUD is down.
+    // The user pressed Stop. Pre-#291 the HUD hid here, before
+    // transcription ran — meaning users would see the HUD vanish,
+    // switch to their target app, paste, and get stale clipboard
+    // content because the transcription + clipboard-write
+    // pipeline hadn't completed. Now the HUD switches to a
+    // Processing visual (label "Processing…", static dot, no
+    // level meter) and stays visible until the clipboard write
+    // succeeds. Audio-error path still hides immediately —
+    // showing a stuck Processing pill on a failed capture is
+    // worse than no pill.
     let captured = stop_audio_capture(&state).map_err(|e| {
         let _ = crate::hud::hide(&app);
         e
     })?;
-    if let Err(e) = crate::hud::hide(&app) {
-        tracing::error!(error = ?e, "failed to hide recording HUD");
+    if let Err(e) = crate::hud::set_state(&app, crate::hud::HudState::Processing) {
+        tracing::warn!(error = ?e, "emit hud:state(processing) failed");
     }
 
     // Vocabulary + replacements load are best-effort. Inference itself
@@ -389,6 +414,14 @@ pub async fn stop_dictation(
     };
     if too_short {
         let foreground = take_foreground_snapshot(&state)?;
+        // Hide the Processing HUD on the too-short path —
+        // there's no transcription happening, so the Processing
+        // visual would falsely imply "still working". No
+        // completion cue either; silence is the right signal
+        // for a genuinely empty press (#291 / #292).
+        if let Err(e) = crate::hud::hide(&app) {
+            tracing::warn!(error = ?e, "failed to hide HUD on too-short dictation");
+        }
         // Don't write to the clipboard for an empty result —
         // pre-#197 this branch was unreachable so the question
         // didn't come up. The user just held the hotkey and got
@@ -402,9 +435,20 @@ pub async fn stop_dictation(
         });
     }
 
-    let utterances = transcriber
-        .transcribe_chunks(&[captured.samples], format, &prompt)
-        .map_err(|e| IpcError::Transcription(e.to_string()))?;
+    // Transcription error path — hide the Processing HUD before
+    // returning so a transcription panic doesn't leave a stuck
+    // "Processing…" pill on screen (#291). The error itself is
+    // surfaced normally to the frontend's structured-error
+    // renderer.
+    let utterances = match transcriber.transcribe_chunks(&[captured.samples], format, &prompt) {
+        Ok(u) => u,
+        Err(e) => {
+            if let Err(hide_err) = crate::hud::hide(&app) {
+                tracing::warn!(error = ?hide_err, "failed to hide HUD on transcription error");
+            }
+            return Err(IpcError::Transcription(e.to_string()));
+        }
+    };
     // Concatenate the final utterances. The default impl emits
     // exactly one; a future streaming backend may emit several.
     // Skip non-final utterances — those are partial revisions
@@ -446,6 +490,23 @@ pub async fn stop_dictation(
 
     write_to_clipboard(&app, &text)?;
     fire_ready_notification(&app);
+    // Hide the Processing HUD now that the clipboard has the
+    // transcript (#291). The user can paste safely from this
+    // point on. Hide after the clipboard write so the HUD
+    // doesn't flicker out before the user knows it's ready.
+    if let Err(e) = crate::hud::hide(&app) {
+        tracing::error!(error = ?e, "failed to hide recording HUD");
+    }
+    // Completion cue: short "Glass" chime so the user knows the
+    // clipboard is ready without glancing at the HUD (#292).
+    // Fired AFTER the clipboard write so the cue truly means
+    // "safe to paste"; never fired on the error paths above.
+    crate::audio_cues::play_if_enabled(
+        state
+            .sound_cues_enabled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        crate::audio_cues::CUE_TRANSCRIPTION_READY,
+    );
 
     let foreground = take_foreground_snapshot(&state)?;
     spawn_history_create(
@@ -890,6 +951,37 @@ pub(crate) async fn set_hud_enabled_inner(state: &AppState, enabled: bool) -> Ip
         .settings
         .set(
             crate::settings::keys::HUD_ENABLED,
+            if enabled { "true" } else { "false" },
+        )
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
+/// Read the audio-cues toggle (#292). Settings → General reads
+/// this on mount. Default off — opt-in by design (intrusive in
+/// shared spaces).
+#[tauri::command]
+pub fn get_sound_cues_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
+    Ok(state
+        .sound_cues_enabled
+        .load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Persist the audio-cues flag + update the AtomicBool. Same
+/// shape as `set_hud_enabled`.
+#[tauri::command]
+pub async fn set_sound_cues_enabled(state: State<'_, AppState>, enabled: bool) -> IpcResult<()> {
+    set_sound_cues_enabled_inner(&state, enabled).await
+}
+
+pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool) -> IpcResult<()> {
+    state
+        .sound_cues_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    state
+        .settings
+        .set(
+            crate::settings::keys::SOUND_CUES_ENABLED,
             if enabled { "true" } else { "false" },
         )
         .await
