@@ -239,6 +239,15 @@ pub trait MeetingSessionRepository:
     /// meeting history. SQLite's PK is indexed, so this is a
     /// single B-tree probe.
     async fn get_by_id(&self, id: i64) -> Result<Option<MeetingSession>>;
+
+    /// Sessions whose `ended_at` is still NULL — i.e. left open
+    /// from a previous run that exited via process kill / OS
+    /// crash / panic before `stop_manual` could close the row
+    /// (#249). Used by [`SessionManager::reconcile_orphan_sessions`]
+    /// at boot to mark them ended so the panel doesn't render a
+    /// "session in progress" badge for a session whose pump task
+    /// died with the previous process.
+    async fn list_open_sessions(&self) -> Result<Vec<MeetingSession>>;
 }
 
 #[cfg(test)]

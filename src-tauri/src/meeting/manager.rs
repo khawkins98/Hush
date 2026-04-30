@@ -326,9 +326,62 @@ struct ActiveSession {
     /// is closed. Wrapped in `Mutex<Option<...>>` so `stop_manual`
     /// can take it out without the borrow checker complaining.
     pump_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Set to `true` when `stop_manual`'s `repo.close_session`
+    /// call fails and the recovery path restores the session for
+    /// a retry (#249). A subsequent `stop_manual` then skips the
+    /// cancel + pump-join steps (the pump is already gone — it
+    /// finished and exited on the first try) and goes straight
+    /// to retrying the DB close. Without this flag the second
+    /// stop would store `true` into a fresh `AtomicBool` no
+    /// task reads, and `take()` an already-empty `pump_handle`,
+    /// burning the user's "let me retry" intent on no-op work.
+    close_attempted: bool,
 }
 
 impl SessionManager {
+    /// Boot-time reconciliation: any sessions whose `ended_at` is
+    /// still NULL are leftover from a previous run that exited
+    /// without `stop_manual` running (process kill, OS crash,
+    /// panic). Mark them closed so the panel doesn't render a
+    /// "session in progress" badge for a session whose pump task
+    /// died with the previous process (#249).
+    ///
+    /// Best-effort: a transient DB failure during reconciliation
+    /// is logged and swallowed — it shouldn't block app startup.
+    /// On the next run we'll try again, and the panel surfaces
+    /// these sessions with `endedAt: null` either way (so the
+    /// failure mode is "weird in-progress badge for a clearly
+    /// historical session" rather than "app won't start").
+    pub async fn reconcile_orphan_sessions(&self) {
+        let open = match self.repo.list_open_sessions().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "meeting reconcile: failed to list open sessions; skipping"
+                );
+                return;
+            }
+        };
+        if open.is_empty() {
+            return;
+        }
+        tracing::info!(
+            count = open.len(),
+            "meeting reconcile: closing {} orphan session(s) from previous run",
+            open.len()
+        );
+        for session in open {
+            if let Err(e) = self.repo.close_session(session.id).await {
+                tracing::warn!(
+                    error = ?e,
+                    session_id = session.id,
+                    "meeting reconcile: failed to close orphan session"
+                );
+            }
+        }
+    }
+
     pub fn new(
         repo: Arc<dyn MeetingSessionRepository>,
         audio: Arc<dyn AudioCapture>,
@@ -671,6 +724,7 @@ impl SessionManager {
             started_at,
             cancel,
             pump_handle: Mutex::new(Some(pump_handle)),
+            close_attempted: false,
         });
         drop(guard);
 
@@ -710,49 +764,64 @@ impl SessionManager {
             None => return Err(anyhow!("no meeting session active")),
         };
 
-        // Tell the pump to wind down, then wait for it to drain its
-        // final chunk + append the resulting utterance. Awaiting the
-        // join here matters: if we close the session row before the
-        // pump's last append, the panel briefly shows "ended" with
-        // a missing tail-of-conversation utterance.
-        active.cancel.store(true, Ordering::Release);
-        let pump_handle = active
-            .pump_handle
-            .lock()
-            .map_err(|_| anyhow!("active session pump_handle mutex poisoned"))?
-            .take();
-        if let Some(handle) = pump_handle {
-            // Best-effort: a panicked pump task shouldn't block
-            // session cleanup. Log and continue.
-            if let Err(e) = handle.await {
-                tracing::error!(error = ?e, "meeting pump task panicked or was cancelled");
+        // First-try path: signal the pump and join it. Subsequent
+        // retries (`close_attempted == true`) skip this — the pump
+        // is already gone, having drained on the original call —
+        // and go straight to retrying the DB close (#249).
+        if !active.close_attempted {
+            // Tell the pump to wind down, then wait for it to drain
+            // its final chunk + append the resulting utterance.
+            // Awaiting the join here matters: if we close the
+            // session row before the pump's last append, the panel
+            // briefly shows "ended" with a missing
+            // tail-of-conversation utterance.
+            active.cancel.store(true, Ordering::Release);
+            let pump_handle = active
+                .pump_handle
+                .lock()
+                .map_err(|_| anyhow!("active session pump_handle mutex poisoned"))?
+                .take();
+            if let Some(handle) = pump_handle {
+                // Best-effort: a panicked pump task shouldn't block
+                // session cleanup. Log and continue.
+                if let Err(e) = handle.await {
+                    tracing::error!(error = ?e, "meeting pump task panicked or was cancelled");
+                }
             }
-        }
 
-        // The pump's finish() path already flushed any tail finals
-        // to the database and cleared the per-source partials. Belt-
-        // and-braces: clear our partials map for this session id so
-        // a stale partial can't leak into a subsequent IPC poll
-        // between this point and the pump's last write.
-        if let Ok(mut guard) = self.partials.write() {
-            guard.remove(&active.id);
+            // The pump's finish() path already flushed any tail
+            // finals to the database and cleared the per-source
+            // partials. Belt-and-braces: clear our partials map
+            // for this session id so a stale partial can't leak
+            // into a subsequent IPC poll between this point and
+            // the pump's last write.
+            if let Ok(mut guard) = self.partials.write() {
+                guard.remove(&active.id);
+            }
+        } else {
+            tracing::info!(
+                session_id = active.id,
+                "meeting stop: retrying close_session after prior DB failure"
+            );
         }
 
         match self.repo.close_session(active.id).await {
             Ok(()) => Ok(()),
             Err(e) => {
-                // Restore the active id so the caller can retry —
-                // a transient SQLite failure shouldn't leave the
-                // user without a way to close the session. The
-                // pump is gone at this point so we restore an
-                // ActiveSession with a no-op pump handle and a
-                // fresh cancel flag (the old one already fired).
+                // Restore the active record with `close_attempted`
+                // set so a retry skips the (already-completed)
+                // pump cancellation work and goes straight to
+                // re-attempting the DB write. The fresh AtomicBool
+                // and empty pump_handle reflect that reality —
+                // the original cancel/handle have already done
+                // their job and aren't reusable.
                 if let Ok(mut guard) = self.state.lock() {
                     *guard = SessionState::Active(ActiveSession {
                         id: active.id,
                         started_at: active.started_at,
                         cancel: Arc::new(AtomicBool::new(false)),
                         pump_handle: Mutex::new(None),
+                        close_attempted: true,
                     });
                 }
                 Err(e)
@@ -1562,6 +1631,14 @@ mod tests {
         let db = SqliteDatabase::open_in_memory().await.unwrap();
         let repo: Arc<dyn MeetingSessionRepository> =
             Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+        manager_with_repo(repo)
+    }
+
+    /// Same as [`fresh_manager`] but lets the caller supply a
+    /// pre-built repo — used by the orphan-reconciliation test
+    /// that needs to insert open rows directly before constructing
+    /// the manager that should close them at boot.
+    fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> SessionManager {
         let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
         let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
         let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
@@ -1654,6 +1731,92 @@ mod tests {
         // SqliteMeetingSessionRepository::close_session test pins
         // that already; the manager's job is just to call it.
         let _ = session;
+    }
+
+    #[tokio::test]
+    async fn reconcile_orphan_sessions_closes_open_rows_from_previous_run() {
+        // Simulate a previous-process state: rows exist with
+        // `ended_at = NULL` because that process never ran
+        // `stop_manual`. A fresh manager pointing at the same
+        // repo should close them on boot via
+        // `reconcile_orphan_sessions` (#249).
+        use crate::meeting::NewMeetingSession;
+
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let repo: Arc<dyn MeetingSessionRepository> =
+            Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+
+        // Two orphans + one already-closed row to pin that
+        // already-closed rows aren't touched.
+        let orphan_a = repo
+            .create(NewMeetingSession {
+                app_name: "Zoom".into(),
+                app_kind: MeetingAppKind::Meeting,
+                sources: vec!["mic".into()],
+                app_title: None,
+            })
+            .await
+            .unwrap();
+        let orphan_b = repo
+            .create(NewMeetingSession {
+                app_name: "Teams".into(),
+                app_kind: MeetingAppKind::Meeting,
+                sources: vec!["mic".into(), "system".into()],
+                app_title: None,
+            })
+            .await
+            .unwrap();
+        let already_closed = repo
+            .create(NewMeetingSession {
+                app_name: "Discord".into(),
+                app_kind: MeetingAppKind::Meeting,
+                sources: vec!["mic".into()],
+                app_title: None,
+            })
+            .await
+            .unwrap();
+        repo.close_session(already_closed.id).await.unwrap();
+        let closed_ended = repo
+            .get_by_id(already_closed.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .ended_at;
+        assert!(
+            closed_ended.is_some(),
+            "preflight: already-closed row has ended_at"
+        );
+
+        // Fresh manager == fresh process. Reconcile.
+        let mgr = manager_with_repo(Arc::clone(&repo));
+        mgr.reconcile_orphan_sessions().await;
+
+        // Both orphans now closed; pre-closed row's timestamp
+        // hasn't drifted (close_session has the COALESCE guard).
+        for id in [orphan_a.id, orphan_b.id] {
+            let row = repo.get_by_id(id).await.unwrap().unwrap();
+            assert!(
+                row.ended_at.is_some(),
+                "orphan {id} should be closed by reconcile"
+            );
+        }
+        let after_reconcile = repo
+            .get_by_id(already_closed.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .ended_at;
+        assert_eq!(
+            after_reconcile, closed_ended,
+            "already-closed row's ended_at must not drift"
+        );
+
+        // Idempotent: a second reconcile is a no-op.
+        mgr.reconcile_orphan_sessions().await;
+        assert!(
+            repo.list_open_sessions().await.unwrap().is_empty(),
+            "no open rows remain after reconcile"
+        );
     }
 
     #[tokio::test]
