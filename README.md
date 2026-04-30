@@ -28,7 +28,7 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 **Meeting Mode**
 - 🎤 Long-running multi-source capture (mic + macOS system-audio in parallel via ScreenCaptureKit) with You/Remote-tagged transcripts
 - ⚡ Streaming Whisper sliding-window transcription with live partials + final utterances
-- 🗣️ Source-tagged You / Remote labels (D2 cross-source diarization tracked in #111)
+- 🗣️ Per-speaker labels — opt-in **Speakers** toggle (Settings → Meeting → Speakers) runs each utterance through a 26 MB ONNX speaker-embedding model (wespeaker ResNet34-LM) and labels transcripts as "Speaker 1, 2, …". Falls back to source-tagged You / Remote labels when off. The model auto-downloads on first enable, SHA-256 verified ([#111](https://github.com/khawkins98/Hush/issues/111))
 - 🤖 Per-app classifier with user-editable overrides (Settings → Meeting tab; #112/#192)
 - 📜 Searchable session history; in-app diagnostic for revoked permissions
 
@@ -49,7 +49,6 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 ### Planned (v1.x)
 
 - 🔊 Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)) system-audio capture (macOS shipped via ScreenCaptureKit)
-- 🧠 Model-based speaker diarization (D2; ONNX speaker-embedding) — replaces D1's heuristic with per-speaker accuracy ([#111](https://github.com/khawkins98/Hush/issues/111))
 - 🔄 Auto-update channel via the Tauri updater plugin ([#10](https://github.com/khawkins98/Hush/issues/10)) — manual "Check for updates" ships today; the auto-channel is gated on a signing-key decision
 - 🎯 Parakeet via ONNX as a second engine ([#32](https://github.com/khawkins98/Hush/issues/32))
 

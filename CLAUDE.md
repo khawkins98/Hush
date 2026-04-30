@@ -25,14 +25,22 @@ Each window has its own capability file in `src-tauri/capabilities/` (`default.j
 ## Common commands
 
 ```bash
-# Run the full app (whisper feature is default — needs cmake on macOS).
-# ScreenCaptureKit is linked unconditionally on macOS, so system-audio
-# capture works out of the box without an extra feature flag.
+# Run the full app. Default features are `whisper` (needs cmake on
+# macOS) + `diarization-onnx` (pulls in the ~50 MB ORT vendored libs
+# at build time via `ort`'s `download-binaries` feature; needs
+# network during the first build to fetch them). ScreenCaptureKit
+# is linked unconditionally on macOS, so system-audio capture works
+# without an extra feature flag.
 npm run tauri dev
 
-# UI-only path: launches the app shell with no Whisper backend.
-# Transcription returns IpcError::TranscriptionUnavailable.
+# UI-only path: launches the app shell with no Whisper backend
+# and no ONNX diarizer. Transcription returns
+# IpcError::TranscriptionUnavailable; meetings get NoopDiarizer.
 cd src-tauri && cargo tauri dev --no-default-features
+
+# Diarizer-only (no whisper): rare but useful for iterating on the
+# diarization stack without paying whisper.cpp compile cost.
+cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx
 
 # macOS-only: build a debug .app bundle and open it. Use this for
 # smoke-testing anything that depends on macOS treating Hush as a
@@ -45,6 +53,7 @@ npm run tauri:bundle
 # Rust unit tests — fast, no real audio device needed.
 cd src-tauri && cargo test --lib
 cd src-tauri && cargo test --lib --features whisper             # plus whisper-gated paths
+cd src-tauri && cargo test --lib --features diarization-onnx    # plus diarizer-gated paths
 
 # Run a single Rust test or module
 cd src-tauri && cargo test --lib audio::tests::name_of_test
@@ -101,7 +110,7 @@ The meeting pump runs continuously from `meeting::SessionManager::start_manual(s
 2. Spawn a tokio task (`run_pump`) that, every `CHUNK_DURATION` (10 s):
    - Drains every handle (so siblings don't accumulate while one transcribes).
    - Runs whisper inference per chunk via `spawn_blocking`.
-   - Appends utterances tagged `speakerLabel = "mic" | "system"` (primitive diarization ahead of #111).
+   - Hands utterances + per-utterance audio (sliced from `meeting::audio_buffer::AudioRollingBuffer`) to `Diarize::label_utterances`. Production diarizer: `FlagGatedDiarizer` routes to `OnnxDiarizer` when the wespeaker model is loaded + the Speakers toggle is on, else `NoopDiarizer`. Source-derived `"mic"` / `"system"` tags stand in when the diarizer doesn't override (the panel maps these to "You" / "Remote").
    - Restarts capture for the next window (or exits on cancel).
 3. `stop_manual` sets the cancel flag, awaits the pump's final-chunk drain, writes `ended_at` on the session row.
 
@@ -170,7 +179,7 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 - `audio/` — cpal mic + SCK system-audio + the `AudioSession` handle trait.
 - `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (origin-restricted to huggingface.co — `ipc/mod.rs::redirect_decision` allows a hop to any HTTPS host when the previous URL was on an HF host so HF→signed-CDN chains work; SHA-256 verified), resample helpers, model catalog.
 - `meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection. `app_overrides` submodule persists per-app classifier overrides (#112) consulted at every session start.
-- `diarization/` — `Diarize` trait + `EnergyDiarizer` (D1 silence-gap heuristic; on disk but **not** wired) + `NoopDiarizer` (wired in production as of #243). The cross-source merge collapsed D1 to "Speaker A" everywhere when mic + system audio were both captured; reverted to source-only labels until D2 (model-based ONNX speaker embeddings, #111) lands. `dispatch_utterances` stamps the source-derived label via `AudioSource::speaker_tag()` (single source of truth: `"mic"` / `"system"`); the panel maps that to "You" / "Remote".
+- `diarization/` — `Diarize` trait + impls. **Production wiring (#111):** `FlagGatedDiarizer` reads the `diarization_enabled` `AtomicBool` from `AppState` and routes utterances to either `OnnxDiarizer` (the wespeaker ResNet34-LM ONNX speaker-embedding model + online 1-NN-with-threshold clustering for session-stable IDs) or the `NoopDiarizer` fallback. `OnnxDiarizer` is constructed when the model file is present in `models_dir`; the IPC `download_diarizer_model` path hot-swaps via the shared `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` so a fresh download takes effect on the next pump tick. Submodules: `cluster.rs` (offline agglomerative — kept for potential batch use; production uses the streaming matcher in `onnx::SessionClusterState`), `features.rs` (Mel-FB extraction matching `torchaudio.compliance.kaldi.fbank`), `onnx.rs` (the diarizer impl, gated behind the `diarization-onnx` Cargo feature), `catalog.rs` (single-entry metadata for the wespeaker model). `EnergyDiarizer` (D1 silence-gap heuristic) sits on disk for reference but isn't wired — the cross-source merge collapsed it to "Speaker A" everywhere; D2 superseded it.
 - `ipc/` — `AppState`, `AppStateBuilder`, `IpcError`. `commands/` is now a directory: `mod.rs` holds dictation / history / replacements / vocabulary / models / app commands; `commands/meeting.rs` holds the meeting-mode commands + types + sanitiser (extracted under #82). New domain-cohesive command groups should follow the same submodule pattern.
 - `hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey + `rdev` for push-to-talk. PTT exposes a configurable combo (set of keys held simultaneously) via `PttCombo` and a `ComboMatcher` state machine; combo + Enabled persist to settings DB and are editable in Settings → General → Hotkeys. **Default-on across all platforms** as of #194 — the macOS Input Monitoring TCC prompt fires at first-listener-spawn (~boot time), but in exchange both the toggle hotkey and PTT work out of the box. Pre-#194 the macOS default was off because rdev `listen()` aborted on macOS 26+; that constraint is gone now that we pin to [fufesou's fork](https://github.com/fufesou/rdev) (the one RustDesk ships, which attaches the CGEventTap to `CFRunLoopGetMain()`). Narsil's upstream PR #147 was incomplete (only fixed the `send` path).
 - `hud/` — borderless transparent always-on-top recording HUD with drag (`data-tauri-drag-region`) + dismiss button + level meter pump.
