@@ -899,6 +899,22 @@
     }
   }
 
+  async function onDiarizerCancel() {
+    // Reuses the existing `model_cancel_download` IPC keyed by id;
+    // `AppState::downloads` is shared between the Whisper picker
+    // and the diarizer downloader, so the same cancel path works.
+    // The download task notices the flag on its next chunk
+    // boundary and exits via `model:download-failed` (an empty-
+    // looking failure message is the convention; the Whisper
+    // picker treats it the same way).
+    try {
+      await invoke("model_cancel_download", { id: "wespeaker-resnet34-lm" });
+    } catch (err) {
+      // Cancel itself failing is exotic — just surface for debugging.
+      console.warn("[hush] model_cancel_download failed", err);
+    }
+  }
+
   async function onResetFirstRun() {
     firstRunResetBusy = true;
     try {
@@ -1158,35 +1174,62 @@
               SHA-256; the toggle below has no effect until this
               completes.
             </p>
-            <button
-              type="button"
-              class="diarizer-download-button"
-              data-testid="diarizer-download-button"
-              disabled={diarizerDownloadBusy}
-              onclick={onDiarizerDownload}
-            >
-              {#if diarizerDownloadBusy}
-                {#if diarizerDownloadProgress?.total}
-                  Downloading… {Math.round(
-                    (100 * diarizerDownloadProgress.received) /
-                      diarizerDownloadProgress.total,
-                  )}%
+            <div class="diarizer-download-row">
+              <button
+                type="button"
+                class="diarizer-download-button"
+                data-testid="diarizer-download-button"
+                disabled={diarizerDownloadBusy}
+                onclick={onDiarizerDownload}
+              >
+                {#if diarizerDownloadBusy}
+                  {#if diarizerDownloadProgress?.total}
+                    Downloading… {Math.round(
+                      (100 * diarizerDownloadProgress.received) /
+                        diarizerDownloadProgress.total,
+                    )}%
+                  {:else}
+                    Downloading…
+                  {/if}
                 {:else}
-                  Downloading…
+                  Download speaker model ({diarizerModelStatus.sizeMb} MB)
                 {/if}
-              {:else}
-                Download speaker model ({diarizerModelStatus.sizeMb} MB)
+              </button>
+              {#if diarizerDownloadBusy}
+                <button
+                  type="button"
+                  class="ghost danger"
+                  data-testid="diarizer-cancel-button"
+                  onclick={onDiarizerCancel}
+                >
+                  Cancel
+                </button>
               {/if}
-            </button>
+            </div>
             {#if diarizerDownloadError}
               <p class="settings-error" data-testid="diarizer-download-error">
                 {diarizerDownloadError}
               </p>
             {/if}
+            <!--
+              Manual-drop escape hatch (audit-2). Corp networks that
+              block huggingface.co can't use the Download button;
+              surface the expected path so the user can drop the
+              file there manually. Same affordance the Whisper
+              picker provides via `expectedPath` on its cards.
+            -->
+            <details class="diarizer-manual-install">
+              <summary>Or install manually</summary>
+              <p class="settings-row-desc">
+                Drop <code>{diarizerModelStatus.expectedPath}</code> with
+                SHA-256 <code>{diarizerModelStatus.sha256}</code>. Restart
+                Hush to load it.
+              </p>
+            </details>
           </div>
         {:else if diarizerModelStatus?.downloaded}
           <p class="settings-row-desc" data-testid="diarizer-model-ready">
-            Speaker model installed and verified.
+            Speaker model installed.
           </p>
         {/if}
 
