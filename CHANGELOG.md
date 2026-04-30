@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(Nothing yet — post-v0.2.0 work lands here.)
+### Added
+
+- **Speaker diarization (D2)** — opt-in per-speaker labels in
+  meeting transcripts ("Speaker 1", "Speaker 2", …) via the
+  wespeaker ResNet34-LM ONNX model. Settings → Meeting → Speakers
+  toggle persists; first-time enable auto-downloads the 26 MB
+  model from Hugging Face (SHA-256 verified) and hot-swaps the
+  diarizer without an app restart. Falls back to the existing
+  source-tagged You / Remote labels when off or when the model
+  isn't available. New `diarization-onnx` Cargo feature
+  (default-on) gates the ort runtime + ndarray + realfft deps;
+  contributors building `--no-default-features` skip the
+  ~50 MB ORT vendored libs. Closes #111. PRs #295, #296, #297,
+  #298, #299, #300 (initial chain) + #303, #304, #305 (audit
+  follow-up: per-tick cluster-stability fix, in-app download,
+  Playwright coverage).
+
+### Fixed
+
+- Settings → Meeting → Speakers errors are no longer hidden by
+  the post-failure refresh (`loadDiarizationEnabled` was
+  clobbering `diarizationError` on a successful read; the setter
+  now owns that field exclusively). Caught by #302 e2e.
 
 ## [0.2.0] - 2026-04-30
 

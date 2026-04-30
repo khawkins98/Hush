@@ -61,7 +61,7 @@ Meeting Mode is **opt-in per app**. The first time the user runs a meeting (Zoom
 
 Streaming transcription depends on either the Whisper.cpp sliding-window pattern or Parakeet (the streaming-friendly second engine — see §5). Whichever ships first is the v1.x default; the other becomes a settable preference.
 
-Diarization (per-speaker labels) starts as a coarse mic-vs-system distinction (Granola-style "Me" / "Them" — different colour bubbles for the two streams, no real voice separation). Real diarization (energy-based then model-based via ONNX) ships later as a swap-in via the existing trait-seam pattern; the v1.x release does not gate on it.
+Diarization (per-speaker labels) ships in two layers. **Default off:** the source-tagged "You" / "Remote" view (Granola-style; mic = You, system audio = Remote). **Opt-in (Settings → Meeting → Speakers):** model-based per-speaker labels — utterances run through an ONNX speaker-embedding model (wespeaker ResNet34-LM, 26 MB, auto-downloaded on first enable, SHA-256 verified). Cluster IDs are stable across pump ticks via online 1-NN-with-threshold matching, so the speaker who's "Speaker 1" early in a meeting stays "Speaker 1" throughout. Closed in #111 (PR chain #295–#300 + audit follow-ups #303–#305). The trait-seam (`Diarize`) and `FlagGatedDiarizer` wrapper survive for any future swap-ins (e.g. a smaller / larger speaker model).
 
 **Privacy guarantee:** audio is buffered in RAM for ~30 s during inference and discarded. No WAV files, no SQLite blobs, no temp files. The Sessions panel surfaces this guarantee permanently, not as a one-time banner.
 
@@ -78,7 +78,7 @@ Phased delivery (each phase independently shippable; tracked under #33):
 - **Phase A** — System audio capture per platform. macOS via ScreenCaptureKit (#105), Linux via PulseAudio monitor (#106), Windows via WASAPI loopback (#107).
 - **Phase B** — Streaming transcription (#108). Whisper sliding-window first; Parakeet later.
 - **Phase C** — Sessions + meeting-mode UI (#110). Foundation (data layer + IPC + scaffolded panel) shipped post-v0.1.0.
-- **Phase D** — Diarization (#111). Mic-vs-system bubble UI ships in Phase C; real per-speaker labels here.
+- **Phase D** — Diarization (#111). Mic-vs-system bubble UI ships in Phase C; real per-speaker labels via wespeaker ONNX shipped 2026-04-30 across #295–#300 + audit follow-ups #303–#305.
 - **Phase E** — Per-app classifier policy refinement (#112).
 
 Design memo at `docs/system-audio-meeting-mode-proposal.md`. The privacy framing draws from Granola's "transcribes, doesn't record" stance; the consent-on-new-voice framing from Limitless's pendant.
