@@ -138,6 +138,17 @@ impl AudioRollingBuffer {
         let max_samples = ms_to_samples(MAX_BUFFER_MS);
         if self.samples.len() > max_samples {
             let drop_count = self.samples.len() - max_samples;
+            // Zeroize the slots *before* `drain` shifts them out
+            // of the live window (audit-2). Without this, the
+            // dropped bytes sit in the VecDeque's backing buffer
+            // until something else writes over them — defeating
+            // the privacy-on-Drop contract for samples that left
+            // the live window mid-session. The `for` loop here is
+            // bounded by `drop_count` which is at most a tick's
+            // worth (~500 ms = 8000 samples) — sub-millisecond.
+            for sample in self.samples.iter_mut().take(drop_count) {
+                sample.zeroize();
+            }
             self.samples.drain(..drop_count);
             self.dropped_ms = self.dropped_ms.saturating_add(samples_to_ms(drop_count));
         }
