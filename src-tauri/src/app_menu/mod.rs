@@ -152,26 +152,46 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 if let Err(e) = app.emit("settings:goto-tab", "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
-                tauri::async_runtime::spawn(async move {
-                    use tauri::Manager as _;
-                    let state = app_handle.state::<crate::ipc::AppState>();
-                    match crate::updater::check_for_updates(&state.http).await {
-                        Ok(result) => {
-                            if let Err(e) = app_handle.emit("updater:result", &result) {
+                // Inflight guard — review #3 caught that rapid
+                // double-clicks would spawn two parallel probes,
+                // each emitting `updater:result` and each burning
+                // a slot from GitHub's 60/hr unauthenticated rate
+                // limit. Skip the spawn if a probe is already
+                // running. AcqRel cmpxchg pairs with the Release
+                // store at task end so the next click sees a
+                // freshly-cleared flag only after the previous
+                // emit landed.
+                use std::sync::atomic::{AtomicBool, Ordering};
+                static PROBE_INFLIGHT: AtomicBool = AtomicBool::new(false);
+                if PROBE_INFLIGHT
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    tauri::async_runtime::spawn(async move {
+                        use tauri::Manager as _;
+                        let state = app_handle.state::<crate::ipc::AppState>();
+                        let outcome = crate::updater::check_for_updates(&state.http).await;
+                        PROBE_INFLIGHT.store(false, Ordering::Release);
+                        match outcome {
+                            Ok(result) => {
+                                if let Err(e) = app_handle.emit("updater:result", &result) {
+                                    tracing::warn!(
+                                        error = ?e,
+                                        "menu check-for-updates: emit result failed"
+                                    );
+                                }
+                            }
+                            Err(e) => {
                                 tracing::warn!(
                                     error = ?e,
-                                    "menu check-for-updates: emit result failed"
+                                    "menu check-for-updates: probe failed"
                                 );
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = ?e,
-                                "menu check-for-updates: probe failed"
-                            );
-                        }
-                    }
-                });
+                    });
+                } else {
+                    tracing::debug!("menu check-for-updates: probe already in flight; skipping");
+                }
             }
             id if id.starts_with("goto-") => {
                 let section = id.trim_start_matches("goto-").to_owned();

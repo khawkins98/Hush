@@ -1017,10 +1017,10 @@
           {/each}
         </ul>
         <p class="perm-recovery-intro">
-          Stuck? Open the diagnostic below to reset all four
+          Stuck? Open the diagnostic below to reset all three
           permission grants (Microphone, Screen Recording, Input
-          Monitoring, Accessibility) at once, or learn why a
-          permission row might not appear in System Settings.
+          Monitoring) at once, or learn why a permission row might
+          not appear in System Settings.
         </p>
         <MacosDiagnosticPanel
           {macosDiagnostic}
@@ -1040,7 +1040,13 @@
       <h2 class="tab-title">About</h2>
       <section class="about-tab">
         <header class="about-header">
-          <h2 class="about-name">{appName}</h2>
+          <!--
+            App name is subordinate to the "About" tab title (H2),
+            so it's H3. Pre-fix it was a sibling H2 — two H2s with
+            no semantic relationship was a hierarchy violation
+            flagged in review #3.
+          -->
+          <h3 class="about-name">{appName}</h3>
           {#if appVersion}
             <p class="about-version">Version {appVersion}</p>
           {/if}
@@ -1066,6 +1072,7 @@
             data-testid="settings-check-updates"
             disabled={updateChecking}
             onclick={onCheckForUpdates}
+            aria-label="Check for application updates"
           >
             {updateChecking ? "Checking…" : "Check for updates"}
           </button>
@@ -1087,7 +1094,16 @@
                 >Open release notes</a>.
               </p>
             {:else if updateCheck.kind === "checkFailed"}
+              <!--
+                Bare `reason` strings (e.g. "Try again in a few
+                minutes.") read as fragmentary without a headline.
+                With #281 the same surface now lights up from a
+                menu click (potentially while the user's attention
+                is elsewhere); the bold lead anchors what the
+                paragraph is about.
+              -->
               <p class="about-update-result about-update-failed" role="status">
+                <strong>Couldn't check for updates.</strong>
                 {updateCheck.reason}
               </p>
             {/if}

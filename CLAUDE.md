@@ -164,7 +164,7 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 ### Backend (`src-tauri/src/`)
 
 - `audio/` — cpal mic + SCK system-audio + the `AudioSession` handle trait.
-- `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (host-restricted to huggingface.co, SHA-256 verified), resample helpers, model catalog.
+- `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (origin-restricted to huggingface.co — `ipc/mod.rs::redirect_decision` allows a hop to any HTTPS host when the previous URL was on an HF host so HF→signed-CDN chains work; SHA-256 verified), resample helpers, model catalog.
 - `meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection. `app_overrides` submodule persists per-app classifier overrides (#112) consulted at every session start.
 - `diarization/` — `Diarize` trait + `EnergyDiarizer` (D1 silence-gap heuristic; on disk but **not** wired) + `NoopDiarizer` (wired in production as of #243). The cross-source merge collapsed D1 to "Speaker A" everywhere when mic + system audio were both captured; reverted to source-only labels until D2 (model-based ONNX speaker embeddings, #111) lands. `dispatch_utterances` stamps the source-derived label via `AudioSource::speaker_tag()` (single source of truth: `"mic"` / `"system"`); the panel maps that to "You" / "Remote".
 - `ipc/` — `AppState`, `AppStateBuilder`, `IpcError`. `commands/` is now a directory: `mod.rs` holds dictation / history / replacements / vocabulary / models / app commands; `commands/meeting.rs` holds the meeting-mode commands + types + sanitiser (extracted under #82). New domain-cohesive command groups should follow the same submodule pattern.
