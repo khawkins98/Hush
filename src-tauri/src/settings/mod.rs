@@ -93,6 +93,16 @@ pub mod keys {
     /// default; nobody wants their mic to spontaneously turn on
     /// because of a bad settings row.
     pub const MEETING_AUTOSTART_MODE: &str = "meeting_autostart_mode";
+
+    /// Whether speaker diarization should run on meeting transcripts.
+    /// Stored as `"true"` / `"false"`; absent means "off" — the safer
+    /// default until the ONNX model + download pipeline lands in PR-B
+    /// of #111. The foundation PR ships the user-visible plumbing
+    /// (this setting key + IPC + UI toggle) so the model-download
+    /// follow-up can flip the default without churn. When off, the
+    /// existing source-derived `"mic"` / `"system"` labels stand in
+    /// for proper speaker IDs.
+    pub const DIARIZATION_ENABLED: &str = "diarization_enabled";
 }
 
 /// Repository trait at the storage boundary.

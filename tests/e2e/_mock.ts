@@ -56,6 +56,12 @@ export async function installMocks(
       // the dropdown override per-test.
       get_meeting_autostart_mode: () => "off",
       set_meeting_autostart_mode: () => undefined,
+      // Diarization toggle (Settings → Meeting → Speakers, #111).
+      // Default matches the backend's "off" default; the foundation
+      // PR ships the toggle only — production diarizer is still
+      // NoopDiarizer until PR-B.
+      get_diarization_enabled: () => false,
+      set_diarization_enabled: () => undefined,
       // Manual update probe (#223). Default to "up to date" so
       // specs that don't override get a stable result if the
       // user clicks the button.

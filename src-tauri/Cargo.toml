@@ -139,6 +139,12 @@ default = ["whisper"]
 # Enable the whisper transcription backend (requires cmake).
 whisper = ["dep:whisper-rs"]
 
+# Reserved for the D2 speaker-diarization ONNX backend (#111).
+# Foundation PR ships the user-visible plumbing only — settings
+# toggle, IPC commands, frontend UI. PR-B adds the `ort` dep
+# (Microsoft ONNX Runtime), the `OnnxDiarizer` impl, and the
+# model-download integration. Default-on once the impl exists.
+
 [dev-dependencies]
 tempfile = "3"
 # Local HTTP mock server for the auto-download test suite. The download

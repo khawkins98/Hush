@@ -333,6 +333,19 @@ pub struct AppState {
     /// cheap, but matching the existing pattern (`hud_enabled`,
     /// `ptt_active`) is consistent.
     pub meeting_autostart_mode: Arc<std::sync::atomic::AtomicU8>,
+    /// Whether speaker diarization should label utterances during
+    /// meeting capture. Read by the meeting pump's dispatch path so
+    /// the toggle takes effect on the next chunk without restarting
+    /// the session. Stored as an `AtomicBool` so the read is lock-
+    /// free; flipped by `set_diarization_enabled`, which also writes
+    /// the `diarization_enabled` settings row.
+    ///
+    /// Foundation-PR scope (#111): the flag is plumbed end-to-end
+    /// (settings row → AppState → IPC → frontend toggle) but the
+    /// production diarizer is still `NoopDiarizer`. PR-B swaps in
+    /// `OnnxDiarizer` and reads this flag at dispatch to decide
+    /// whether to run inference.
+    pub diarization_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Encode [`crate::meeting::MeetingAutostartMode`] into the
@@ -396,6 +409,7 @@ pub struct AppStateBuilder {
     hud_enabled: Option<bool>,
     sound_cues_enabled: Option<bool>,
     meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
+    diarization_enabled: Option<bool>,
 }
 
 impl AppStateBuilder {
@@ -498,6 +512,11 @@ impl AppStateBuilder {
 
     pub fn meeting_autostart_mode(mut self, mode: crate::meeting::MeetingAutostartMode) -> Self {
         self.meeting_autostart_mode = Some(mode);
+        self
+    }
+
+    pub fn diarization_enabled(mut self, enabled: bool) -> Self {
+        self.diarization_enabled = Some(enabled);
         self
     }
 
@@ -604,6 +623,9 @@ impl AppStateBuilder {
                         .unwrap_or(crate::meeting::MeetingAutostartMode::Off),
                 ),
             )),
+            diarization_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                self.diarization_enabled.unwrap_or(false),
+            )),
         })
     }
 }
@@ -669,6 +691,17 @@ pub(crate) fn parse_hud_enabled_setting(raw: Option<String>) -> bool {
 /// are off by default — they'd be intrusive in shared spaces /
 /// meeting rooms, opt-in is the right shape).
 pub(crate) fn parse_sound_cues_setting(raw: Option<String>) -> bool {
+    matches!(raw.as_deref(), Some("true"))
+}
+
+/// Parse the persisted [`crate::settings::keys::DIARIZATION_ENABLED`]
+/// row (#111). Encoding is `"true"` / `"false"`; absent rows + any
+/// other value fall back to `false` — diarization is opt-in until the
+/// PR-B model-download flow lands. A corrupted row shouldn't silently
+/// turn it on either, since the production diarizer in this PR is
+/// `NoopDiarizer` and a `true` setting would be misleading until the
+/// real impl arrives.
+pub(crate) fn parse_diarization_enabled_setting(raw: Option<String>) -> bool {
     matches!(raw.as_deref(), Some("true"))
 }
 
@@ -840,6 +873,19 @@ impl AppState {
                 .as_deref(),
         );
 
+        // Diarization — off by default (#111). Foundation PR ships
+        // the toggle + plumbing only; the production diarizer is
+        // still NoopDiarizer, so even a `true` row results in
+        // source-derived "mic"/"system" labels until PR-B wires the
+        // ONNX backend.
+        let diarization_enabled = parse_diarization_enabled_setting(
+            settings
+                .get(crate::settings::keys::DIARIZATION_ENABLED)
+                .await
+                .ok()
+                .flatten(),
+        );
+
         AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
@@ -857,6 +903,7 @@ impl AppState {
             .hud_enabled(hud_enabled)
             .sound_cues_enabled(sound_cues_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
+            .diarization_enabled(diarization_enabled)
             .build()
     }
 }
@@ -1619,6 +1666,26 @@ mod tests {
         assert!(parse_hud_enabled_setting(Some("".into())));
         assert!(parse_hud_enabled_setting(Some("True".into())));
         assert!(parse_hud_enabled_setting(Some("FALSE".into())));
+    }
+
+    #[test]
+    fn parse_diarization_enabled_setting_handles_all_branches() {
+        // Absent row → off. Diarization is opt-in until PR-B
+        // ships the model + download path; a missing row must not
+        // imply "on" or the foundation PR's NoopDiarizer would
+        // make a `true` setting misleading.
+        assert!(!parse_diarization_enabled_setting(None));
+        // Literal "true" → on. The only string that turns it on.
+        assert!(parse_diarization_enabled_setting(Some("true".into())));
+        // Literal "false" → off.
+        assert!(!parse_diarization_enabled_setting(Some("false".into())));
+        // Anything else falls through to off — corrupted rows
+        // shouldn't silently enable a feature that costs a model
+        // download.
+        assert!(!parse_diarization_enabled_setting(Some("garbage".into())));
+        assert!(!parse_diarization_enabled_setting(Some("".into())));
+        assert!(!parse_diarization_enabled_setting(Some("True".into())));
+        assert!(!parse_diarization_enabled_setting(Some("1".into())));
     }
 
     #[test]
