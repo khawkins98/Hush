@@ -2,7 +2,9 @@
 
 **Offline voice-to-text for macOS, Windows, and Linux.**
 
-Hush records your voice, transcribes it locally using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) (via `whisper-rs`), and places the text on your clipboard — ready to paste wherever you need it. Transcription happens on-device — no audio leaves your machine. No telemetry by default. The only network traffic is the one-time download of the Whisper model from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) the first time you pick one; after that, transcription is fully offline.
+Hush is a desktop dictation + meeting-transcription app. It records your voice, transcribes it locally using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) (via `whisper-rs`), and places the text on your clipboard — ready to paste wherever you need it. Transcription happens on-device — no audio leaves your machine. No telemetry by default. The only network traffic is the one-time download of the Whisper model from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) the first time you pick one; after that, transcription is fully offline.
+
+Built on [Tauri 2](https://tauri.app/) — a Rust backend with a web-tech UI, packaged as a native app on each OS — so a single codebase ships for macOS, Windows, and Linux. See the [platform-support table](#platform-support--honest-version) for what's actually hands-on tested.
 
 > **Hush is a behavioural reimplementation of [VoiceInk](https://github.com/Beingpax/VoiceInk).** No source code was copied or referenced. See [Acknowledgements](#acknowledgements).
 
@@ -60,9 +62,9 @@ Hush records your voice, transcribes it locally using [whisper.cpp](https://gith
 |---|---|---|
 | **macOS 26** | Primary target. Daily-driven. PTT is on by default (#194); the Input Monitoring prompt fires at first launch. Disable in Settings → General → Hotkeys if not wanted. | ✅ Yes |
 | **macOS ≤ 15** | Not directly supported. Code may compile and run, but the maintainer does not test against older macOS, will not gate features on older-macOS APIs, and bug reports against older versions are best-effort. | ❌ Not supported |
-| **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ❌ Not hands-on tested |
-| **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ❌ Not hands-on tested |
-| **Windows** | Built and published in the release pipeline (`.msi` + `.exe`). Code is cross-platform but the maintainer doesn't run it day-to-day; bug reports against the Windows build are best-effort. | ❌ Not hands-on tested |
+| **Linux (X11)** | Theoretically supported. Code is cross-platform; CI builds + tests on `ubuntu-latest`. | ⚠️ Not hands-on tested |
+| **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ⚠️ Not hands-on tested |
+| **Windows** | Built and published in the release pipeline (`.msi` + `.exe`). Code is cross-platform but the maintainer doesn't run it day-to-day; bug reports against the Windows build are best-effort. | ⚠️ Not hands-on tested |
 
 **Linux and Windows hands-on contributions are welcome.** If you run Hush on either and something is broken, file an issue with steps to reproduce + your platform version. Build prerequisites are in [`CONTRIBUTING.md`](./CONTRIBUTING.md). PRs that fix platform-specific gaps are exactly the right contribution shape — small, scoped, and address a real reported bug.
 

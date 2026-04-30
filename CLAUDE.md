@@ -147,17 +147,13 @@ CI does not run a real Tauri runtime. A panic at app boot (plugin init, capabili
 
 ## macOS TCC dev-binary quirk
 
-`cargo tauri dev` produces a bare unsigned binary at `target/debug/hush`, not a `.app` bundle. macOS TCC (the privacy-permission system gating Microphone, Screen Recording, Input Monitoring) attributes requests from such binaries to the **parent process** — usually the iTerm / Terminal that launched `npm run tauri dev`. Hush never appears in System Settings → Privacy & Security under its own name; iTerm does, and any grant the user hands iTerm covers Hush's mic access too.
-
-Mic and Input Monitoring fall through this parent-attribution path and work fine. **Screen Recording is stricter** — SCK requires the calling binary to be its own TCC entry, not a child of one. The dev binary effectively can't access SCK no matter how many bits we add to its embedded Info.plist (CFBundleIdentifier, NSScreenCaptureUsageDescription, etc. — all helpful, none sufficient).
-
-For SCK / Screen Recording / system-audio testing, use:
+The short version: `cargo tauri dev` builds an unsigned binary that TCC attributes to the parent terminal, so Microphone / Input Monitoring leak through but **Screen Recording (SCK / system-audio) does not**. For anything that touches SCK, build the real bundle:
 
     npm run tauri:bundle
 
-That builds a real `.app` at `src-tauri/target/debug/bundle/macos/Hush.app` and opens it. macOS treats it as a proper app, prompts cleanly with the description from `src-tauri/Info.plist`, and persists the grant across re-bundles of the same path. See `learnings.md` 2026-04-27 entry for the full background.
+Stale `Hush.app` rows after rebuilds are recovered via Settings → Permissions → Reset permissions inside Hush, then `−` on the System Settings rows, then relaunch.
 
-**Iterating across rebuilds — stale TCC rows.** Each `npm run tauri:bundle` produces an ad-hoc-signed `.app`; the signing identity is derived from the binary contents and changes every rebuild. macOS can end up with multiple `Hush.app` rows in System Settings → Privacy & Security under different identities, and the wrong row may "win" — Hush gets blocked silently with no fresh prompt. Recovery: **Settings → Permissions → Reset permissions** in Hush (resets the three TCC categories Hush actually requests: Microphone, ScreenCapture, ListenEvent — Accessibility was previously included but Hush legitimately doesn't request it, removed in #273), then in System Settings click the `−` button at the bottom of any pane that still lists a `Hush.app` row, then relaunch the bundle. The per-row **"Grant in Settings…"** buttons on the Permissions tab deep-link straight to the correct pane. Full recipe: `docs/macos-permissions.md` "Dev-loop: stale Hush.app rows after a re-bundle."
+The full reasoning, symptom-by-symptom recovery recipes, and the "Dev-loop: stale Hush.app rows after a re-bundle" recipe live in [`docs/macos-permissions.md`](./docs/macos-permissions.md). `learnings.md` 2026-04-27 has the original investigation.
 
 ## Conventions
 
@@ -196,7 +192,7 @@ Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/V
 - `lib/errors.ts` — `ErrorDisplay` shape + `formatErrorDisplay` / `formatErrorMessage` helpers. Single place to map an `IpcError` variant (or a thrown `Error`) into the headline / hint / details rendered by `ErrorDisplay.svelte`.
 - `app.css` — global stylesheet imported by every route via `+layout.svelte`. Hosts the accent CSS custom properties (`--accent`, `--accent-hover`) used across components.
 - `routes/+layout.svelte` — markup-free layout that imports `app.css`. SvelteKit requires a layout file to apply a global stylesheet to every route.
-- `routes/+page.svelte` — main window; orchestrates Dictation / Meetings / History sections. ~1.2k LOC; tracked under #156. Does NOT own model picker, vocabulary, replacements, or macOS-permissions diagnostic state — those live in the Settings window. Recent extractions: `FirstRunModal` + `MacosPermsPill` (#212).
+- `routes/+page.svelte` — main window; orchestrates Dictation / Meetings / History sections. ~1.2k LOC. Does NOT own model picker, vocabulary, replacements, or macOS-permissions diagnostic state — those live in the Settings window. Further extraction (meeting state into a composable) is the next natural step if a contributor finds navigation friction.
 - `routes/settings/+page.svelte` — standalone Settings window. State-owner for the moved panels. Cross-window invalidation is event-driven where it matters (`model:download-done` is broadcast; replacements/vocab changes are picked up at the next `start_dictation`).
 - `routes/hud/+page.svelte` — recording HUD pill. Loaded into the secondary `hud` window.
 - `app.html` — page shell.

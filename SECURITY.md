@@ -36,7 +36,7 @@ The only outbound network traffic is the Whisper model download triggered explic
 - **Host-restricts redirects** to `huggingface.co` and its subdomains. Cross-origin redirects fail closed before any bytes transfer to a foreign host.
 - **Caps redirect depth** at 4 hops.
 - **Verifies SHA-256** of the downloaded bytes against a value embedded in the static catalog before the file is moved into the models directory. A failed hash deletes the partial file and surfaces an error to the user.
-- **Refuses to download** any model whose catalog entry has an empty SHA-256 string. Hash backfill is tracked publicly as issue #41.
+- **Refuses to download** any model whose catalog entry has an empty SHA-256 string. (All shipped catalog entries carry a verified hash; #41 closed 2026-04-26.)
 
 ### No telemetry
 

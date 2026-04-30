@@ -3,10 +3,9 @@
 Run this checklist before every tagged release on each supported platform.
 
 ## Platforms
-- [ ] macOS 14+ (Apple Silicon)
-- [ ] macOS 14+ (Intel)
-- [ ] Windows 11 x64
-- [ ] Ubuntu 24.04
+- [ ] macOS 26 (Apple Silicon — primary target; Intel and macOS ≤ 15 out of scope)
+- [ ] Windows 11 x64 (best-effort — not hands-on tested by the maintainer)
+- [ ] Ubuntu 24.04 (best-effort — not hands-on tested by the maintainer)
 
 ## Steps
 
