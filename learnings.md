@@ -173,6 +173,8 @@ Three decisions worth pinning while the auto-download is the freshest network su
 
 ## 2026-04-25 — CSP disabled for the dev minimum, document the trade
 
+> **Update (2026-04-30, #282 / #267):** the trade flipped. `csp:` is now set to a strict policy: `default-src 'self' tauri'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost tauri: https://api.github.com`. `'unsafe-inline'` on `style-src` is required by SvelteKit's scoped-CSS injection (verified — every other source restricts to `'self'`). `connect-src https://api.github.com` is the only outbound network host whitelisted (the updater probe in `updater::check_for_updates`); model downloads go through Rust's reqwest, not the webview, so they don't need a CSP allowance. Any new outbound host the webview talks to needs a `connect-src` edit. The original argument below stays as historical context for what the trade-off looked like before the policy was filled in.
+
 Tauri's `csp: null` (in `src-tauri/tauri.conf.json`) opts the webview out of Content-Security-Policy enforcement. The round-1 security review flagged it as `[MED]` for an eventual public release — without CSP, an XSS via user-supplied content in the webview would have less defence. For where Hush is right now this is acceptable:
 
 - The frontend never injects user-supplied HTML (`innerHTML` is unused; everything binds via Svelte's escape-by-default pipeline).

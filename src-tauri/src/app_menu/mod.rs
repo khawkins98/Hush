@@ -152,27 +152,37 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 if let Err(e) = app.emit("settings:goto-tab", "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
-                // Inflight guard — review #3 caught that rapid
-                // double-clicks would spawn two parallel probes,
-                // each emitting `updater:result` and each burning
-                // a slot from GitHub's 60/hr unauthenticated rate
-                // limit. Skip the spawn if a probe is already
-                // running. AcqRel cmpxchg pairs with the Release
-                // store at task end so the next click sees a
-                // freshly-cleared flag only after the previous
-                // emit landed.
+                // Inflight guard — rapid double-clicks would
+                // otherwise spawn two parallel probes, each
+                // emitting `updater:result` and each burning a slot
+                // from GitHub's 60/hr unauthenticated rate limit.
+                // RAII guard so a panic inside the spawned task
+                // (or a runtime abort) still clears the flag —
+                // pre-fix a bare `store(false)` after the await
+                // could be skipped, leaving the flag stuck `true`
+                // and silently disabling the menu item for the
+                // rest of the process lifetime (review #4 R-3).
                 use std::sync::atomic::{AtomicBool, Ordering};
                 static PROBE_INFLIGHT: AtomicBool = AtomicBool::new(false);
+                struct InflightGuard;
+                impl Drop for InflightGuard {
+                    fn drop(&mut self) {
+                        PROBE_INFLIGHT.store(false, Ordering::Release);
+                    }
+                }
                 if PROBE_INFLIGHT
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
                     tauri::async_runtime::spawn(async move {
+                        // Holding `_guard` for the task body
+                        // ensures Drop runs whether we exit via
+                        // normal completion, await cancellation,
+                        // or panic unwind.
+                        let _guard = InflightGuard;
                         use tauri::Manager as _;
                         let state = app_handle.state::<crate::ipc::AppState>();
-                        let outcome = crate::updater::check_for_updates(&state.http).await;
-                        PROBE_INFLIGHT.store(false, Ordering::Release);
-                        match outcome {
+                        match crate::updater::check_for_updates(&state.http).await {
                             Ok(result) => {
                                 if let Err(e) = app_handle.emit("updater:result", &result) {
                                     tracing::warn!(
