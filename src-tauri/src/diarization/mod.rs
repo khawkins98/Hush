@@ -62,6 +62,8 @@
 use crate::audio::CaptureFormat;
 use crate::transcription::Utterance;
 
+pub mod cluster;
+
 /// Tag a batch of utterances with speaker labels in place.
 ///
 /// Called by the meeting pump after each batch of finals lands from
