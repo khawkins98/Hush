@@ -640,10 +640,15 @@ impl SessionManager {
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
+        // `started_at` here populates `ActiveSession.started_at`
+        // (used by the pump to anchor utterance offsets and
+        // prevent drift across out-of-order chunk completions).
+        // This is *not* the same field that #253 removed from
+        // `PumpContext` — that one was unused; this one is
+        // load-bearing.
         let started_at = Instant::now();
         let pump_handle = tokio::spawn(run_pump(PumpContext {
             session_id: session.id,
-            session_started_at: started_at,
             repo: Arc::clone(&self.repo),
             sources: sources.clone(),
             handles,
@@ -784,10 +789,11 @@ impl SessionManager {
         };
 
         // Cumulative-end-of-last-utterance scheme (the original
-        // legacy behavior). The pump path uses absolute offsets
-        // computed from `session_started_at`; this hotkey-dictation
-        // path doesn't have access to a comparable wall-clock so it
-        // anchors at the previous utterance's end.
+        // legacy behavior). The streaming pump uses offsets
+        // produced by each session's internal clock; this
+        // hotkey-dictation path doesn't have access to a
+        // comparable per-session wall-clock so it anchors at the
+        // previous utterance's end.
         let utterances = self.repo.list_utterances(id).await?;
         let next_start = utterances.last().map(|u| u.ended_at_ms).unwrap_or(0);
 
@@ -872,12 +878,6 @@ impl Drop for SessionManager {
 /// `streaming_sessions` correspond to the same source.
 struct PumpContext {
     session_id: i64,
-    /// Wall-clock start of the session. Not currently read by the
-    /// streaming pump — utterance offsets come from the streaming
-    /// session's internal clock — but kept for parity with the
-    /// pre-#108 path and for any future "session age" diagnostics.
-    #[allow(dead_code)]
-    session_started_at: Instant,
     repo: Arc<dyn MeetingSessionRepository>,
     sources: Vec<AudioSource>,
     handles: Vec<Box<dyn AudioSession>>,

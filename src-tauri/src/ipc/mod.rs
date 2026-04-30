@@ -1186,6 +1186,12 @@ mod tests {
         async fn set_notes(&self, _: i64, _: Option<String>) -> anyhow::Result<()> {
             Ok(())
         }
+        async fn get_by_id(
+            &self,
+            _: i64,
+        ) -> anyhow::Result<Option<crate::meeting::MeetingSession>> {
+            Ok(None)
+        }
     }
 
     /// Test mock for the meeting-app overrides repo (#112). Returns

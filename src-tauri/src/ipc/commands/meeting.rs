@@ -76,15 +76,16 @@ pub async fn meeting_session_get(
     state: State<'_, AppState>,
     id: i64,
 ) -> IpcResult<MeetingSessionDetail> {
-    let sessions = state
+    // Single-row PK lookup (#253) — pre-fix this loaded every
+    // session row with `list()` and ran a linear `find` on the
+    // result, scaling O(N) over the user's entire meeting
+    // history per detail-panel open.
+    let session = state
         .data
         .meetings
-        .list()
+        .get_by_id(id)
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("session get: {e:#}")))?;
-    let session = sessions
-        .into_iter()
-        .find(|s| s.id == id)
+        .map_err(|e| IpcError::MeetingSessions(format!("session get: {e:#}")))?
         .ok_or_else(|| IpcError::MeetingSessions(format!("session {id} not found")))?;
     let utterances = state
         .data
