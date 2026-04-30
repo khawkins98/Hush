@@ -209,6 +209,7 @@ export async function installMocks(
         utteranceCount: 0,
         notes: null,
         sources: ["mic", "system"],
+        appTitle: null,
       }),
       meeting_stop_manual: () => undefined,
 
