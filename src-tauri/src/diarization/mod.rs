@@ -64,6 +64,13 @@ use crate::transcription::Utterance;
 
 pub mod catalog;
 pub mod cluster;
+// `features` (Mel-Filterbank extraction) and `onnx` are only used
+// by the OnnxDiarizer impl. Gating both behind the
+// `diarization-onnx` feature keeps `realfft` (the only dep used
+// by `features`) out of `--no-default-features` builds. Audit
+// review of the #111 chain flagged the unconditional `realfft`
+// pull as wasted build cost when the diarizer feature is off.
+#[cfg(feature = "diarization-onnx")]
 pub mod features;
 #[cfg(feature = "diarization-onnx")]
 pub mod onnx;
