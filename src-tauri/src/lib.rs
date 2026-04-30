@@ -56,7 +56,16 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![]),
+            // Pass `--background` so the LaunchAgent-fired launch
+            // is distinguishable from a user-initiated launch
+            // (#268). The setup hook hides the main window and
+            // sets the activation policy to Accessory when this
+            // arg is present, matching the silent-tray-launch
+            // behaviour every macOS background utility uses.
+            // User-initiated launches via Finder / Spotlight
+            // don't pass it, so they show the main window
+            // normally.
+            Some(vec!["--background"]),
         ))
         // Updater plugin is deferred until #10 — registering it without a
         // `plugins.updater` block in tauri.conf.json (pubkey + endpoints)
@@ -128,6 +137,67 @@ pub fn run() {
             tauri::async_runtime::block_on(state.meeting_manager.reconcile_orphan_sessions());
 
             app.manage(state);
+
+            // Hide-on-close for main + settings (#263). Tauri 2's
+            // default destroys the window on red-✕; combined with
+            // `exitOnLastWindowClose: false` (set in
+            // tauri.conf.json), the user could close the main
+            // window expecting it to hide and find Hush had quit
+            // (tray icon gone), or close Settings and find that
+            // ⌘, no longer reopens it (window is destroyed, only
+            // re-creatable on app restart). Both flows now
+            // intercept CloseRequested and call `hide()` instead.
+            //
+            // Done from setup so the handlers are wired before
+            // any user interaction can fire CloseRequested. The
+            // closures clone the window handle so they outlive
+            // setup; that's the standard pattern Tauri expects.
+            for label in ["main", "settings"] {
+                if let Some(window) = app.get_webview_window(label) {
+                    let win_clone = window.clone();
+                    window.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            if let Err(e) = win_clone.hide() {
+                                tracing::warn!(
+                                    label = %win_clone.label(),
+                                    error = ?e,
+                                    "hide-on-close failed; falling through to default destroy"
+                                );
+                                api.prevent_close(); // belt-and-braces
+                            }
+                        }
+                    });
+                } else {
+                    tracing::warn!(
+                        label,
+                        "hide-on-close: window not found at setup time; close defaults to destroy"
+                    );
+                }
+            }
+
+            // Background-launch behaviour (#268). When the
+            // LaunchAgent fires Hush at login, we don't want to
+            // pop the main window — every macOS tray utility
+            // (Rectangle, Bartender, Alfred) starts silent. The
+            // installer / autostart-toggle code passes
+            // `--background` as a CLI arg; if present, hide the
+            // main window and switch to Accessory activation
+            // policy so the Dock icon doesn't appear either.
+            //
+            // The flag is passed via the autostart plugin's
+            // `Some(vec!["--background"])` registration argument
+            // (see the `tauri_plugin_autostart::init` call above).
+            #[cfg(target_os = "macos")]
+            if std::env::args().any(|a| a == "--background") {
+                if let Some(main_win) = app.get_webview_window("main") {
+                    let _ = main_win.hide();
+                }
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                tracing::info!(
+                    "background launch: main window hidden, activation policy = Accessory"
+                );
+            }
 
             // HUD level-meter pump (#21). Reads the latest RMS from the
             // audio backend at ~30 Hz and emits `audio:level` so the HUD
