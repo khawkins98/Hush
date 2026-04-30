@@ -55,4 +55,11 @@ export const Events = {
   /// "system-audio", reason }`. Surfaces a struck-through chip
   /// in the active-session source line.
   MeetingSourceFailed: "meeting:source-failed",
+  /// Backend → settings window: result of a Check for Updates
+  /// probe fired from the macOS menu (#265). Payload is the
+  /// `UpdateCheckResult` tagged union. The Settings About tab
+  /// listens for this to render the result inline when the
+  /// probe was triggered from the menu rather than the in-tab
+  /// button.
+  UpdaterResult: "updater:result",
 } as const;

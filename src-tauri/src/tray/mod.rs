@@ -61,7 +61,15 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         // entry. The hotkey itself is registered separately via
         // `tauri-plugin-global-shortcut`; this string is purely a
         // hint glyph (Tauri does not actually wire it).
-        Some("CmdOrCtrl+Alt+H"),
+        //
+        // Must be `Ctrl+Alt+H` — *not* `CmdOrCtrl+Alt+H` (#264).
+        // The `CmdOrCtrl` token resolves to ⌘ on macOS, but
+        // `DEFAULT_TOGGLE_HOTKEY` (in `hotkey/mod.rs`) is literal
+        // `Ctrl` (⌃) — and `Cmd+Alt+H` is the macOS system
+        // shortcut for "Hide All Other Apps", so the wrong glyph
+        // not only mis-labelled the menu but pointed at a built-in
+        // shortcut that does the wrong thing entirely.
+        Some("Ctrl+Alt+H"),
     )?;
     let settings = MenuItem::with_id(
         app,
