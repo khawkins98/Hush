@@ -104,6 +104,57 @@ fn is_huggingface_host(host: Option<&str>) -> bool {
     }
 }
 
+/// Outcome of the model-download redirect predicate, broken out
+/// from the reqwest closure so the policy is unit-testable
+/// (`reqwest::redirect::Attempt` has no public constructor — the
+/// closure as a whole is not testable, but this is).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RedirectDecision {
+    Follow,
+    /// Static reasons rather than `Error<String>` so each branch
+    /// matches against a `&'static str` in tests without
+    /// stringifying.
+    Stop(&'static str),
+}
+
+/// Pure logic behind the model-download redirect closure (#258).
+///
+/// Allows a hop when EITHER the destination is on an HF host OR
+/// the immediately-previous URL was on an HF host. The second
+/// clause covers HF → signed-CDN chains (S3, Cloudflare R2, etc.)
+/// that surface when HF routes large-file serving through a
+/// third-party object store. The signed URL itself isn't an HF
+/// host, but the user trusts HF to redirect them to one — same
+/// trust shape browsers use.
+///
+/// Only HTTPS is ever followed; an http:// destination is
+/// rejected even from an HF origin (downgrade defence).
+///
+/// Caps at `MAX_DOWNLOAD_REDIRECTS` regardless of host trust.
+pub(crate) fn redirect_decision(
+    previous: &[reqwest::Url],
+    destination: &reqwest::Url,
+) -> RedirectDecision {
+    if previous.len() >= MAX_DOWNLOAD_REDIRECTS {
+        return RedirectDecision::Stop("too many redirects");
+    }
+    if destination.scheme() != "https" {
+        return RedirectDecision::Stop("redirect to non-HTTPS scheme");
+    }
+    let dest_is_hf = is_huggingface_host(destination.host_str());
+    let previous_is_hf = previous
+        .last()
+        .map(|u| is_huggingface_host(u.host_str()))
+        .unwrap_or(false);
+    if dest_is_hf || previous_is_hf {
+        RedirectDecision::Follow
+    } else {
+        RedirectDecision::Stop(
+            "redirect from non-HF host to non-HF host (signed-URL chain not extending HF origin)",
+        )
+    }
+}
+
 /// Snapshot of which application was in the foreground when dictation
 /// started. Captured so the resulting history row records "you were
 /// dictating into Slack / Notion / Mail" rather than "you were dictating
@@ -495,18 +546,28 @@ impl AppStateBuilder {
                 // We allow up to four hops (HF's `/resolve/main/`
                 // typically goes huggingface.co → cdn-lfs.huggingface.co
                 // → a signed URL on the same CDN; four leaves headroom
-                // for a future re-architecture). Every hop must land on
-                // a host inside the `huggingface.co` zone.
-                .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                    if attempt.previous().len() >= MAX_DOWNLOAD_REDIRECTS {
-                        return attempt.error("too many redirects");
-                    }
-                    if is_huggingface_host(attempt.url().host_str()) {
-                        attempt.follow()
-                    } else {
-                        attempt.error("redirect to host outside huggingface.co")
-                    }
-                }))
+                // for a future re-architecture).
+                //
+                // Browser-like trust model (#258): a hop is allowed
+                // if EITHER its destination is on an HF host OR the
+                // immediately-previous URL was on an HF host. The
+                // second clause covers HF → S3-signed-URL chains
+                // that surface when HF routes large-file serving
+                // through a third-party CDN. Without it we'd reject
+                // the perfectly-legitimate "HF told us to fetch the
+                // file from this signed AWS URL" hop and the
+                // download dies with no clear user-facing reason.
+                //
+                // Only HTTPS is ever followed — an http:// hop from
+                // anywhere is rejected, including from an HF host.
+                // Defends against a downgrade attack via a
+                // (hypothetical) compromised HF redirect.
+                .redirect(reqwest::redirect::Policy::custom(
+                    |attempt| match redirect_decision(attempt.previous(), attempt.url()) {
+                        RedirectDecision::Follow => attempt.follow(),
+                        RedirectDecision::Stop(reason) => attempt.error(reason),
+                    },
+                ))
                 .build()
                 .expect("reqwest client should always build with default config"),
             downloads: Mutex::new(HashMap::new()),
@@ -1403,6 +1464,106 @@ mod tests {
         assert!(!is_huggingface_host(Some("hf.co.attacker.com")));
         assert!(!is_huggingface_host(Some("")));
         assert!(!is_huggingface_host(None));
+    }
+
+    /// Helper: build a `reqwest::Url` for the redirect tests below.
+    fn url(s: &str) -> reqwest::Url {
+        reqwest::Url::parse(s).expect("test URL parses")
+    }
+
+    #[test]
+    fn redirect_decision_allows_hop_within_hf_zone() {
+        // Common case: huggingface.co → cas-bridge.xethub.hf.co.
+        let prev = vec![url("https://huggingface.co/foo")];
+        let dest = url("https://cas-bridge.xethub.hf.co/bar");
+        assert_eq!(redirect_decision(&prev, &dest), RedirectDecision::Follow);
+    }
+
+    #[test]
+    fn redirect_decision_allows_hf_to_signed_cdn() {
+        // The whole reason this PR exists (#258): HF redirects to
+        // a signed AWS / Cloudflare URL outside the HF zone.
+        let prev = vec![
+            url("https://huggingface.co/foo"),
+            url("https://cas-bridge.xethub.hf.co/bar"),
+        ];
+        let dest = url("https://hf-cdn.s3.amazonaws.com/weights.gguf?X-Amz-Signature=abc123");
+        assert_eq!(redirect_decision(&prev, &dest), RedirectDecision::Follow);
+    }
+
+    #[test]
+    fn redirect_decision_allows_first_hop_hf_to_signed_cdn() {
+        // Single-hop variant: HF immediately redirects to the
+        // signed URL with no in-zone intermediary.
+        let prev = vec![url("https://huggingface.co/resolve/main/foo.gguf")];
+        let dest = url("https://r2-signed.cloudflarestorage.com/x?sig=abc");
+        assert_eq!(redirect_decision(&prev, &dest), RedirectDecision::Follow);
+    }
+
+    #[test]
+    fn redirect_decision_blocks_chain_extension_from_signed_url() {
+        // After we've hopped to a signed CDN URL, that URL's host
+        // is no longer trusted to redirect us further. If the CDN
+        // tries to send us to attacker.com, deny.
+        let prev = vec![
+            url("https://huggingface.co/foo"),
+            url("https://hf-cdn.s3.amazonaws.com/x?sig=abc"),
+        ];
+        let dest = url("https://attacker.com/evil.gguf");
+        match redirect_decision(&prev, &dest) {
+            RedirectDecision::Stop(reason) => {
+                assert!(
+                    reason.contains("non-HF host"),
+                    "non-HF → non-HF should be blocked, got: {reason}"
+                );
+            }
+            d => panic!("expected Stop, got {d:?}"),
+        }
+    }
+
+    #[test]
+    fn redirect_decision_blocks_http_downgrade() {
+        // Defence-in-depth: an HF host telling us to downgrade
+        // to plain http:// is rejected, not followed. We don't
+        // trust HF (or anyone) to send us cleartext.
+        let prev = vec![url("https://huggingface.co/foo")];
+        let dest = url("http://huggingface.co/foo"); // http not https
+        match redirect_decision(&prev, &dest) {
+            RedirectDecision::Stop(reason) => {
+                assert!(reason.contains("non-HTTPS"), "got: {reason}");
+            }
+            d => panic!("expected Stop for http://, got {d:?}"),
+        }
+    }
+
+    #[test]
+    fn redirect_decision_caps_at_max_redirects() {
+        // The hop-count cap fires before host checks so a chain
+        // that's legitimate at every hop still terminates.
+        let prev: Vec<reqwest::Url> = (0..MAX_DOWNLOAD_REDIRECTS)
+            .map(|i| url(&format!("https://huggingface.co/hop-{i}")))
+            .collect();
+        let dest = url("https://huggingface.co/final");
+        match redirect_decision(&prev, &dest) {
+            RedirectDecision::Stop(reason) => {
+                assert!(reason.contains("too many"), "got: {reason}");
+            }
+            d => panic!("expected Stop for over-cap, got {d:?}"),
+        }
+    }
+
+    #[test]
+    fn redirect_decision_blocks_non_hf_origin() {
+        // Unlikely path (the request started at HF and reqwest
+        // wouldn't manufacture a fresh non-HF origin), but pin it
+        // anyway: zero-length previous + non-HF destination is a
+        // straight reject.
+        let prev: Vec<reqwest::Url> = vec![];
+        let dest = url("https://attacker.com/evil.gguf");
+        match redirect_decision(&prev, &dest) {
+            RedirectDecision::Stop(_) => {}
+            d => panic!("expected Stop for empty-prev + non-HF, got {d:?}"),
+        }
     }
 
     #[test]
