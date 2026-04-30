@@ -876,6 +876,52 @@ our flags as a `-arch` companion pair. We're sandwiched.
   ships in a "Linux + Windows artefacts attach cleanly, macOS leg
   needs an upstream poke" state.
 
+### Update 2026-04-30 — local bundling: `CMAKE_OSX_DEPLOYMENT_TARGET` is the magic env var
+
+After a clean-cache rebuild during local hands-on testing
+(`npm run tauri:bundle` after Cargo's whisper-rs-sys cache had
+been invalidated by an unrelated dep change), the same
+`<filesystem>` failure surfaced on the maintainer's dev box.
+`CFLAGS=-mmacosx-version-min=14.0` + `MACOSX_DEPLOYMENT_TARGET=14.0`
+weren't enough — the cc-emitted compile line still showed
+`-mmacosx-version-min=10.13` *appended after* the user CFLAGS, and
+the C++ filesystem header rejected accordingly.
+
+**The fix that worked locally: also set `CMAKE_OSX_DEPLOYMENT_TARGET=14.0`.**
+cmake-rs reads this env var directly (separate from
+`MACOSX_DEPLOYMENT_TARGET` which the `cc` crate honours) and threads
+it into the cmake configure step's compile-flag construction. Once
+set, the `-mmacosx-version-min=10.13` injection went away and the
+build succeeded.
+
+The full local-bundle invocation that worked:
+
+```bash
+CMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+MACOSX_DEPLOYMENT_TARGET=14.0 \
+CFLAGS="-march=armv8.6-a" \
+CXXFLAGS="-march=armv8.6-a" \
+npm run tauri:bundle
+```
+
+`-march=armv8.6-a` stays for the i8mm target-feature, same reason
+as the GH Actions matrix. The two deployment-target env vars are
+both required: `CMAKE_OSX_DEPLOYMENT_TARGET` is what cmake-rs reads,
+`MACOSX_DEPLOYMENT_TARGET` is what cc reads, and the two crates
+each contribute compile flags, so missing either re-introduces the
+mismatch.
+
+This points at option 4 for the upstream-pipeline fix (in addition
+to the three listed above): **set both env vars in `release.yml`**.
+The release pipeline currently only sets `MACOSX_DEPLOYMENT_TARGET`,
+which is why the macOS leg has been stuck. Worth a single-PR smoke
+to verify before declaring the full fix.
+
+For maintainer recipe-doc purposes (`docs/releases.md`): include
+both env vars in the local-bundle invocation. Without that the
+next contributor to do a hands-on bundle on a fresh build cache
+will hit this and have to re-derive the workaround.
+
 ---
 
 ## 2026-04-29 — TCC Reset bug + dev-loop polish (#231)
