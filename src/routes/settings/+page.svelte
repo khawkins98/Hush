@@ -842,9 +842,13 @@
   }
 
   async function loadDiarizationEnabled(): Promise<void> {
+    // Refresh-only path: re-read the persisted value, but don't
+    // touch `diarizationError` if it's already non-null. The
+    // setter-failure path needs the error to survive the
+    // post-failure refresh; clobbering it on a successful read
+    // hid the error from users (caught by #302 e2e).
     try {
       diarizationEnabled = await invoke<boolean>("get_diarization_enabled");
-      diarizationError = null;
     } catch (e) {
       diarizationError = "Couldn't read diarization setting.";
       console.warn("[hush] get_diarization_enabled failed", e);
@@ -860,6 +864,8 @@
       diarizationEnabled = checked;
     } catch (err) {
       diarizationError = formatErrorMessage(err);
+      // Re-read the persisted value (likely false) without
+      // clobbering the error message we just set.
       await loadDiarizationEnabled();
     } finally {
       diarizationBusy = false;
