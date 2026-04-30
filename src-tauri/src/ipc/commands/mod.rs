@@ -988,6 +988,43 @@ pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Read the diarization-enabled flag (#111). Settings → Meeting reads
+/// this on mount so the toggle renders the persisted value. Defaults
+/// to `false` when the row is absent — diarization is opt-in until
+/// the PR-B model-download path lands.
+#[tauri::command]
+pub fn get_diarization_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
+    Ok(state
+        .diarization_enabled
+        .load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Persist the diarization-enabled flag + update the AtomicBool. Same
+/// shape as `set_hud_enabled`. Foundation PR (this one) only flips
+/// the flag; the meeting pump's dispatch path will read it once PR-B
+/// wires the `OnnxDiarizer` impl.
+#[tauri::command]
+pub async fn set_diarization_enabled(state: State<'_, AppState>, enabled: bool) -> IpcResult<()> {
+    set_diarization_enabled_inner(&state, enabled).await
+}
+
+pub(crate) async fn set_diarization_enabled_inner(
+    state: &AppState,
+    enabled: bool,
+) -> IpcResult<()> {
+    state
+        .diarization_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    state
+        .settings
+        .set(
+            crate::settings::keys::DIARIZATION_ENABLED,
+            if enabled { "true" } else { "false" },
+        )
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
 /// Read the current Meeting-Mode auto-start mode. The Settings
 /// → Meeting tab calls this on mount so the dropdown renders the
 /// persisted value.
@@ -1888,5 +1925,58 @@ mod tests {
             .await
             .expect("settings get ok");
         assert_eq!(persisted.as_deref(), Some("true"));
+    }
+
+    #[tokio::test]
+    async fn set_diarization_enabled_round_trips_through_atomic_and_settings() {
+        // Foundation PR (#111). Default at construction is false; flip
+        // on, verify both the atomic + persisted row, then flip off and
+        // verify both directions land. A single-direction test would
+        // miss a regression where the writer only ever stored one value.
+        let state = crate::ipc::tests::mock_state();
+        assert!(
+            !state
+                .diarization_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "default should be off"
+        );
+
+        set_diarization_enabled_inner(&state, true)
+            .await
+            .expect("set true ok");
+        assert!(
+            state
+                .diarization_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "atomic should reflect true"
+        );
+        assert_eq!(
+            state
+                .settings
+                .get(crate::settings::keys::DIARIZATION_ENABLED)
+                .await
+                .expect("settings get ok")
+                .as_deref(),
+            Some("true"),
+        );
+
+        set_diarization_enabled_inner(&state, false)
+            .await
+            .expect("set false ok");
+        assert!(
+            !state
+                .diarization_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "atomic should reflect false"
+        );
+        assert_eq!(
+            state
+                .settings
+                .get(crate::settings::keys::DIARIZATION_ENABLED)
+                .await
+                .expect("settings get ok")
+                .as_deref(),
+            Some("false"),
+        );
     }
 }
