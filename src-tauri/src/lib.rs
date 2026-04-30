@@ -235,6 +235,51 @@ pub fn run() {
                 );
             }
 
+            // LaunchAgent path reconciliation (#271). The autostart
+            // plugin's `enable()` writes a `~/Library/LaunchAgents/`
+            // plist that points to the binary's *absolute path* at
+            // the time it was called. If the user moves Hush.app
+            // afterwards (the natural ~/Downloads → /Applications
+            // flow for a DMG-distributed app), the stale plist
+            // points at the old path and the LaunchAgent fails
+            // silently at the next login — Settings still shows
+            // "Launch at Login: on" but Hush never actually starts.
+            //
+            // Fix: on every startup where autostart is currently
+            // enabled, re-register. The plugin's `enable()` is
+            // idempotent + cheap (writes a small plist file), so a
+            // blind re-enable is simpler than parsing the existing
+            // plist to detect a path mismatch — and gets the same
+            // outcome (the plist now points at `current_exe()`).
+            // No prompts, no UI flicker; LaunchAgents don't gate on
+            // any TCC permission. The cost is one fs::write of
+            // ~500 bytes at every launch.
+            //
+            // If `enable()` fails (e.g. read-only home, file-system
+            // permission issue) we log at warn level and continue —
+            // the user's session is otherwise unaffected and the
+            // failure surfaces clearly enough in the log for a
+            // support diagnostic. A Settings → General "path is
+            // stale" warning UI would be nicer; tracked as polish
+            // follow-up.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let mgr = app.autolaunch();
+                let enabled = mgr.is_enabled().unwrap_or(false);
+                if enabled {
+                    match mgr.enable() {
+                        Ok(()) => tracing::debug!(
+                            "autostart: re-registered LaunchAgent with current binary path (#271)"
+                        ),
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            "autostart: re-register failed; LaunchAgent path may be stale (#271)"
+                        ),
+                    }
+                }
+            }
+
             // HUD level-meter pump (#21). Reads the latest RMS from the
             // audio backend at ~30 Hz and emits `audio:level` so the HUD
             // page can animate a bar. Lives here (not in commands.rs)
