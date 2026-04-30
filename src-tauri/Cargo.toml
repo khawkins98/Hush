@@ -87,6 +87,41 @@ futures-util = "0.3"
 # In production builds the CI installs cmake explicitly.
 whisper-rs = { version = "0.14", features = [], optional = true }
 
+# ONNX runtime for the D2 speaker-embedding diarizer (#111).
+# `ort` wraps Microsoft's ONNX Runtime — mature, battle-tested,
+# broad operator coverage, and CoreML acceleration on Apple
+# Silicon (the design target) via execution providers. `ndarray`
+# is its tensor type and is also used directly here for
+# embedding post-processing (mean-pool over time frames).
+#
+# Considered but rejected: `candle-onnx` (HF's pure-Rust path).
+# Candle has incomplete operator coverage and is 3–5× slower on
+# CPU than ort. The pure-Rust appeal mostly buys binary size
+# (~5 MB vs ~50 MB) — acceptable here only because Hush already
+# ships whisper.cpp at ~50 MB so the incremental cost is real
+# but not prohibitive. CoreML acceleration on Apple Silicon
+# (the project's design target) is the load-bearing reason —
+# ort lets us hand inference to the Neural Engine on supported
+# Macs.
+#
+# `download-binaries` enables vendored runtime libs from
+# `pyke.io`'s pre-built bundles, removing the system-onnxruntime
+# dependency on Linux (distro packagers prefer this) and
+# avoiding a separate Windows DLL bundling step. `tls-rustls`
+# matches the rest of Hush's TLS posture (reqwest is rustls-
+# only); without it the default-features-off build pulls in no
+# TLS provider and ort-sys's build script fails.
+#
+# Pinned to 2.0.0-rc.12 because rc.10 had an upstream ort-sys
+# build script that referenced `ureq::tls` (a path that no
+# longer exists in the current ureq line). rc.12 builds clean.
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "ndarray", "tls-rustls"], optional = true }
+
+# Tensor type that `ort` re-exports. Pinned to 0.17 to match
+# ort's expected version; `std` is required for `NdFloat` +
+# the linalg traits we use for embedding mean / norm.
+ndarray = { version = "0.17", default-features = false, features = ["std"], optional = true }
+
 # Real-input FFT for the D2 diarizer's Mel-Filterbank feature
 # extraction (#111). The wespeaker speaker-embedding model takes
 # 80-dim Mel-FB features as input — `diarization::features`
@@ -144,15 +179,18 @@ rdev = { git = "https://github.com/fufesou/rdev", rev = "a90dbe1172f8832f54c97c6
 # and developers had to remember to pass `--features whisper`; the
 # user hit this in hands-on testing because the model was on disk
 # but the binary literally didn't include the loader code.
-default = ["whisper"]
+default = ["whisper", "diarization-onnx"]
 # Enable the whisper transcription backend (requires cmake).
 whisper = ["dep:whisper-rs"]
 
-# Reserved for the D2 speaker-diarization ONNX backend (#111).
-# Foundation PR ships the user-visible plumbing only — settings
-# toggle, IPC commands, frontend UI. PR-B adds the `ort` dep
-# (Microsoft ONNX Runtime), the `OnnxDiarizer` impl, and the
-# model-download integration. Default-on once the impl exists.
+# D2 speaker-embedding diarization (#111). Pulls in `ort` and
+# `ndarray`. Default-on so binaries ship with the diarizer
+# available; runtime activation is gated on the
+# `diarization_enabled` settings flag (Settings → Meeting →
+# Speakers, added in #295) AND a downloaded model file. UI-only
+# contributors can opt out with `--no-default-features` for a
+# faster build that doesn't pull ~50 MB of vendored ORT libs.
+diarization-onnx = ["dep:ort", "dep:ndarray"]
 
 [dev-dependencies]
 tempfile = "3"
