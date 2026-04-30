@@ -7,11 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This block covers the post-v0.1.0 meeting-mode pivot work plus the
+(Nothing yet — post-v0.2.0 work lands here.)
+
+## [0.2.0] - 2026-04-30
+
+This release covers the post-v0.1.0 meeting-mode pivot work plus the
 post-#143 IA redesign and platform-polish stretch. Grouped by PR so
 a reader can scan which features shipped in which change — the
 unreleased queue grew long enough during the pivot scaffold that a
 single flat list was hard to navigate.
+
+Headline features beyond v0.1.0: full Meeting Mode (mic + macOS
+system-audio capture with You/Remote-tagged transcripts, live
+streaming partials, search + Copy transcript), three-window IA
+(main + standalone Settings + transparent HUD), native macOS menu
+bar + tray icon, manual update checker, autostart, first-run
+welcome, programmatic TCC permission detection, and the cross-
+platform release pipeline (macOS Apple-Silicon-only, Linux, Windows
+artefacts attached to GitHub Releases on `v*` tags).
 
 ### Added
 
