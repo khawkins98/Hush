@@ -26,6 +26,13 @@ use tauri::{Emitter, Manager};
 /// sensitive, exact match, no `=value` form — has a unit test
 /// pinning it. Pre-fix this lived inline in `setup` and was only
 /// reachable via dev-launch smoke.
+///
+/// Gated to macOS because that's the only platform that registers
+/// a LaunchAgent (Linux/Windows autostart paths don't pass the
+/// flag). Ungated, Ubuntu CI's `clippy --all-targets` flags it as
+/// `dead_code` since the only call site is in a
+/// `#[cfg(target_os = "macos")]` block.
+#[cfg(target_os = "macos")]
 fn is_background_launch(mut args: impl Iterator<Item = String>) -> bool {
     args.any(|a| a == "--background")
 }
@@ -487,7 +494,7 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
 /// IPC each.
 const MEETING_AUTOSTART_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
