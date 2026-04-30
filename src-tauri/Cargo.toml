@@ -128,8 +128,9 @@ ndarray = { version = "0.17", default-features = false, features = ["std"], opti
 # computes them in pure Rust using `realfft` for the underlying
 # FFT step. `realfft` wraps `rustfft` to halve the work for
 # real-valued input (audio is real); both are mature crates with
-# wide downstream use.
-realfft = "3.5"
+# wide downstream use. Optional + pulled in by `diarization-onnx`
+# because `diarization::features` is the sole consumer.
+realfft = { version = "3.5", optional = true }
 
 # SQLite persistence
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
@@ -190,7 +191,7 @@ whisper = ["dep:whisper-rs"]
 # Speakers, added in #295) AND a downloaded model file. UI-only
 # contributors can opt out with `--no-default-features` for a
 # faster build that doesn't pull ~50 MB of vendored ORT libs.
-diarization-onnx = ["dep:ort", "dep:ndarray"]
+diarization-onnx = ["dep:ort", "dep:ndarray", "dep:realfft"]
 
 [dev-dependencies]
 tempfile = "3"

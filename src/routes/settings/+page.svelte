@@ -165,9 +165,13 @@
   let soundCuesBusy = $state(false);
   let soundCuesError = $state<string | null>(null);
 
-  // Diarization (#111). Foundation PR ships the toggle only — the
-  // production diarizer is still NoopDiarizer until PR-B lands the
-  // ONNX model + download pipeline. Default off.
+  // Diarization (#111). Default off — opt-in. When the toggle is
+  // on AND the wespeaker .onnx model is present in the models
+  // directory, the meeting pump labels utterances per-speaker
+  // (Speaker 1, 2, …) instead of the source-derived "You" /
+  // "Remote" tags. The toggle persists; runtime behaviour gates
+  // on `FlagGatedDiarizer` reading the same atomic shared with
+  // AppState.
   let diarizationEnabled = $state(false);
   let diarizationBusy = $state(false);
   let diarizationError = $state<string | null>(null);
@@ -1041,12 +1045,12 @@
       </section>
 
       <!--
-        Diarization toggle (#111). Foundation PR ships the user-
-        visible toggle + persistence; the production diarizer is
-        still NoopDiarizer until PR-B lands the ONNX model + the
-        download pipeline. Copy reflects that status — the toggle
-        works (it persists) but transcripts won't carry per-speaker
-        labels yet.
+        Diarization toggle (#111). When on AND the wespeaker model
+        is present in the models directory, the meeting pump's
+        FlagGatedDiarizer routes utterances through OnnxDiarizer
+        instead of the Noop fallback. Copy in the toggle row
+        below describes the user-visible effect; the model-status
+        + download affordance lives in #301.
       -->
       <section class="settings-group" aria-labelledby="settings-diarization-heading">
         <h2 id="settings-diarization-heading" class="group-heading">Speakers</h2>
