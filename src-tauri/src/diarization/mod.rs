@@ -64,6 +64,8 @@ use crate::transcription::Utterance;
 
 pub mod cluster;
 pub mod features;
+#[cfg(feature = "diarization-onnx")]
+pub mod onnx;
 
 /// Tag a batch of utterances with speaker labels in place.
 ///
