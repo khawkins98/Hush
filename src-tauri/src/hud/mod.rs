@@ -84,7 +84,7 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
             // (rather than once at startup) handles the case where
             // the user has moved the laptop to an external display
             // between dictations — the HUD always lands top-right of
-            // wherever the primary monitor currently is.
+            // whichever monitor the user is currently working on.
             //
             // Failure here is non-fatal: if monitor info is
             // unavailable for some reason, the OS picks the position
@@ -92,13 +92,7 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
             if let Err(e) = position_top_right(&window) {
                 tracing::warn!(error = ?e, "failed to position HUD top-right; falling back to OS default");
             }
-            window.show().context("show HUD window")?;
-            // `set_focus(false)` would be ideal but Tauri 2 doesn't
-            // expose a "show without focus" call directly — once a
-            // hidden window appears it gets focus by default on most
-            // platforms. The `acceptFirstMouse: false` config keeps
-            // interaction-claiming minimal and the user's target app
-            // retains typing focus on first input.
+            show_without_activating(&window)?;
         }
         None => {
             tracing::error!(
@@ -110,18 +104,74 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     Ok(())
 }
 
-/// Place the HUD `HUD_MARGIN` logical pixels from the top-right
-/// corner of the primary monitor.
+/// Show the window without stealing keyboard focus from the user's
+/// active app (#262). On macOS, `WebviewWindow::show()` lowers to
+/// `NSWindow makeKeyAndOrderFront:` which both reveals the window
+/// AND activates the Hush process — keystrokes that follow the
+/// recording-start hotkey land in the HUD instead of the user's
+/// document.
 ///
-/// Multi-monitor: uses the monitor's physical origin so the HUD lands
-/// on whichever screen is the primary one *now*. We do the math in
-/// physical pixels because Tauri's `Monitor` exposes physical sizes;
-/// `set_position(PhysicalPosition)` matches.
+/// Pre-fix the comment in this module claimed `acceptFirstMouse:
+/// false` mitigated focus theft; that's wrong. `acceptFirstMouse`
+/// only affects the first *mouse* click forwarded to window
+/// content; it has zero effect on keyboard focus. The orderFront
+/// path below uses the AppKit primitive that reveals the window
+/// in the window list without making it key.
+///
+/// On non-macOS platforms `window.show()` does the right thing
+/// already — Linux / Windows window managers don't have the same
+/// mac-style "process activation on window show" behaviour.
+fn show_without_activating<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        // SAFETY: `ns_window()` returns a valid NSWindow pointer for
+        // the duration of the window's lifetime. We don't store the
+        // pointer beyond this scope; we just message it once to
+        // order it front without activating. AppKit's
+        // `orderFrontRegardless` (selector
+        // `orderFrontRegardless:`) is the standard primitive for
+        // "show in window list without making key" — same call
+        // status-bar apps and floating palettes use.
+        let ns_window_ptr = window.ns_window().context("retrieve NSWindow pointer")?;
+        let ns_window = ns_window_ptr as *mut AnyObject;
+        if ns_window.is_null() {
+            // Fall back to the standard show path if NSWindow isn't
+            // available (shouldn't happen but guards against UAF
+            // if Tauri's internals change).
+            return window.show().context("show HUD window");
+        }
+        unsafe {
+            // `orderFront:` shows the window without activating the
+            // app. `nil` sender == programmatic source.
+            let _: () = msg_send![ns_window, orderFront: std::ptr::null_mut::<AnyObject>()];
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show().context("show HUD window")
+    }
+}
+
+/// Place the HUD `HUD_MARGIN` logical pixels from the top-right
+/// corner of the monitor the user is currently working on.
+///
+/// "Currently working on" = the monitor containing the mouse cursor
+/// (#266). Pre-fix this used `primary_monitor()`, which on a dual-
+/// monitor setup where the user's main work happens on an external
+/// display would put the HUD on the built-in MacBook screen — out
+/// of sight unless they happened to glance at the other monitor.
+///
+/// Falls back to primary monitor if the cursor position can't be
+/// resolved or no monitor matches the cursor (rare, but possible
+/// during a display reconfigure).
+///
+/// Math is in physical pixels because Tauri's `Monitor` exposes
+/// physical sizes; `set_position(PhysicalPosition)` matches.
 fn position_top_right<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<()> {
-    let monitor = window
-        .primary_monitor()
-        .context("query primary monitor")?
-        .ok_or_else(|| anyhow::anyhow!("no primary monitor reported"))?;
+    let monitor = active_monitor(window)?;
     let scale = monitor.scale_factor();
     let mon_pos = monitor.position();
     let mon_size = monitor.size();
@@ -136,6 +186,37 @@ fn position_top_right<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<()
         .set_position(PhysicalPosition::new(x, y))
         .context("set HUD position")?;
     Ok(())
+}
+
+/// Pick the monitor the user is currently working on (#266).
+/// Cursor-under-monitor wins; primary monitor fallback if the
+/// cursor can't be located in any known monitor.
+fn active_monitor<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<tauri::Monitor> {
+    let monitors = window.available_monitors().context("list monitors")?;
+    let cursor = window.cursor_position().ok();
+    if let Some(pos) = cursor {
+        // Cursor position is in physical pixels in Tauri 2 (see
+        // `tauri::PhysicalPosition`). Each monitor exposes its
+        // origin (`position()`) and size (`size()`) also in physical
+        // pixels, so the containment check is a straight
+        // axis-aligned bounding box test.
+        let cursor_x = pos.x as i32;
+        let cursor_y = pos.y as i32;
+        if let Some(m) = monitors.iter().find(|m| {
+            let origin = m.position();
+            let size = m.size();
+            cursor_x >= origin.x
+                && cursor_x < origin.x + size.width as i32
+                && cursor_y >= origin.y
+                && cursor_y < origin.y + size.height as i32
+        }) {
+            return Ok(m.clone());
+        }
+    }
+    window
+        .primary_monitor()
+        .context("query primary monitor")?
+        .ok_or_else(|| anyhow::anyhow!("no primary monitor reported"))
 }
 
 /// Hide the HUD window. Symmetric with [`show`]; same graceful
