@@ -2218,4 +2218,66 @@ mod tests {
             Some("false"),
         );
     }
+
+    /// Sentinel diarizer used by the swap-failure test below.
+    /// Different type from the `RecordingDiarizer` in
+    /// `diarization::tests` so we can use `Arc::ptr_eq` reliably
+    /// to confirm the *exact same* `Arc` survived the failed swap.
+    /// Gated alongside the test that uses it so `--no-default-features`
+    /// builds don't trip the dead-code lint.
+    #[cfg(feature = "diarization-onnx")]
+    struct SwapSentinelDiarizer;
+
+    #[cfg(feature = "diarization-onnx")]
+    impl crate::diarization::Diarize for SwapSentinelDiarizer {
+        fn label_utterances(
+            &self,
+            _utterances: &mut [crate::transcription::Utterance],
+            _audio_chunks: &[Vec<f32>],
+            _format: crate::audio::CaptureFormat,
+        ) {
+            // No-op; presence in the slot is the assertion.
+        }
+    }
+
+    #[cfg(feature = "diarization-onnx")]
+    #[test]
+    fn swap_diarizer_after_download_err_leaves_slot_intact() {
+        // Audit-2 gap: when the post-download model load fails
+        // (corrupt ONNX, SHA mismatch from `OnnxDiarizer::new`'s
+        // load-time verify, or feature compiled out), the slot
+        // must not be poisoned or replaced with a half-built
+        // diarizer. The catch path in `download_diarizer_model`
+        // also relies on this — if the slot got partially written
+        // on Err, a subsequent successful swap could pile on top
+        // of an indeterminate state.
+        //
+        // Test: build a slot with a sentinel diarizer; call swap
+        // with a tempfile whose contents won't match the
+        // wespeaker SHA (so `OnnxDiarizer::new` fails *before*
+        // any `slot.write()` happens); assert the slot still
+        // points at the exact same Arc via `Arc::ptr_eq`.
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("not-wespeaker.onnx");
+        let mut f = std::fs::File::create(&path).expect("create");
+        f.write_all(b"definitely not a wespeaker model")
+            .expect("write");
+        drop(f);
+
+        let sentinel: Arc<dyn crate::diarization::Diarize> = Arc::new(SwapSentinelDiarizer);
+        let slot: crate::diarization::DiarizeSlot =
+            Arc::new(std::sync::RwLock::new(Arc::clone(&sentinel)));
+
+        let res = swap_diarizer_after_download(&slot, &path);
+        assert!(res.is_err(), "swap should reject a non-wespeaker file");
+
+        // The slot still holds the sentinel — same Arc identity,
+        // not a clone or replacement.
+        let guard = slot.read().expect("slot read");
+        assert!(
+            Arc::ptr_eq(&*guard, &sentinel),
+            "swap failure must not replace the slot's Arc"
+        );
+    }
 }
