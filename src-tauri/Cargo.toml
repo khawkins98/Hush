@@ -1,6 +1,6 @@
 [package]
 name = "hush"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hush — offline voice-to-text. Local Whisper transcription, no cloud round-trip."
 authors = []
 edition = "2021"
