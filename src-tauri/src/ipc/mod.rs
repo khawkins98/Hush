@@ -299,8 +299,7 @@ pub struct AppState {
     /// well below the rate-limit window, well above the spam-click
     /// threshold. The frontend's `updateChecking` flag covers the
     /// in-flight case; this covers the back-to-back case.
-    pub last_update_check:
-        Mutex<Option<(std::time::Instant, crate::updater::UpdateCheckResult)>>,
+    pub last_update_check: Mutex<Option<(std::time::Instant, crate::updater::UpdateCheckResult)>>,
     /// Cancel handles for in-flight downloads, keyed by model id.
     /// Inserted by `model_download` when it spawns a task; the cancel
     /// command flips the handle's flag; the spawned task removes its
