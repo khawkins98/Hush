@@ -45,12 +45,24 @@ use crate::transcription::{Transcribe, Utterance, WHISPER_SAMPLE_RATE};
 ///
 /// Whisper.cpp scales roughly linearly up to ~4 threads on Apple Silicon and
 /// modern x86; beyond that the gains are small and the contention with the
-/// UI thread starts to bite. We pick a fixed conservative value rather than
-/// `num_cpus`-based auto-detection so behaviour is reproducible across
-/// machines. Exposing this as a per-user setting is intentionally deferred
-/// until someone has measured a workload where the default leaves
-/// performance on the table.
-const DEFAULT_INFERENCE_THREADS: i32 = 4;
+/// UI thread starts to bite. 4 is the cross-platform default. Users who want
+/// more (or less, for battery life) flip the slider in Settings → General
+/// (#255). The atomic field on [`WhisperTranscription`] holds the live
+/// value; the IPC layer's `set_inference_threads` writes through it so
+/// changes take effect on the next inference call without a model reload.
+pub const DEFAULT_INFERENCE_THREADS: i32 = 4;
+
+/// Lower bound on the inference thread count. Whisper requires at least
+/// one thread to make progress; the slider in Settings → General is also
+/// clamped to this floor.
+pub const MIN_INFERENCE_THREADS: i32 = 1;
+
+/// Upper bound on the inference thread count. Beyond this, the gains
+/// from extra threads are dwarfed by their contention overhead — even
+/// on 16-core machines whisper rarely benefits past ~12 threads. Picked
+/// to match what `Settings → General` exposes; the atomic is `clamp`'d
+/// here at write-time so a malformed settings row can't push past it.
+pub const MAX_INFERENCE_THREADS: i32 = 16;
 
 /// `whisper-rs` backed implementation of [`Transcribe`].
 ///
@@ -79,6 +91,14 @@ pub struct WhisperTranscription {
     /// Where the model was loaded from. Kept for diagnostics — useful in
     /// error messages and the eventual settings panel.
     model_path: PathBuf,
+    /// Live inference thread count (#255). Read on every inference
+    /// call and forwarded to `params.set_n_threads`. Writes via
+    /// `set_inference_threads` IPC update this atomic; the next call
+    /// (one-shot or streaming) picks up the new value with no model
+    /// reload. Stored as `Arc<AtomicI32>` so the streaming session
+    /// (cloned out of the parent) and the AppState IPC writer share
+    /// one canonical count.
+    inference_threads: Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl WhisperTranscription {
@@ -159,11 +179,46 @@ struct LoadedContext {
     ctx: WhisperContext,
 }
 
+impl WhisperTranscription {
+    /// Borrow the live thread-count atomic (#255). AppStateBuilder
+    /// reads this at boot to share the same atomic with the IPC
+    /// `set_inference_threads` writer, so a slider change in
+    /// Settings → General is observable on the next inference call
+    /// without a model reload.
+    pub fn shared_inference_threads(&self) -> Arc<std::sync::atomic::AtomicI32> {
+        Arc::clone(&self.inference_threads)
+    }
+
+    /// Builder-style setter: swap the inference-threads atomic for a
+    /// caller-supplied one. Production wiring uses this so the
+    /// loaded transcriber points at AppState's canonical Arc, not
+    /// the fresh one `into_owned` initialised. Tests that don't care
+    /// about live updates skip the setter entirely.
+    pub fn with_inference_threads(mut self, arc: Arc<std::sync::atomic::AtomicI32>) -> Self {
+        self.inference_threads = arc;
+        self
+    }
+
+    /// Set the live thread count. Clamps to
+    /// `[MIN_INFERENCE_THREADS, MAX_INFERENCE_THREADS]` so a
+    /// malformed settings row can't push past the band whisper.cpp
+    /// is happy with. Use [`Self::shared_inference_threads`] for
+    /// the canonical handle that other code reads through.
+    pub fn set_inference_threads(&self, threads: i32) {
+        let clamped = threads.clamp(MIN_INFERENCE_THREADS, MAX_INFERENCE_THREADS);
+        self.inference_threads
+            .store(clamped, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl LoadedContext {
     fn into_owned(self, model_path: PathBuf) -> Result<WhisperTranscription> {
         Ok(WhisperTranscription {
             ctx: Arc::new(Mutex::new(self.ctx)),
             model_path,
+            inference_threads: Arc::new(std::sync::atomic::AtomicI32::new(
+                DEFAULT_INFERENCE_THREADS,
+            )),
         })
     }
 }
@@ -183,7 +238,10 @@ impl WhisperTranscription {
         // trade we can expose later if user testing shows accuracy gains
         // worth the cost.
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(DEFAULT_INFERENCE_THREADS);
+        params.set_n_threads(
+            self.inference_threads
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         // Suppress whisper.cpp's stdout chatter — we own the user-visible
         // logging surface via `tracing`.
         params.set_print_special(false);
@@ -299,6 +357,7 @@ impl Transcribe for WhisperTranscription {
             format,
             prompt.to_owned(),
             SlidingWindowConfig::meeting_defaults(),
+            Arc::clone(&self.inference_threads),
         );
         Ok(Box::new(session))
     }
@@ -333,6 +392,10 @@ pub struct WhisperStreamingSession {
     /// Policy state machine — owns the rolling window + commit logic.
     /// See `transcription::streaming` for the design rationale.
     state: SlidingWindowState,
+    /// Shared inference thread count (#255). Cloned out of
+    /// [`WhisperTranscription`] at session construction so
+    /// settings updates propagate without rebuilding the session.
+    inference_threads: Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl WhisperStreamingSession {
@@ -341,12 +404,14 @@ impl WhisperStreamingSession {
         capture_format: CaptureFormat,
         prompt: String,
         config: SlidingWindowConfig,
+        inference_threads: Arc<std::sync::atomic::AtomicI32>,
     ) -> Self {
         Self {
             ctx,
             capture_format,
             prompt,
             state: SlidingWindowState::new(WHISPER_SAMPLE_RATE, config),
+            inference_threads,
         }
     }
 
@@ -375,6 +440,7 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
         let mut inferer = WhisperInferer {
             ctx: Arc::clone(&self.ctx),
             prompt: &self.prompt,
+            inference_threads: Arc::clone(&self.inference_threads),
         };
         self.state.tick(&mut inferer)
     }
@@ -383,6 +449,7 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
         let mut inferer = WhisperInferer {
             ctx: Arc::clone(&self.ctx),
             prompt: &self.prompt,
+            inference_threads: Arc::clone(&self.inference_threads),
         };
         self.state.finish(&mut inferer)
     }
@@ -395,12 +462,13 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
 struct WhisperInferer<'a> {
     ctx: Arc<Mutex<WhisperContext>>,
     prompt: &'a str,
+    inference_threads: Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
     fn infer(&mut self, mono_16k_pcm: &[f32]) -> Result<Vec<StreamSegment>> {
         // Same FullParams shape as the one-shot path — greedy decode,
-        // 4-thread budget, no chatter on stdout. The streaming-specific
+        // configurable thread count, no chatter on stdout. The streaming-specific
         // bit is `set_no_context(true)`: we feed whisper a fresh window
         // each call rather than carrying KV-cache across calls.
         // Carrying context would technically reduce per-call cost but
@@ -409,7 +477,10 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         // re-tokenisations and lets the sliding-window policy converge
         // on a stable transcript.
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(DEFAULT_INFERENCE_THREADS);
+        params.set_n_threads(
+            self.inference_threads
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);

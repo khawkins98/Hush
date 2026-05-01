@@ -354,6 +354,14 @@ pub struct AppState {
     /// new `OnnxDiarizer` takes effect on the next meeting tick
     /// — no app restart required.
     pub diarize_slot: crate::diarization::DiarizeSlot,
+    /// Whisper inference thread count (#255). Settings → General
+    /// slider writes through the `set_inference_threads` IPC; the
+    /// loaded `WhisperTranscription` shares this same Arc via
+    /// `shared_inference_threads()` so a slider change is
+    /// observable on the next inference call without a model
+    /// reload. `AtomicI32` matches `whisper-rs`'s `set_n_threads`
+    /// signature.
+    pub inference_threads: Arc<std::sync::atomic::AtomicI32>,
 }
 
 /// Encode [`crate::meeting::MeetingAutostartMode`] into the
@@ -435,6 +443,13 @@ pub struct AppStateBuilder {
     /// `NoopDiarizer` — fine for tests that don't exercise the
     /// download / swap path.
     diarize_slot: Option<crate::diarization::DiarizeSlot>,
+    /// Pre-built shared thread-count atomic (#255). Set via
+    /// [`AppStateBuilder::inference_threads_arc`] when
+    /// `build_default` wants to share the loaded
+    /// `WhisperTranscription`'s atomic with the IPC writer. When
+    /// unset, `build` constructs a fresh Arc seeded from the
+    /// default thread count — fine for tests.
+    inference_threads_arc: Option<Arc<std::sync::atomic::AtomicI32>>,
 }
 
 impl AppStateBuilder {
@@ -551,6 +566,16 @@ impl AppStateBuilder {
     /// path flips both views with one atomic store.
     pub fn diarization_enabled_arc(mut self, arc: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.diarization_enabled_arc = Some(arc);
+        self
+    }
+
+    /// Set the pre-built shared thread-count atomic (#255).
+    /// `build_default` cloned this out of the just-loaded
+    /// `WhisperTranscription::shared_inference_threads()`, so the
+    /// AppState field, the IPC writer, and the transcriber all
+    /// read/write through the same atomic.
+    pub fn inference_threads_arc(mut self, arc: Arc<std::sync::atomic::AtomicI32>) -> Self {
+        self.inference_threads_arc = Some(arc);
         self
     }
 
@@ -677,6 +702,9 @@ impl AppStateBuilder {
                         as Arc<dyn crate::diarization::Diarize>,
                 ))
             }),
+            inference_threads: self
+                .inference_threads_arc
+                .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicI32::new(4))),
         })
     }
 }
@@ -754,6 +782,33 @@ pub(crate) fn parse_sound_cues_setting(raw: Option<String>) -> bool {
 /// real impl arrives.
 pub(crate) fn parse_diarization_enabled_setting(raw: Option<String>) -> bool {
     matches!(raw.as_deref(), Some("true"))
+}
+
+/// Parse the persisted [`crate::settings::keys::INFERENCE_THREADS`]
+/// row into an `i32` clamped to the band whisper.cpp accepts (#255).
+/// Absent or unparseable rows fall back to
+/// `DEFAULT_INFERENCE_THREADS` so existing installs see no behaviour
+/// change until the user touches the slider.
+pub(crate) fn parse_inference_threads_setting(raw: Option<String>) -> i32 {
+    #[cfg(feature = "whisper")]
+    let default_threads = crate::transcription::DEFAULT_INFERENCE_THREADS;
+    #[cfg(not(feature = "whisper"))]
+    let default_threads: i32 = 4;
+    let parsed = raw
+        .as_deref()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(default_threads);
+    #[cfg(feature = "whisper")]
+    {
+        parsed.clamp(
+            crate::transcription::MIN_INFERENCE_THREADS,
+            crate::transcription::MAX_INFERENCE_THREADS,
+        )
+    }
+    #[cfg(not(feature = "whisper"))]
+    {
+        parsed.clamp(1, 16)
+    }
 }
 
 /// Build the "inner" diarizer for the FlagGatedDiarizer (#111).
@@ -843,13 +898,29 @@ impl AppState {
         );
         let meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
             Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db));
+        // Inference thread count (#255). Read the persisted value
+        // from settings, clamp to the supported range, build the
+        // shared Arc that AppState + WhisperTranscription + the IPC
+        // writer all read/write through. Constructed *before*
+        // `build_transcriber` so the loaded model points at this
+        // exact Arc, not a fresh one.
+        let inference_threads_initial = parse_inference_threads_setting(
+            settings
+                .get(crate::settings::keys::INFERENCE_THREADS)
+                .await
+                .ok()
+                .flatten(),
+        );
+        let inference_threads_arc =
+            Arc::new(std::sync::atomic::AtomicI32::new(inference_threads_initial));
+
         // Resolve which transcriber to load at startup. Order:
         //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
         //   2. legacy `HUSH_MODEL_PATH` env var (M1/M2 dev workflow)
         //   3. None — IPC surfaces `TranscriptionUnavailable`.
         // Step 1 resolves the M3 picker; step 2 keeps the existing dev
         // setup working until a user actually opens the picker once.
-        let transcribe = build_transcriber(&settings, &models_dir).await;
+        let transcribe = build_transcriber(&settings, &models_dir, &inference_threads_arc).await;
 
         // The session manager needs the live audio + transcribe
         // handles to drive its own capture pump (#122 PR2). Wrap
@@ -998,6 +1069,7 @@ impl AppState {
             .meeting_autostart_mode(meeting_autostart_mode)
             .diarization_enabled_arc(diarization_enabled_arc)
             .diarize_slot(diarize_slot)
+            .inference_threads_arc(inference_threads_arc)
             .build()
     }
 }
@@ -1041,6 +1113,7 @@ impl AppState {
 pub fn load_transcriber_for_model(
     model_id: &str,
     models_dir: &Path,
+    inference_threads: &Arc<std::sync::atomic::AtomicI32>,
 ) -> Result<Option<Arc<dyn Transcribe>>> {
     #[cfg(feature = "whisper")]
     {
@@ -1054,7 +1127,8 @@ pub fn load_transcriber_for_model(
             return Ok(None);
         }
         let transcriber = crate::transcription::WhisperTranscription::new(&path)
-            .with_context(|| format!("load whisper model {} from {}", meta.id, path.display()))?;
+            .with_context(|| format!("load whisper model {} from {}", meta.id, path.display()))?
+            .with_inference_threads(Arc::clone(inference_threads));
         tracing::info!(
             model_id = %meta.id,
             path = %path.display(),
@@ -1065,6 +1139,7 @@ pub fn load_transcriber_for_model(
 
     #[cfg(not(feature = "whisper"))]
     {
+        let _ = inference_threads;
         Ok(None)
     }
 }
@@ -1076,6 +1151,7 @@ pub fn load_transcriber_for_model(
 async fn build_transcriber(
     settings: &Arc<dyn SettingsRepository>,
     models_dir: &Path,
+    inference_threads: &Arc<std::sync::atomic::AtomicI32>,
 ) -> Option<Arc<dyn Transcribe>> {
     #[cfg(feature = "whisper")]
     {
@@ -1094,7 +1170,9 @@ async fn build_transcriber(
                                 path = %path.display(),
                                 "loaded selected whisper model"
                             );
-                            return Some(Arc::new(t) as Arc<dyn Transcribe>);
+                            return Some(Arc::new(
+                                t.with_inference_threads(Arc::clone(inference_threads)),
+                            ) as Arc<dyn Transcribe>);
                         }
                         Err(e) => {
                             tracing::error!(
@@ -1126,7 +1204,10 @@ async fn build_transcriber(
             match crate::transcription::WhisperTranscription::new(&path) {
                 Ok(t) => {
                     tracing::info!(path = %path.display(), "loaded HUSH_MODEL_PATH whisper model");
-                    return Some(Arc::new(t) as Arc<dyn Transcribe>);
+                    return Some(
+                        Arc::new(t.with_inference_threads(Arc::clone(inference_threads)))
+                            as Arc<dyn Transcribe>,
+                    );
                 }
                 Err(e) => {
                     tracing::error!(
