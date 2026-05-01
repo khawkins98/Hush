@@ -103,15 +103,15 @@
         <span class="status-label recording-label">Recording</span>
       {:else}
         {#if sessionStatus.modelName}
-          <div class="status-row">
+          <div class="status-stack">
             <span class="status-key">Model</span>
-            <span class="status-val">{sessionStatus.modelName}</span>
+            <span class="status-val" title={sessionStatus.modelName}>{sessionStatus.modelName}</span>
           </div>
         {/if}
         {#if sessionStatus.audioSourceName}
-          <div class="status-row">
+          <div class="status-stack">
             <span class="status-key">Source</span>
-            <span class="status-val">{sessionStatus.audioSourceName}</span>
+            <span class="status-val" title={sessionStatus.audioSourceName}>{sessionStatus.audioSourceName}</span>
           </div>
         {/if}
       {/if}
@@ -281,29 +281,28 @@
     color: #d83a3a;
   }
 
-  .status-row {
+  .status-stack {
     display: flex;
-    align-items: baseline;
-    gap: 0.35rem;
+    flex-direction: column;
+    gap: 0.05rem;
     min-width: 0;
   }
 
   .status-key {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     font-weight: 600;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: #888;
-    flex-shrink: 0;
   }
 
   .status-val {
-    font-size: 0.78rem;
-    color: #555;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #333;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
     min-width: 0;
   }
 
@@ -338,6 +337,6 @@
       border-color: #2f2f33;
     }
     .status-key { color: #666; }
-    .status-val { color: #a0a0a0; }
+    .status-val { color: #c0c0c0; }
   }
 </style>
