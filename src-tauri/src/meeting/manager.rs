@@ -26,11 +26,11 @@
 //!
 //! Each persisted utterance carries a `speaker_label`. The pump
 //! runs every batch of finals through the configured `Diarize`
-//! impl (production: `NoopDiarizer` since #243 — D1
-//! `EnergyDiarizer` collapsed cross-source utterances into a
-//! single "Speaker A"; reverted until D2 model-based diarization
-//! lands in #111). With `NoopDiarizer` every diarized label is
-//! `None`, so `dispatch_utterances` stamps the source-derived
+//! impl (production: `FlagGatedDiarizer` over `OnnxDiarizer` when
+//! the Speakers toggle is on and the wespeaker model is loaded,
+//! else `NoopDiarizer`). When the diarizer abstains —
+//! `NoopDiarizer`, or `OnnxDiarizer` skipping a too-short
+//! utterance — `dispatch_utterances` stamps the source-derived
 //! `"mic"` / `"system"` tag from `AudioSource::speaker_tag()`
 //! (the single source of truth for the persistence-layer label
 //! shape); the panel maps that to "You" / "Remote" when
@@ -95,13 +95,11 @@ use super::{
     NewPersistedUtterance,
 };
 
-/// Canonical capture format passed to the diarizer (#111). The pump
-/// no longer has the per-source audio at the dispatch boundary (the
-/// streaming session has already consumed it), so D1's
-/// [`crate::diarization::EnergyDiarizer`] — which only needs
-/// utterance timestamps — can ignore this. D2's model-based path
-/// will need real audio threaded through; that's a follow-up
-/// refactor.
+/// Canonical capture format passed to the diarizer. Audio is
+/// resampled to 16 kHz mono inside `AudioRollingBuffer::append`
+/// (#300) so by the time the dispatch path hands chunks to the
+/// diarizer they're all in this format — the parameter exists so
+/// the trait doesn't grow a per-chunk format dimension.
 const CANONICAL_FORMAT: CaptureFormat = CaptureFormat {
     sample_rate: 16_000,
     channels: 1,
@@ -284,14 +282,13 @@ pub struct SessionManager {
     /// emitter; tests use [`NoopMeetingEventEmitter`].
     event_emitter: Arc<dyn MeetingEventEmitter>,
     /// Speaker diarization. Production wires
-    /// [`crate::diarization::NoopDiarizer`] as of #243 — the
-    /// `EnergyDiarizer` D1 silence-gap heuristic collapsed
-    /// cross-source utterances into a single "Speaker A" when
-    /// mic + system audio were both captured (the common Meeting
-    /// Mode shape). `dispatch_utterances` then falls back to the
-    /// source-derived `"mic"` / `"system"` tag from
-    /// `AudioSource::speaker_tag()`. D2 (#111) is the upgrade
-    /// path that can distinguish voices across sources.
+    /// [`crate::diarization::FlagGatedDiarizer`] which routes to
+    /// [`crate::diarization::onnx::OnnxDiarizer`] when the
+    /// Speakers toggle is on and the wespeaker model is loaded,
+    /// else [`crate::diarization::NoopDiarizer`]. When the
+    /// diarizer abstains, `dispatch_utterances` falls back to
+    /// the source-derived `"mic"` / `"system"` tag from
+    /// `AudioSource::speaker_tag()`.
     diarize: Arc<dyn crate::diarization::Diarize>,
 }
 
@@ -1410,11 +1407,9 @@ async fn dispatch_utterances(
 ) {
     for mut u in utterances {
         // Source-derived speaker label is the fallback for any
-        // utterance whose diarizer abstained (`NoopDiarizer`, or
-        // a future impl that emits None for low-confidence cases).
-        // Production wires `EnergyDiarizer` (#201) which always
-        // produces a per-speaker tag; this branch is the
-        // swap-back-to-Noop / D2-abstain path.
+        // utterance whose diarizer abstained (`NoopDiarizer`,
+        // or `OnnxDiarizer` skipping a too-short utterance, or
+        // the toggle-off branch of `FlagGatedDiarizer`).
         if u.speaker_label.is_none() {
             u.speaker_label = Some(source_label.to_owned());
         }
@@ -2276,8 +2271,7 @@ mod tests {
     /// the chronological sequence of `started_at_ms` values it
     /// receives + the audio chunk lengths (#111 PR-F), then writes
     /// deterministic `"Speaker A"` labels so the test can assert
-    /// order without relying on the real `EnergyDiarizer`
-    /// heuristic.
+    /// order without standing up a real diarizer.
     struct RecordingDiarizer {
         seen_starts: Mutex<Vec<u64>>,
         seen_audio_lens: Mutex<Vec<usize>>,

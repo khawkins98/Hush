@@ -83,12 +83,14 @@ use crate::audio::{CaptureFormat, CapturedAudio};
 /// the streaming session, not wall-clock timestamps. The session
 /// owner pairs these with a wall-clock anchor when persisting.
 ///
-/// `speaker_label` is set by the diarizer (`EnergyDiarizer` in
-/// production, #201) — typically `"Speaker A"` / `"Speaker B"` for
-/// D1, model-derived ids when D2 lands. `None` only when the
-/// diarizer abstains (e.g. `NoopDiarizer` in tests); the meeting
-/// pump's `dispatch_utterances` falls back to the source-derived
-/// `"mic"` / `"system"` label in that case so the panel always has
+/// `speaker_label` is set by the diarizer (production:
+/// `FlagGatedDiarizer` over `OnnxDiarizer` when the toggle is on
+/// and the wespeaker model is loaded, otherwise `NoopDiarizer`).
+/// `OnnxDiarizer` emits `"Speaker 1"` / `"Speaker 2"` … from
+/// session-stable cluster IDs. `None` when the diarizer abstains;
+/// the meeting pump's `dispatch_utterances` falls back to the
+/// source-derived `"mic"` / `"system"` label in that case so the
+/// panel always has
 /// something to render.
 ///
 /// `serde` derives so this flows over the IPC boundary into the
@@ -112,12 +114,14 @@ pub struct Utterance {
     /// a newer non-final one arrives, and lock it in when a final
     /// arrives. The legacy one-shot path always emits `is_final = true`.
     pub is_final: bool,
-    /// Diarization label (`"Speaker A"`, `"Speaker B"`, or
-    /// user-renamed). Set by the diarizer (D1 `EnergyDiarizer` in
-    /// production, #201). Single-speaker dictation paths leave this
-    /// `None` and the IPC layer skips the meeting-pump dispatch
-    /// (where the source-derived fallback would apply) — for
-    /// dictation the field is informational only.
+    /// Diarization label (`"Speaker 1"`, `"Speaker 2"`, or
+    /// `"mic"` / `"system"` from the source-derived fallback).
+    /// Set by the production `FlagGatedDiarizer` over
+    /// `OnnxDiarizer` when the model is loaded and the Speakers
+    /// toggle is on; otherwise the meeting-pump dispatch path
+    /// stamps the source-derived label. Single-speaker dictation
+    /// paths leave this `None` — for dictation the field is
+    /// informational only.
     pub speaker_label: Option<String>,
 }
 

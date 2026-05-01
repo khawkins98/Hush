@@ -159,12 +159,14 @@ pub struct PersistedUtterance {
     pub session_id: i64,
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
-    /// Source-derived `"mic"` / `"system"` tag (set via
+    /// Production wiring (post-#111): `FlagGatedDiarizer` routes
+    /// to `OnnxDiarizer` when the Speakers toggle is on and the
+    /// wespeaker model is loaded, producing `"Speaker 1"` /
+    /// `"Speaker 2"` … from session-stable cluster IDs. When
+    /// the diarizer abstains, the meeting-pump dispatch stamps
+    /// a source-derived `"mic"` / `"system"` tag (via
     /// `AudioSource::speaker_tag()`); the panel maps that to
-    /// "You" / "Remote" when rendering. Production runs
-    /// `NoopDiarizer` since #243, so the diarizer-set path only
-    /// applies if a future build re-wires `EnergyDiarizer` (or
-    /// the D2 model-based diarizer in #111).
+    /// "You" / "Remote" when rendering.
     pub speaker_label: Option<String>,
     pub text: String,
     /// Reserved. v1 only persists `is_final = true` utterances; the

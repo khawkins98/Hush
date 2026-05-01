@@ -246,12 +246,13 @@ pub struct AppState {
     /// model picker writes through the shared `Arc`, so the pump
     /// picks up the new model on its next chunk automatically.
     pub transcribe: TranscribeSlot,
-    /// Speaker diarization seam (#191/#201). Tags meeting utterances
+    /// Speaker diarization seam (#111). Tags meeting utterances
     /// with per-speaker labels. Production wires
-    /// [`crate::diarization::EnergyDiarizer`] (D1 silence-gap
-    /// heuristic). The trait builder default falls back to
-    /// [`crate::diarization::NoopDiarizer`] for tests; swapping the
-    /// production wiring is one line in `build_default`.
+    /// [`crate::diarization::FlagGatedDiarizer`] which routes to
+    /// [`crate::diarization::onnx::OnnxDiarizer`] when the
+    /// Speakers toggle is on and the wespeaker model is loaded,
+    /// else [`crate::diarization::NoopDiarizer`]. The builder
+    /// default falls back to plain `NoopDiarizer` for tests.
     pub diarize: Arc<dyn crate::diarization::Diarize>,
     /// Persistent user-data repositories bundled together. See
     /// [`DataServices`] for why these four group naturally and why
@@ -859,23 +860,7 @@ impl AppState {
         let transcribe_shared = Arc::new(Mutex::new(transcribe));
         let event_emitter: Arc<dyn crate::meeting::MeetingEventEmitter> =
             Arc::new(AppHandleMeetingEventEmitter { app: app.clone() });
-        // Source-only labels for v1 — every utterance carries
-        // its source-derived `"mic"` / `"system"` tag, which the
-        // frontend renders as "You" / "Remote".
-        //
-        // Why not the EnergyDiarizer wired previously (#191 D1):
-        // the silence-gap heuristic operates on a single
-        // chronologically-merged stream of utterances. With
-        // mic + system audio captured concurrently (the common
-        // Meeting Mode shape), finals from both sources
-        // interleave with no reliable inter-source gap, so the
-        // heuristic collapses everything into "Speaker A" — a
-        // regression vs the source-only labels it was supposed
-        // to refine.
-        //
-        // D2 (model-based ONNX speaker embeddings, #111) is the
-        // upgrade path. The wespeaker ResNet34-LM model can
-        // distinguish voices across sources. The wiring here is:
+        // Diarization wiring (#111, post-#310):
         //
         // 1. Read the persisted `diarization_enabled` flag and
         //    build an `Arc<AtomicBool>` so the IPC `set_*` path
