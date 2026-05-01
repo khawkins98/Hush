@@ -117,7 +117,13 @@ test.describe("UX walkthrough — main window", () => {
     await shot(page, "04-first-run-modal");
   });
 
-  test("meetings: empty state", async ({ page }) => {
+  // Phase 1 of #357 dropped the standalone Meetings panel from the
+  // main-window sidebar (Dictation/History only now). The three
+  // meetings: shots below are skipped until Phase 2 reintroduces
+  // meetings as part of the unified History feed; the spec bodies
+  // stay checked-in so the screenshots can be re-baselined when
+  // the surface returns.
+  test.skip("meetings: empty state", async ({ page }) => {
     await installMocks(page);
     await page.goto("/");
     await page.locator("button", { hasText: "Meetings" }).click();
@@ -127,7 +133,7 @@ test.describe("UX walkthrough — main window", () => {
     await shot(page, "05-meetings-empty");
   });
 
-  test("meetings: populated list with search visible", async ({ page }) => {
+  test.skip("meetings: populated list with search visible", async ({ page }) => {
     await installMocks(page, {
       meeting_sessions_list: () => [
         {
@@ -164,7 +170,7 @@ test.describe("UX walkthrough — main window", () => {
     await shot(page, "06-meetings-populated");
   });
 
-  test("meetings: search active with no matches", async ({ page }) => {
+  test.skip("meetings: search active with no matches", async ({ page }) => {
     await installMocks(page, {
       meeting_sessions_list: () => [
         {
