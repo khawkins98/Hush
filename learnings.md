@@ -16,6 +16,26 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-04-30 — rdev::listen has no clean stop API; deliberate decision to leave it (#257)
+
+The PTT listener spawns a thread that calls `rdev::listen` (fufesou fork, rev `a90dbe1172f8832f54c97c62e823c5a34af5fdfe`). The thread blocks on `CFRunLoopRun()` for the life of the process and we abandon it on quit. Issue #257 asked us to investigate clean shutdown.
+
+**What the fork exposes.** Nothing for the `listen` path. fufesou's `src/macos/listen.rs` is ~30 lines and ends with a bare `CFRunLoopRun()`; the run-loop ref is a local that's never stored or returned. There is a private `static mut CUR_LOOP` for the *grab* path's `exit_grab()`, but it's `pub(self)` and only visible inside `grab.rs`. Upstream Narsil has the same shape — neither fork has a stop API for `listen`.
+
+**CFRunLoopStop *is* thread-safe.** Apple documents `CFRunLoopStop`, `CFRunLoopWakeUp`, and `CFRunLoopAddSource/RemoveSource` as the thread-safe members of the API; calling `CFRunLoopStop(loop_ref)` from any thread causes the target loop's current `CFRunLoopRun()` invocation to return on the next iteration. The blocker is that we don't have the loop ref — `listen()` calls `CFRunLoopGetMain()` and discards it.
+
+**Dedicated-CFRunLoop alternative is feasible but costly.** We'd have to inline ~40 lines of fufesou's `listen.rs` ourselves, swapping `CFRunLoopGetMain` → `CFRunLoopGetCurrent` and storing the ref in an `AtomicPtr` we own. Doing so means re-deriving the macOS 26 `CGEventTap` fix that was the reason we're on the fork — net negative until we actually need teardown.
+
+**Process-exit behaviour is fine.** A `CGEventTap` is owned by the process; on exit the kernel reaps the Mach port and `WindowServer` removes the tap. No hung shutdown, no kernel leak, no zombie tap. The leaked thread (blocked on `CFRunLoopRun`) just goes away when the process does. Espanso, RustDesk, and every other rdev consumer ships the same "spawn-and-forget" pattern.
+
+**Decision.** Leave `register_ptt_listener` as-is. The spawn-and-forget pattern is correct for "listener lives for the life of the app" — which is exactly what we want. If a future feature needs teardown without quit (e.g. a "disable global hotkeys" toggle that must release Input Monitoring at runtime), the cheapest path is option (b): a ~40-line internal `listen_with_handle()` that mirrors fufesou's listen.rs but captures `CFRunLoopGetCurrent()` into an `AtomicPtr<__CFRunLoop>` and calls `CFRunLoopStop` from `Drop`. Avoid switching crates — `device_query`, `global-hotkey`, and `livesplit-hotkey` all have worse macOS 26 stories than fufesou/rdev does.
+
+Comment in `src-tauri/src/hotkey/ptt.rs::register_ptt_listener` cites this entry so a future contributor sizing up the same problem doesn't re-derive it.
+
+References: fufesou [listen.rs](https://github.com/fufesou/rdev/blob/a90dbe1172f8832f54c97c62e823c5a34af5fdfe/src/macos/listen.rs), fufesou [grab.rs `exit_grab`](https://github.com/fufesou/rdev/blob/a90dbe1172f8832f54c97c62e823c5a34af5fdfe/src/macos/grab.rs#L78), Apple [CFRunLoop reference](https://developer.apple.com/documentation/corefoundation/cfrunloop).
+
+---
+
 ## 2026-04-30 — D2 diarization decisions (#111 chain)
 
 Six PRs (#295–#300) shipped the initial chain and three follow-ups (#303–#305) closed audit findings. Capturing the non-obvious calls so future-Claude doesn't re-derive them from the diff.
