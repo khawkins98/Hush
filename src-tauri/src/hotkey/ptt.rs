@@ -455,6 +455,17 @@ fn ptt_key_for(key: Key) -> Option<PttKey> {
 /// thread and the thread terminates without affecting the rest of the
 /// app. The toggle hotkey and button-driven dictation continue to work.
 ///
+/// The "no clean stop" trade-off was investigated under #257 and is a
+/// deliberate decision: fufesou's `listen()` calls `CFRunLoopRun()`
+/// without storing the run-loop ref, so we'd have to inline our own
+/// version to get `CFRunLoopStop` access — losing the macOS 26
+/// `CGEventTap` fix that motivated picking the fork in the first
+/// place. Process-exit reaps the tap cleanly; spawn-and-forget is
+/// the correct pattern for "listener lives for the life of the app".
+/// See `learnings.md` 2026-04-30 entry for the full investigation +
+/// the escape hatch to take if a future feature needs teardown
+/// without quit.
+///
 /// # Errors
 ///
 /// Returns an error only if the configured PTT key fails to parse from
