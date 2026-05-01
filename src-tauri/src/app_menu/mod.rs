@@ -232,12 +232,13 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 // AppHandle, so we iterate webview_windows() and
                 // pick the one whose `is_focused()` returns true.
                 use tauri::Manager as _;
-                let focused = app.webview_windows().into_iter().find_map(|(_, w)| {
-                    match w.is_focused() {
-                        Ok(true) => Some(w),
-                        _ => None,
-                    }
-                });
+                let focused =
+                    app.webview_windows()
+                        .into_iter()
+                        .find_map(|(_, w)| match w.is_focused() {
+                            Ok(true) => Some(w),
+                            _ => None,
+                        });
                 if let Some(window) = focused {
                     let label = window.label().to_owned();
                     if let Err(e) = window.hide() {
