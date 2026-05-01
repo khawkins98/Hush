@@ -337,6 +337,62 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await expect(disclosure.getByText("com.spotify.client")).toBeVisible();
   });
 
+  test("variant-suggestion box surfaces matching defaults + batch-adds (#320 part 2)", async ({
+    page,
+  }) => {
+    const upserts: Array<{ appName: string; kind: string }> = [];
+    await page.exposeFunction("__hush_record_upsert_variants", (args: unknown) => {
+      upserts.push(args as { appName: string; kind: string });
+    });
+    await installMocks(page, {
+      meeting_app_override_upsert: (args) => {
+        const { appName, kind } = (args ?? {}) as {
+          appName: string;
+          kind: string;
+        };
+        (
+          window as unknown as {
+            __hush_record_upsert_variants: (a: {
+              appName: string;
+              kind: string;
+            }) => void;
+          }
+        ).__hush_record_upsert_variants({ appName, kind });
+        return { appName, kind, createdAt: "2026-05-01T00:00:00Z" };
+      },
+    });
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    // Suggestion box hidden until the user types a substring
+    // matching multiple defaults.
+    await expect(
+      page.locator('[data-testid="override-variant-suggestions"]'),
+    ).toHaveCount(0);
+
+    // Type "zoom" — matches 2 entries in the default mock
+    // (us.zoom.xos + Zoom.exe).
+    await page.getByLabel("App identifier").fill("zoom");
+    const box = page.locator('[data-testid="override-variant-suggestions"]');
+    await expect(box).toBeVisible();
+    await expect(box.getByText("us.zoom.xos")).toBeVisible();
+    await expect(box.getByText("Zoom.exe")).toBeVisible();
+
+    // Submit batch — both pre-checked, kind defaults to Meeting.
+    await page
+      .locator('[data-testid="override-variant-submit"]')
+      .click();
+    // Two upserts happen in parallel; assert both landed with the
+    // right shape (order isn't guaranteed because of Promise.all).
+    await expect.poll(() => upserts.length).toBe(2);
+    const names = new Set(upserts.map((u) => u.appName));
+    expect(names.has("us.zoom.xos")).toBe(true);
+    expect(names.has("Zoom.exe")).toBe(true);
+    for (const u of upserts) {
+      expect(u.kind).toBe("meeting");
+    }
+  });
+
   test("redundant-override warning surfaces when typing a default app_name (#320)", async ({
     page,
   }) => {
