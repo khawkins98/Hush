@@ -23,11 +23,79 @@
  */
 
 :root {
-  /* Primary accent. Buttons-and-borders default; hover targets;
-     focus rings; the brand chip in the sidebar. */
+  /* ── Accent ─────────────────────────────────────────────────── */
   --accent: #6a8cf0;
-  /* Hover / pressed companion — slightly darker, more saturated.
-     Used for hover-state border colour on default buttons and the
-     "Change" chip's hover text. */
   --accent-hover: #396cd8;
+  --accent-subtle: rgba(106, 140, 240, 0.12);
+
+  /* ── Surfaces ───────────────────────────────────────────────── */
+  --bg-app:      #f6f6f6;
+  --bg-sidebar:  #f0f0f3;
+  --bg-surface:  #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-input:    #ffffff;
+
+  /* ── Text ───────────────────────────────────────────────────── */
+  --text-primary:   #111111;
+  --text-secondary: #444444;
+  --text-muted:     #888888;
+  --text-on-accent: #ffffff;
+
+  /* ── Borders ────────────────────────────────────────────────── */
+  --border:        #e1e1e4;
+  --border-subtle: #ebebef;
+  --border-input:  #d1d1d8;
+  --border-focus:  var(--accent);
+
+  /* ── Semantic ───────────────────────────────────────────────── */
+  --danger:         #d83a3a;
+  --danger-bg:      #fff0f0;
+  --danger-border:  #f5c0c0;
+  --warning-bg:     #fff7e6;
+  --warning-border: #f0c87b;
+  --warning-text:   #6a4a00;
+  --info-bg:        #eef2ff;
+  --info-border:    #c7d2fe;
+  --info-text:      #2c3e8f;
+
+  /* ── Shape ──────────────────────────────────────────────────── */
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-pill: 999px;
+
+  /* ── Controls ───────────────────────────────────────────────── */
+  /* Shared height for inputs, selects, and single-line buttons so
+     the config row aligns without explicit per-element overrides. */
+  --control-height: 2.6rem;
+  --control-padding-x: 0.85rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-app:      #1a1a1a;
+    --bg-sidebar:  #1d1d1f;
+    --bg-surface:  #242428;
+    --bg-elevated: #2a2a2e;
+    --bg-input:    #2a2a2a;
+
+    --text-primary:   #f0f0f0;
+    --text-secondary: #c0c0c0;
+    --text-muted:     #888888;
+
+    --border:        #2f2f33;
+    --border-subtle: #252528;
+    --border-input:  #3a3a3e;
+
+    --accent-subtle: rgba(106, 140, 240, 0.18);
+
+    --danger-bg:      #2a1010;
+    --danger-border:  #5a2020;
+    --warning-bg:     #3a2e10;
+    --warning-border: #7a5a20;
+    --warning-text:   #f0d090;
+    --info-bg:        #1e2a4a;
+    --info-border:    #3a4a7a;
+    --info-text:      #c0d0ff;
+  }
 }

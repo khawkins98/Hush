@@ -20,9 +20,17 @@
     active: AppSection;
     onSelect: (section: AppSection) => void;
     historyCount: number | null;
+    // Ambient session state displayed below the nav list. Keeps the
+    // sidebar useful at a glance — model + source tell the user what
+    // config is active without opening Settings.
+    sessionStatus?: {
+      modelName: string | null;
+      audioSourceName: string | null;
+      recording: boolean;
+    };
   };
 
-  let { active, onSelect, historyCount }: Props = $props();
+  let { active, onSelect, historyCount, sessionStatus }: Props = $props();
 
   async function openSettings() {
     try {
@@ -88,6 +96,28 @@
     {/each}
   </ul>
 
+  {#if sessionStatus}
+    <div class="session-status" class:recording={sessionStatus.recording}>
+      {#if sessionStatus.recording}
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-label recording-label">Recording</span>
+      {:else}
+        {#if sessionStatus.modelName}
+          <button type="button" class="status-stack" onclick={openSettings} title="Open Settings to change model">
+            <span class="status-key">Model</span>
+            <span class="status-val">{sessionStatus.modelName}</span>
+          </button>
+        {/if}
+        {#if sessionStatus.audioSourceName}
+          <button type="button" class="status-stack" onclick={openSettings} title="Open Settings to change source">
+            <span class="status-key">Source</span>
+            <span class="status-val">{sessionStatus.audioSourceName}</span>
+          </button>
+        {/if}
+      {/if}
+    </div>
+  {/if}
+
   <div class="sidebar-footer">
     <button
       type="button"
@@ -107,8 +137,8 @@
     width: 180px;
     flex-shrink: 0;
     padding: 1.25rem 0.75rem;
-    background-color: #f6f6f8;
-    border-right: 1px solid #e1e1e1;
+    background-color: var(--bg-sidebar, #f0f0f3);
+    border-right: 1px solid var(--border, #e1e1e1);
     display: flex;
     flex-direction: column;
     gap: 1rem;
@@ -123,7 +153,7 @@
     align-items: center;
     gap: 0.55rem;
     padding: 0 0.5rem 0.5rem;
-    border-bottom: 1px solid #e1e1e1;
+    border-bottom: 1px solid var(--border, #e1e1e1);
   }
   .brand-icon {
     width: 22px;
@@ -199,7 +229,7 @@
   .sidebar-footer {
     margin-top: auto;
     padding-top: 0.75rem;
-    border-top: 1px solid #e1e1e1;
+    border-top: 1px solid var(--border, #e1e1e1);
   }
   .nav-item-secondary {
     color: #666;
@@ -209,9 +239,93 @@
     color: #888;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   }
+  .session-status {
+    padding: 0.6rem 0.75rem;
+    border-top: 1px solid var(--border, #e1e1e1);
+    border-bottom: 1px solid var(--border, #e1e1e1);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .session-status.recording {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .status-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background-color: #d83a3a;
+    flex-shrink: 0;
+    animation: sidebar-pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes sidebar-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .status-dot { animation: none; }
+  }
+
+  .status-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .recording-label {
+    color: #d83a3a;
+  }
+
+  .status-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+    min-width: 0;
+    width: 100%;
+    /* reset button chrome */
+    background: none;
+    border: none;
+    padding: 0.3rem 0.5rem;
+    margin: 0 -0.5rem;
+    border-radius: 5px;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    transition: background-color 0.12s;
+  }
+  .status-stack:hover {
+    background-color: rgba(44, 62, 143, 0.08);
+  }
+  .status-stack:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .status-key {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #888;
+  }
+
+  .status-val {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
   @media (prefers-color-scheme: dark) {
     .app-sidebar {
-      background-color: #1d1d1f;
       border-right-color: #2f2f33;
     }
     .brand {
@@ -237,5 +351,11 @@
     }
     .nav-item-secondary { color: #a8a8a8; }
     .nav-shortcut { color: #888; }
+    .session-status {
+      border-color: #2f2f33;
+    }
+    .status-key { color: #666; }
+    .status-val { color: #c0c0c0; }
+    .status-stack:hover { background-color: rgba(150, 170, 240, 0.1); }
   }
 </style>

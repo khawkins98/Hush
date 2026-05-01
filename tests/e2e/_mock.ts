@@ -326,8 +326,10 @@ export async function gotoSection(
   page: Page,
   section: "dictation" | "meetings" | "history" | "configuration",
 ): Promise<void> {
+  // Sidebar navigation was removed; sections are always in the DOM.
+  // "meetings" content lives in the history section.
   const target = section === "meetings" ? "history" : section;
-  await page.locator(`[data-testid="nav-${target}"]`).click();
+  await page.locator(`#${target}-section`).scrollIntoViewIfNeeded();
 }
 
 /**

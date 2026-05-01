@@ -3,8 +3,8 @@ import { installMocks } from "./_mock";
 
 // Phase A1 of the system-audio + meeting-mode pivot (#33) replaced
 // the simple input-device dropdown with a grouped source picker:
-// every mic device under a "Microphone" optgroup, the system-audio
-// entry under a "System audio" optgroup. The system-audio option is
+// every mic device under a "Microphone" group, the system-audio
+// entry under a "System audio" group. The system-audio option is
 // rendered disabled with a "(coming soon — #33)" suffix until a
 // per-platform backend ships.
 //
@@ -19,6 +19,12 @@ import { installMocks } from "./_mock";
 // session. These specs scope to the dictation controls section
 // (`section.controls`) so the assertions stay about the dictation
 // hot path's picker; the meeting panel picker has its own coverage.
+//
+// UI design system (#364/#365): the native `<select>` was replaced
+// with a custom listbox component (Select.svelte). Options now use
+// ARIA roles (role="option", aria-disabled) and data-testid attrs
+// instead of native HTML select/optgroup/option elements. The
+// dropdown must be opened (trigger click) before options are visible.
 
 test.describe("audio source picker", () => {
   test("renders both microphone and system-audio optgroups", async ({
@@ -34,33 +40,28 @@ test.describe("audio source picker", () => {
     // meeting-panel picker added in #122 Phase 1.
     const controls = page.locator("section.controls");
 
-    // Wait for the picker to mount with a real `<select>` (the loading
-    // placeholder is a `<p>`).
-    await expect(controls.locator("select")).toBeVisible();
+    // Wait for the custom trigger to mount (loading placeholder is a <p>).
+    const trigger = controls.locator('[data-testid="source-picker-trigger"]');
+    await expect(trigger).toBeVisible();
 
-    // The picker wraps options in <optgroup> by source kind.
-    const micGroup = controls.locator('optgroup[label="Microphone"]');
-    const sysGroup = controls.locator('optgroup[label="System audio"]');
+    // Open the dropdown before checking options.
+    await trigger.click();
+
+    // The picker wraps options in groups with data-group-label.
+    const micGroup = controls.locator('[data-group-label="Microphone"]');
+    const sysGroup = controls.locator('[data-group-label="System audio"]');
     await expect(micGroup).toHaveCount(1);
     await expect(sysGroup).toHaveCount(1);
 
     // The mock surfaces "Built-in Microphone" as the only mic.
-    const micOption = micGroup.locator("option").first();
+    const micOption = micGroup.locator('[role="option"]').first();
     await expect(micOption).toHaveText(/Built-in Microphone/);
 
     // The system-audio option is the disabled "coming soon" affordance.
-    // Use the attribute check rather than `toBeDisabled` because
-    // Playwright's interactivity-shaped helpers don't fully recognise
-    // `<option>` as a disable-able element on every WebKit/Chromium
-    // version we test against — the HTML attribute is the canonical
-    // signal anyway.
-    const sysOption = sysGroup.locator("option").first();
-    await expect(sysOption).toHaveAttribute("disabled", "");
+    // aria-disabled="true" is the custom listbox's disabled signal.
+    const sysOption = sysGroup.locator('[role="option"]').first();
+    await expect(sysOption).toHaveAttribute("aria-disabled", "true");
     await expect(sysOption).toContainText(/coming soon/i);
-    // Pre-#209 the "coming soon" suffix carried `#33` (the umbrella
-    // issue, since closed when macOS shipped). Now the option text
-    // is platform-shaped without the issue number; the #106/#107
-    // trackers live in the surrounding copy/error messages.
     await expect(sysOption).not.toContainText(/#33/);
   });
 
@@ -91,14 +92,17 @@ test.describe("audio source picker", () => {
     });
     await page.goto("/");
 
-    const sysOption = page
-      .locator("section.controls")
-      .locator('optgroup[label="System audio"]')
-      .locator("option")
+    const controls = page.locator("section.controls");
+    const trigger = controls.locator('[data-testid="source-picker-trigger"]');
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+
+    const sysOption = controls
+      .locator('[data-group-label="System audio"]')
+      .locator('[role="option"]')
       .first();
-    // No `disabled` attribute = enabled. See the parallel test for
-    // why we use the attribute rather than `toBeEnabled`.
-    await expect(sysOption).not.toHaveAttribute("disabled", "");
+    // No `aria-disabled` = enabled.
+    await expect(sysOption).not.toHaveAttribute("aria-disabled", "true");
     await expect(sysOption).not.toContainText(/coming soon/i);
   });
 

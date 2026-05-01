@@ -1,5 +1,6 @@
 <script lang="ts">
   import ErrorDisplay from "./ErrorDisplay.svelte";
+  import Select from "./Select.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type { AudioSourceListing } from "./types";
 
@@ -18,7 +19,13 @@
     error: ErrorDisplayShape | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
+    // Shared callback used by both the setup-banner "Open Settings →
+    // Model" button and the inline model chip.
     onScrollToModelPicker: () => void;
+    // Active model display name; null when no model is loaded.
+    // Renders an inline model chip above the audio picker so the two
+    // session-config controls are visually co-located.
+    activeModelName: string | null;
   };
 
   let {
@@ -33,6 +40,7 @@
     onStart,
     onStop,
     onScrollToModelPicker,
+    activeModelName,
   }: Props = $props();
 
   // Derived: separate the mic devices from the system-audio entry so
@@ -44,19 +52,46 @@
   let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
 
   // Total picker option count, including the disabled system-audio
-  // entry. Used to size the "no audio sources at all" empty state —
-  // we should never get here in practice (the backend always pushes
-  // a system-audio listing) but it's a safety net for the UI to not
-  // render an empty `<select>`.
+  // entry. Used to size the "no audio sources at all" empty state.
   let pickableCount = $derived(mics.length + (systemAudio ? 1 : 0));
 
   // Can the user actually start? At least one *supported* source must
   // exist. Mics are always supported when present; the system-audio
-  // entry is supported only when the backend says so. A platform with
-  // zero mics AND no system-audio support would have nothing usable.
+  // entry is supported only when the backend says so.
   let hasUsableSource = $derived(
     mics.length > 0 || (systemAudio?.isSupported ?? false),
   );
+
+  // Build the groups array for the custom Select component, mirroring
+  // the old <optgroup> structure. The system-audio entry renders as a
+  // disabled option when the backend reports it unsupported.
+  let sourceGroups = $derived([
+    {
+      label: "Microphone",
+      options: mics.map((m) => ({
+        value: m.id,
+        label: m.name + (m.isDefault ? " (default)" : ""),
+      })),
+    },
+    ...(systemAudio
+      ? [
+          {
+            label: "System audio",
+            options: [
+              {
+                value: systemAudio.id,
+                label:
+                  systemAudio.name +
+                  (systemAudio.isSupported
+                    ? ""
+                    : " (coming soon on this platform)"),
+                disabled: !systemAudio.isSupported,
+              },
+            ],
+          },
+        ]
+      : []),
+  ]);
 </script>
 
 {#if noModelInstalled}
@@ -81,48 +116,70 @@
 {/if}
 
 <section class="controls">
-  <label>
-    Audio source
-    {#if !sourcesLoaded}
-      <p class="empty-devices">Loading sources…</p>
-    {:else if pickableCount === 0}
-      <p class="empty-devices">
-        No audio sources detected. On macOS, grant microphone access in
-        System Settings → Privacy &amp; Security. On Linux, check that
-        PulseAudio / PipeWire is running.
-      </p>
-    {:else}
-      <!--
-        Two groups: mic devices (always supported) and the system-audio
-        entry. ScreenCaptureKit is wired on macOS today; Linux
-        (#106) and Windows (#107) are still pending. Splitting via
-        <optgroup> makes the structure clear to assistive tech; the
-        disabled attribute on the not-yet-supported option means the
-        user can't accidentally pick it and hit a runtime error.
-      -->
-      <select bind:value={selected} disabled={recording || busy}>
-        <optgroup label="Microphone">
-          {#each mics as mic (mic.id)}
-            <option value={mic.id}>
-              {mic.name}{mic.isDefault ? " (default)" : ""}
-            </option>
-          {/each}
-        </optgroup>
-        {#if systemAudio}
-          <optgroup label="System audio">
-            <option value={systemAudio.id} disabled={!systemAudio.isSupported}>
-              {systemAudio.name}{systemAudio.isSupported
-                ? ""
-                : " (coming soon on this platform)"}
-            </option>
-          </optgroup>
-        {/if}
-      </select>
+  <!--
+    Unified session-config row: model chip (left) + audio source
+    picker (right). Co-locating these two "what are you recording
+    with?" controls replaces the old pattern where the model chip
+    floated in the page header and the source lived below. Now they
+    read as a single setup strip above the action button.
+  -->
+  <div class="config-row">
+    <div class="config-field">
+      <label class="field-label" for="audio-source-select">Audio source</label>
+      {#if !sourcesLoaded}
+        <p class="empty-devices">Loading sources…</p>
+      {:else if pickableCount === 0}
+        <p class="empty-devices">
+          No audio sources detected. On macOS, grant microphone access in
+          System Settings → Privacy &amp; Security. On Linux, check that
+          PulseAudio / PipeWire is running.
+        </p>
+      {:else}
+        <Select
+          id="audio-source-select"
+          groups={sourceGroups}
+          value={selected}
+          onchange={(v) => (selected = v)}
+          disabled={recording || busy}
+        />
+      {/if}
+    </div>
+
+    {#if activeModelName}
+      <div class="config-field">
+        <span class="field-label">Model</span>
+        <button
+          type="button"
+          class="model-chip"
+          onclick={onScrollToModelPicker}
+          aria-label="Active model: {activeModelName}. Click to change."
+          title="Change transcription model"
+        >
+          <span class="model-name">{activeModelName}</span>
+          <svg
+            class="model-chevron"
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            aria-hidden="true"
+            fill="none"
+          >
+            <path
+              d="M3 4l2 2 2-2"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
     {/if}
-  </label>
+  </div>
 
   {#if !recording}
     <button
+      class="start-btn"
       onclick={onStart}
       disabled={busy || !hasUsableSource || noModelInstalled}
       aria-label={busy
@@ -135,20 +192,23 @@
       {#if transcribing}
         <span class="spinner" aria-hidden="true"></span> Transcribing…
       {:else}
-        ● Start recording
+        <span class="rec-dot idle" aria-hidden="true"></span> Start recording
       {/if}
     </button>
   {:else}
-    <button class="stop" onclick={onStop} disabled={busy} aria-label="Stop recording and transcribe">
-      ■ Stop and transcribe
+    <button
+      class="start-btn stop"
+      onclick={onStop}
+      disabled={busy}
+      aria-label="Stop recording and transcribe"
+    >
+      <span class="rec-dot stop" aria-hidden="true"></span> Stop and transcribe
     </button>
   {/if}
 
   <!--
     aria-live so screen readers announce the recording state change
-    when the hotkey toggles it from elsewhere on the desktop. Visually
-    this is the same `🔴 Recording…` cue that gives sighted users
-    feedback that the mic is hot when the window is in the background.
+    when the hotkey toggles it from elsewhere on the desktop.
   -->
   <p class="status" aria-live="polite">
     {#if recording}
@@ -166,12 +226,7 @@
 {/if}
 
 <style>
-/*
-  First-time-setup banner. Renders only when the catalog has loaded
-  and no model is on disk. Sits above the controls row so it's the
-  first action-shaped surface a fresh-install user reads — replaces
-  the previous "click Start, get a confusing error" flow.
-*/
+/* ── First-time-setup banner ─────────────────────────────── */
 .setup-banner {
   display: flex;
   align-items: center;
@@ -179,9 +234,9 @@
   gap: 1rem;
   padding: 0.85rem 1rem;
   margin: 0 0 1rem;
-  background-color: #eef2ff;
-  border: 1px solid #c7d2fe;
-  border-radius: 8px;
+  background-color: var(--info-bg);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-md);
 }
 
 .setup-banner-text {
@@ -194,12 +249,13 @@
 
 .setup-banner-text strong {
   font-size: 0.95rem;
-  color: #1e1b4b;
+  color: var(--info-text);
 }
 
 .setup-banner-text span {
   font-size: 0.85rem;
-  color: #3730a3;
+  color: var(--info-text);
+  opacity: 0.85;
 }
 
 .setup-banner button {
@@ -207,99 +263,182 @@
   white-space: nowrap;
 }
 
-@media (prefers-color-scheme: dark) {
-  .setup-banner {
-    background-color: #1e1b4b;
-    border-color: #4338ca;
-  }
-  .setup-banner-text strong {
-    color: #e0e7ff;
-  }
-  .setup-banner-text span {
-    color: #c7d2fe;
-  }
-}
-
+/* ── Controls container ──────────────────────────────────── */
 .controls {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.85rem;
   align-items: stretch;
 }
 
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  text-align: left;
-  font-size: 0.85rem;
-  color: #555;
+/* ── Config row: audio source + model ───────────────────── */
+.config-row {
+  display: grid;
+  /* Model chip is narrower; audio source fills remaining space. */
+  grid-template-columns: 1fr auto;
+  gap: 0.6rem;
+  align-items: end;
 }
 
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.field-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+
+/* ── Model chip ──────────────────────────────────────────── */
+.model-chip {
+  height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.85rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.model-chip:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-hover);
+  color: var(--text-primary);
+}
+
+.model-chip:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.model-name {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ── Empty devices notice ────────────────────────────────── */
 .empty-devices {
   margin: 0;
   padding: 0.65rem 0.85rem;
-  background-color: #fff7e6;
-  border: 1px solid #f0c87b;
-  border-radius: 6px;
-  color: #6a4a00;
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  color: var(--warning-text);
   font-size: 0.9rem;
   line-height: 1.4;
 }
 
-select,
-button {
-  border-radius: 8px;
-  border: 1px solid #d1d1d1;
-  padding: 0.7em 1.2em;
+/* ── Start / Stop button ─────────────────────────────────── */
+.start-btn {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-input);
+  height: var(--control-height);
+  padding: 0 1.2em;
   font-size: 1em;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.15s, background-color 0.15s;
-}
-
-button {
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   cursor: pointer;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+  width: 100%;
 }
 
-button:hover:not(:disabled) {
+.start-btn:hover:not(:disabled) {
   border-color: var(--accent-hover);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
-button:disabled {
-  opacity: 0.6;
+.start-btn:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.start-btn:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
-button.stop {
-  background-color: #d83a3a;
+.start-btn.stop {
+  background-color: var(--danger);
   color: white;
-  border-color: #d83a3a;
+  border-color: var(--danger);
 }
 
+.start-btn.stop:hover:not(:disabled) {
+  background-color: #c02e2e;
+  border-color: #c02e2e;
+  box-shadow: 0 0 0 3px rgba(216, 58, 58, 0.18);
+}
+
+/* Separate primary button style used by the setup-banner. */
 button.primary {
   background-color: var(--accent);
-  color: white;
-  border-color: var(--accent);
+  color: var(--text-on-accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 0.45rem 1rem;
+  font-size: 0.88rem;
+  font-family: inherit;
   font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s;
 }
 
 button.primary:hover:not(:disabled) {
-  background-color: #4a6cd0;
-  border-color: #4a6cd0;
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
+/* ── Recording dot / spinner ─────────────────────────────── */
+.rec-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.rec-dot.idle {
+  background-color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.rec-dot.stop {
+  background-color: white;
+}
+
+/* ── Status line ─────────────────────────────────────────── */
 .status {
   margin: 0;
   min-height: 1.4em;
-  font-size: 0.95rem;
-  color: #555;
+  font-size: 0.88rem;
+  color: var(--text-muted);
   text-align: center;
   display: flex;
   align-items: center;
@@ -308,10 +447,10 @@ button.primary:hover:not(:disabled) {
 }
 
 .recording-dot {
-  width: 0.7rem;
-  height: 0.7rem;
+  width: 0.65rem;
+  height: 0.65rem;
   border-radius: 50%;
-  background-color: #d83a3a;
+  background-color: var(--danger);
   display: inline-block;
   animation: pulse 1.2s ease-in-out infinite;
 }
@@ -340,26 +479,5 @@ button.primary:hover:not(:disabled) {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-@media (prefers-color-scheme: dark) {
-  label,
-  .status {
-    color: #aaa;
-  }
-  .empty-devices {
-    background-color: #3a2e10;
-    border-color: #7a5a20;
-    color: #f0d090;
-  }
-  select,
-  button {
-    color: #f0f0f0;
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  button:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
 }
 </style>
