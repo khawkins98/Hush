@@ -85,9 +85,11 @@
   let userFilter = $state<HistoryFilter>("all");
 
   let hasQuery = $derived(historyQuery.trim().length > 0);
-  let effectiveFilter = $derived<HistoryFilter>(
-    hasQuery ? "dictation" : userFilter,
-  );
+  // #357 phase 2 step 3 lifted the search-time forced filter:
+  // both streams now run their own searches (history FTS5 +
+  // utterance FTS5 rolled up to sessions), so the user's chip
+  // selection stays in effect while a query is active.
+  let effectiveFilter = $derived<HistoryFilter>(userFilter);
 
   // Merged feed. Each entry tags its kind so the {#each} below can
   // dispatch to the right row component, and the sort key is the
@@ -287,18 +289,12 @@
           class="filter-chip"
           class:active={effectiveFilter === chip.value}
           aria-pressed={effectiveFilter === chip.value}
-          disabled={hasQuery && chip.value !== "dictation"}
           onclick={() => selectFilter(chip.value as HistoryFilter)}
           data-testid="history-filter-{chip.value}"
         >
           {chip.label}
         </button>
       {/each}
-      {#if hasQuery}
-        <span class="filter-note" role="note">
-          Search covers dictation only — meetings come in a follow-up.
-        </span>
-      {/if}
     </div>
   {/if}
 
@@ -443,12 +439,6 @@
 .filter-chip:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-.filter-note {
-  font-size: 0.78rem;
-  color: #777;
-  font-style: italic;
-  margin-left: 0.25rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -619,9 +609,6 @@ button.ghost.danger:hover:not(:disabled) {
     background-color: rgba(150, 170, 240, 0.18);
     border-color: rgba(150, 170, 240, 0.5);
     color: #b8c8ff;
-  }
-  .filter-note {
-    color: #8a8a90;
   }
   button.ghost {
     border-color: #3a3a3a;

@@ -43,6 +43,38 @@ pub async fn meeting_sessions_list(
         .map_err(|e| IpcError::MeetingSessions(format!("sessions list: {e:#}")))
 }
 
+/// Cross-stream meeting search (#357 phase 2). Matches `query`
+/// against the FTS5 index over `utterances.text` and returns the
+/// distinct sessions whose utterances hit. The unified History
+/// surface calls this in parallel with `history_search` so the
+/// search box queries dictation + meetings in lockstep.
+///
+/// An empty / whitespace-only `query` is treated as "no filter"
+/// and returns the full list — same shape as `history_search`'s
+/// fallback. Avoids handing FTS5 a malformed phrase that would
+/// throw a "no such column" error for trivially-empty input.
+#[tauri::command]
+pub async fn meeting_sessions_search(
+    state: State<'_, AppState>,
+    query: String,
+) -> IpcResult<Vec<crate::meeting::MeetingSession>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return state
+            .data
+            .meetings
+            .list()
+            .await
+            .map_err(|e| IpcError::MeetingSessions(format!("sessions list: {e:#}")));
+    }
+    state
+        .data
+        .meetings
+        .search_sessions(trimmed)
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("sessions search: {e:#}")))
+}
+
 /// Full detail for one session: the row plus all its persisted
 /// utterances ordered by `started_at_ms ASC`, plus any in-flight
 /// partials the streaming pump has produced for the still-active

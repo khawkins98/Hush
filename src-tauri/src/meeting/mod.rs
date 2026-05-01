@@ -251,6 +251,19 @@ pub trait MeetingSessionRepository:
     /// "session in progress" badge for a session whose pump task
     /// died with the previous process.
     async fn list_open_sessions(&self) -> Result<Vec<MeetingSession>>;
+
+    /// Cross-stream session search (#357 phase 2). Matches the
+    /// user's `query` against the `utterances_fts` virtual table
+    /// (FTS5 over `utterances.text`, set up in migration 0002),
+    /// rolls up to one row per session via `DISTINCT session_id`,
+    /// and returns the matching sessions ordered by recency. Empty
+    /// query is rejected by the IPC layer; the repo can assume the
+    /// caller already filtered out short queries.
+    ///
+    /// Returns `Vec<MeetingSession>` rather than the raw IDs so
+    /// the frontend's merged-feed render doesn't have to do a
+    /// second round-trip.
+    async fn search_sessions(&self, query: &str) -> Result<Vec<MeetingSession>>;
 }
 
 #[cfg(test)]
