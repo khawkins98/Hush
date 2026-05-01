@@ -36,6 +36,18 @@ References: fufesou [listen.rs](https://github.com/fufesou/rdev/blob/a90dbe1172f
 
 ---
 
+## 2026-04-30 — SCK audio buffer migrated to lock-free `rtrb` ring (#251)
+
+Pre-#251 the SCK system-audio path wrote into an `Arc<Mutex<Vec<f32>>>` from inside `did_output_sample_buffer`. The cpal mic path had been on an `rtrb` SPSC ring since #55 — asymmetric. If the consumer (meeting pump) wedged on a SQLite write or a long Whisper inference, the framework's libdispatch callback thread would block waiting on the mutex, putting the OS audio scheduler at risk of degrading the capture session.
+
+**Why `rtrb::Producer` needs an `UnsafeCell`-and-`unsafe impl Sync` wrapper here.** `Producer` is `Send + !Sync` — the correct shape for an SPSC ring (two threads concurrently calling `Producer::push` would race on the head pointer). cpal's input-stream callback is `FnMut` (so it can capture the producer by `move` and call `push` directly). SCK's `SCStreamOutputTrait::did_output_sample_buffer` takes `&self`, so we need interior mutability. Wrapping in `Mutex<Producer>` would defeat the lock-free goal — the whole point of the migration. So we wrap `Producer` in `UnsafeCell` and `unsafe impl Sync` on the wrapper, with a SAFETY comment grounded in the fact that **ScreenCaptureKit dispatches callbacks serially per output handler** (libdispatch serial queue). Concrete-the-invariant tests live in `audio::screencapturekit::tests` (Send/Sync compile-check + push/drain round-trip + full-ring overflow surfacing).
+
+**Consumer side stays `Mutex<Consumer>`.** `Consumer::read_chunk` is itself wait-free; the `Mutex` is just providing interior mutability so `drain_buffer(&self)` and `stop(self)` can both touch the consumer end. The lock is never contended in practice — the consumer side is single-threaded (the meeting pump's drain tick or the stop path, not both at once). Using `Mutex` for "give me `&mut` from `&self`" is fine when the realtime thread is on the producer side, which is where the discipline matters.
+
+**Drain helpers shared via `pub(super)`.** `drain_consumer` and `log_overflow_if_set` lived in `audio::mod.rs` for the cpal path. Marked `pub(super)` rather than copy-pasted into the SCK submodule — same overflow-rate-limiting policy across both sources, one source of truth. The cpal mic path's existing tests (rtrb shape, drain-after-overflow logging) cover the helpers; the SCK module adds wrapper-specific tests on top.
+
+---
+
 ## 2026-04-30 — D2 diarization decisions (#111 chain)
 
 Six PRs (#295–#300) shipped the initial chain and three follow-ups (#303–#305) closed audit findings. Capturing the non-obvious calls so future-Claude doesn't re-derive them from the diff.
