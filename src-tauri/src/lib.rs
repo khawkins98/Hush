@@ -485,6 +485,7 @@ pub fn run() {
             ipc::commands::meeting::meeting_sessions_search,
             ipc::commands::meeting::meeting_session_get,
             ipc::commands::meeting::meeting_session_delete,
+            ipc::commands::meeting::meeting_session_export,
             ipc::commands::meeting::meeting_session_set_notes,
             ipc::commands::meeting::meeting_active_session,
             ipc::commands::meeting::meeting_start_manual,
