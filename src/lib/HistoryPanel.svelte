@@ -5,6 +5,7 @@
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type {
     HistoryEntry,
+    MeetingExportFormat,
     MeetingSession,
     MeetingSessionDetail,
     ModelCard,
@@ -57,6 +58,13 @@
     /// when a meeting row is expanded. The row caches the result
     /// locally so a re-toggle is free.
     onMeetingLoadDetail: (id: number) => Promise<MeetingSessionDetail>;
+    /// Per-row meeting export (#357 phase 3b). Drives the OS save
+    /// picker + the IPC. `null` if the parent didn't pass a
+    /// handler — the row hides its Export ▾ button in that case.
+    onMeetingExport?: (
+      session: MeetingSession,
+      format: MeetingExportFormat,
+    ) => void | Promise<void>;
     /// Wipes every dictation row. Meetings have their own per-row
     /// Delete; bulk meeting delete pends until the export work in
     /// phase 3 ships an Export-filtered + Delete-filtered pair.
@@ -81,6 +89,7 @@
     onExportDictationCsv,
     onMeetingDelete,
     onMeetingLoadDetail,
+    onMeetingExport,
     onClearAll,
   }: Props = $props();
 
@@ -346,6 +355,7 @@
             confirming={isConfirming("meeting", row.session.id)}
             onLoadDetail={onMeetingLoadDetail}
             onDelete={handleMeetingDelete}
+            onExport={onMeetingExport}
           />
         {/if}
       {/each}
