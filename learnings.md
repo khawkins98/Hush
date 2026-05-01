@@ -4,6 +4,34 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## Supply-chain pins (policy, last reviewed 2026-05-01)
+
+Two production deps live outside the "stable crates.io release" baseline. Both are deliberate; both have a documented exit condition. Don't bump either without re-reading this section.
+
+### `ort = "=2.0.0-rc.12"` (exact pin, RC)
+
+**Why we're on an RC.** ort 2.0 stable hasn't shipped. We need 2.0 for the macOS CoreML acceleration path the wespeaker diarizer (#111) takes; 1.x is missing several execution-provider features. The `download-binaries` feature pulls vendored ORT runtime libs from `pyke.io` at build time, so we don't depend on a system-installed onnxruntime — important for the Linux distro packagers and our Windows release artifact.
+
+**Why exact-pinned (`=`, not `^`).** rc.10 → rc.12 ate one breakage already (an upstream `ureq::tls` path change in ort-sys's build script). RCs ship API changes between versions; an unpinned `cargo update` could re-break the diarizer between PRs. The exact pin makes any version movement an explicit, reviewed change.
+
+**Bump-when policy.** Switch to a caret pin or stable version *only when* either:
+1. ort 2.0 stable ships and our compile is clean against it, **or**
+2. a future rc fixes a security advisory we care about (then bump to the next exact rc, run the diarizer integration smoke, document the bump in this section).
+
+`ndarray = "=0.17"` is exact-pinned for the same reason — ort's exposed types are generic over `ndarray::ArrayBase`, so bumping either crate in isolation breaks the build.
+
+### `rdev` git fork pin
+
+**Why a fork.** Narsil/rdev's upstream is incomplete on macOS 26+ for the `listen` path — the `CGEventTap` needs to be attached to `CFRunLoopGetMain()`, and Narsil's PR #147 only fixed the `send` path. fufesou's fork (the one RustDesk ships) has the listen-path fix.
+
+**Bump-when policy.** Switch to a published crate version *only when* either:
+1. Narsil ships an upstream release that completes the listen-path fix, **or**
+2. fufesou publishes their fork to crates.io.
+
+If you're considering bumping the rev (`rev = "..."`) to track newer fufesou commits, read the fork's CHANGELOG / open issues first — the rev is currently load-bearing because it predates a refactor we haven't validated. The 2026-04-30 entry on rdev::listen has the architectural reasoning.
+
+---
+
 ## 2026-04-30 — Whisper context split for dictation vs meeting (#248)
 
 `AppState` previously held a single `TranscribeSlot` shared between the dictation one-shot path (`stop_dictation`) and the meeting pump (`WhisperStreamingSession::drain`). Both dispatched inference via `tokio::task::spawn_blocking`, so two blocking-pool threads could land on the same `Mutex<WhisperContext>` simultaneously. Pressing the dictation hotkey during a meeting pump tick made one thread wait the full inference duration (200 ms – 2 s on Tiny / Small models) for the lock — and because the pump runs on a fixed drain interval, repeated contention pushed pump ticks past their window, accumulating audio, lengthening the next inference, and compounding latency over long meetings.
