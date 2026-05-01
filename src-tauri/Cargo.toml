@@ -37,6 +37,19 @@ tauri-plugin-shell = "2"
 # functional — without it the plugin commands return permission
 # errors at runtime.
 tauri-plugin-os = "2"
+# Single-instance lock (#326). Without this plugin a second
+# launch (Spotlight while a tray-hidden instance is up,
+# `npm run tauri dev` while a bundled build is running, etc.)
+# would open a fresh process that opens its own SQLite pool on
+# the shared `hush.db` (sqlx's runtime lock is in-process only,
+# not cross-process — concurrent FTS5 writes can corrupt the
+# index), spawns its own rdev `listen()` thread (two CGEventTaps
+# racing for PTT events), registers its own toggle hotkey (one
+# fails non-deterministically), and emits its own `audio:level`
+# pump. Registered first in the builder chain so the second
+# instance bails out before any of the side-effect-bearing
+# plugins (autostart, global-shortcut, etc.) initialise.
+tauri-plugin-single-instance = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
