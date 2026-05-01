@@ -1347,6 +1347,77 @@ pub async fn set_meeting_autostart_mode(
 /// quitting the app.
 pub const UPDATE_CHECK_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
+/// LaunchAgent path-staleness flag (#317). #271's setup hook
+/// re-registers the autostart plist with the current binary
+/// path on every launch where autostart is enabled — but if
+/// `enable()` fails (read-only home, fs permission issue) the
+/// LaunchAgent still points at whatever path it had before, and
+/// the user gets no signal. This IPC + the retry below give
+/// Settings → General a way to surface the failure and let the
+/// user trigger another attempt.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutostartPathStatus {
+    /// True if `lib.rs::run`'s post-#271 re-register hit an
+    /// error. False on every other path (autostart not enabled,
+    /// re-register succeeded, or non-macOS where the flag is
+    /// always false because the re-register block is gated to
+    /// macOS).
+    pub stale: bool,
+}
+
+#[tauri::command]
+pub fn get_autostart_path_status(state: State<'_, AppState>) -> IpcResult<AutostartPathStatus> {
+    Ok(AutostartPathStatus {
+        stale: state
+            .autostart_path_stale
+            .load(std::sync::atomic::Ordering::Relaxed),
+    })
+}
+
+/// Retry the LaunchAgent re-register that failed at boot (#317).
+/// Returns `true` if the retry succeeded (and clears the stale
+/// flag so subsequent `get_autostart_path_status` calls see the
+/// cleaner state); returns `false` if the retry also failed.
+///
+/// Settings → General's "Click to update" button calls this when
+/// the user wants to retry without restarting the app.
+#[tauri::command]
+pub fn retry_autostart_registration(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> IpcResult<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let mgr = app.autolaunch();
+        match mgr.enable() {
+            Ok(()) => {
+                state
+                    .autostart_path_stale
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(
+                    "autostart: retry_autostart_registration succeeded; LaunchAgent path is now current"
+                );
+                Ok(true)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "autostart: retry_autostart_registration failed; flag stays set"
+                );
+                Ok(false)
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        let _ = state;
+        Ok(true)
+    }
+}
+
 /// Manual "Check for updates" probe (#223). Calls
 /// [`crate::updater::check_for_updates`] against the app's shared
 /// HTTP client; the result drives an in-app dialog.

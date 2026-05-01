@@ -386,6 +386,13 @@ pub struct AppState {
     /// reload. `AtomicI32` matches `whisper-rs`'s `set_n_threads`
     /// signature.
     pub inference_threads: Arc<std::sync::atomic::AtomicI32>,
+    /// Whether the LaunchAgent re-register on startup (#271)
+    /// failed for a reason that needs the user's attention
+    /// (read-only home, fs permission issue). Set by `lib.rs::run`
+    /// when `autolaunch().enable()` returns Err. Read by Settings
+    /// → General to show a "path is stale" warning row (#317).
+    /// Cleared when `retry_autostart_registration` succeeds.
+    pub autostart_path_stale: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Encode [`crate::meeting::MeetingAutostartMode`] into the
@@ -747,6 +754,7 @@ impl AppStateBuilder {
             inference_threads: self
                 .inference_threads_arc
                 .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicI32::new(4))),
+            autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 }
