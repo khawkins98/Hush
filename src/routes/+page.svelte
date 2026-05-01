@@ -992,11 +992,21 @@
 /* Phase 1 IA redesign: app shell is a flex row of sidebar +
    content. The container's centred-with-max-width treatment moves
    to .app-main so each section reads at the same comfortable
-   measure. */
+   measure.
+
+   Fixed-height shell + scroll-isolated main panel (#336). Pre-fix
+   the document body was the scroll container, so a two-finger
+   scroll moved the entire .app-shell — including the sidebar
+   whose `position: sticky` only sticks within its containing
+   block. Locking .app-shell to 100vh and making .app-main the
+   sole `overflow: auto` region means the sidebar stays put and
+   only the content panel scrolls. Mirrors how every native macOS
+   app's sidebar behaves. */
 .app-shell {
   display: flex;
   align-items: stretch;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-main {
@@ -1004,6 +1014,7 @@
   min-width: 0;
   padding: 3vh 2rem 4vh;
   text-align: left;
+  overflow-y: auto;
 }
 
 .section-header {

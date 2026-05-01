@@ -108,7 +108,22 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         )
         .build()?;
 
+    // Window submenu carries the standard macOS window-management
+    // affordances PLUS our custom `close-window` item bound to
+    // ⌘W (#336). Tauri 2 doesn't synthesise a Close item for us,
+    // so without this entry ⌘W is a silent no-op — a real-feel
+    // papercut that distinguishes "Mac app" from "web app in a
+    // window". The item ID is dispatched in `on_menu_event` to
+    // hide (not destroy) the focused window: main + settings rejoin
+    // the close-hide pattern wired in lib.rs::run; HUD hides without
+    // affecting the in-flight recording.
     let window_submenu = SubmenuBuilder::new(app, "Window")
+        .item(
+            &MenuItemBuilder::with_id("close-window", "Close Window")
+                .accelerator("CmdOrCtrl+W")
+                .build(app)?,
+        )
+        .separator()
         .minimize()
         .maximize()
         .separator()
@@ -201,6 +216,37 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                     });
                 } else {
                     tracing::debug!("menu check-for-updates: probe already in flight; skipping");
+                }
+            }
+            "close-window" => {
+                // ⌘W (#336). Hide the focused window rather than
+                // destroying it — the close-hide pattern in
+                // lib.rs::run already does this for the red-✕
+                // button on `main` and `settings`; we route ⌘W
+                // through the same path so a future change to the
+                // hide policy applies uniformly. HUD hides without
+                // affecting the in-flight recording (same semantics
+                // as the dismiss button on the HUD itself).
+                //
+                // Tauri 2 has no direct "focused window" getter on
+                // AppHandle, so we iterate webview_windows() and
+                // pick the one whose `is_focused()` returns true.
+                use tauri::Manager as _;
+                let focused = app.webview_windows().into_iter().find_map(|(_, w)| {
+                    match w.is_focused() {
+                        Ok(true) => Some(w),
+                        _ => None,
+                    }
+                });
+                if let Some(window) = focused {
+                    let label = window.label().to_owned();
+                    if let Err(e) = window.hide() {
+                        tracing::warn!(
+                            error = ?e,
+                            label = %label,
+                            "menu close-window: hide failed"
+                        );
+                    }
                 }
             }
             id if id.starts_with("goto-") => {
