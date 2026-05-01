@@ -62,6 +62,24 @@ pub fn run() {
         .try_init();
 
     tauri::Builder::default()
+        // Single-instance lock (#326). Registered first so a second
+        // launch bails out before any of the side-effect-bearing
+        // plugins below open SQLite, install a CGEventTap, register
+        // the toggle hotkey, etc. The handler runs on the
+        // *already-running* primary instance with the second
+        // instance's argv: bring the existing main window forward
+        // (the typical post-`--background` state has it hidden) and
+        // focus it so the user sees Hush respond to the second
+        // launch attempt. The second process exits on its own when
+        // the plugin returns.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         // Install the global-shortcut handler at plugin-build time. Specific
         // shortcuts are registered later from `setup`, where we have access
         // to the [`AppHandle`] needed to call the registration API.
