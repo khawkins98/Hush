@@ -4,6 +4,18 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-04-30 — Whisper context split for dictation vs meeting (#248)
+
+`AppState` previously held a single `TranscribeSlot` shared between the dictation one-shot path (`stop_dictation`) and the meeting pump (`WhisperStreamingSession::drain`). Both dispatched inference via `tokio::task::spawn_blocking`, so two blocking-pool threads could land on the same `Mutex<WhisperContext>` simultaneously. Pressing the dictation hotkey during a meeting pump tick made one thread wait the full inference duration (200 ms – 2 s on Tiny / Small models) for the lock — and because the pump runs on a fixed drain interval, repeated contention pushed pump ticks past their window, accumulating audio, lengthening the next inference, and compounding latency over long meetings.
+
+**Fix.** Two slots: `transcribe` (dictation) and `transcribe_meeting`. `model_select` loads two `WhisperTranscription` instances from the same GGUF path and writes both via `swap_transcriber(new_dictation, new_meeting)`. `SessionManager` is constructed with the meeting slot only; `stop_dictation` reads the dictation slot only. The two paths now have independent `Mutex<WhisperContext>`s.
+
+**Why the marginal cost is small.** `whisper-rs` mmap's the GGUF file. Two `WhisperContext`s constructed from the same path share the underlying weight pages on disk; the only incremental RAM is the per-context working state (KV cache, decoder buffers — order of MB on small models, not tens of MB).
+
+**Why not split inference parameters per path.** The split deliberately keeps the same model in both slots — diverging parameters (e.g. beam-search for dictation vs greedy for meetings) is a possible future refinement, but introducing it now would conflate "fix the contention bug" with "tune for accuracy vs latency tradeoffs", which want separate decisions and separate tests.
+
+---
+
 ## 2026-04-30 — D2 diarization decisions (#111 chain)
 
 Six PRs (#295–#300) shipped the initial chain and three follow-ups (#303–#305) closed audit findings. Capturing the non-obvious calls so future-Claude doesn't re-derive them from the diff.

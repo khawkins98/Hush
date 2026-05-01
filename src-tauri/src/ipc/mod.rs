@@ -240,12 +240,27 @@ pub struct AppState {
     /// `swap_transcriber` for the swap path; `stop_dictation` for the
     /// read path.
     ///
-    /// Wrapped in `Arc` so the meeting pump (#122 PR2) can hold its
-    /// own clone and read the current transcriber on each chunk
-    /// without going back through `AppState`. Hot-swapping via the
-    /// model picker writes through the shared `Arc`, so the pump
-    /// picks up the new model on its next chunk automatically.
+    /// Wrapped in `Arc` so a hot-swap from `model_select` writes
+    /// through to the dictation hot path (`stop_dictation`) on the
+    /// next call without needing to rebuild `AppState`.
+    ///
+    /// Split from [`Self::transcribe_meeting`] under #248 so the
+    /// dictation one-shot inference and the meeting pump's
+    /// streaming inference don't contend on a single
+    /// `Mutex<WhisperContext>`. Both slots load the same GGUF; the
+    /// underlying weights are mmap'd, so the marginal RAM cost of
+    /// the second context is near zero (just two `WhisperContext`
+    /// structs on the heap).
     pub transcribe: TranscribeSlot,
+    /// Meeting-pump transcribe slot. Owns its own
+    /// `WhisperTranscription` instance distinct from
+    /// [`Self::transcribe`] so a chunk-tick inference and a
+    /// concurrent dictation `stop` don't queue up behind one
+    /// `Mutex<WhisperContext>` (#248). Cloned into
+    /// `SessionManager` at startup; `model_select` writes both
+    /// slots in lockstep so the user-visible model stays
+    /// consistent across the two paths.
+    pub transcribe_meeting: TranscribeSlot,
     /// Speaker diarization seam (#111). Tags meeting utterances
     /// with per-speaker labels. Production wires
     /// [`crate::diarization::FlagGatedDiarizer`] which routes to
@@ -411,6 +426,10 @@ pub struct AppStateBuilder {
     /// [`Self::transcribe`] in a fresh Arc — the hot-swap surface
     /// stays inside `AppState` only.
     transcribe_arc: Option<TranscribeSlot>,
+    /// Pre-built Arc for the meeting-pump slot. See [`AppState::transcribe_meeting`]
+    /// (#248). When unset, `build` creates a fresh empty slot — fine
+    /// for tests that don't drive the meeting pump.
+    transcribe_meeting_arc: Option<TranscribeSlot>,
     diarize: Option<Arc<dyn crate::diarization::Diarize>>,
     history: Option<Arc<dyn HistoryRepository>>,
     replacements: Option<Arc<dyn ReplacementRepository>>,
@@ -476,6 +495,16 @@ impl AppStateBuilder {
     /// `transcribe()` in a fresh Arc.
     pub fn transcribe_arc(mut self, transcribe: TranscribeSlot) -> Self {
         self.transcribe_arc = Some(transcribe);
+        self
+    }
+
+    /// Hand the builder the pre-built meeting-pump slot. Production
+    /// (#248) loads a second `WhisperTranscription` instance and
+    /// wires it here so `SessionManager` reads from a slot
+    /// independent of the dictation one. Tests can leave this
+    /// unset; `build` then constructs an empty slot.
+    pub fn transcribe_meeting_arc(mut self, transcribe: TranscribeSlot) -> Self {
+        self.transcribe_meeting_arc = Some(transcribe);
         self
     }
 
@@ -598,6 +627,9 @@ impl AppStateBuilder {
             transcribe: self
                 .transcribe_arc
                 .unwrap_or_else(|| Arc::new(Mutex::new(self.transcribe))),
+            transcribe_meeting: self
+                .transcribe_meeting_arc
+                .unwrap_or_else(|| Arc::new(Mutex::new(None))),
             diarize: self
                 .diarize
                 .unwrap_or_else(|| Arc::new(crate::diarization::NoopDiarizer)),
@@ -920,15 +952,25 @@ impl AppState {
         //   3. None — IPC surfaces `TranscriptionUnavailable`.
         // Step 1 resolves the M3 picker; step 2 keeps the existing dev
         // setup working until a user actually opens the picker once.
-        let transcribe = build_transcriber(&settings, &models_dir, &inference_threads_arc).await;
+        //
+        // Loaded twice so the dictation hot path and the meeting pump
+        // each own a private `WhisperContext` and don't contend on a
+        // single mutex (#248). Marginal RAM cost is small — `whisper-rs`
+        // mmap's the GGUF, so the two contexts share the underlying
+        // weights on disk. Both instances share the same
+        // `inference_threads_arc` so the slider in Settings (#255)
+        // takes effect on every inference call regardless of slot.
+        let transcribe_dictation =
+            build_transcriber(&settings, &models_dir, &inference_threads_arc).await;
+        let transcribe_meeting =
+            build_transcriber(&settings, &models_dir, &inference_threads_arc).await;
 
-        // The session manager needs the live audio + transcribe
-        // handles to drive its own capture pump (#122 PR2). Wrap
-        // transcribe in the same Arc<Mutex<...>> shape AppState uses
-        // so model hot-swap propagates to in-flight meeting sessions
-        // automatically — both AppState and the manager hold clones
-        // of the same Arc.
-        let transcribe_shared = Arc::new(Mutex::new(transcribe));
+        // Wrap each instance in its own `Arc<Mutex<...>>` so
+        // `model_select` can hot-swap independently. SessionManager
+        // gets the meeting slot only — it never needs to read or
+        // write the dictation slot, and vice versa.
+        let transcribe_shared = Arc::new(Mutex::new(transcribe_dictation));
+        let transcribe_meeting_shared = Arc::new(Mutex::new(transcribe_meeting));
         let event_emitter: Arc<dyn crate::meeting::MeetingEventEmitter> =
             Arc::new(AppHandleMeetingEventEmitter { app: app.clone() });
         // Diarization wiring (#111, post-#310):
@@ -975,7 +1017,7 @@ impl AppState {
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
-            Arc::clone(&transcribe_shared),
+            Arc::clone(&transcribe_meeting_shared),
             event_emitter,
             Arc::clone(&diarize),
             Arc::clone(&meeting_app_overrides),
@@ -1053,6 +1095,7 @@ impl AppState {
         AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
+            .transcribe_meeting_arc(transcribe_meeting_shared)
             .diarize(diarize)
             .history(history)
             .replacements(replacements)
@@ -1075,26 +1118,40 @@ impl AppState {
 }
 
 impl AppState {
-    /// Hot-swap the loaded transcriber.
+    /// Hot-swap the loaded transcriber across both the dictation and
+    /// meeting slots (#248).
     ///
     /// Called from `model_select` after the user picks a model that
     /// has a downloaded file on disk. The lock is acquired only after
     /// the (potentially-slow) GGUF load completes on a blocking task,
     /// so the dictation hot path is never blocked on disk I/O.
     ///
-    /// Returns the previous value so the caller can drop it explicitly
-    /// if it wants — the default `Drop` is fine for `Arc<dyn Trait>`,
-    /// but returning is cheap and lets callers diagnose "did we
-    /// actually swap something?" if they care.
+    /// Both slots receive instances constructed from the same GGUF
+    /// path so the user-visible model stays consistent — the split
+    /// is purely about avoiding `Mutex<WhisperContext>` contention
+    /// between the two inference paths, not about running different
+    /// models per path.
+    ///
+    /// Returns the previous dictation-slot value so the caller can
+    /// diagnose "did we actually swap something?" if it cares; the
+    /// previous meeting-slot value is dropped on the floor.
     pub fn swap_transcriber(
         &self,
-        new: Option<Arc<dyn Transcribe>>,
+        new_dictation: Option<Arc<dyn Transcribe>>,
+        new_meeting: Option<Arc<dyn Transcribe>>,
     ) -> Result<Option<Arc<dyn Transcribe>>> {
-        let mut guard = self
+        let mut dictation_guard = self
             .transcribe
             .lock()
             .map_err(|_| anyhow::anyhow!("transcribe mutex poisoned"))?;
-        Ok(std::mem::replace(&mut *guard, new))
+        let prev = std::mem::replace(&mut *dictation_guard, new_dictation);
+        drop(dictation_guard);
+        let mut meeting_guard = self
+            .transcribe_meeting
+            .lock()
+            .map_err(|_| anyhow::anyhow!("transcribe_meeting mutex poisoned"))?;
+        *meeting_guard = new_meeting;
+        Ok(prev)
     }
 }
 
@@ -1624,34 +1681,47 @@ mod tests {
         }
 
         let state = mock_state();
-        // mock_state() leaves transcribe = None (no model loaded).
+        // mock_state() leaves both slots = None (no model loaded).
         assert!(state.transcribe.lock().unwrap().is_none());
+        assert!(state.transcribe_meeting.lock().unwrap().is_none());
 
-        let first: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "first" });
+        let first_d: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "first" });
+        let first_m: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "first" });
         let prev = state
-            .swap_transcriber(Some(first))
+            .swap_transcriber(Some(first_d), Some(first_m))
             .expect("first swap succeeds");
         assert!(prev.is_none(), "previous was None (mock_state baseline)");
 
-        // Now confirm the swap actually landed.
+        // Now confirm the swap actually landed in both slots.
         {
             let guard = state.transcribe.lock().unwrap();
             assert_eq!(
                 guard.as_ref().map(|t| t.model_label()),
                 Some("first".to_owned()),
-                "new transcriber readable from inside the Mutex"
+                "new transcriber readable from the dictation slot"
+            );
+        }
+        {
+            let guard = state.transcribe_meeting.lock().unwrap();
+            assert_eq!(
+                guard.as_ref().map(|t| t.model_label()),
+                Some("first".to_owned()),
+                "new transcriber readable from the meeting slot"
             );
         }
 
-        // Second swap returns the first one as the "previous" value.
-        let second: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "second" });
+        // Second swap returns the first one as the "previous" value
+        // (from the dictation slot — the meeting-slot prev is dropped
+        // on the floor as documented).
+        let second_d: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "second" });
+        let second_m: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "second" });
         let prev = state
-            .swap_transcriber(Some(second))
+            .swap_transcriber(Some(second_d), Some(second_m))
             .expect("second swap succeeds");
         assert_eq!(
             prev.map(|t| t.model_label()),
             Some("first".to_owned()),
-            "previous value returned to caller"
+            "previous dictation value returned to caller"
         );
         assert_eq!(
             state
@@ -1661,13 +1731,26 @@ mod tests {
                 .as_ref()
                 .map(|t| t.model_label()),
             Some("second".to_owned()),
-            "second transcriber landed"
+            "second dictation transcriber landed"
+        );
+        assert_eq!(
+            state
+                .transcribe_meeting
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|t| t.model_label()),
+            Some("second".to_owned()),
+            "second meeting transcriber landed"
         );
 
-        // Swap to None to confirm the unload path works.
-        let prev = state.swap_transcriber(None).expect("clear swap succeeds");
+        // Swap to None to confirm the unload path works for both slots.
+        let prev = state
+            .swap_transcriber(None, None)
+            .expect("clear swap succeeds");
         assert_eq!(prev.map(|t| t.model_label()), Some("second".to_owned()));
         assert!(state.transcribe.lock().unwrap().is_none());
+        assert!(state.transcribe_meeting.lock().unwrap().is_none());
     }
 
     #[test]

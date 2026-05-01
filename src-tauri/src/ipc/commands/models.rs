@@ -133,23 +133,31 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
     // hold the tokio runtime. If the file isn't on disk yet this
     // returns Ok(None) and we report `loaded: false` — selection has
     // already persisted, so the picker remembers across restarts.
+    //
+    // Loaded twice — once for the dictation slot, once for the
+    // meeting-pump slot (#248). Both share the mmap'd weights on
+    // disk, so the marginal cost of the second load is small.
     let models_dir = state.models_dir.clone();
     let id_for_load = id.clone();
     let inference_threads = std::sync::Arc::clone(&state.inference_threads);
     let load_result = tauri::async_runtime::spawn_blocking(move || {
-        crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir, &inference_threads)
+        let dictation =
+            crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir, &inference_threads)?;
+        let meeting =
+            crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir, &inference_threads)?;
+        Ok::<_, anyhow::Error>((dictation, meeting))
     })
     .await
     .map_err(|e| IpcError::Internal(format!("blocking task panicked: {e}")))?;
 
     match load_result {
-        Ok(Some(new_transcriber)) => {
+        Ok((Some(dictation), Some(meeting))) => {
             state
-                .swap_transcriber(Some(new_transcriber))
+                .swap_transcriber(Some(dictation), Some(meeting))
                 .map_err(|e| IpcError::Internal(e.to_string()))?;
             Ok(ModelSelectResult { loaded: true })
         }
-        Ok(None) => {
+        Ok((None, _)) | Ok((_, None)) => {
             // File not yet on disk, or whisper feature off. Selection
             // still persisted; user just needs to Download (or rebuild
             // with the whisper feature, but that's a contributor
