@@ -168,12 +168,19 @@
   let soundCuesBusy = $state(false);
   let soundCuesError = $state<string | null>(null);
 
-  // Whisper inference threads (#255). Backend clamps to [1, 16].
+  // Transcription threads (#255). Backend clamps to [1, 16].
   // Bigger model + slower CPU benefits from more threads;
   // background-friendly setups want fewer. Persists across launches
   // and is read on every inference call via a shared atomic, so a
   // slider change takes effect on the next chunk without restart.
+  //
+  // Two state cells (#348): `inferenceThreads` is the persisted
+  // value (source of truth from the backend); `inferenceThreadsDisplay`
+  // tracks the slider thumb live during drag so the inline label
+  // updates in real time without firing one IPC per pixel. The
+  // change-event (release) is what actually persists.
   let inferenceThreads = $state(4);
+  let inferenceThreadsDisplay = $state(4);
   let inferenceThreadsBusy = $state(false);
   let inferenceThreadsError = $state<string | null>(null);
 
@@ -870,10 +877,22 @@
   async function loadInferenceThreads(): Promise<void> {
     try {
       inferenceThreads = await invoke<number>("get_inference_threads");
+      inferenceThreadsDisplay = inferenceThreads;
       inferenceThreadsError = null;
     } catch (e) {
       inferenceThreadsError = "Couldn't read inference-threads setting.";
       console.warn("[hush] get_inference_threads failed", e);
+    }
+  }
+
+  /// Live drag handler. Only updates the visible label so the user
+  /// sees the slider thumb's position in real time without firing
+  /// one IPC per pixel of movement. The `change` event below fires
+  /// on release and is what actually persists. (#348 follow-up)
+  function onInferenceThreadsInput(e: Event) {
+    const next = Number((e.target as HTMLInputElement).value);
+    if (Number.isFinite(next)) {
+      inferenceThreadsDisplay = next;
     }
   }
 
@@ -887,8 +906,12 @@
     try {
       await invoke("set_inference_threads", { threads: next });
       inferenceThreads = next;
+      inferenceThreadsDisplay = next;
     } catch (err) {
       inferenceThreadsError = formatErrorMessage(err);
+      // Snap the display back to the persisted value so the user
+      // can see their drag didn't take. `loadInferenceThreads`
+      // syncs both `inferenceThreads` and the display.
       await loadInferenceThreads();
     } finally {
       inferenceThreadsBusy = false;
@@ -1128,10 +1151,16 @@
         <label class="slider-row">
           <span class="toggle-label">
             <span class="toggle-name">
-              Whisper inference threads:
-              <span data-testid="settings-inference-threads-value">{inferenceThreads}</span>
+              Transcription threads:
+              <span
+                data-testid="settings-inference-threads-value"
+                aria-live="polite"
+              >{inferenceThreadsDisplay}</span>
+              {#if inferenceThreadsBusy}
+                <span class="row-note" aria-live="polite">Saving…</span>
+              {/if}
             </span>
-            <span class="toggle-desc">
+            <span id="settings-inference-threads-desc" class="toggle-desc">
               How many CPU threads whisper.cpp uses per chunk. More
               threads finish each chunk faster on a multi-core CPU but
               compete with other apps for cores. The default (4) suits
@@ -1146,8 +1175,12 @@
             max="16"
             step="1"
             data-testid="settings-inference-threads-slider"
+            aria-label="Transcription threads"
+            aria-describedby="settings-inference-threads-desc"
+            aria-valuetext={`${inferenceThreadsDisplay} threads`}
             disabled={inferenceThreadsBusy}
-            value={inferenceThreads}
+            value={inferenceThreadsDisplay}
+            oninput={onInferenceThreadsInput}
             onchange={onInferenceThreadsChange}
           />
         </label>
@@ -1931,6 +1964,16 @@
   }
   .slider-row input[type="range"] {
     width: 100%;
+    /* Defensive dark-mode contrast (#348). The settings-window root
+       sets `accent-color: auto` + `color-scheme: light dark`, so the
+       slider thumb already adapts to the system theme on most
+       backends. WebKit on macOS dark mode can render the native
+       thumb with low contrast against the dark card background;
+       pinning `color-scheme: light dark` *on the input itself*
+       lets WebKit pick the dark-mode form-control palette directly
+       rather than inheriting through the wrapper. No-op on
+       light-mode and on backends that already render correctly. */
+    color-scheme: light dark;
   }
 
   /* Select-shaped settings row — same bordered-card pattern as
