@@ -423,9 +423,6 @@ button.ghost.danger.confirming {
   margin-right: 0.5rem;
 }
 
-/* Error rendering migrated to the shared ErrorDisplay component
-   (#199 + follow-up). */
-
 .loading-skeleton {
   margin: 0.5rem 0;
   padding: 1rem;

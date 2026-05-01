@@ -64,7 +64,9 @@ export async function installMocks(
       // Diarizer model status (#301). Default is "downloaded" so
       // the toggle is interactable in specs that don't care about
       // the missing-model state. Specs that exercise the download
-      // affordance flip this to `downloaded: false`.
+      // affordance flip this to `downloaded: false`. Field shape
+      // mirrors `DiarizerModelStatus` in `src/lib/types.ts` —
+      // keep them in sync per the four-place IPC sync rule.
       get_diarizer_model_status: () => ({
         downloaded: true,
         sizeMb: 26,

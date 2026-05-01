@@ -241,3 +241,19 @@ export type PttConfig = {
 // Settings window (opened via ⌘, on macOS) is reached separately
 // via `invoke("open_settings")` and is not in this union.
 export type AppSection = "dictation" | "meetings" | "history";
+
+// Status of the wespeaker speaker-embedding model on disk.
+// Returned by `get_diarizer_model_status` (#304); read by Settings
+// → Meeting → Speakers on mount + after every download lifecycle
+// event so the UI can render "model not installed", "downloading",
+// or "ready" states accurately.
+//
+// Mirrors the Rust `DiarizeModelStatus` struct in
+// `src-tauri/src/ipc/commands/mod.rs` — keep field names + types
+// in sync per the four-place IPC sync rule (CLAUDE.md).
+export type DiarizerModelStatus = {
+  downloaded: boolean;
+  sizeMb: number;
+  sha256: string;
+  expectedPath: string;
+};
