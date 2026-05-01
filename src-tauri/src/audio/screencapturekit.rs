@@ -1,12 +1,14 @@
 //! macOS system-audio capture via ScreenCaptureKit (#105).
 //!
-//! Compiled only on macOS with the `screencapturekit` feature on.
-//! When present, this module gives [`super::CpalAudioCapture`] a parallel
+//! Compiled on macOS only via `cfg(target_os = "macos")`. The
+//! `screencapturekit` crate is linked unconditionally on macOS — the
+//! feature flag was dropped once SCK became load-bearing for Meeting
+//! Mode. This module gives [`super::CpalAudioCapture`] a parallel
 //! capture path that pulls system audio (whatever the OS mixer is
-//! routing to the speakers — Zoom calls, browser audio, music) into the
-//! same `Vec<f32>` shape that the cpal mic path produces, so the rest
-//! of the transcription pipeline does not need to know which source
-//! it came from.
+//! routing to the speakers — Zoom calls, browser audio, music) into
+//! the same `Vec<f32>` shape that the cpal mic path produces, so the
+//! rest of the transcription pipeline does not need to know which
+//! source it came from.
 //!
 //! ## Why ScreenCaptureKit
 //!
