@@ -162,6 +162,15 @@ realfft = { version = "3.5", optional = true }
 # SQLite persistence
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 
+# RFC-4180 CSV writer for the History export pipeline (#357 phase 3).
+# Hand-rolling escape rules around quotes / newlines / embedded
+# delimiters is the kind of thing that breaks subtly under real
+# transcripts (curly quotes, em-dashes, multi-line dictations).
+# `csv` is the de-facto Rust crate for the format and is stable on
+# 1.x; trade-off is one more dep, but the alternative is a
+# never-ending edge-case sweep.
+csv = "1"
+
 # Async-trait shim for `async fn` in object-safe traits. Native async-fn-
 # in-trait works since Rust 1.75 but is awkward to use behind `dyn` —
 # `async-trait` keeps the existing `Arc<dyn HistoryRepository>` test seam
