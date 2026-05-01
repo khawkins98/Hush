@@ -154,6 +154,16 @@ export type MeetingAppOverride = {
   createdAt: string;
 };
 
+// Built-in classification table entry (#320). Mirrors the Rust
+// `BuiltinAppEntry` struct returned by
+// `meeting_app_classifier_defaults`. The Settings panel renders
+// these read-only so users can see what's already covered before
+// adding a redundant override.
+export type BuiltinAppEntry = {
+  appName: string;
+  kind: MeetingAppKind;
+};
+
 // Mirrors `ModelCard` on the Rust side. `metadata` is flattened by
 // serde so all the catalog fields land at the top level.
 export type ModelCard = {

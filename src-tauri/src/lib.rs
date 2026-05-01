@@ -421,6 +421,7 @@ pub fn run() {
             ipc::commands::meeting::meeting_app_override_list,
             ipc::commands::meeting::meeting_app_override_upsert,
             ipc::commands::meeting::meeting_app_override_delete,
+            ipc::commands::meeting::meeting_app_classifier_defaults,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hush");

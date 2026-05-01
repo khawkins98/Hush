@@ -312,6 +312,58 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await expect(rows.nth(0).locator(".override-name")).toHaveText("alpha.app");
     await expect(rows.nth(1).locator(".override-name")).toHaveText("zebra.app");
   });
+
+  test("built-in defaults disclosure renders Meeting + Media sections (#320)", async ({
+    page,
+  }) => {
+    // Default mock returns a small representative subset so the
+    // assertions are stable. Real production has ~70 entries.
+    await installMocks(page);
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    const disclosure = page.locator('[data-testid="override-defaults"]');
+    await expect(disclosure).toBeVisible();
+    await disclosure.locator("summary").click();
+    // Sections are present + entries from the default mock land in
+    // the right groups.
+    await expect(
+      disclosure.locator(".override-defaults-heading", { hasText: "Meeting" }),
+    ).toBeVisible();
+    await expect(
+      disclosure.locator(".override-defaults-heading", { hasText: "Media" }),
+    ).toBeVisible();
+    await expect(disclosure.getByText("us.zoom.xos")).toBeVisible();
+    await expect(disclosure.getByText("com.spotify.client")).toBeVisible();
+  });
+
+  test("redundant-override warning surfaces when typing a default app_name (#320)", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/settings");
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    // Pre-warning: the input is empty, no notice.
+    await expect(
+      page.locator('[data-testid="override-redundant-note"]'),
+    ).toHaveCount(0);
+
+    // Type a default app_name → notice appears with the right
+    // classification.
+    await page.getByLabel("App identifier").fill("us.zoom.xos");
+    const note = page.locator('[data-testid="override-redundant-note"]');
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(/already classified as/i);
+    await expect(note).toContainText(/Meeting/i);
+    await expect(note).toContainText("us.zoom.xos");
+
+    // Type a non-default app_name → notice disappears.
+    await page.getByLabel("App identifier").fill("com.example.unknown");
+    await expect(
+      page.locator('[data-testid="override-redundant-note"]'),
+    ).toHaveCount(0);
+  });
 });
 
 test.describe("settings window — About tab", () => {
