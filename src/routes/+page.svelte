@@ -503,6 +503,68 @@
     }
   }
 
+  /// Bulk "Export filtered" (#357 phase 3c-1). The panel emits the
+  /// dialog selection + active filter; we resolve "auto" against
+  /// the filter chip, fire the OS folder picker, then invoke the
+  /// backend bundle IPC. The IPC writes one file per row to the
+  /// chosen directory and returns the count for the user-facing
+  /// toast. Empty result is a legitimate outcome (no rows match
+  /// the filter) — surfaced inline rather than as an error.
+  async function exportBundle(args: {
+    kind: "auto" | "dictation" | "meetings" | "both";
+    meetingFormat: MeetingExportFormat;
+    activeFilter: "all" | "dictation" | "meetings";
+  }) {
+    try {
+      const resolvedKind: "both" | "dictation" | "meetings" =
+        args.kind === "auto"
+          ? args.activeFilter === "dictation"
+            ? "dictation"
+            : args.activeFilter === "meetings"
+              ? "meetings"
+              : "both"
+          : args.kind;
+
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const directory = await open({
+        directory: true,
+        multiple: false,
+        title: "Export filtered to…",
+      });
+      if (directory === null || Array.isArray(directory)) {
+        // User cancelled or the picker returned an unexpected shape.
+        return;
+      }
+      const result = await invoke<{ directory: string; written: number }>(
+        "history_export_bundle",
+        {
+          options: {
+            query: historyQuery,
+            kind: resolvedKind,
+            meetingFormat: args.meetingFormat,
+          },
+          directory,
+        },
+      );
+      // Surface a one-line confirmation through the existing
+      // history-error region — same channel everything else uses,
+      // styled green / neutral on the success path. The error
+      // shape carries a `headline`; using it here for "wrote 7
+      // files" is a small abuse but keeps the UI consistent
+      // until a dedicated toast component lands.
+      historyError = {
+        headline:
+          result.written === 0
+            ? "No rows matched the current filter."
+            : `Wrote ${result.written} file${result.written === 1 ? "" : "s"} to ${result.directory}.`,
+        hint: undefined,
+        details: undefined,
+      };
+    } catch (e) {
+      historyError = formatErrorDisplay(e);
+    }
+  }
+
   async function clearAllHistory() {
     try {
       const removed = await invoke<number>("history_clear");
@@ -949,6 +1011,7 @@
       onMeetingDelete={deleteMeetingSession}
       onMeetingLoadDetail={loadMeetingSessionDetail}
       onMeetingExport={exportMeetingSession}
+      onExportBundle={exportBundle}
       onClearAll={clearAllHistory}
     />
   </section>

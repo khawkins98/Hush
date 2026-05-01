@@ -441,6 +441,7 @@ pub fn run() {
             ipc::commands::history_list,
             ipc::commands::history_search,
             ipc::commands::history_export_row_csv,
+            ipc::commands::export::history_export_bundle,
             ipc::commands::history_delete,
             ipc::commands::history_count,
             ipc::commands::history_clear,
