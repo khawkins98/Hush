@@ -233,8 +233,12 @@ export async function installMocks(
       // ---- meeting mode (Phase C scaffold; refs #33 / #109) ----
       // Empty list by default so the panel renders the "no sessions
       // yet" placeholder. Specs that exercise populated states
-      // override `meeting_sessions_list` per-test.
+      // override `meeting_sessions_list` per-test. The search-aware
+      // sibling (#357 phase 2 step 3) defaults to the same empty
+      // shape — specs that exercise cross-stream search override
+      // it per-test alongside `history_search`.
       meeting_sessions_list: () => [],
+      meeting_sessions_search: () => [],
       meeting_session_get: () => {
         throw { kind: "settings", message: "meeting session not found (default mock)" };
       },

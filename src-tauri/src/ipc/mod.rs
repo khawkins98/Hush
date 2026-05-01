@@ -1589,6 +1589,12 @@ mod tests {
         async fn list_open_sessions(&self) -> anyhow::Result<Vec<crate::meeting::MeetingSession>> {
             Ok(vec![])
         }
+        async fn search_sessions(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<Vec<crate::meeting::MeetingSession>> {
+            Ok(vec![])
+        }
     }
 
     /// Test mock for the meeting-app overrides repo (#112). Returns

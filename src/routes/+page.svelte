@@ -393,16 +393,22 @@
     }
   }
 
-  /// Debounce the search input so we don't fire a SQLite query on every
-  /// keystroke. 200ms is the empirical sweet spot — fast enough that the
-  /// user feels the list react, slow enough that holding a key doesn't
-  /// queue dozens of queries.
+  /// Debounce the search input so we don't fire SQLite queries on
+  /// every keystroke. 200ms is the empirical sweet spot — fast
+  /// enough that the user feels the list react, slow enough that
+  /// holding a key doesn't queue dozens of queries.
+  ///
+  /// Cross-stream search (#357 phase 2): both `refreshHistory` and
+  /// `refreshMeetingSessions` see the new query — the latter
+  /// reads `historyQuery` directly inside `refreshMeetingSessions`,
+  /// so we just fire the two refreshes in parallel.
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   function onSearchInput(e: Event) {
     historyQuery = (e.target as HTMLInputElement).value;
     if (searchTimer !== null) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       void refreshHistory();
+      void refreshMeetingSessions();
     }, 200);
   }
 
@@ -566,8 +572,16 @@
 
   async function refreshMeetingSessions() {
     try {
+      // Use the search-aware IPC so a non-empty query filters the
+      // returned sessions in lockstep with `history_search`. The
+      // backend treats an empty `query` as "no filter" and falls
+      // through to a plain `list()`, so this works the same as the
+      // pre-#357 `meeting_sessions_list` call when the search box
+      // is empty.
       const [sessions, active] = await Promise.all([
-        invoke<MeetingSession[]>("meeting_sessions_list"),
+        invoke<MeetingSession[]>("meeting_sessions_search", {
+          query: historyQuery,
+        }),
         invoke<{ active: number | null }>("meeting_active_session"),
       ]);
       meetingSessions = sessions;

@@ -232,6 +232,34 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         .await
         .context("list open meeting sessions")
     }
+
+    async fn search_sessions(&self, query: &str) -> Result<Vec<MeetingSession>> {
+        // Cross-stream search (#357 phase 2): roll up FTS5 hits on
+        // utterance text to one row per session. The phrase wrap
+        // matches the dictation `history_search` shape — quote the
+        // user's input so FTS5 treats it as a literal phrase
+        // rather than parsing operators (`OR`, `NOT`, …) the UI
+        // doesn't currently expose. Escapes embedded double quotes
+        // by doubling them, same as SQLite's identifier quoting.
+        let phrase = format!("\"{}\"", query.replace('"', "\"\""));
+
+        sqlx::query_as::<_, MeetingSession>(
+            "SELECT s.id, s.app_name, s.app_kind, s.started_at, s.ended_at, \
+                    s.speaker_count, s.utterance_count, s.notes, s.sources, s.app_title \
+             FROM meeting_sessions s \
+             WHERE s.id IN ( \
+                SELECT DISTINCT u.session_id \
+                FROM utterances u \
+                INNER JOIN utterances_fts fts ON fts.rowid = u.id \
+                WHERE utterances_fts MATCH ? \
+             ) \
+             ORDER BY s.started_at DESC",
+        )
+        .bind(phrase)
+        .fetch_all(self.db.pool())
+        .await
+        .context("search meeting sessions")
+    }
 }
 
 /// String form for the `app_kind` column. Kept in one place so the
@@ -515,6 +543,146 @@ mod tests {
         repo.set_notes(s.id, None).await.unwrap();
         let after_clear = repo.list().await.unwrap()[0].clone();
         assert!(after_clear.notes.is_none());
+    }
+
+    #[tokio::test]
+    async fn search_sessions_matches_any_utterance_hit() {
+        // #357 phase 2: a session is in the search result if any of
+        // its utterances match the query. The test seeds two
+        // sessions, gives each a distinguishing utterance, and
+        // confirms the right session(s) come back for a per-keyword
+        // probe and for a cross-cutting keyword.
+        let repo = fresh_repo().await;
+
+        let alpha = repo
+            .create(NewMeetingSession {
+                app_name: "Alpha".to_string(),
+                app_kind: MeetingAppKind::Meeting,
+                sources: vec!["mic".into()],
+                app_title: None,
+            })
+            .await
+            .unwrap();
+        repo.append_utterance(NewPersistedUtterance {
+            session_id: alpha.id,
+            started_at_ms: 0,
+            ended_at_ms: 1_000,
+            speaker_label: None,
+            text: "kubernetes deployment failed".into(),
+        })
+        .await
+        .unwrap();
+        repo.append_utterance(NewPersistedUtterance {
+            session_id: alpha.id,
+            started_at_ms: 1_000,
+            ended_at_ms: 2_000,
+            speaker_label: None,
+            text: "shared everywhere".into(),
+        })
+        .await
+        .unwrap();
+
+        let beta = repo
+            .create(NewMeetingSession {
+                app_name: "Beta".to_string(),
+                app_kind: MeetingAppKind::Meeting,
+                sources: vec!["mic".into()],
+                app_title: None,
+            })
+            .await
+            .unwrap();
+        repo.append_utterance(NewPersistedUtterance {
+            session_id: beta.id,
+            started_at_ms: 0,
+            ended_at_ms: 1_000,
+            speaker_label: None,
+            text: "shared everywhere".into(),
+        })
+        .await
+        .unwrap();
+
+        // Per-session keyword: only alpha matches.
+        let kube_hits = repo.search_sessions("kubernetes").await.unwrap();
+        let kube_ids: Vec<i64> = kube_hits.iter().map(|s| s.id).collect();
+        assert_eq!(kube_ids, vec![alpha.id]);
+
+        // Cross-session keyword: both sessions match. We don't pin
+        // the order here because SQLite's default `started_at` has
+        // single-second resolution and the two creates happen
+        // back-to-back; the ORDER BY is verified by the
+        // `list_sessions_returns_*` tests that seed wider gaps.
+        let shared_hits = repo.search_sessions("shared").await.unwrap();
+        let mut shared_ids: Vec<i64> = shared_hits.iter().map(|s| s.id).collect();
+        shared_ids.sort();
+        let mut expected = vec![alpha.id, beta.id];
+        expected.sort();
+        assert_eq!(shared_ids, expected);
+
+        // No-match query: empty result.
+        let miss = repo
+            .search_sessions("definitely-nothing-here")
+            .await
+            .unwrap();
+        assert!(miss.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_sessions_returns_each_session_once_even_when_many_utterances_match() {
+        // Audit-of-audit hazard from the dictation-FTS shape: a
+        // naive INNER JOIN against the FTS table would yield one
+        // row per matching utterance, so a session with N matching
+        // utterances would appear N times. The repo uses
+        // `WHERE id IN (SELECT DISTINCT session_id ...)` to roll
+        // up — pin that here so a future refactor doesn't regress.
+        let repo = fresh_repo().await;
+        let s = repo.create(sample_new()).await.unwrap();
+        for i in 0..5 {
+            repo.append_utterance(NewPersistedUtterance {
+                session_id: s.id,
+                started_at_ms: i * 1_000,
+                ended_at_ms: (i + 1) * 1_000,
+                speaker_label: None,
+                text: format!("repeated keyword {i}"),
+            })
+            .await
+            .unwrap();
+        }
+
+        let hits = repo.search_sessions("repeated").await.unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "session deduplicated despite 5 matching utterances"
+        );
+        assert_eq!(hits[0].id, s.id);
+    }
+
+    #[tokio::test]
+    async fn search_sessions_quotes_user_query_so_operators_are_literal() {
+        // FTS5 parses bare `OR` / `NOT` as operators. The repo wraps
+        // the user input in double quotes so it's treated as a
+        // literal phrase — same shape `history_search` uses. The
+        // probe here uses a phrase containing what would otherwise
+        // be an operator and confirms the behaviour is "find this
+        // exact text" not "match either token".
+        let repo = fresh_repo().await;
+        let s = repo.create(sample_new()).await.unwrap();
+        repo.append_utterance(NewPersistedUtterance {
+            session_id: s.id,
+            started_at_ms: 0,
+            ended_at_ms: 1_000,
+            speaker_label: None,
+            text: "either OR neither here".into(),
+        })
+        .await
+        .unwrap();
+
+        let hits = repo.search_sessions("OR").await.unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "OR is treated as a literal token, not an operator",
+        );
     }
 
     #[tokio::test]
