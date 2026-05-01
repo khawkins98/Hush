@@ -291,6 +291,16 @@ pub struct AppState {
     /// keep-alive working across consecutive downloads (e.g. Tiny
     /// then Base on first launch).
     pub http: reqwest::Client,
+    /// Cache for the manual "Check for updates" probe (#333).
+    /// GitHub's unauthenticated API rate limit is 60 req/h/IP; a
+    /// shared corporate NAT or an impatient user clicking the
+    /// Settings → About button can collectively burn that limit
+    /// fast. We cache the last successful result for 15 minutes —
+    /// well below the rate-limit window, well above the spam-click
+    /// threshold. The frontend's `updateChecking` flag covers the
+    /// in-flight case; this covers the back-to-back case.
+    pub last_update_check:
+        Mutex<Option<(std::time::Instant, crate::updater::UpdateCheckResult)>>,
     /// Cancel handles for in-flight downloads, keyed by model id.
     /// Inserted by `model_download` when it spawns a task; the cancel
     /// command flips the handle's flag; the spawned task removes its
@@ -704,6 +714,7 @@ impl AppStateBuilder {
                 .expect("reqwest client should always build with default config"),
             downloads: Mutex::new(HashMap::new()),
             pending_foreground: Mutex::new(None),
+            last_update_check: Mutex::new(None),
             ptt_combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(
                 || crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
             ))),

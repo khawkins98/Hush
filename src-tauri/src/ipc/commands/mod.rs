@@ -1338,19 +1338,51 @@ pub async fn set_meeting_autostart_mode(
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// TTL for the [`check_for_updates`] cache (#333). 15 minutes is
+/// well below GitHub's 60-req/h unauthenticated rate-limit window
+/// (so a single user under heavy clicking can't self-DoS) and well
+/// above the spam-click threshold (so back-to-back clicks return
+/// instantly). The window is also short enough that a user who
+/// just installed an update sees the new "up to date" copy without
+/// quitting the app.
+pub const UPDATE_CHECK_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 /// Manual "Check for updates" probe (#223). Calls
 /// [`crate::updater::check_for_updates`] against the app's shared
-/// HTTP client; the result drives an in-app dialog. Idempotent —
-/// the user can click as many times as they like; no background
-/// polling lives here. Auto-update is the separate
-/// [#10] follow-up.
+/// HTTP client; the result drives an in-app dialog.
+///
+/// Caches the last successful result for [`UPDATE_CHECK_TTL`]
+/// (#333) so a spam-clicking user or a shared-IP environment
+/// (corporate NAT, family Wi-Fi with multiple installs) can't burn
+/// the unauthenticated-GitHub rate limit. Auto-update is the
+/// separate [#10] follow-up.
 ///
 /// [#10]: https://github.com/khawkins98/Hush/issues/10
 #[tauri::command]
 pub async fn check_for_updates(
     state: State<'_, AppState>,
 ) -> IpcResult<crate::updater::UpdateCheckResult> {
-    crate::updater::check_for_updates(&state.http).await
+    check_for_updates_inner(&state, std::time::Instant::now()).await
+}
+
+/// Inner implementation that takes the current instant explicitly
+/// so unit tests can pin time without an actual sleep. The IPC
+/// command always passes `Instant::now()`.
+pub(crate) async fn check_for_updates_inner(
+    state: &AppState,
+    now: std::time::Instant,
+) -> IpcResult<crate::updater::UpdateCheckResult> {
+    {
+        let cached = state.last_update_check.lock().map_err(poisoned)?;
+        if let Some((at, result)) = cached.as_ref() {
+            if now.duration_since(*at) < UPDATE_CHECK_TTL {
+                return Ok(result.clone());
+            }
+        }
+    }
+    let fresh = crate::updater::check_for_updates(&state.http).await?;
+    *state.last_update_check.lock().map_err(poisoned)? = Some((now, fresh.clone()));
+    Ok(fresh)
 }
 
 /// Clear the first-run-completed flag so the welcome modal renders
@@ -2376,5 +2408,82 @@ mod tests {
             Arc::ptr_eq(&*guard, &sentinel),
             "swap failure must not replace the slot's Arc"
         );
+    }
+
+    // ---- check_for_updates cache (#333) --------------------------------
+
+    #[tokio::test]
+    async fn check_for_updates_returns_cached_result_within_ttl() {
+        // Seed the cache with a fixed UpToDate result, then call
+        // check_for_updates_inner with a `now` that's just inside the
+        // TTL window. The inner must short-circuit and return the
+        // seeded value without touching the network — wiremock isn't
+        // running, so any HTTP call would fail loudly.
+        let state = crate::ipc::tests::mock_state();
+        let seeded = crate::updater::UpdateCheckResult::UpToDate {
+            current: "0.2.0".to_string(),
+        };
+        let seed_at = std::time::Instant::now();
+        *state.last_update_check.lock().unwrap() = Some((seed_at, seeded.clone()));
+
+        // Just inside the TTL → cache hit.
+        let still_within = seed_at + UPDATE_CHECK_TTL - std::time::Duration::from_secs(1);
+        let result = check_for_updates_inner(&state, still_within)
+            .await
+            .expect("cache hit ok");
+        assert_eq!(result, seeded);
+    }
+
+    #[tokio::test]
+    async fn check_for_updates_bypasses_cache_after_ttl() {
+        // Past the TTL the inner has to fall through to the network
+        // path. Without a wiremock server running the call fails —
+        // we don't care about the kind, only that the cache layer
+        // is no longer short-circuiting. A successful "fresh" path
+        // is exercised by the wiremock tests in `updater::tests`.
+        let state = crate::ipc::tests::mock_state();
+        let seeded = crate::updater::UpdateCheckResult::UpToDate {
+            current: "0.2.0".to_string(),
+        };
+        let seed_at = std::time::Instant::now();
+        *state.last_update_check.lock().unwrap() = Some((seed_at, seeded));
+
+        // Past the TTL → cache miss → network call (which will fail
+        // here because no wiremock server is wired). The inner
+        // bubbles that as `CheckFailed { reason: ... }` rather than
+        // an Err, since `check_for_updates` itself maps network
+        // errors to the typed enum. Either way, we should not see
+        // the seeded UpToDate value back.
+        let past_ttl = seed_at + UPDATE_CHECK_TTL + std::time::Duration::from_secs(1);
+        let result = check_for_updates_inner(&state, past_ttl).await;
+        match result {
+            Ok(crate::updater::UpdateCheckResult::CheckFailed { .. }) => {
+                // Network path was hit and failed — the cache was
+                // bypassed as required.
+            }
+            Ok(other) => panic!("expected cache miss to hit network and fail; got {other:?}"),
+            Err(_) => {
+                // Also acceptable — some failure modes return Err
+                // rather than the typed enum.
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn check_for_updates_with_no_cache_calls_through() {
+        // Empty cache → no short-circuit. Same shape as the
+        // post-TTL test, just confirming the None path also falls
+        // through.
+        let state = crate::ipc::tests::mock_state();
+        assert!(state.last_update_check.lock().unwrap().is_none());
+        let result = check_for_updates_inner(&state, std::time::Instant::now()).await;
+        // Network failure expected (no wiremock); we just want to
+        // pin that this path is reached, not blocked by an empty
+        // cache.
+        match result {
+            Ok(crate::updater::UpdateCheckResult::CheckFailed { .. }) => {}
+            Ok(other) => panic!("expected fresh check to fail; got {other:?}"),
+            Err(_) => {}
+        }
     }
 }
