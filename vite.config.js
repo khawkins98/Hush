@@ -40,6 +40,14 @@ export default defineConfig(async () => ({
             projectRoot,
             "tests/e2e/setup/app-stub.ts",
           ),
+          // External-URL opener (#322). The real plugin reaches
+          // `window.__TAURI_INTERNALS__`; the stub no-ops by
+          // default and routes through the mock bus for tests
+          // that want to assert the URL the user clicked.
+          "@tauri-apps/plugin-shell": path.resolve(
+            projectRoot,
+            "tests/e2e/setup/shell-stub.ts",
+          ),
         },
       }
     : {},

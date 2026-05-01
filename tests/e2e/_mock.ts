@@ -108,6 +108,12 @@ export async function installMocks(
       // `settings/+page.svelte`. Tests run macOS-flavoured copy
       // since that's the project's design target.
       "plugin:os|platform": () => "macos",
+      // `@tauri-apps/plugin-shell::open()` — used by the
+      // `openExternal` helper (#322) for every external link in
+      // the app. Default no-op so specs that don't care about
+      // link clicks pass through; specs that exercise a link
+      // override with a recording handler.
+      "plugin:shell|open": () => undefined,
       open_macos_privacy_pane: () => undefined,
       prime_screen_recording_permission: () => undefined,
       open_settings: () => undefined,

@@ -39,6 +39,7 @@
   } from "@tauri-apps/plugin-autostart";
   import { onDestroy, onMount, tick } from "svelte";
 
+  import { openExternal } from "$lib/openExternal";
   import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
   import MeetingAppOverridesPanel from "$lib/MeetingAppOverridesPanel.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
@@ -1447,7 +1448,10 @@
           <dd>
             <a
               href="https://www.apache.org/licenses/LICENSE-2.0"
-              target="_blank"
+              onclick={(e) => {
+                e.preventDefault();
+                openExternal("https://www.apache.org/licenses/LICENSE-2.0");
+              }}
               rel="noopener noreferrer">Apache License 2.0</a
             >
           </dd>
@@ -1455,7 +1459,10 @@
           <dd>
             <a
               href="https://github.com/khawkins98/Hush"
-              target="_blank"
+              onclick={(e) => {
+                e.preventDefault();
+                openExternal("https://github.com/khawkins98/Hush");
+              }}
               rel="noopener noreferrer">github.com/khawkins98/Hush</a
             >
           </dd>
@@ -1463,7 +1470,10 @@
           <dd>
             <a
               href="https://github.com/khawkins98/Hush/issues/new"
-              target="_blank"
+              onclick={(e) => {
+                e.preventDefault();
+                openExternal("https://github.com/khawkins98/Hush/issues/new");
+              }}
               rel="noopener noreferrer">Open an issue</a
             >
           </dd>
@@ -1477,17 +1487,26 @@
           Built on
           <a
             href="https://github.com/ggerganov/whisper.cpp"
-            target="_blank"
+            onclick={(e) => {
+              e.preventDefault();
+              openExternal("https://github.com/ggerganov/whisper.cpp");
+            }}
             rel="noopener noreferrer">whisper.cpp</a
           >,
           <a
             href="https://tauri.app"
-            target="_blank"
+            onclick={(e) => {
+              e.preventDefault();
+              openExternal("https://tauri.app");
+            }}
             rel="noopener noreferrer">Tauri</a
           >, and
           <a
             href="https://svelte.dev"
-            target="_blank"
+            onclick={(e) => {
+              e.preventDefault();
+              openExternal("https://svelte.dev");
+            }}
             rel="noopener noreferrer">Svelte</a
           >.
         </p>
