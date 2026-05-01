@@ -99,6 +99,11 @@ export async function installMocks(
       "plugin:autostart|is_enabled": () => false,
       "plugin:autostart|enable": () => undefined,
       "plugin:autostart|disable": () => undefined,
+      // LaunchAgent path-staleness flag (#317). Default `false` so
+      // the warning row stays hidden in the success path; specs
+      // that exercise the warning override `stale: true` per-test.
+      get_autostart_path_status: () => ({ stale: false }),
+      retry_autostart_registration: () => true,
       // App-info plugin commands. The Settings → About tab calls
       // `getName` / `getVersion` / `getTauriVersion` from
       // `@tauri-apps/api/app`, all of which dispatch through these

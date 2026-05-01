@@ -311,12 +311,12 @@ pub fn run() {
             // ~500 bytes at every launch.
             //
             // If `enable()` fails (e.g. read-only home, file-system
-            // permission issue) we log at warn level and continue —
-            // the user's session is otherwise unaffected and the
-            // failure surfaces clearly enough in the log for a
-            // support diagnostic. A Settings → General "path is
-            // stale" warning UI would be nicer; tracked as polish
-            // follow-up.
+            // permission issue) we log at warn level and write a
+            // flag into AppState. Settings → General reads the flag
+            // and surfaces a "path is stale" warning row with a
+            // retry button (#317). The user's session is otherwise
+            // unaffected — only the next-login behaviour is
+            // degraded.
             #[cfg(target_os = "macos")]
             {
                 use tauri_plugin_autostart::ManagerExt;
@@ -327,10 +327,18 @@ pub fn run() {
                         Ok(()) => tracing::debug!(
                             "autostart: re-registered LaunchAgent with current binary path (#271)"
                         ),
-                        Err(e) => tracing::warn!(
-                            error = %e,
-                            "autostart: re-register failed; LaunchAgent path may be stale (#271)"
-                        ),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "autostart: re-register failed; LaunchAgent path may be stale (#271)"
+                            );
+                            if let Some(state) = app.try_state::<ipc::AppState>() {
+                                state.autostart_path_stale.store(
+                                    true,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -463,6 +471,8 @@ pub fn run() {
             ipc::commands::set_inference_threads,
             ipc::commands::get_diarizer_model_status,
             ipc::commands::download_diarizer_model,
+            ipc::commands::get_autostart_path_status,
+            ipc::commands::retry_autostart_registration,
             ipc::commands::check_for_updates,
             ipc::commands::ptt_get_config,
             ipc::commands::ptt_set_config,

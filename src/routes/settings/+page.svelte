@@ -147,6 +147,12 @@
   let autostartEnabled = $state(false);
   let autostartBusy = $state(false);
   let autostartError = $state<string | null>(null);
+  // LaunchAgent path-staleness flag (#317). Read on mount; surfaces
+  // as a warning row when the boot-time re-register failed. Cleared
+  // by a successful retry.
+  let autostartPathStale = $state(false);
+  let autostartRetryBusy = $state(false);
+  let autostartRetryFailed = $state(false);
   // First-run reset: brief confirmation message replaces the button
   // label after a successful reset, then clears on a 3 s timer.
   let firstRunResetBusy = $state(false);
@@ -721,6 +727,7 @@
       loadReplacements(),
       loadMacosDiagnostic(),
       loadAutostartState(),
+      loadAutostartPathStatus(),
       loadHudEnabled(),
       loadSoundCuesEnabled(),
       loadInferenceThreads(),
@@ -843,6 +850,38 @@
       autostartEnabled = false;
       autostartError = "Couldn't read autostart state on this platform.";
       console.warn("[hush] isAutostartEnabled failed", e);
+    }
+  }
+
+  async function loadAutostartPathStatus(): Promise<void> {
+    try {
+      const status = await invoke<{ stale: boolean }>(
+        "get_autostart_path_status",
+      );
+      autostartPathStale = status.stale;
+    } catch (e) {
+      // Failure is non-fatal — the warning just doesn't render.
+      console.warn("[hush] get_autostart_path_status failed", e);
+      autostartPathStale = false;
+    }
+  }
+
+  async function onRetryAutostartRegistration() {
+    if (autostartRetryBusy) return;
+    autostartRetryBusy = true;
+    autostartRetryFailed = false;
+    try {
+      const ok = await invoke<boolean>("retry_autostart_registration");
+      if (ok) {
+        autostartPathStale = false;
+      } else {
+        autostartRetryFailed = true;
+      }
+    } catch (e) {
+      autostartRetryFailed = true;
+      console.warn("[hush] retry_autostart_registration failed", e);
+    } finally {
+      autostartRetryBusy = false;
     }
   }
 
@@ -1118,6 +1157,48 @@
         </label>
         {#if autostartError}
           <p class="settings-error">{autostartError}</p>
+        {/if}
+
+        {#if autostartPathStale}
+          <!--
+            Stale-LaunchAgent warning (#317). The setup hook re-
+            registers the plist on every launch; if that re-register
+            failed (read-only home, fs permission), the LaunchAgent
+            still points at whatever path it had before. Surface the
+            failure with a retry button so the user isn't left with
+            a silent broken autostart.
+          -->
+          <div
+            class="settings-warning-row"
+            data-testid="autostart-path-stale-warning"
+            role="alert"
+          >
+            <p class="settings-row-name">⚠ Autostart path is out of date</p>
+            <p class="settings-row-desc">
+              Hush couldn't refresh the LaunchAgent at startup, so
+              "Launch at Login" may not work after the next restart.
+              Click below to retry — usually a one-click fix.
+            </p>
+            <button
+              type="button"
+              class="ghost"
+              data-testid="autostart-retry-button"
+              disabled={autostartRetryBusy}
+              onclick={onRetryAutostartRegistration}
+            >
+              {autostartRetryBusy ? "Retrying…" : "Click to update"}
+            </button>
+            {#if autostartRetryFailed}
+              <p
+                class="settings-error"
+                data-testid="autostart-retry-error"
+              >
+                Retry failed too. Check that <code
+                  >~/Library/LaunchAgents/</code
+                > is writable, then try again.
+              </p>
+            {/if}
+          </div>
         {/if}
       </section>
 
