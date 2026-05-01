@@ -37,14 +37,20 @@
 //! retain/release-safe and the crate's per-stream context lives behind
 //! a heap allocation referenced by FFI callbacks). Sample-buffer
 //! callbacks fire on a libdispatch queue owned by the framework; our
-//! handler closes over `Arc<Mutex<Vec<f32>>>` and `Arc<AtomicU32>` so
-//! the public API stays synchronous from the caller's perspective —
-//! same shape as the cpal worker-thread plumbing.
+//! handler holds the producer end of an `rtrb` SPSC ring (#251),
+//! mirroring the cpal mic path. The framework dispatches callbacks
+//! serially per output handler, so the producer side is wait-free
+//! and never blocks waiting on the consumer (the meeting pump's
+//! drain tick) — even if the pump stalls on a SQLite write or a
+//! long Whisper inference, the SCK callback continues to push into
+//! the ring without waiting on a mutex.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
+use rtrb::{Consumer, Producer, RingBuffer};
 use screencapturekit::{
     cm::CMSampleBuffer,
     shareable_content::SCShareableContent,
@@ -54,7 +60,44 @@ use screencapturekit::{
     },
 };
 
-use super::CaptureFormat;
+use super::{drain_consumer, log_overflow_if_set, CaptureFormat, MAX_BUFFER_FRAMES};
+
+/// `Sync` wrapper around `rtrb::Producer<f32>` for use inside an
+/// SCK output handler.
+///
+/// `rtrb::Producer` is `Send + !Sync` — that's the correct shape for
+/// a single-producer ring (two threads concurrently calling
+/// `Producer::push` would race on the head pointer). The SCStream
+/// `did_output_sample_buffer` callback signature takes `&self`,
+/// which would normally force us to wrap the producer in a `Mutex`.
+/// We don't, because **ScreenCaptureKit dispatches callbacks
+/// serially per output handler** (libdispatch serial queue), so the
+/// producer is in fact never accessed concurrently. An `UnsafeCell`
+/// + manual `unsafe impl Sync` captures that invariant directly.
+///
+/// SAFETY: every call to [`Self::with_inner`] runs on the SCK
+/// libdispatch callback thread for one output handler. Two outstanding
+/// `&mut` references to the inner `Producer` would only arise if SCK
+/// re-entered the callback before the previous call returned, which
+/// the framework's serial-dispatch contract forbids.
+struct SerialProducer(UnsafeCell<Producer<f32>>);
+
+unsafe impl Sync for SerialProducer {}
+
+impl SerialProducer {
+    fn new(inner: Producer<f32>) -> Self {
+        Self(UnsafeCell::new(inner))
+    }
+
+    /// Run a closure with mutable access to the inner producer.
+    /// SAFETY: see struct-level comment.
+    fn with_inner<R>(&self, f: impl FnOnce(&mut Producer<f32>) -> R) -> R {
+        // SAFETY: SCK callback dispatch is serial; no other thread
+        // holds a reference to the inner Producer at any time.
+        let inner = unsafe { &mut *self.0.get() };
+        f(inner)
+    }
+}
 
 /// Sample rate we ask ScreenCaptureKit to deliver. SCK supports a fixed
 /// set (8000 / 16000 / 24000 / 48000); 48 kHz matches the rate the OS
@@ -70,7 +113,8 @@ const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
 
 /// Active SCK system-audio capture. Owns the stream for the duration
-/// of one recording and the shared buffer the callback writes into.
+/// of one recording and the consumer end of the SPSC ring the
+/// callback writes into.
 pub struct ScreenCaptureKitSession {
     /// Held alive for the duration of capture. Dropping it stops the
     /// stream; we also call `stop_capture()` explicitly in [`Self::stop`]
@@ -79,18 +123,28 @@ pub struct ScreenCaptureKitSession {
     /// Format the buffer was captured in, surfaced back through the
     /// trait's [`super::CapturedAudio`] alongside the samples.
     pub format: CaptureFormat,
-    /// Shared with the SCK callback. The callback locks briefly per
-    /// sample buffer; the worker drains the whole thing on stop. Same
-    /// discipline as the cpal path.
-    buffer: Arc<Mutex<Vec<f32>>>,
+    /// Consumer end of the SPSC ring (#251). Wrapped in `Mutex` only
+    /// to give `&self`-callable methods (`drain_buffer`, `stop`)
+    /// interior mutability; the lock is uncontended in practice
+    /// because the consumer side is single-threaded. `rtrb` itself
+    /// never blocks the consumer either — `Consumer::read_chunk` is
+    /// wait-free.
+    consumer: Mutex<Consumer<f32>>,
+    /// Set by the SCK callback when `Producer::push` returns
+    /// `PushError::Full`. The worker logs once per drain cycle when
+    /// it sees this set, then resets it.
+    overflow_flag: Arc<AtomicBool>,
 }
 
-/// Sample-buffer handler installed on the SCStream. Holds the buffer +
-/// level Arcs the cpal path also writes through, so the HUD level pump
-/// and the eventual drain see the same atomic / mutex shape regardless
-/// of which capture source is active.
+/// Sample-buffer handler installed on the SCStream.
+///
+/// Owns the producer end of the SPSC ring + shared atomics for the
+/// overflow flag and the level meter. Producer push is wait-free,
+/// so the framework callback thread never blocks waiting on the
+/// consumer — even if the meeting pump's drain tick is stalled.
 struct AudioHandler {
-    buffer: Arc<Mutex<Vec<f32>>>,
+    producer: SerialProducer,
+    overflow_flag: Arc<AtomicBool>,
     level: Arc<AtomicU32>,
 }
 
@@ -116,6 +170,13 @@ impl SCStreamOutputTrait for AudioHandler {
         // The convention is "1 buffer = interleaved", and we fold the
         // planar case into the same interleaved Vec<f32> the rest of
         // the pipeline expects.
+        //
+        // We still build the interleaved `Vec<f32>` because the
+        // planar→interleaved transform isn't expressible in a single
+        // `Producer::push_iter` pass (different source slices per
+        // sample), and the alloc cost is amortised by the caller's
+        // typical buffer-size of a few thousand frames per callback.
+        // The ring push happens immediately after — see below.
         let mut samples: Vec<f32> = Vec::new();
         let mut sum_sq = 0.0_f32;
 
@@ -175,27 +236,37 @@ impl SCStreamOutputTrait for AudioHandler {
             frames_per_chan * chans.len()
         };
 
-        // Locking the mutex briefly is fine — the only other holder is
-        // the worker thread on stop, by which point capture has been
-        // halted via `stop_capture()` and no more callbacks land.
-        // Apply the same defensive `MAX_BUFFER_FRAMES` ceiling the
-        // cpal mic path uses, so an SCK stream whose drain has
-        // wedged can't grow without bound either.
-        let mut guard = match self.buffer.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.extend_from_slice(&samples);
-        if guard.len() > super::MAX_BUFFER_FRAMES {
-            let drop_count = guard.len() - super::MAX_BUFFER_FRAMES;
-            guard.drain(..drop_count);
-            tracing::warn!(
-                dropped_samples = drop_count,
-                buffer_cap_frames = super::MAX_BUFFER_FRAMES,
-                "SCK audio buffer exceeded cap; dropping oldest samples"
-            );
+        // Push into the wait-free ring. `Producer::push` is wait-free
+        // and allocation-free; on a full ring it returns
+        // `PushError::Full` and we drop the oldest-pushed-first
+        // newer-sample-first — same overflow shape as the cpal path
+        // (drop newer, not older). Setting the overflow flag lets
+        // the worker log once per drain cycle so chronic overflow is
+        // visible without flooding the log on a single transient.
+        //
+        // The ring's pre-allocated capacity is `MAX_BUFFER_FRAMES`,
+        // matching the cpal path's defensive ceiling. The pre-#251
+        // path used a `Mutex<Vec<f32>>` that locked the framework
+        // callback thread while the worker drained — under a wedged
+        // worker (long whisper inference, SQLite write, etc.) the
+        // callback would stall, risking OS-level frame drops.
+        let mut overflowed = false;
+        self.producer.with_inner(|producer| {
+            for s in &samples {
+                if producer.push(*s).is_err() {
+                    overflowed = true;
+                    // Continue the loop so RMS still reflects the
+                    // full callback worth of audio even when the
+                    // ring is full — the level meter shouldn't go
+                    // silent during overflow.
+                }
+            }
+        });
+        if overflowed {
+            // `Relaxed`: the worker reads on a human-paced drain
+            // tick; the message is purely informational.
+            self.overflow_flag.store(true, Ordering::Relaxed);
         }
-        drop(guard);
 
         if count > 0 {
             let rms = (sum_sq / count as f32).sqrt();
@@ -298,11 +369,17 @@ impl ScreenCaptureKitSession {
             // free insurance against future feedback if we add either.
             .with_excludes_current_process_audio(true);
 
-        let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        // Pre-allocate the SPSC ring at the cpal path's defensive
+        // cap so the overflow behaviour matches across sources. The
+        // whole capacity is allocated once at session start — no
+        // realloc inside the realtime callback.
+        let (producer, consumer) = RingBuffer::<f32>::new(MAX_BUFFER_FRAMES);
+        let overflow_flag = Arc::new(AtomicBool::new(false));
         let mut stream = SCStream::new(&filter, &config);
         stream.add_output_handler(
             AudioHandler {
-                buffer: Arc::clone(&buffer),
+                producer: SerialProducer::new(producer),
+                overflow_flag: Arc::clone(&overflow_flag),
                 level: Arc::clone(&level),
             },
             SCStreamOutputType::Audio,
@@ -321,22 +398,25 @@ impl ScreenCaptureKitSession {
                 sample_rate: SAMPLE_RATE,
                 channels: CHANNELS,
             },
-            buffer,
+            consumer: Mutex::new(consumer),
+            overflow_flag,
         })
     }
 
     /// Stop capture and return the accumulated samples.
     pub fn stop(self) -> Result<Vec<f32>> {
         // Stop first so any final in-flight sample callback writes
-        // its bytes before we take the buffer.
+        // its bytes before we drain the ring.
         self.stream
             .stop_capture()
             .context("ScreenCaptureKit: stop capture")?;
         let mut guard = self
-            .buffer
+            .consumer
             .lock()
-            .map_err(|_| anyhow!("audio buffer mutex poisoned"))?;
-        Ok(std::mem::take(&mut *guard))
+            .map_err(|_| anyhow!("sck consumer mutex poisoned"))?;
+        let samples = drain_consumer(&mut guard);
+        log_overflow_if_set(&self.overflow_flag);
+        Ok(samples)
     }
 
     /// Drain whatever samples have accumulated **without stopping**
@@ -344,21 +424,21 @@ impl ScreenCaptureKitSession {
     /// tight tick to feed a `WhisperStreamingSession` between
     /// stop()-style chunk boundaries.
     ///
-    /// The SCK callback continues writing into the same buffer
-    /// `Arc<Mutex<Vec<f32>>>` after the drain — `mem::take` swaps
-    /// in a fresh empty `Vec` for the inner storage, leaving the
-    /// callback's Arc clone valid. The callback's next write
-    /// re-grows the (now-empty) Vec.
+    /// The SCK callback continues writing into the producer end of
+    /// the ring after the drain — only the consumer half is touched
+    /// here.
     ///
     /// Returns an empty Vec if the callback hasn't written anything
     /// since the previous drain — that's a normal "tick fired
     /// faster than the audio callback" condition, not an error.
     pub fn drain_buffer(&self) -> Result<Vec<f32>> {
         let mut guard = self
-            .buffer
+            .consumer
             .lock()
-            .map_err(|_| anyhow!("audio buffer mutex poisoned"))?;
-        Ok(std::mem::take(&mut *guard))
+            .map_err(|_| anyhow!("sck consumer mutex poisoned"))?;
+        let samples = drain_consumer(&mut guard);
+        log_overflow_if_set(&self.overflow_flag);
+        Ok(samples)
     }
 
     /// Format the in-flight buffer is being captured in. Used by
@@ -366,5 +446,64 @@ impl ScreenCaptureKitSession {
     /// a [`super::CapturedAudio`].
     pub fn format(&self) -> CaptureFormat {
         self.format
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Compile-time assertion that the wrapper actually upgrades
+    /// `Producer<f32>` to `Sync`. If a future refactor accidentally
+    /// removes the unsafe impl, the SCStreamOutputTrait bound on
+    /// `AudioHandler` would no longer hold and the build would
+    /// regress to a less-helpful error elsewhere — pin the contract
+    /// here directly.
+    #[test]
+    fn serial_producer_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<SerialProducer>();
+    }
+
+    /// Round-trip a few samples through a real `SerialProducer` to
+    /// prove `with_inner` actually exposes mutable access. rtrb's
+    /// own crate covers the ring semantics; this test pins the
+    /// wrapper's contract.
+    #[test]
+    fn serial_producer_pushes_through_with_inner() {
+        let (producer, mut consumer) = RingBuffer::<f32>::new(4);
+        let serial = SerialProducer::new(producer);
+
+        serial.with_inner(|p| {
+            for v in [0.1, 0.2, 0.3] {
+                p.push(v).expect("ring has space");
+            }
+        });
+
+        let drained = drain_consumer(&mut consumer);
+        assert_eq!(drained, vec![0.1, 0.2, 0.3]);
+    }
+
+    /// On a full ring, push returns `Err`. The handler treats this
+    /// as overflow and sets the flag; the worker logs once on its
+    /// next drain. This pins the contract that the wrapper does
+    /// not silently drop the error.
+    #[test]
+    fn serial_producer_surfaces_overflow_when_ring_is_full() {
+        let (producer, _consumer) = RingBuffer::<f32>::new(2);
+        let serial = SerialProducer::new(producer);
+
+        let mut overflowed = false;
+        serial.with_inner(|p| {
+            for v in [0.1, 0.2, 0.3, 0.4] {
+                if p.push(v).is_err() {
+                    overflowed = true;
+                }
+            }
+        });
+        assert!(
+            overflowed,
+            "pushing past capacity should surface PushError::Full to the caller"
+        );
     }
 }
