@@ -417,6 +417,48 @@
     }
   }
 
+  /// Batch add for the variant-suggestion box (#320 part 2). The
+  /// user picks N defaults from the suggestion list; we run an
+  /// upsert per name in parallel + merge each result into the
+  /// override list. Errors short-circuit at the first failure
+  /// (the others may have already landed; the panel's full-list
+  /// reload would catch any drift, but an explicit refresh keeps
+  /// state simple).
+  async function addAppOverrideVariants(
+    appNames: string[],
+    kind: MeetingAppKind,
+  ) {
+    if (appNames.length === 0) return;
+    try {
+      const created = await Promise.all(
+        appNames.map((appName) =>
+          invoke<MeetingAppOverride>("meeting_app_override_upsert", {
+            appName,
+            kind,
+          }),
+        ),
+      );
+      // Merge upserts into the existing list — replace any rows
+      // with matching appName, then sort.
+      const createdNames = new Set(created.map((o) => o.appName));
+      appOverrides = [
+        ...appOverrides.filter((o) => !createdNames.has(o.appName)),
+        ...created,
+      ].sort((a, b) => a.appName.localeCompare(b.appName));
+      newOverrideName = "";
+      newOverrideKind = "meeting";
+      appOverridesError = null;
+      await tick();
+      overrideInputEl?.focus();
+    } catch (err) {
+      // Any partial successes already landed; reload to get a
+      // consistent view rather than leaving the UI in a guessed
+      // state.
+      await loadAppOverrides();
+      appOverridesError = formatErrorDisplay(err);
+    }
+  }
+
   async function changeAppOverrideKind(
     override: MeetingAppOverride,
     kind: MeetingAppKind,
@@ -1385,6 +1427,7 @@
         bind:newKind={newOverrideKind}
         bind:inputEl={overrideInputEl}
         onSubmit={addAppOverride}
+        onSubmitVariants={addAppOverrideVariants}
         onChangeKind={changeAppOverrideKind}
         onDelete={deleteAppOverride}
       />
