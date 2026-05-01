@@ -1,8 +1,12 @@
 <!--
   Left-rail navigation for the main window. Splits the main
-  window's content into Dictation / Meetings / History sections;
-  configuration lives in the standalone Settings window opened
-  from the footer (or ⌘, on macOS).
+  window's content into Dictation / History sections; configuration
+  lives in the standalone Settings window opened from the footer
+  (or ⌘, on macOS).
+
+  Phase 1 of #357 dropped the standalone "Meetings" entry. Meeting
+  sessions surface in the History feed once Phase 2 lands; until
+  then History still renders dictation rows only.
 
   Why a sibling component rather than inline markup: the parent
   page is already large (#156). Pulling the sidebar out keeps the
@@ -16,17 +20,9 @@
     active: AppSection;
     onSelect: (section: AppSection) => void;
     historyCount: number | null;
-    meetingsCount: number | null;
-    activeMeetingInProgress: boolean;
   };
 
-  let {
-    active,
-    onSelect,
-    historyCount,
-    meetingsCount,
-    activeMeetingInProgress,
-  }: Props = $props();
+  let { active, onSelect, historyCount }: Props = $props();
 
   async function openSettings() {
     try {
@@ -44,19 +40,12 @@
   // user-facing copy.
   const sections: Array<{ key: AppSection; label: string; testId: string }> = [
     { key: "dictation", label: "Dictation", testId: "nav-dictation" },
-    { key: "meetings", label: "Meetings", testId: "nav-meetings" },
     { key: "history", label: "History", testId: "nav-history" },
   ];
 
   function badgeFor(key: AppSection): string | null {
     if (key === "history" && historyCount !== null && historyCount > 0) {
       return historyCount > 99 ? "99+" : String(historyCount);
-    }
-    if (key === "meetings") {
-      if (activeMeetingInProgress) return "●";
-      if (meetingsCount !== null && meetingsCount > 0) {
-        return meetingsCount > 99 ? "99+" : String(meetingsCount);
-      }
     }
     return null;
   }
@@ -90,11 +79,7 @@
         >
           <span class="nav-label">{section.label}</span>
           {#if badge}
-            <span
-              class="nav-badge"
-              class:nav-badge-live={section.key === "meetings" && activeMeetingInProgress}
-              aria-hidden="true"
-            >
+            <span class="nav-badge" aria-hidden="true">
               {badge}
             </span>
           {/if}
@@ -211,12 +196,6 @@
     background-color: rgba(44, 62, 143, 0.2);
     color: #2c3e8f;
   }
-  .nav-badge-live {
-    background-color: #ff4040;
-    color: white;
-    animation: live-pulse 1.4s ease-in-out infinite;
-  }
-
   .sidebar-footer {
     margin-top: auto;
     padding-top: 0.75rem;
@@ -230,14 +209,6 @@
     color: #888;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   }
-  @keyframes live-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .nav-badge-live { animation: none; }
-  }
-
   @media (prefers-color-scheme: dark) {
     .app-sidebar {
       background-color: #1d1d1f;

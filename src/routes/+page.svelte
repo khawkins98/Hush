@@ -8,7 +8,6 @@
   import ControlsSection from "$lib/ControlsSection.svelte";
   import ResultBlock from "$lib/ResultBlock.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
-  import MeetingSessionsPanel from "$lib/MeetingSessionsPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
   import MacosPermsPill from "$lib/MacosPermsPill.svelte";
   import { formatErrorDisplay, type ErrorDisplay } from "$lib/errors";
@@ -42,8 +41,15 @@
   function loadActiveSection(): AppSection {
     try {
       const stored = window.localStorage.getItem(ACTIVE_SECTION_KEY);
-      if (stored === "dictation" || stored === "meetings" || stored === "history") {
+      if (stored === "dictation" || stored === "history") {
         return stored;
+      }
+      // Pre-#357 a third "meetings" section existed; gracefully
+      // migrate any persisted value to History so a returning user
+      // who last had Meetings active doesn't land on a 404 / fall
+      // back to Dictation unexpectedly.
+      if (stored === "meetings") {
+        return "history";
       }
     } catch {
       // localStorage unavailable (private mode / Tauri webview
@@ -264,11 +270,15 @@
     // doesn't yet know about.
     unlistenMenuGoto = await listen<string>(Events.MenuGotoSection, (e) => {
       const payload = e.payload;
-      if (
-        payload === "dictation" ||
-        payload === "meetings" ||
-        payload === "history"
-      ) {
+      // Phase 1 of #357 dropped the "meetings" menu entry. Any
+      // backend that still emits it (e.g. a stale build still
+      // running) is silently coerced to History — the destination
+      // meetings will route to once Phase 2's unified surface ships.
+      if (payload === "meetings") {
+        activeSection = "history";
+        return;
+      }
+      if (payload === "dictation" || payload === "history") {
         activeSection = payload;
       }
     });
@@ -819,8 +829,6 @@
     active={activeSection}
     onSelect={(s) => (activeSection = s)}
     historyCount={historyTotalCount}
-    meetingsCount={meetingSessions.length}
-    activeMeetingInProgress={meetingActiveId !== null}
   />
 
   <main class="app-main" data-active-section={activeSection}>
@@ -887,45 +895,6 @@
         allGranted={allPermsGranted}
         anyDenied={anyPermsDenied}
         onOpenPermissions={() => openSettingsTab("permissions")}
-      />
-    {:else if activeSection === "meetings"}
-      <header class="section-header">
-        <div class="section-header-text">
-          <h1>Meetings</h1>
-          <p class="tagline">
-            Long-running multi-source capture with searchable transcripts.
-          </p>
-        </div>
-        {#if activeModel}
-          <button
-            type="button"
-            class="active-model-chip"
-            onclick={openModelSettings}
-            aria-label="Active model: {activeModel.displayName}. Click to change."
-            title="Change transcription model"
-          >
-            <span class="active-model-name">{activeModel.displayName}</span>
-            <span class="active-model-chevron" aria-hidden="true">›</span>
-          </button>
-        {/if}
-      </header>
-
-      <MeetingSessionsPanel
-        sessions={meetingSessions}
-        sessionsLoaded={meetingSessionsLoaded}
-        sessionsError={meetingSessionsError}
-        activeSessionId={meetingActiveId}
-        activeDetail={meetingActiveDetail}
-        busy={meetingBusy}
-        {sources}
-        {sourcesLoaded}
-        droppedSources={meetingDroppedSources}
-        bind:meetingMicId
-        bind:meetingIncludeSystemAudio
-        onDelete={deleteMeetingSession}
-        onStart={startMeetingSession}
-        onStop={stopMeetingSession}
-        onLoadDetail={loadMeetingSessionDetail}
       />
     {:else if activeSection === "history"}
       <header class="section-header">

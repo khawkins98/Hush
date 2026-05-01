@@ -22,10 +22,11 @@
 //!
 //! - `settings` — open the Settings window
 //!   ([`crate::settings_window::show`])
-//! - `goto-dictation` / `goto-meetings` / `goto-history` /
-//!   `goto-configuration` — emit `menu:goto-section` Tauri event
-//!   with the section name as payload; the main window's onMount
-//!   listener flips its `activeSection` rune.
+//! - `goto-dictation` / `goto-history` — emit `menu:goto-section`
+//!   Tauri event with the section name as payload; the main
+//!   window's onMount listener flips its `activeSection` rune.
+//!   (Pre-#357 Phase 1 also exposed `goto-meetings`; meetings now
+//!   surface in History once Phase 2 lands.)
 //!
 //! ## Why event-not-IPC for the goto- entries
 //!
@@ -87,9 +88,12 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .select_all()
         .build()?;
 
-    // View submenu: section navigation. ⌘1..⌘3 mirror the sidebar
-    // order. Configuration was a Phase 1 placeholder; Phase 3 moved
-    // its panels into the Settings window (⌘, on the App menu).
+    // View submenu: section navigation. ⌘1/⌘2 mirror the sidebar
+    // order after #357 Phase 1 collapsed Dictation/Meetings/History
+    // to Dictation/History — meeting sessions surface in the unified
+    // History feed once Phase 2 lands. Configuration was a pre-IA
+    // placeholder; its panels live in the standalone Settings
+    // window (⌘, on the App menu).
     let view_submenu = SubmenuBuilder::new(app, "View")
         .item(
             &MenuItemBuilder::with_id("goto-dictation", "Dictation")
@@ -97,13 +101,8 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 .build(app)?,
         )
         .item(
-            &MenuItemBuilder::with_id("goto-meetings", "Meetings")
-                .accelerator("CmdOrCtrl+2")
-                .build(app)?,
-        )
-        .item(
             &MenuItemBuilder::with_id("goto-history", "History")
-                .accelerator("CmdOrCtrl+3")
+                .accelerator("CmdOrCtrl+2")
                 .build(app)?,
         )
         .build()?;

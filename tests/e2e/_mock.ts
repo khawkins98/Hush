@@ -304,17 +304,25 @@ export async function installMocks(
 }
 
 /**
- * Click into one of the main-window sidebar sections (Phase 1 IA
- * redesign). Specs targeting Meetings / History / Configuration
- * panels should call this after `page.goto("/")` so the panel is
- * actually rendered before locating it. Dictation is the default
- * landing tab — specs hitting it can skip this helper.
+ * Click into one of the main-window sidebar sections.
+ *
+ * Phase 1 of #357 collapsed the sidebar from three sections
+ * (Dictation/Meetings/History) to two (Dictation/History) — meeting
+ * sessions surface in the unified History feed once Phase 2 lands.
+ *
+ * The legacy `"meetings"` token is still accepted by this helper so
+ * older specs don't break overnight; it routes to History (the
+ * destination meetings will eventually live in). Specs that
+ * specifically depend on the old meetings panel UI are kept
+ * checked-in but skipped via `test.skip` until Phase 2 reintroduces
+ * the surface.
  */
 export async function gotoSection(
   page: Page,
   section: "dictation" | "meetings" | "history" | "configuration",
 ): Promise<void> {
-  await page.locator(`[data-testid="nav-${section}"]`).click();
+  const target = section === "meetings" ? "history" : section;
+  await page.locator(`[data-testid="nav-${target}"]`).click();
 }
 
 /**
