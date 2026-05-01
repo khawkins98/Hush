@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openExternal } from "./openExternal";
   import type { MacosPermissionDiagnostic } from "./types";
 
   type Props = {
@@ -107,7 +108,12 @@
         Full troubleshooting recipe is in
         <a
           href="https://github.com/khawkins98/Hush/blob/main/docs/macos-permissions.md"
-          target="_blank"
+          onclick={(e) => {
+            e.preventDefault();
+            openExternal(
+              "https://github.com/khawkins98/Hush/blob/main/docs/macos-permissions.md",
+            );
+          }}
           rel="noopener noreferrer"
         >docs/macos-permissions.md</a>.
       </p>
