@@ -175,15 +175,25 @@ jobs:
       # patterns *and* are already on main; new matches fail the
       # build so the additions are reviewed under "Supply-chain pins"
       # in `learnings.md`.
-      - name: New RC / git dep?
+      - name: New RC / git / pre-release / registry dep?
         run: |
           set -euo pipefail
           # Skip comment lines (those starting with #) — comments
           # explain the policy and may legitimately mention "rc.X"
           # or example git URLs without those being live deps.
           # Match only on dep-table lines.
+          #
+          # Patterns flagged (#350 extended #327):
+          #   - `rc.N` / `alpha.N` / `beta.N` (any pre-release tag)
+          #   - `-pre` / `-dev` (less common but still pre-stable)
+          #   - `git = "https...` and the single-quoted variant
+          #     (TOML allows both `"` and `'`)
+          #   - `registry = ` (a dep pulled from a non-crates.io
+          #     registry — a real supply-chain vector that's
+          #     invisible to crates.io review)
           current=$(grep -nE '^(ort|rdev|ndarray|[a-zA-Z0-9_-]+) *=' src-tauri/Cargo.toml \
-            | grep -E 'rc\.[0-9]+|git = "https' || true)
+            | grep -E 'rc\.[0-9]+|alpha\.[0-9]+|beta\.[0-9]+|-pre|-dev|git = "https|git = '\''https|registry =' \
+            || true)
           # Allowlisted *exact* dep-table lines (kept in lockstep
           # with `learnings.md` → "Supply-chain pins").
           allowed=$(cat <<'EOF'
