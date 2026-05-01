@@ -10,11 +10,11 @@
 //! ticks for the lifetime of the diarizer — the speaker that gets
 //! "Speaker 1" early in a meeting keeps it for the whole meeting.
 //!
-//! The batch [`super::cluster::cluster_with_threshold`] function
-//! still exists for one-shot offline use cases, but the streaming
-//! meeting pump uses the session-state matcher because per-tick
-//! agglomerative clustering produced unstable IDs across ticks
-//! (audit finding from PR-F review).
+//! Pre-#303 the diarizer ran per-tick agglomerative clustering
+//! (`super::cluster::cluster_with_threshold`, removed in #310);
+//! cluster IDs reset on every pump tick. The streaming
+//! session-state matcher fixes that — a speaker who gets "Speaker
+//! 1" early in the meeting keeps it for the whole meeting.
 //!
 //! ## Pipeline
 //!
@@ -28,12 +28,6 @@
 //! cluster ID, and stamp the utterance `"Speaker {N+1}"`. Cluster
 //! state persists for the lifetime of the diarizer, so cluster
 //! IDs are stable across pump ticks.
-//!
-//! ## Why a separate `Diarize` impl rather than swapping algorithms
-//!
-//! The trait's `label_utterances` signature already gives us audio
-//! chunks parallel to utterances. The D1 [`super::EnergyDiarizer`]
-//! ignores them; we use them. No interface change needed.
 //!
 //! ## Threading model
 //!
