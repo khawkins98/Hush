@@ -22,6 +22,13 @@
     newKind: MeetingAppKind;
     inputEl?: HTMLInputElement | null;
     onSubmit: (e: Event) => void | Promise<void>;
+    /// Batch-add for the variant-suggestion box (#320 part 2).
+    /// Called when the user picks N defaults from the suggestion
+    /// list and clicks "Add N selected variants".
+    onSubmitVariants: (
+      appNames: string[],
+      kind: MeetingAppKind,
+    ) => void | Promise<void>;
     onChangeKind: (
       override: MeetingAppOverride,
       kind: MeetingAppKind,
@@ -38,6 +45,7 @@
     newKind = $bindable(),
     inputEl = $bindable(),
     onSubmit,
+    onSubmitVariants,
     onChangeKind,
     onDelete,
   }: Props = $props();
@@ -68,6 +76,68 @@
     }
     return { meeting, media, other };
   });
+
+  // Variant suggestions (#320 part 2). When the user types in the
+  // Add input, find every default entry whose `appName` contains
+  // the typed substring (case-insensitive). The classifier needs
+  // a separate row per platform variant — surfacing the matches
+  // lets the user pick "give me overrides for all 7 Zoom
+  // variants" in one click rather than typing each manually.
+  //
+  // Excludes the typed text itself (the redundancy warning
+  // already handles the exact-match case) and only fires when
+  // there are at least 2 matches — a single match is just the
+  // redundancy warning's territory.
+  let variantSuggestions = $derived.by(() => {
+    const trimmed = newAppName.trim();
+    if (trimmed.length < 2) return [];
+    const lower = trimmed.toLowerCase();
+    const matches = defaults.filter((d) =>
+      d.appName.toLowerCase().includes(lower),
+    );
+    // If there's exactly one match AND it equals the typed text,
+    // the redundancy warning carries the message — no suggestion
+    // needed.
+    if (matches.length <= 1) return [];
+    return matches;
+  });
+
+  // Which suggested variants the user has checked. Defaults to
+  // all-checked when the suggestion list first appears (the
+  // "yes give me everything for this app" path is the common
+  // case). Re-resets when the suggestion list changes.
+  let selectedVariants = $state<Set<string>>(new Set());
+
+  // Re-init `selectedVariants` whenever the suggestion list shape
+  // changes. Tracking the list's identity directly via $effect so
+  // the user's mid-edit selections aren't preserved across a
+  // different input — that would be confusing.
+  let lastSuggestionKey = $state("");
+  $effect(() => {
+    const key = variantSuggestions.map((s) => s.appName).join("|");
+    if (key !== lastSuggestionKey) {
+      lastSuggestionKey = key;
+      selectedVariants = new Set(variantSuggestions.map((s) => s.appName));
+    }
+  });
+
+  function toggleVariant(appName: string) {
+    const next = new Set(selectedVariants);
+    if (next.has(appName)) {
+      next.delete(appName);
+    } else {
+      next.add(appName);
+    }
+    selectedVariants = next;
+  }
+
+  async function onAddVariants() {
+    const picks = variantSuggestions
+      .map((s) => s.appName)
+      .filter((n) => selectedVariants.has(n));
+    if (picks.length === 0) return;
+    await onSubmitVariants(picks, newKind);
+  }
 
   // Per-row click-to-confirm. First click arms the row's Remove
   // button (label flips to "Click to confirm"); second click within
@@ -147,6 +217,61 @@
       >
       by default — you only need an override to change that.
     </p>
+  {/if}
+
+  {#if variantSuggestions.length > 0}
+    <!--
+      Variant suggestion box (#320 part 2). Active-win returns
+      different strings per OS (bundle ID on macOS, exe basename
+      on Windows, process name on Linux). Surfacing the matching
+      defaults as a checkbox list lets the user pick the
+      cross-platform variants they want overrides for in one
+      submit, instead of typing each manually.
+    -->
+    <div
+      class="override-variants"
+      data-testid="override-variant-suggestions"
+    >
+      <p class="override-variants-prose">
+        Did you mean one of these {variantSuggestions.length} variants? Each row is what
+        <code>active-win</code> reports on a different platform — pick whichever you want overrides for and click <em>Add</em>.
+      </p>
+      <ul class="override-variants-list">
+        {#each variantSuggestions as suggestion (suggestion.appName)}
+          <li>
+            <label>
+              <input
+                type="checkbox"
+                checked={selectedVariants.has(suggestion.appName)}
+                onchange={() => toggleVariant(suggestion.appName)}
+              />
+              <code>{suggestion.appName}</code>
+              <span class="override-variants-kind"
+                >({suggestion.kind === "meeting"
+                  ? "Meeting"
+                  : suggestion.kind === "media"
+                    ? "Media"
+                    : "Ignore"} default)</span
+              >
+            </label>
+          </li>
+        {/each}
+      </ul>
+      <button
+        type="button"
+        class="ghost"
+        data-testid="override-variant-submit"
+        disabled={selectedVariants.size === 0}
+        onclick={onAddVariants}
+      >
+        Add {selectedVariants.size} as
+        {newKind === "meeting"
+          ? "Meeting"
+          : newKind === "media"
+            ? "Media"
+            : "Ignore"}
+      </button>
+    </div>
   {/if}
 
   {#if !overridesLoaded}
