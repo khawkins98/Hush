@@ -72,8 +72,29 @@ pub fn run() {
         // focus it so the user sees Hush respond to the second
         // launch attempt. The second process exits on its own when
         // the plugin returns.
+        //
+        // Background-launch carve-out (#349). If the second launch
+        // is itself `--background` (e.g. a duplicate LaunchAgent
+        // fire — rare, but observed across macOS resume-from-sleep
+        // edge cases), do NOT show the window. Surfacing a window
+        // a user explicitly didn't ask for would defeat the
+        // background-launch discipline maintained at the existing
+        // post-setup branch around line 280. On non-macOS the
+        // helper is unavailable (no LaunchAgent path), so the
+        // carve-out is a no-op and the original "show + focus"
+        // behaviour stays.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             use tauri::Manager;
+            #[cfg(target_os = "macos")]
+            {
+                if is_background_launch(_args.iter().cloned()) {
+                    tracing::info!(
+                        "single-instance: second launch is --background; \
+                         leaving primary window untouched"
+                    );
+                    return;
+                }
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
