@@ -45,6 +45,15 @@
   // recording state too, so this is just a safe initial render.
   let hudState = $state<"recording" | "processing">("recording");
 
+  // Recording-duration timer (#360). `recordingStartedAt` is set
+  // when the backend emits `hud:state === "recording"`, freezes
+  // when state flips to `processing`, and resets between cycles so
+  // back-to-back dictations each start at 0:00. The visible
+  // `elapsedLabel` is recomputed on every rAF tick — same loop
+  // that smooths the level meter, so no extra timer.
+  let recordingStartedAt = $state<number | null>(null);
+  let elapsedLabel = $state("0:00");
+
   // Pre-#330 these were closure-locals inside `onMount`'s synchronous
   // teardown, populated by `.then()`. Hoisted to module scope and
   // assigned via `await listen(...)` inside an async `onMount` so the
@@ -57,6 +66,21 @@
   let unlistenState: UnlistenFn | null = null;
   let raf: number | undefined;
 
+  // Format a millisecond duration as `M:SS` (under an hour) or
+  // `H:MM:SS` (one hour and beyond — meetings hit this routinely).
+  // Lives outside `tick()` so the `onMount` close-over captures a
+  // stable reference rather than re-allocating on every frame.
+  function formatElapsed(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+    }
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+
   onMount(async () => {
     const ATTACK = 0.6;
     const RELEASE = 0.12;
@@ -65,6 +89,14 @@
       const target = rms;
       const coeff = target > displayLevel ? ATTACK : RELEASE;
       displayLevel += (target - displayLevel) * coeff;
+      // Update the elapsed-time label on every frame the timer is
+      // running. The wall-clock check is cheap; recomputing the
+      // formatted string ~30 times per second is fine for a label
+      // that changes once per second and Svelte's diffing skips
+      // re-renders when the string is unchanged.
+      if (recordingStartedAt !== null) {
+        elapsedLabel = formatElapsed(Date.now() - recordingStartedAt);
+      }
       raf = requestAnimationFrame(tick);
     };
 
@@ -83,9 +115,28 @@
         if (next === "processing") {
           rms = 0;
           displayLevel = 0;
+          // Freeze the timer (don't reset) — the user still sees
+          // the final duration of the just-finished capture during
+          // the post-stop transcription window. A back-to-back
+          // dictation will reset on the next `recording` event.
+          recordingStartedAt = null;
+        } else {
+          // Recording — start a fresh timer. Resets cleanly across
+          // back-to-back cycles per #360 acceptance.
+          recordingStartedAt = Date.now();
+          elapsedLabel = "0:00";
         }
       }
     });
+
+    // First-paint default: the HUD is rendered with `hudState`
+    // initially "recording" so a same-tick `start_dictation`
+    // doesn't flicker the Processing label. Seed the timer at
+    // mount so the first frame already shows 0:00 ticking up
+    // even before the backend's first `hud:state` event lands.
+    if (recordingStartedAt === null && hudState === "recording") {
+      recordingStartedAt = Date.now();
+    }
 
     raf = requestAnimationFrame(tick);
   });
@@ -167,6 +218,11 @@
   <span class="hud-label">
     {hudState === "processing" ? "Processing…" : "Recording"}
   </span>
+  {#if hudState === "recording"}
+    <span class="hud-elapsed" data-testid="hud-elapsed" aria-hidden="true">
+      {elapsedLabel}
+    </span>
+  {/if}
   {#if hudState === "recording"}
     <div class="hud-meter" role="presentation">
       <div class="hud-meter-fill" style="width: {barWidth}%"></div>
@@ -297,6 +353,19 @@
   .hud-label {
     font-size: 0.95rem;
     font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  /* Elapsed-time counter (#360). Sits between the label and the
+     level meter; tabular-numbers prevent the column from wobbling
+     as digits change width. Slightly dimmer than the label so the
+     visual hierarchy is "Recording" → time → meter. */
+  .hud-elapsed {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.78);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
     letter-spacing: 0.01em;
   }
 
