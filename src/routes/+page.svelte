@@ -3,8 +3,7 @@
   import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { platform } from "@tauri-apps/plugin-os";
   import { onDestroy, onMount } from "svelte";
-  import AppSidebar from "$lib/AppSidebar.svelte";
-  import type { AppSection } from "$lib/types";
+
   import ControlsSection from "$lib/ControlsSection.svelte";
   import ResultBlock from "$lib/ResultBlock.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
@@ -31,42 +30,6 @@
   const HISTORY_PAGE_SIZE = 25;
 
   // Sidebar nav state. Drives which content block renders in the
-  // main pane. Persists the last-active section in localStorage so
-  // closing on History reopens to History — useful for users who
-  // dip in primarily to review meeting transcripts. localStorage
-  // (rather than the backend settings repo) because the value is
-  // window-scoped UI state, not anything the backend or other
-  // surfaces care about.
-  const ACTIVE_SECTION_KEY = "hush.activeSection";
-  function loadActiveSection(): AppSection {
-    try {
-      const stored = window.localStorage.getItem(ACTIVE_SECTION_KEY);
-      if (stored === "dictation" || stored === "history") {
-        return stored;
-      }
-      // Pre-#357 a third "meetings" section existed; gracefully
-      // migrate any persisted value to History so a returning user
-      // who last had Meetings active doesn't land on a 404 / fall
-      // back to Dictation unexpectedly.
-      if (stored === "meetings") {
-        return "history";
-      }
-    } catch {
-      // localStorage unavailable (private mode / Tauri webview
-      // without storage access); fall through to the default.
-    }
-    return "dictation";
-  }
-  let activeSection = $state<AppSection>(loadActiveSection());
-  $effect(() => {
-    try {
-      window.localStorage.setItem(ACTIVE_SECTION_KEY, activeSection);
-    } catch {
-      // Best-effort — if storage write fails we just lose the
-      // persistence, the in-memory state still works for this
-      // session.
-    }
-  });
 
   let sources = $state<AudioSourceListing[]>([]);
   let sourcesLoaded = $state(false);
@@ -264,23 +227,16 @@
     });
 
     // Native menu bar dispatches View → Section selections through
-    // this event (#164 Phase 2). Payload is a string matching the
-    // `AppSection` union; an unknown value is ignored so the
-    // frontend stays robust to a future menu entry the page
-    // doesn't yet know about.
+    // this event (#164 Phase 2). Sections are now always rendered in
+    // one scrollable page, so we scroll to the anchor instead of
+    // switching a tab.
     unlistenMenuGoto = await listen<string>(Events.MenuGotoSection, (e) => {
       const payload = e.payload;
-      // Phase 1 of #357 dropped the "meetings" menu entry. Any
-      // backend that still emits it (e.g. a stale build still
-      // running) is silently coerced to History — the destination
-      // meetings will route to once Phase 2's unified surface ships.
-      if (payload === "meetings") {
-        activeSection = "history";
-        return;
-      }
-      if (payload === "dictation" || payload === "history") {
-        activeSection = payload;
-      }
+      const sectionId =
+        payload === "meetings" || payload === "history"
+          ? "history-section"
+          : "dictation-section";
+      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
     });
 
     // Model-download events from the backend. The progress event
@@ -824,103 +780,93 @@
   onOpenPrivacyPane={openPrivacyPane}
 />
 
-<div class="app-shell">
-  <AppSidebar
-    active={activeSection}
-    onSelect={(s) => (activeSection = s)}
-    historyCount={historyTotalCount}
-  />
+<header class="app-bar">
+  <div class="brand">
+    <img
+      class="brand-icon"
+      src="/app-icon.png"
+      srcset="/app-icon.png 1x, /app-icon@2x.png 2x"
+      alt=""
+      aria-hidden="true"
+      width="22"
+      height="22"
+    />
+    <span class="brand-name">Hush</span>
+  </div>
+  <button
+    type="button"
+    class="settings-btn"
+    onclick={() => openSettingsTab("general")}
+    title="Settings (⌘,)"
+  >
+    Settings <kbd>⌘,</kbd>
+  </button>
+</header>
 
-  <main class="app-main" data-active-section={activeSection}>
-    {#if activeSection === "dictation"}
-      <header class="section-header">
-        <div class="section-header-text">
-          <h1>Dictation</h1>
-          <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
-        </div>
-        {#if activeModel}
-          <!--
-            Active-model chip. Right-aligned next to the section
-            heading so it reads as a status badge rather than a
-            stray pill floating mid-page. Single button is the
-            click target; the chevron hints "click to change."
-          -->
-          <button
-            type="button"
-            class="active-model-chip"
-            onclick={openModelSettings}
-            aria-label="Active model: {activeModel.displayName}. Click to change."
-            title="Change transcription model"
-          >
-            <span class="active-model-name">{activeModel.displayName}</span>
-            <span class="active-model-chevron" aria-hidden="true">›</span>
-          </button>
-        {/if}
-      </header>
+<main class="app-main">
+  <section id="dictation-section" class="page-section">
+    <header class="section-header">
+      <h1>Dictation</h1>
+      <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
+    </header>
 
-      <!--
-        Hotkey hint card. Stays sticky inside the Dictation pane so
-        the shortcut stays visible as the result block grows. The
-        PTT key shown matches the platform default; the editor in
-        Settings → General overrides it.
-      -->
-      <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
-        <strong>Shortcuts:</strong>
-        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
-        or hold
-        {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
-        to push-to-talk.
-      </aside>
+    <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
+      <strong>Shortcuts:</strong>
+      <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
+      or hold
+      {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
+      to push-to-talk.
+    </aside>
 
-      <ControlsSection
-        {sources}
-        {sourcesLoaded}
-        bind:selected
-        {recording}
-        {busy}
-        {transcribing}
-        {noModelInstalled}
-        {error}
-        onStart={start}
-        onStop={stop}
-        onScrollToModelPicker={openModelSettings}
-      />
+    <ControlsSection
+      {sources}
+      {sourcesLoaded}
+      bind:selected
+      {recording}
+      {busy}
+      {transcribing}
+      {noModelInstalled}
+      {error}
+      onStart={start}
+      onStop={stop}
+      onScrollToModelPicker={openModelSettings}
+      activeModelName={activeModel?.displayName ?? null}
+    />
 
-      {#if result}
-        <ResultBlock {result} />
-      {/if}
-
-      <MacosPermsPill
-        capable={macosCapable}
-        allGranted={allPermsGranted}
-        anyDenied={anyPermsDenied}
-        onOpenPermissions={() => openSettingsTab("permissions")}
-      />
-    {:else if activeSection === "history"}
-      <header class="section-header">
-        <div class="section-header-text">
-          <h1>History</h1>
-          <p class="tagline">Every dictation transcript, searchable.</p>
-        </div>
-      </header>
-      <HistoryPanel
-        {historyEntries}
-        {historyLoaded}
-        {historyQuery}
-        {historySearching}
-        {historyError}
-        {historyVersion}
-        {historyTotalCount}
-        {models}
-        {formatTimestamp}
-        {onSearchInput}
-        onCopy={copyHistoryEntry}
-        onDelete={deleteHistoryEntry}
-        onClearAll={clearAllHistory}
-      />
+    {#if result}
+      <ResultBlock {result} />
     {/if}
-  </main>
-</div>
+
+    <MacosPermsPill
+      capable={macosCapable}
+      allGranted={allPermsGranted}
+      anyDenied={anyPermsDenied}
+      onOpenPermissions={() => openSettingsTab("permissions")}
+    />
+  </section>
+
+  <section id="history-section" class="page-section">
+    <header class="section-header">
+      <h1>History</h1>
+      <p class="tagline">Every dictation transcript, searchable.</p>
+    </header>
+    <HistoryPanel
+      {historyEntries}
+      {historyLoaded}
+      {historyQuery}
+      {historySearching}
+      {historyError}
+      {historyVersion}
+      {historyTotalCount}
+      {models}
+      {formatTimestamp}
+      {onSearchInput}
+      onCopy={copyHistoryEntry}
+      onDelete={deleteHistoryEntry}
+      onClearAll={clearAllHistory}
+    />
+  </section>
+</main>
 
 <style>
 :root {
@@ -950,96 +896,134 @@
 
   font-size: 16px;
   line-height: 24px;
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  color: var(--text-primary);
+  background-color: var(--bg-app);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Phase 1 IA redesign: app shell is a flex row of sidebar +
-   content. The container's centred-with-max-width treatment moves
-   to .app-main so each section reads at the same comfortable
-   measure.
-
-   Fixed-height shell + scroll-isolated main panel (#336). Pre-fix
-   the document body was the scroll container, so a two-finger
-   scroll moved the entire .app-shell — including the sidebar
-   whose `position: sticky` only sticks within its containing
-   block. Locking .app-shell to 100vh and making .app-main the
-   sole `overflow: auto` region means the sidebar stays put and
-   only the content panel scrolls. Mirrors how every native macOS
-   app's sidebar behaves. */
-.app-shell {
+/* Single-scroll layout: top bar + main content column. */
+.app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
-  align-items: stretch;
-  height: 100vh;
-  overflow: hidden;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1.5rem;
+  background-color: var(--bg-sidebar, #f0f0f3);
+  border-bottom: 1px solid var(--border, #e1e1e1);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.brand-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  image-rendering: -webkit-optimize-contrast;
+}
+.brand-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+}
+
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.75rem;
+  background: none;
+  border: 1px solid var(--border-input, #d1d1d6);
+  border-radius: var(--radius-md, 8px);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary, #555);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.settings-btn:hover {
+  background-color: rgba(44, 62, 143, 0.07);
+  border-color: var(--accent, #5b7ee5);
+  color: var(--text-primary, #111);
+}
+.settings-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.settings-btn kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78em;
+  color: var(--text-muted, #888);
 }
 
 .app-main {
-  flex: 1;
-  min-width: 0;
-  padding: 3vh 2rem 4vh;
+  padding: 0 1.5rem 4rem;
   text-align: left;
   overflow-y: auto;
+  height: calc(100vh - 45px); /* subtract app-bar height */
+  box-sizing: border-box;
+}
+
+.page-section {
+  max-width: 36rem;
+  margin: 0 auto;
+  padding-top: 2.5rem;
+}
+
+.page-section + .page-section {
+  border-top: 1px solid var(--border, #e1e1e1);
+  margin-top: 2rem;
+  padding-top: 2.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .app-bar {
+    border-bottom-color: #2f2f33;
+  }
+  .brand-name { color: #e8e8e8; }
+  .settings-btn {
+    color: #a0a0a0;
+    border-color: #3a3a3a;
+  }
+  .settings-btn:hover {
+    background-color: rgba(150, 170, 240, 0.1);
+    border-color: var(--accent);
+    color: #e8e8e8;
+  }
+  .page-section + .page-section {
+    border-top-color: #2f2f33;
+  }
 }
 
 .section-header {
-  max-width: 36rem;
-  margin: 0 auto 1.5rem;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-.section-header-text {
-  flex: 1;
-  min-width: 0;
+  margin-bottom: 1.5rem;
 }
 .section-header h1 {
   margin: 0 0 0.25rem;
-  font-size: 1.6rem;
-  letter-spacing: -0.01em;
-}
-.section-header .active-model-chip {
-  /* Right-aligned status badge inside the header — flush with the
-     h1 baseline so the chip reads as ambient state, not as a
-     standalone affordance to act on. */
-  flex-shrink: 0;
-  margin: 0;
-  align-self: flex-start;
-}
-
-/* Centred content column inside the main pane. Each section's
-   children inherit this measure via the existing per-component
-   styles (HistoryPanel etc. use width:auto inside a max-width
-   parent). */
-.app-main > :not(.section-header) {
-  max-width: 36rem;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-h1 {
-  margin: 0 0 0.25rem;
-  font-size: 2.5rem;
+  font-size: 1.75rem;
   letter-spacing: -0.02em;
 }
 
 .tagline {
-  color: #555;
+  color: var(--text-muted);
   margin: 0 0 1.25rem;
 }
 
 .hint {
   margin: 0 0 2rem;
   padding: 0.75rem 1rem;
-  background-color: #eef2ff;
-  border: 1px solid #c7d2fe;
-  border-radius: 8px;
-  color: #2c3e8f;
+  background-color: var(--info-bg);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-md);
+  color: var(--info-text);
   font-size: 0.9rem;
   text-align: left;
   line-height: 1.5;
@@ -1056,130 +1040,15 @@ h1 {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
-.active-model-chip {
-  /* Quiet pill that surfaces the active model + opens the picker.
-     The whole chip is the click target; a small chevron at the
-     trailing edge hints "click to change" without shouting. Lives
-     inside `.section-header`, right-aligned via that container's
-     flex layout. */
-  padding: 0.3rem 0.7rem;
-  font-size: 0.85rem;
-  font-family: inherit;
-  color: #444;
-  background-color: #f3f3f5;
-  border: 1px solid #e1e1e4;
-  border-radius: 999px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
-}
-.active-model-chip:hover {
-  background-color: #e8e8ec;
-  border-color: #d4d4d9;
-  color: #222;
-}
-.active-model-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.active-model-name {
-  font-weight: 500;
-}
-.active-model-chevron {
-  font-size: 1.05em;
-  color: #999;
-  margin-left: 0.05rem;
-  /* Vertically nudge the chevron — Apple-style "›" sits a hair
-     above the optical baseline at this font size. */
-  transform: translateY(-0.05em);
-}
-.active-model-chip:hover .active-model-chevron {
-  color: #555;
-}
-
-@media (prefers-color-scheme: dark) {
-  .active-model-chip {
-    color: #b8b8b8;
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  .active-model-chip:hover {
-    background-color: #353535;
-    border-color: #4a4a4a;
-    color: #e8e8e8;
-  }
-  .active-model-chevron {
-    color: #777;
-  }
-  .active-model-chip:hover .active-model-chevron {
-    color: #b8b8b8;
-  }
-}
-
 .hint kbd {
   display: inline-block;
   padding: 0.05rem 0.4rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
-  background-color: white;
-  border: 1px solid #c7d2fe;
-  border-radius: 4px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-sm);
   margin: 0 0.1rem;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid #d1d1d1;
-  padding: 0.7em 1.2em;
-  font-size: 1em;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  cursor: pointer;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  transition: border-color 0.15s, background-color 0.15s;
-}
-
-button:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f0f0f0;
-    background-color: #1a1a1a;
-  }
-  .tagline {
-    color: #aaa;
-  }
-  .hint {
-    background-color: #1e2a4a;
-    border-color: #3a4a7a;
-    color: #c0d0ff;
-  }
-  .hint kbd {
-    background-color: #0f1a2e;
-    border-color: #3a4a7a;
-    color: #f0f0f0;
-  }
-  button {
-    color: #f0f0f0;
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  button:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-}
 </style>
