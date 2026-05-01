@@ -279,3 +279,15 @@ export type DiarizerModelStatus = {
 // backend's `MeetingExportFormat` serde shape — the IPC accepts
 // these strings verbatim.
 export type MeetingExportFormat = "text" | "csv" | "json";
+
+// Source-of-rows choice for the bulk-export options dialog (#357
+// phase 3c). `"auto"` mirrors whichever filter chip is active in
+// the panel; the explicit kinds force a scope regardless of chip.
+// Lowercase tokens match the backend's `ExportKind` serde shape.
+export type BundleKind = "auto" | "dictation" | "meetings" | "both";
+
+// User-confirmed selection from `ExportOptionsDialog`.
+export type BundleSelection = {
+  kind: BundleKind;
+  meetingFormat: MeetingExportFormat;
+};

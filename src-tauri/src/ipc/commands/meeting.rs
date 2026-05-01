@@ -221,7 +221,7 @@ pub async fn meeting_session_export(
 /// `HistoryMeetingRow.svelte::speakerCopy` uses, kept in lockstep
 /// here so exports never leak the raw source-derived `mic` /
 /// `system` tokens (#357 phase 3 acceptance).
-fn rendered_speaker_label(raw: Option<&str>) -> &str {
+pub(super) fn rendered_speaker_label(raw: Option<&str>) -> &str {
     match raw {
         Some("mic") => "You",
         Some("system") => "Remote",
@@ -246,7 +246,7 @@ fn format_relative_timestamp(ms: i64) -> String {
 /// session metadata, blank line, utterances one per line with a
 /// relative-time prefix and the rendered speaker label. Trailing
 /// newline so the file ends cleanly when concatenated.
-fn meeting_session_text(
+pub(super) fn meeting_session_text(
     session: &crate::meeting::MeetingSession,
     utterances: &[crate::meeting::PersistedUtterance],
 ) -> String {
@@ -292,7 +292,7 @@ fn meeting_session_text(
 /// CSV with one row per utterance. `csv` crate does the RFC-4180
 /// escape (quotes, commas, newlines in transcript text). Speaker
 /// label is the rendered copy, not the raw token.
-fn meeting_session_csv(
+pub(super) fn meeting_session_csv(
     session: &crate::meeting::MeetingSession,
     utterances: &[crate::meeting::PersistedUtterance],
 ) -> anyhow::Result<String> {
@@ -323,7 +323,7 @@ fn meeting_session_csv(
 /// printed for readability — the file is meant to be human-
 /// inspectable, and for programmatic re-import the indentation
 /// doesn't change semantics.
-fn meeting_session_json(
+pub(super) fn meeting_session_json(
     session: &crate::meeting::MeetingSession,
     utterances: &[crate::meeting::PersistedUtterance],
 ) -> anyhow::Result<String> {

@@ -9,6 +9,7 @@
     "notification:default",
     "global-shortcut:default",
     "shell:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "dialog:allow-open"
   ]
 }

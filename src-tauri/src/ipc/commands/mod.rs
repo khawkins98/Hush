@@ -40,6 +40,7 @@
 // a hidden `__cmd__<name>` symbol as a sibling of each command, and
 // `pub use` re-exports do not carry that symbol with them. See the
 // 2026-04-25 entry in `learnings.md`.
+pub mod export;
 pub mod macos;
 pub mod meeting;
 pub mod models;
@@ -753,7 +754,7 @@ pub async fn history_export_row_csv(
 /// tests can call it without an `AppState` around the corner. RFC
 /// 4180 escaping handled by the `csv` crate — embedded quotes /
 /// newlines / commas are quote-wrapped + double-quoted as needed.
-fn history_csv_for_entries(entries: &[HistoryEntry]) -> anyhow::Result<String> {
+pub(super) fn history_csv_for_entries(entries: &[HistoryEntry]) -> anyhow::Result<String> {
     let mut wtr = csv::Writer::from_writer(vec![]);
     wtr.write_record([
         "id",
