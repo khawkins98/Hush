@@ -244,6 +244,13 @@ export async function installMocks(
       // tests we just no-op so specs can assert the click reached
       // the mock layer without needing a writable disk path.
       history_export_row_csv: () => undefined,
+      // Bulk Export filtered (#357 phase 3c-1). Default returns
+      // the shape the frontend expects without writing anything.
+      // Specs that exercise the toast copy override per-test.
+      history_export_bundle: () => ({
+        directory: "/Users/test/Desktop",
+        written: 0,
+      }),
       meeting_session_get: () => {
         throw { kind: "settings", message: "meeting session not found (default mock)" };
       },

@@ -1,9 +1,11 @@
 <script lang="ts">
   import ErrorDisplay from "./ErrorDisplay.svelte";
+  import ExportOptionsDialog from "./ExportOptionsDialog.svelte";
   import HistoryDictationRow from "./HistoryDictationRow.svelte";
   import HistoryMeetingRow from "./HistoryMeetingRow.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type {
+    BundleSelection,
     HistoryEntry,
     MeetingExportFormat,
     MeetingSession,
@@ -65,6 +67,16 @@
       session: MeetingSession,
       format: MeetingExportFormat,
     ) => void | Promise<void>;
+    /// Bulk "Export filtered" (#357 phase 3c-1). The panel
+    /// surfaces the dialog; the parent fires the OS folder
+    /// picker + the IPC with the chosen options + the active
+    /// filter. `null` if the parent didn't pass a handler — the
+    /// panel hides its Export filtered button in that case.
+    onExportBundle?: (args: {
+      kind: "auto" | "dictation" | "meetings" | "both";
+      meetingFormat: MeetingExportFormat;
+      activeFilter: HistoryFilter;
+    }) => void | Promise<void>;
     /// Wipes every dictation row. Meetings have their own per-row
     /// Delete; bulk meeting delete pends until the export work in
     /// phase 3 ships an Export-filtered + Delete-filtered pair.
@@ -90,6 +102,7 @@
     onMeetingDelete,
     onMeetingLoadDetail,
     onMeetingExport,
+    onExportBundle,
     onClearAll,
   }: Props = $props();
 
@@ -97,6 +110,20 @@
   // surface lands on first paint. Forced to "dictation" while the
   // search box has a query — see `effectiveFilter` below.
   let userFilter = $state<HistoryFilter>("all");
+
+  /// Whether the bulk-export options dialog is open. Toggled by
+  /// the panel header's "Export filtered" button; closes itself
+  /// on Cancel / Confirm / Escape.
+  let exportDialogOpen = $state(false);
+
+  function onExportConfirm(selection: BundleSelection) {
+    exportDialogOpen = false;
+    void onExportBundle?.({
+      kind: selection.kind,
+      meetingFormat: selection.meetingFormat,
+      activeFilter: effectiveFilter,
+    });
+  }
 
   let hasQuery = $derived(historyQuery.trim().length > 0);
   // #357 phase 2 step 3 lifted the search-time forced filter:
@@ -273,6 +300,17 @@
             </button>
           </div>
         {:else}
+          {#if onExportBundle && (historyTotalCount > 0 || meetingSessions.length > 0)}
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => (exportDialogOpen = true)}
+              data-testid="history-export-bundle"
+              aria-label="Export filtered rows"
+            >
+              Export filtered…
+            </button>
+          {/if}
           <button
             type="button"
             class="ghost danger"
@@ -362,6 +400,18 @@
     </ul>
   {/if}
 </section>
+
+{#if exportDialogOpen}
+  <ExportOptionsDialog
+    initialKind={effectiveFilter === "all"
+      ? "auto"
+      : effectiveFilter === "dictation"
+        ? "dictation"
+        : "meetings"}
+    onConfirm={onExportConfirm}
+    onCancel={() => (exportDialogOpen = false)}
+  />
+{/if}
 
 <style>
 .history {
