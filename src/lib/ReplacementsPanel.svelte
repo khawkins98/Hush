@@ -231,9 +231,6 @@ button.ghost.danger.confirming {
   font-weight: 600;
 }
 
-/* Error rendering migrated to the shared ErrorDisplay component
-   (#199 + follow-up). */
-
 .empty-history {
   margin: 0.5rem 0;
   padding: 1rem;

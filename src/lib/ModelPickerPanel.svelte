@@ -341,9 +341,6 @@ button.ghost.primary:hover:not(:disabled) {
   border-color: #4a6cd0;
 }
 
-/* Error rendering migrated to the shared ErrorDisplay component
-   (#199 + follow-up). */
-
 .loading-skeleton {
   margin: 0.5rem 0;
   padding: 1rem;

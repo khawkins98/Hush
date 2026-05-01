@@ -53,6 +53,7 @@
   import { Events } from "$lib/events";
   import { formatMb } from "$lib/format";
   import type {
+    DiarizerModelStatus,
     DownloadProgress,
     IpcError,
     MacosPermissionDiagnostic,
@@ -180,13 +181,8 @@
   // missing, the toggle is informational only — the runtime falls
   // back to source-only labels. Settings → Speakers reads this on
   // mount + after each download lifecycle event so the UI can
-  // render "model not installed", "downloading", or "ready".
-  type DiarizerModelStatus = {
-    downloaded: boolean;
-    sizeMb: number;
-    sha256: string;
-    expectedPath: string;
-  };
+  // render "model not installed", "downloading", or "ready". The
+  // type lives in `$lib/types` per the four-place IPC sync rule.
   let diarizerModelStatus = $state<DiarizerModelStatus | null>(null);
   let diarizerDownloadBusy = $state(false);
   let diarizerDownloadProgress = $state<{ received: number; total: number | null } | null>(null);

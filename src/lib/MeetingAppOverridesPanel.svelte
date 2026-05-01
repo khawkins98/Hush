@@ -327,9 +327,6 @@ button.ghost.danger.confirming {
   font-weight: 600;
 }
 
-/* Error rendering migrated to the shared ErrorDisplay component
-   (#199 + follow-up). */
-
 @media (prefers-color-scheme: dark) {
   .history-header h2 {
     color: #d8d8d8;

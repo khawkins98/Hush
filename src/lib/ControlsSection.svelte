@@ -342,10 +342,6 @@ button.primary:hover:not(:disabled) {
   to { transform: rotate(360deg); }
 }
 
-/* Error rendering moved to the shared ErrorDisplay component
-   (#199); the previous `.error` rule lived here when the panel
-   surfaced its own raw error string. */
-
 @media (prefers-color-scheme: dark) {
   label,
   .status {
