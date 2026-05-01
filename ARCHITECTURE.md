@@ -63,8 +63,9 @@ The load-bearing seams:
 
 **Hot-swappable slots.**
 
-- `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` — model hot-swap propagates to in-flight meeting pumps without restart.
+- `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` — model hot-swap propagates without restart. `AppState` holds **two** independent slots ([#248](https://github.com/khawkins98/Hush/issues/248)): `transcribe` (dictation hot path, read by `stop_dictation`) and `transcribe_meeting` (cloned into `SessionManager`). `model_select` loads two `WhisperTranscription` instances from the same GGUF and writes both via `swap_transcriber(new_dictation, new_meeting)` — the underlying model weights are mmap'd, so the marginal RAM cost is small. The split removes mutex contention between a dictation-hotkey press and an in-flight meeting pump tick.
 - `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` — wespeaker model download takes effect on the next pump tick.
+- `inference_threads: Arc<AtomicI32>` ([#255](https://github.com/khawkins98/Hush/issues/255)) — Settings → General slider value, shared between AppState and every loaded `WhisperTranscription` (both slots above) so a slider change takes effect on the next inference call without a model reload.
 
 ---
 
@@ -76,6 +77,8 @@ The load-bearing seams:
 - **Handle-based** — `start_session(source) -> Box<dyn AudioSession>`. The meeting pump opens one handle per source (mic + macOS system-audio in parallel). Each handle's `stop()` consumes `Box<Self>` so a double-stop is a compile error.
 
 `active_sessions: AtomicU32` refcounts in-flight captures so `is_recording()` returns `count > 0` whether the caller went through the singleton or handle path. `MAX_BUFFER_FRAMES` defends against runaway buffer growth in cpal callbacks.
+
+Both the cpal mic path and the ScreenCaptureKit system-audio path now hand audio to the consumer via an **`rtrb` SPSC ring** ([#251](https://github.com/khawkins98/Hush/issues/251)) — wait-free producer push from the realtime callback thread, wait-free consumer drain. SCK's callback signature takes `&self`, so the producer is wrapped in an `UnsafeCell<Producer<f32>>` + `unsafe impl Sync` whose SAFETY argument grounds in ScreenCaptureKit's serial-per-handler dispatch contract. See `learnings.md` 2026-04-30 entry.
 
 System-audio capture uses **ScreenCaptureKit** on macOS (linked unconditionally — no feature flag). Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)) impls are open issues.
 
