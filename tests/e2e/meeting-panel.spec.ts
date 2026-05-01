@@ -12,8 +12,16 @@ import { gotoSection, installMocks } from "./_mock";
 //    the entry as `isSupported: true`, OFF otherwise.
 //  - Active-session view replaces the picker with a "Recording
 //    from <sources>" line + a separate live utterance counter.
+//
+// Phase 1 of #357 collapsed the main-window sidebar to
+// Dictation/History only — the standalone Meetings panel is gone
+// until Phase 2 reintroduces the surface as part of the unified
+// History feed. This entire file targets that removed panel; it's
+// kept checked-in (don't lose the assertions) but skipped at the
+// describe level so CI passes. Re-enable + adapt selectors when
+// Phase 2 lands.
 
-test.describe("meeting panel — multi-source picker", () => {
+test.describe.skip("meeting panel — multi-source picker", () => {
   test("idle panel renders mic dropdown + system-audio checkbox", async ({
     page,
   }) => {

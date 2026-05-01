@@ -148,7 +148,12 @@ test.describe("destructive confirm — History row Delete", () => {
   });
 });
 
-test.describe("destructive confirm — Meeting session Delete", () => {
+// Phase 1 of #357 dropped the standalone Meetings panel from the
+// main-window sidebar; the meeting-session Delete affordance lives
+// in that panel. Skip until Phase 2 reintroduces meetings as part
+// of the unified History feed (the Delete + two-click confirm
+// pattern will move with the row component).
+test.describe.skip("destructive confirm — Meeting session Delete", () => {
   test("two-click confirm flow fires meeting_session_delete exactly once", async ({
     page,
   }) => {

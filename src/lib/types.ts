@@ -250,7 +250,13 @@ export type PttConfig = {
 // Main-window left-sidebar section identifier. The standalone
 // Settings window (opened via ⌘, on macOS) is reached separately
 // via `invoke("open_settings")` and is not in this union.
-export type AppSection = "dictation" | "meetings" | "history";
+//
+// Phase 1 of #357 collapsed the sidebar from three entries
+// (Dictation/Meetings/History) to two (Dictation/History). The
+// "meetings" token is intentionally absent — meeting sessions
+// surface in the unified History feed once Phase 2 lands. Until
+// then the History tab continues to render dictation rows only.
+export type AppSection = "dictation" | "history";
 
 // Status of the wespeaker speaker-embedding model on disk.
 // Returned by `get_diarizer_model_status` (#304); read by Settings
