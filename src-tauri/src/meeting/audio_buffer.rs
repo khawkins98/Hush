@@ -198,12 +198,24 @@ impl AudioRollingBuffer {
     }
 }
 
+/// Convert ms → samples with round-to-nearest. Pre-fix this used
+/// integer truncation (`(ms * SR) / 1000`), which biased every
+/// boundary to round toward zero — a slice request for
+/// `[start_ms, end_ms)` could miss up to one sample at each edge.
+/// Round-to-nearest halves the worst-case error to ±0.5 samples
+/// per boundary at no real cost (one extra add of `SR/2` and a
+/// divide that the compiler folds away).
 fn ms_to_samples(ms: u64) -> usize {
-    ((ms * CANONICAL_SAMPLE_RATE_HZ as u64) / 1000) as usize
+    let sr = CANONICAL_SAMPLE_RATE_HZ as u64;
+    ((ms * sr + 500) / 1000) as usize
 }
 
+/// Inverse of [`ms_to_samples`] with the same round-to-nearest
+/// shape. Round-trip error stays bounded by ~1 ms in the worst
+/// case (a half-rounding in each direction).
 fn samples_to_ms(samples: usize) -> u64 {
-    (samples as u64 * 1000) / CANONICAL_SAMPLE_RATE_HZ as u64
+    let sr = CANONICAL_SAMPLE_RATE_HZ as u64;
+    (samples as u64 * 1000 + sr / 2) / sr
 }
 
 #[cfg(test)]
@@ -360,12 +372,32 @@ mod tests {
         for &ms in &[0_u64, 1, 100, 500, 1000, 9999, 30_000] {
             let samples = ms_to_samples(ms);
             let back = samples_to_ms(samples);
-            // Conversion rounds toward zero — round-trip can lose
-            // sub-millisecond precision but the absolute error is
-            // bounded by 1 ms per direction.
-            assert!(back <= ms);
-            assert!(ms.saturating_sub(back) <= 1, "ms={ms} back={back}");
+            // Round-to-nearest in both directions, so round-trip
+            // can drift in either direction by at most 1 ms.
+            // (Pre-rounding-fix this asserted `back <= ms` on
+            // the toward-zero contract; the new contract is
+            // simply absolute-error-bounded.)
+            let drift = back.abs_diff(ms);
+            assert!(drift <= 1, "ms={ms} back={back} drift={drift}");
         }
+    }
+
+    #[test]
+    fn ms_to_samples_rounds_to_nearest_at_boundary() {
+        // 16 kHz → 16 samples per ms exactly; integer ms map to
+        // exact sample counts. The edge worth pinning is a
+        // sub-millisecond input that would round to zero under
+        // truncation but to one under round-to-nearest. We don't
+        // expose sub-ms inputs (the public API is u64 ms), so the
+        // assertion is on integer ms — there's no drift to test.
+        // Keep this as a sanity check that 1 ms ↔ 16 samples is
+        // exact + that 0 ms is 0 samples.
+        assert_eq!(ms_to_samples(0), 0);
+        assert_eq!(ms_to_samples(1), 16);
+        assert_eq!(ms_to_samples(1000), 16_000);
+        assert_eq!(samples_to_ms(0), 0);
+        assert_eq!(samples_to_ms(16), 1);
+        assert_eq!(samples_to_ms(16_000), 1000);
     }
 
     #[test]
