@@ -93,6 +93,13 @@ pub fn run() {
         // plugin is registered.
         //.plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        // External-URL opener (#322). Plain `<a target="_blank">`
+        // links do nothing in a Tauri 2 WebView — the shell
+        // plugin's `open()` call from a click handler delegates
+        // to the OS browser. Capabilities also need
+        // `shell:allow-open`; see `capabilities/default.json` +
+        // `capabilities/settings.json`.
+        .plugin(tauri_plugin_shell::init())
         // Platform detection (#272). Frontend uses `platform()`
         // from `@tauri-apps/plugin-os` to decide macOS-specific
         // UI affordances; replaces the deprecated

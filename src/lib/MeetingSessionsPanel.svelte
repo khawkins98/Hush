@@ -15,6 +15,7 @@
   // settled finals list.
 
   import ErrorDisplay from "./ErrorDisplay.svelte";
+  import { openExternal } from "./openExternal";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type {
     AudioSourceListing,
@@ -1011,11 +1012,21 @@
                   (macOS only today — Linux/Windows tracked in
                   <a
                     href="https://github.com/khawkins98/Hush/issues/106"
-                    target="_blank"
+                    onclick={(e) => {
+                      e.preventDefault();
+                      openExternal(
+                        "https://github.com/khawkins98/Hush/issues/106",
+                      );
+                    }}
                     rel="noopener noreferrer">#106</a
                   >/<a
                     href="https://github.com/khawkins98/Hush/issues/107"
-                    target="_blank"
+                    onclick={(e) => {
+                      e.preventDefault();
+                      openExternal(
+                        "https://github.com/khawkins98/Hush/issues/107",
+                      );
+                    }}
                     rel="noopener noreferrer">#107</a
                   >)
                 </span>
@@ -1215,7 +1226,10 @@
         A" across long meetings) is on the roadmap —
         <a
           href="https://github.com/khawkins98/Hush/issues/111"
-          target="_blank"
+          onclick={(e) => {
+            e.preventDefault();
+            openExternal("https://github.com/khawkins98/Hush/issues/111");
+          }}
           rel="noopener noreferrer">#111</a
         >.
       </p>

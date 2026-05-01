@@ -23,6 +23,13 @@ tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+# Open external URLs in the OS browser (#322). In a Tauri 2 WebView
+# `<a target="_blank">` does not open a new tab — outbound
+# navigation is intercepted and dropped silently unless the shell
+# plugin is registered. Frontend uses `@tauri-apps/plugin-shell`'s
+# `open()` from a click handler; the Rust crate below is what
+# makes that JS call functional.
+tauri-plugin-shell = "2"
 # Platform detection for the frontend (#272). Replaces the deprecated
 # `navigator.platform` reads in `+page.svelte` / `settings/+page.svelte`
 # with the plugin's `platform()` call. The Rust crate registration
