@@ -829,6 +829,11 @@
     active={activeSection}
     onSelect={(s) => (activeSection = s)}
     historyCount={historyTotalCount}
+    sessionStatus={{
+      modelName: activeModel?.displayName ?? null,
+      audioSourceName: sources.find((s) => s.id === selected)?.name ?? null,
+      recording,
+    }}
   />
 
   <main class="app-main" data-active-section={activeSection}>
@@ -838,24 +843,6 @@
           <h1>Dictation</h1>
           <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
         </div>
-        {#if activeModel}
-          <!--
-            Active-model chip. Right-aligned next to the section
-            heading so it reads as a status badge rather than a
-            stray pill floating mid-page. Single button is the
-            click target; the chevron hints "click to change."
-          -->
-          <button
-            type="button"
-            class="active-model-chip"
-            onclick={openModelSettings}
-            aria-label="Active model: {activeModel.displayName}. Click to change."
-            title="Change transcription model"
-          >
-            <span class="active-model-name">{activeModel.displayName}</span>
-            <span class="active-model-chevron" aria-hidden="true">›</span>
-          </button>
-        {/if}
       </header>
 
       <!--
@@ -884,6 +871,7 @@
         onStart={start}
         onStop={stop}
         onScrollToModelPicker={openModelSettings}
+        activeModelName={activeModel?.displayName ?? null}
       />
 
       {#if result}
@@ -950,8 +938,8 @@
 
   font-size: 16px;
   line-height: 24px;
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  color: var(--text-primary);
+  background-color: var(--bg-app);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -1003,15 +991,6 @@
   font-size: 1.6rem;
   letter-spacing: -0.01em;
 }
-.section-header .active-model-chip {
-  /* Right-aligned status badge inside the header — flush with the
-     h1 baseline so the chip reads as ambient state, not as a
-     standalone affordance to act on. */
-  flex-shrink: 0;
-  margin: 0;
-  align-self: flex-start;
-}
-
 /* Centred content column inside the main pane. Each section's
    children inherit this measure via the existing per-component
    styles (HistoryPanel etc. use width:auto inside a max-width
@@ -1029,17 +1008,17 @@ h1 {
 }
 
 .tagline {
-  color: #555;
+  color: var(--text-muted);
   margin: 0 0 1.25rem;
 }
 
 .hint {
   margin: 0 0 2rem;
   padding: 0.75rem 1rem;
-  background-color: #eef2ff;
-  border: 1px solid #c7d2fe;
-  border-radius: 8px;
-  color: #2c3e8f;
+  background-color: var(--info-bg);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-md);
+  color: var(--info-text);
   font-size: 0.9rem;
   text-align: left;
   line-height: 1.5;
@@ -1056,130 +1035,15 @@ h1 {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
-.active-model-chip {
-  /* Quiet pill that surfaces the active model + opens the picker.
-     The whole chip is the click target; a small chevron at the
-     trailing edge hints "click to change" without shouting. Lives
-     inside `.section-header`, right-aligned via that container's
-     flex layout. */
-  padding: 0.3rem 0.7rem;
-  font-size: 0.85rem;
-  font-family: inherit;
-  color: #444;
-  background-color: #f3f3f5;
-  border: 1px solid #e1e1e4;
-  border-radius: 999px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
-}
-.active-model-chip:hover {
-  background-color: #e8e8ec;
-  border-color: #d4d4d9;
-  color: #222;
-}
-.active-model-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.active-model-name {
-  font-weight: 500;
-}
-.active-model-chevron {
-  font-size: 1.05em;
-  color: #999;
-  margin-left: 0.05rem;
-  /* Vertically nudge the chevron — Apple-style "›" sits a hair
-     above the optical baseline at this font size. */
-  transform: translateY(-0.05em);
-}
-.active-model-chip:hover .active-model-chevron {
-  color: #555;
-}
-
-@media (prefers-color-scheme: dark) {
-  .active-model-chip {
-    color: #b8b8b8;
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  .active-model-chip:hover {
-    background-color: #353535;
-    border-color: #4a4a4a;
-    color: #e8e8e8;
-  }
-  .active-model-chevron {
-    color: #777;
-  }
-  .active-model-chip:hover .active-model-chevron {
-    color: #b8b8b8;
-  }
-}
-
 .hint kbd {
   display: inline-block;
   padding: 0.05rem 0.4rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
-  background-color: white;
-  border: 1px solid #c7d2fe;
-  border-radius: 4px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-sm);
   margin: 0 0.1rem;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid #d1d1d1;
-  padding: 0.7em 1.2em;
-  font-size: 1em;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  cursor: pointer;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  transition: border-color 0.15s, background-color 0.15s;
-}
-
-button:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f0f0f0;
-    background-color: #1a1a1a;
-  }
-  .tagline {
-    color: #aaa;
-  }
-  .hint {
-    background-color: #1e2a4a;
-    border-color: #3a4a7a;
-    color: #c0d0ff;
-  }
-  .hint kbd {
-    background-color: #0f1a2e;
-    border-color: #3a4a7a;
-    color: #f0f0f0;
-  }
-  button {
-    color: #f0f0f0;
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  button:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-}
 </style>
