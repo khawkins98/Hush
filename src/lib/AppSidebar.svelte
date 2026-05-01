@@ -103,16 +103,16 @@
         <span class="status-label recording-label">Recording</span>
       {:else}
         {#if sessionStatus.modelName}
-          <div class="status-stack">
+          <button type="button" class="status-stack" onclick={openSettings} title="Open Settings to change model">
             <span class="status-key">Model</span>
-            <span class="status-val" title={sessionStatus.modelName}>{sessionStatus.modelName}</span>
-          </div>
+            <span class="status-val">{sessionStatus.modelName}</span>
+          </button>
         {/if}
         {#if sessionStatus.audioSourceName}
-          <div class="status-stack">
+          <button type="button" class="status-stack" onclick={openSettings} title="Open Settings to change source">
             <span class="status-key">Source</span>
-            <span class="status-val" title={sessionStatus.audioSourceName}>{sessionStatus.audioSourceName}</span>
-          </div>
+            <span class="status-val">{sessionStatus.audioSourceName}</span>
+          </button>
         {/if}
       {/if}
     </div>
@@ -286,6 +286,24 @@
     flex-direction: column;
     gap: 0.05rem;
     min-width: 0;
+    width: 100%;
+    /* reset button chrome */
+    background: none;
+    border: none;
+    padding: 0.3rem 0.5rem;
+    margin: 0 -0.5rem;
+    border-radius: 5px;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    transition: background-color 0.12s;
+  }
+  .status-stack:hover {
+    background-color: rgba(44, 62, 143, 0.08);
+  }
+  .status-stack:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   .status-key {
@@ -338,5 +356,6 @@
     }
     .status-key { color: #666; }
     .status-val { color: #c0c0c0; }
+    .status-stack:hover { background-color: rgba(150, 170, 240, 0.1); }
   }
 </style>
