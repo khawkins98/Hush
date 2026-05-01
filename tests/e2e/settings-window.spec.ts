@@ -174,6 +174,76 @@ test.describe("settings window — General tab", () => {
     // success path without waiting on the timer.
     await expect(button).toContainText(/Welcome will show on next launch/i);
   });
+
+  test("autostart path-stale warning hidden when status is clean (#317)", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/settings");
+    await expect(
+      page.locator('[data-testid="autostart-path-stale-warning"]'),
+    ).toHaveCount(0);
+  });
+
+  test("autostart path-stale warning surfaces + retry clears it (#317)", async ({
+    page,
+  }) => {
+    let retryCalls = 0;
+    await page.exposeFunction("__hush_record_autostart_retry", () => {
+      retryCalls += 1;
+    });
+    await installMocks(page, {
+      get_autostart_path_status: () => ({ stale: true }),
+      retry_autostart_registration: () => {
+        (
+          window as unknown as {
+            __hush_record_autostart_retry: () => void;
+          }
+        ).__hush_record_autostart_retry();
+        // First call returns `true` → frontend clears the flag
+        // and the warning disappears.
+        return true;
+      },
+    });
+    await page.goto("/settings");
+
+    const warning = page.locator(
+      '[data-testid="autostart-path-stale-warning"]',
+    );
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText(/out of date/i);
+
+    await page
+      .locator('[data-testid="autostart-retry-button"]')
+      .click();
+
+    await expect.poll(() => retryCalls).toBe(1);
+    // Successful retry clears the flag → warning disappears.
+    await expect(warning).toHaveCount(0);
+  });
+
+  test("autostart retry failure surfaces an error sub-row (#317)", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      get_autostart_path_status: () => ({ stale: true }),
+      // Mock returns false → frontend keeps the warning visible
+      // and shows the retry-failed sub-error.
+      retry_autostart_registration: () => false,
+    });
+    await page.goto("/settings");
+
+    await page
+      .locator('[data-testid="autostart-retry-button"]')
+      .click();
+    await expect(
+      page.locator('[data-testid="autostart-retry-error"]'),
+    ).toBeVisible();
+    // Warning row still visible (retry didn't clear the flag).
+    await expect(
+      page.locator('[data-testid="autostart-path-stale-warning"]'),
+    ).toBeVisible();
+  });
 });
 
 test.describe("settings window — PTT editor", () => {
