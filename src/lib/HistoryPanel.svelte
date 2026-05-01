@@ -1,5 +1,6 @@
 <script lang="ts">
   import ErrorDisplay from "./ErrorDisplay.svelte";
+  import HistoryDictationRow from "./HistoryDictationRow.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type { HistoryEntry, ModelCard } from "./types";
 
@@ -45,17 +46,6 @@
     onDelete,
     onClearAll,
   }: Props = $props();
-
-  // Render `entry.model` (the stored GGUF filename) as the
-  // friendly display name from the catalog. Fall back to the raw
-  // filename if no catalog match — better to show the truth than
-  // a confusing blank.
-  function displayModelName(filename: string | null): string | null {
-    if (!filename) return null;
-    return (
-      models.find((m) => m.filename === filename)?.displayName ?? filename
-    );
-  }
 
   // Click-to-confirm state for the "Clear all" button. Same shape
   // as the meeting-mode Stop session confirmation: first click
@@ -106,18 +96,6 @@
     clearConfirming = false;
   }
 
-  // Render duration as a compact m:ss / s.s string. Sub-second clips
-  // get one decimal so a 0.4s mis-press is visibly different from a
-  // 4s real recording. Anything ≥1 minute uses m:ss.
-  function formatDuration(ms: number | null): string | null {
-    if (ms === null || ms < 0) return null;
-    if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
-    const totalSeconds = Math.round(ms / 1000);
-    if (totalSeconds < 60) return `${totalSeconds}s`;
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-  }
 </script>
 
 <section class="history panel-history" aria-labelledby="history-heading">
@@ -196,31 +174,14 @@
   {:else}
     <ul class="history-list" data-version={historyVersion}>
       {#each historyEntries as entry (entry.id)}
-        <li class="history-row">
-          <p class="history-text">{entry.transcript}</p>
-          <p class="history-meta">
-            {formatTimestamp(entry.createdAt)}
-            {#if formatDuration(entry.durationMs)}· {formatDuration(entry.durationMs)}{/if}
-            {#if entry.appName}· {entry.appName}{/if}
-            {#if entry.model}· {displayModelName(entry.model)}{/if}
-          </p>
-          <div class="history-actions">
-            <button class="ghost" onclick={() => onCopy(entry)}>
-              Copy
-            </button>
-            <button
-              class="ghost danger"
-              class:confirming={confirmingDeleteId === entry.id}
-              onclick={() => handleRowDelete(entry)}
-              aria-label={confirmingDeleteId === entry.id
-                ? "Click again to confirm deleting this transcript"
-                : "Delete this transcript"}
-              data-testid="history-delete-{entry.id}"
-            >
-              {confirmingDeleteId === entry.id ? "Click to confirm" : "Delete"}
-            </button>
-          </div>
-        </li>
+        <HistoryDictationRow
+          {entry}
+          confirming={confirmingDeleteId === entry.id}
+          {models}
+          {formatTimestamp}
+          {onCopy}
+          onDelete={handleRowDelete}
+        />
       {/each}
     </ul>
   {/if}
@@ -309,32 +270,6 @@
   gap: 0.5rem;
 }
 
-.history-row {
-  padding: 0.75rem 1rem;
-  background-color: white;
-  border: 1px solid #e1e1e1;
-  border-radius: 8px;
-}
-
-.history-text {
-  margin: 0 0 0.35rem;
-  font-size: 0.95rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.history-meta {
-  margin: 0 0 0.5rem;
-  font-size: 0.8rem;
-  color: #6b6b6b;
-}
-
-.history-actions {
-  display: flex;
-  gap: 0.4rem;
-}
-
 button {
   border-radius: 8px;
   border: 1px solid #d1d1d1;
@@ -381,13 +316,6 @@ button.ghost.danger {
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
   border-color: #d83a3a;
-}
-
-button.ghost.danger.confirming {
-  background-color: #fbeaea;
-  border-color: #d83a3a;
-  color: #8a0000;
-  font-weight: 600;
 }
 
 .empty-history {
@@ -472,13 +400,6 @@ button.ghost.danger.confirming {
   }
   .history-header h2 {
     color: #d8d8d8;
-  }
-  .history-row {
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  .history-meta {
-    color: #9a9a9a;
   }
   button.ghost {
     border-color: #3a3a3a;
