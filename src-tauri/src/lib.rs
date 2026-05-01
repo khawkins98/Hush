@@ -440,6 +440,7 @@ pub fn run() {
             ipc::commands::stop_dictation,
             ipc::commands::history_list,
             ipc::commands::history_search,
+            ipc::commands::history_export_row_csv,
             ipc::commands::history_delete,
             ipc::commands::history_count,
             ipc::commands::history_clear,

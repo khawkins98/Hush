@@ -239,6 +239,11 @@ export async function installMocks(
       // it per-test alongside `history_search`.
       meeting_sessions_list: () => [],
       meeting_sessions_search: () => [],
+      // Per-row dictation CSV export (#357 phase 3a). The IPC
+      // accepts `{ id, path }` and writes the file server-side; in
+      // tests we just no-op so specs can assert the click reached
+      // the mock layer without needing a writable disk path.
+      history_export_row_csv: () => undefined,
       meeting_session_get: () => {
         throw { kind: "settings", message: "meeting session not found (default mock)" };
       },
