@@ -4,23 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project shape
 
-Hush is a Tauri 2 desktop app: Rust backend (`src-tauri/`) + SvelteKit / Svelte 5 frontend (`src/`). It records the microphone, transcribes locally via whisper.cpp (`whisper-rs`), and writes the text to the clipboard. Meeting Mode adds continuous capture from microphone + system audio with You/Remote-tagged transcripts.
+Hush is a Tauri 2 desktop app: Rust backend (`src-tauri/`) + SvelteKit / Svelte 5 frontend (`src/`). Three windows (`main`, `settings`, `hud`) each with their own capability file. The full architecture — stack, three-window topology, trait-seam pattern, meeting pump dataflow, module map — lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md). Read it before non-trivial cross-module changes.
 
 Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scope — don't add backwards-compat shims or `@available`-style version guards. Linux and Windows compile cleanly via CI but are not hands-on tested.
-
-### Three Tauri windows
-
-Post-IA-redesign (#163–#167), the app runs three windows:
-
-- **`main`** — the primary window. Sidebar nav with Dictation / Meetings / History sections. Loads `/`.
-- **`settings`** — standalone Settings window opened via ⌘, on macOS or the sidebar's "Settings" footer button. Hosts the model picker, vocabulary, replacements, macOS permissions diagnostic, autostart toggle, hotkey display, and the PTT editor. Hidden by default; the only path to show is `crate::settings_window::show()`. Loads `/settings`.
-- **`hud`** — borderless transparent always-on-top pill that shows during recording. No interactivity beyond drag + dismiss. Loads `/hud`.
-
-Each window has its own capability file in `src-tauri/capabilities/` (`default.json` for main, `settings.json`, `hud.json`). On macOS the native menu bar lives in `src-tauri/src/app_menu/` — `Hush → Settings…` (⌘,), `View → Dictation/Meetings/History` (⌘1/⌘2/⌘3). Menu events emit `menu:goto-section` to the main window or call `settings_window::show` directly.
-
-**Window lifecycle (#280):** main + Settings intercept `WindowEvent::CloseRequested` in `lib.rs::setup` and call `window.hide()` instead of letting Tauri destroy. Closing the red ✕ on either window hides it without quitting; the tray icon stays alive and ⌘, reopens Settings. The HUD has the standard show/hide pair. To actually quit Hush, use ⌘Q (macOS), `Hush → Quit Hush` from the menu, or `Quit Hush` from the tray.
-
-**Background launch (#280):** the autostart plugin is registered with `Some(vec!["--background"])`, so the LaunchAgent fires Hush at login with that arg. The setup hook checks `std::env::args()` and, when `--background` is present, hides the main window and switches activation policy to `Accessory` (no Dock icon). User-initiated launches (Finder / Spotlight) don't pass the flag and show the main window normally.
 
 ## Common commands
 
@@ -91,30 +77,9 @@ ScreenCaptureKit is now an unconditional macOS dependency (no feature flag). The
 
 ## Architecture: trait-seam pattern
 
-Every OS-touching layer is a trait, with a concrete impl + hand-rolled mocks at the boundary. The IPC layer holds `Arc<dyn Trait>` so tests can substitute deterministic stubs without spinning up real audio / sqlite / network. The traits are the load-bearing seams:
+Every OS-touching layer is a trait (`AudioCapture`, `Transcribe`, `Diarize`, `HistoryRepository`, etc.) with a concrete impl + hand-rolled mocks. The IPC layer composes `Arc<dyn Trait>` into `AppState` so tests substitute deterministic stubs without real audio / SQLite / network. Hot-swap slots — `TranscribeSlot`, `DiarizeSlot` — let model changes propagate to in-flight meeting pumps.
 
-- **`audio::AudioCapture`** (`src-tauri/src/audio/mod.rs`) — capture lifecycle. Cpal-backed `CpalAudioCapture` is the prod impl. Two APIs:
-  - Singleton `start_with_source(source) -> ()` + `stop() -> CapturedAudio` is the dictation hot path.
-  - Handle-based `start_session(source) -> Box<dyn AudioSession>` returns a per-session handle. The meeting pump uses it to capture mic + SCK system-audio in parallel. Each handle's `stop()` consumes `Box<Self>` so a double-stop is a compile error.
-  - `active_sessions: AtomicU32` is a refcount of in-flight captures; `is_recording()` returns `count > 0` so legacy + handle paths coexist. `MAX_BUFFER_FRAMES` defends against runaway buffer growth in callbacks.
-- **`transcription::Transcribe`** (`src-tauri/src/transcription/mod.rs`) — inference. `WhisperTranscribe` is gated behind the `whisper` feature; the trait's `transcribe_chunks` default impl pretends to be streaming (one final utterance per call). #108 (sliding-window streaming) replaces that default for the meeting pump.
-- **`history::HistoryRepository`** / **`meeting::MeetingSessionRepository`** / **`dictionary::*Repository`** / **`settings::SettingsRepository`** — persistence. Each has a `Sqlite*` impl + an in-memory test mock (search for `Noop*` / `Mem*` in `src-tauri/src/ipc/mod.rs` tests).
-
-The IPC layer (`src-tauri/src/ipc/`) wires these into `AppState`, which is `manage`'d by Tauri at startup. `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` is shared between `AppState` and `meeting::SessionManager` so model hot-swap propagates to in-flight pumps.
-
-## Meeting mode (post-#122)
-
-The meeting pump runs continuously from `meeting::SessionManager::start_manual(sources, app_name)`:
-
-1. Open one `Box<dyn AudioSession>` per source (default: mic + SystemAudio when supported).
-2. Spawn a tokio task (`run_pump`) that, every `CHUNK_DURATION` (10 s):
-   - Drains every handle (so siblings don't accumulate while one transcribes).
-   - Runs whisper inference per chunk via `spawn_blocking`.
-   - Hands utterances + per-utterance audio (sliced from `meeting::audio_buffer::AudioRollingBuffer`) to `Diarize::label_utterances`. Production diarizer: `FlagGatedDiarizer` routes to `OnnxDiarizer` when the wespeaker model is loaded + the Speakers toggle is on, else `NoopDiarizer`. Source-derived `"mic"` / `"system"` tags stand in when the diarizer doesn't override (the panel maps these to "You" / "Remote").
-   - Restarts capture for the next window (or exits on cancel).
-3. `stop_manual` sets the cancel flag, awaits the pump's final-chunk drain, writes `ended_at` on the session row.
-
-State machine: `Mutex<SessionState>` where `SessionState` is `Idle | Opening | Active(...)`. The `Opening` sentinel is held across the async DB / handle-open work so concurrent `meeting_start_manual` IPC calls can't race past the precondition. `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `SckSessionHandle` both have `Drop` impls that release their OS resources.
+Full seam table, the meeting-pump dataflow diagram, and the module map are in [`ARCHITECTURE.md`](./ARCHITECTURE.md). When you touch a seam (adding a new trait method, swapping a prod impl, threading a new dependency through `AppState`), update both the prod impl *and* the test mock in the same change — the mocks are how the IPC tests stay deterministic.
 
 ## The four-place IPC sync rule
 
@@ -168,39 +133,17 @@ The full reasoning, symptom-by-symptom recovery recipes, and the "Dev-loop: stal
 
 Hush is a black-box reimplementation of [VoiceInk](https://github.com/Beingpax/VoiceInk). **VoiceInk's source code must never be read** by anyone working on Hush — before, during, or after writing equivalent functionality. Design comes from VoiceInk's public README and observable runtime behaviour, plus general dictation-app knowledge. See `hush-prd.md` §13.8 for the full reasoning. If the discipline is broken accidentally, declare it; the affected module gets re-implemented by a clean contributor.
 
-## Where things live
+## Module gotchas
 
-### Backend (`src-tauri/src/`)
+The high-level module map is in [`ARCHITECTURE.md`](./ARCHITECTURE.md). Below are the non-obvious things worth knowing before editing specific modules — most are calls that didn't survive simplification:
 
-- `audio/` — cpal mic + SCK system-audio + the `AudioSession` handle trait.
-- `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF auto-download (origin-restricted to huggingface.co — `ipc/mod.rs::redirect_decision` allows a hop to any HTTPS host when the previous URL was on an HF host so HF→signed-CDN chains work; SHA-256 verified), resample helpers, model catalog.
-- `meeting/` — `SessionManager` + chunking pump + `AppClassifier` for foreground-app detection. `app_overrides` submodule persists per-app classifier overrides (#112) consulted at every session start.
-- `diarization/` — `Diarize` trait + impls. **Production wiring (#111):** `FlagGatedDiarizer` reads the `diarization_enabled` `AtomicBool` from `AppState` and routes utterances to either `OnnxDiarizer` (the wespeaker ResNet34-LM ONNX speaker-embedding model + online 1-NN-with-threshold clustering for session-stable IDs) or the `NoopDiarizer` fallback. `OnnxDiarizer` is constructed when the model file is present in `models_dir`; the IPC `download_diarizer_model` path hot-swaps via the shared `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` so a fresh download takes effect on the next pump tick. Submodules: `cluster.rs` (offline agglomerative — kept for potential batch use; production uses the streaming matcher in `onnx::SessionClusterState`), `features.rs` (Mel-FB extraction matching `torchaudio.compliance.kaldi.fbank`), `onnx.rs` (the diarizer impl, gated behind the `diarization-onnx` Cargo feature), `catalog.rs` (single-entry metadata for the wespeaker model). `EnergyDiarizer` (D1 silence-gap heuristic) sits on disk for reference but isn't wired — the cross-source merge collapsed it to "Speaker A" everywhere; D2 superseded it.
-- `ipc/` — `AppState`, `AppStateBuilder`, `IpcError`. `commands/` is now a directory: `mod.rs` holds dictation / history / replacements / vocabulary / models / app commands; `commands/meeting.rs` holds the meeting-mode commands + types + sanitiser (extracted under #82). New domain-cohesive command groups should follow the same submodule pattern.
-- `hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey + `rdev` for push-to-talk. PTT exposes a configurable combo (set of keys held simultaneously) via `PttCombo` and a `ComboMatcher` state machine; combo + Enabled persist to settings DB and are editable in Settings → General → Hotkeys. **Default-on across all platforms** as of #194 — the macOS Input Monitoring TCC prompt fires at first-listener-spawn (~boot time), but in exchange both the toggle hotkey and PTT work out of the box. Pre-#194 the macOS default was off because rdev `listen()` aborted on macOS 26+; that constraint is gone now that we pin to [fufesou's fork](https://github.com/fufesou/rdev) (the one RustDesk ships, which attaches the CGEventTap to `CFRunLoopGetMain()`). Narsil's upstream PR #147 was incomplete (only fixed the `send` path).
-- `hud/` — borderless transparent always-on-top recording HUD with drag (`data-tauri-drag-region`) + dismiss button + level meter pump.
-- `settings_window/` — `show()` / `hide()` helpers for the standalone Settings window. Symmetric with `hud/`. Window itself is declared in `tauri.conf.json`.
-- `app_menu/` — native macOS menu bar. No-op on non-macOS. Menu events emit `menu:goto-section` to the main window or call `settings_window::show` directly.
-- `tray/` — status-bar / system-tray icon (macOS menu-bar extra, Windows system tray, Linux notification area). Menu: Show Hush / Toggle Recording / Open Settings / Quit. "Toggle Recording" emits the existing `hotkey:toggle` Tauri event the frontend listens for; one source of truth for start/stop semantics. Behind the `tauri = { features = ["tray-icon", "image-png"] }` Cargo features. Loads `src-tauri/icons/tray-icon@2x.png` — a monochrome alpha-extracted silhouette of the brand mark — at compile time via `include_bytes!`, then sets `icon_as_template(true)` so macOS adapts it to dark/light menu bars (#275). Pre-#275 the builder fed the full-colour `default_window_icon()` to the template mechanism, producing a black blob on light menu bars.
-- `macos_perms/` — programmatic TCC permission status reads via AVFoundation / CoreGraphics / IOKit. Used by `diagnose_macos_permissions` to surface granted/denied/not-determined per permission without triggering OS prompts.
-- `updater/` — manual "Check for updates" probe (#223). Hits GitHub's `/releases/latest`, compares to `CARGO_PKG_VERSION` via `semver`, returns a tagged `UpdateCheckResult` (UpToDate / UpdateAvailable / CheckFailed). The full `tauri-plugin-updater` auto-update channel (#10) still pends a signing-key decision; the manual probe lives here in the meantime so users have an "am I current?" affordance. Hush does not poll — every update check is user-initiated.
-
-### Frontend (`src/`)
-
-- `lib/*.svelte` — Svelte 5 components (runes-based; `$state`, `$derived`, `$effect`, `$bindable`, `$props()`). `AppSidebar.svelte`, `PttHotkeyEditor.svelte`, `ErrorDisplay.svelte` (shared structured-error renderer), plus the panel components (`HistoryPanel`, `MeetingSessionsPanel`, `ModelPickerPanel`, `VocabularyPanel`, `ReplacementsPanel`, `MeetingAppOverridesPanel`, `MacosDiagnosticPanel`, `ControlsSection`, `ResultBlock`).
-- `lib/format.ts`, `lib/types.ts` — shared format helpers and TS types mirroring backend serde shapes (camelCase).
-- `lib/errors.ts` — `ErrorDisplay` shape + `formatErrorDisplay` / `formatErrorMessage` helpers. Single place to map an `IpcError` variant (or a thrown `Error`) into the headline / hint / details rendered by `ErrorDisplay.svelte`.
-- `app.css` — global stylesheet imported by every route via `+layout.svelte`. Hosts the accent CSS custom properties (`--accent`, `--accent-hover`) used across components.
-- `routes/+layout.svelte` — markup-free layout that imports `app.css`. SvelteKit requires a layout file to apply a global stylesheet to every route.
-- `routes/+page.svelte` — main window; orchestrates Dictation / Meetings / History sections. ~1.2k LOC. Does NOT own model picker, vocabulary, replacements, or macOS-permissions diagnostic state — those live in the Settings window. Further extraction (meeting state into a composable) is the next natural step if a contributor finds navigation friction.
-- `routes/settings/+page.svelte` — standalone Settings window. State-owner for the moved panels. Cross-window invalidation is event-driven where it matters (`model:download-done` is broadcast; replacements/vocab changes are picked up at the next `start_dictation`).
-- `routes/hud/+page.svelte` — recording HUD pill. Loaded into the secondary `hud` window.
-- `app.html` — page shell.
-- `static/app-icon.png` / `app-icon@2x.png` — sourced from `src-tauri/icons/` and used by the sidebar brand chip.
-
-### Other
-
-- `tests/e2e/` — Path A. Playwright specs against `HUSH_E2E=1` mode (vite swaps `@tauri-apps/api/{core,event}` for in-tree stubs). Helper at `tests/e2e/_mock.ts`. Sidebar nav uses `gotoSection(page, "meetings" | "history")` to switch tabs in tests.
-- `tests/e2e-tauri/` — Path B (#57 / #202). WebdriverIO + `tauri-driver` against the real built binary. Catches the flows Path A's IPC mocks can't (real `invoke` round-trips, `listen` events, HUD secondary-window lifecycle, real model download against `wiremock`). Scaffold + smoke spec ship today; CI integration deferred until tauri-driver's macOS path stabilises. Run locally per the README.
-- `src-tauri/capabilities/` — per-window Tauri capability files: `default.json` (main), `settings.json`, `hud.json`. Adding a new permission to a window is deliberate; every grant widens that window's blast radius.
-- `.github/workflows/release.yml` — tag-driven cross-platform builds via `tauri-action` (macOS Apple Silicon `.dmg` only — macOS 26+ is Apple-Silicon-only, so Intel was dropped from the matrix; Linux `.AppImage` + `.deb`; Windows `.msi` + `.exe`). Fires on `v*` tags or manual `workflow_dispatch`. macOS deployment target is 14.0 (the `macos-latest` runner's Xcode 16.4 ships the macOS 15 SDK — that's the ceiling); design target stays macOS 26. Maintainer recipe in [`docs/releases.md`](./docs/releases.md). Auto-update via `tauri-plugin-updater` (#10) is the natural follow-up — gated on a signing-key decision.
+- **`transcription/` redirect handling.** `ipc/mod.rs::redirect_decision` allows a hop to any HTTPS host when the previous URL was on a Hugging Face host, so HF → signed-CDN chains work. Don't tighten this without testing the actual download path — HF redirects to a S3-style signed URL.
+- **`diarization/` D1 vs D2.** `EnergyDiarizer` (D1, silence-gap) sits on disk for reference but **isn't wired**. Production is `FlagGatedDiarizer` → `OnnxDiarizer` (D2, wespeaker). `cluster.rs` (offline agglomerative) is also unwired — production uses the streaming matcher in `onnx::SessionClusterState`. Don't resurrect the unwired paths without an explicit reason.
+- **`ipc/commands/` registration trap.** `pub use` re-exports do **not** carry the `#[tauri::command]` macro's hidden `__cmd__<name>` symbol. Always register submodule commands with their full module path (`ipc::commands::meeting::meeting_start_manual`) in `tauri::generate_handler![]`. See `learnings.md` 2026-04-25 for the lesson we already ate.
+- **`hotkey/` rdev fork.** Pinned to [fufesou's rdev fork](https://github.com/fufesou/rdev) (the one RustDesk ships) because Narsil's upstream PR #147 only fixed the `send` path on macOS 26+; the `listen()` path needs the CGEventTap attached to `CFRunLoopGetMain()`. Don't bump to upstream rdev until that lands.
+- **`tray/` icon-as-template.** Loads `src-tauri/icons/tray-icon@2x.png` — a monochrome alpha-extracted silhouette — and sets `icon_as_template(true)` so macOS adapts to dark/light menu bars. Feeding `default_window_icon()` (full colour) to the template mechanism produces a black blob on light menu bars (#275).
+- **`updater/` is manual only.** Hits GitHub `/releases/latest`, returns a tagged `UpdateCheckResult`. Hush does not poll — every update check is user-initiated. Auto-update via `tauri-plugin-updater` (#10) pends a signing-key decision.
+- **`routes/+page.svelte` ownership.** Does NOT own model picker, vocabulary, replacements, or TCC diagnostic state — those live in the Settings window. Cross-window invalidation is event-driven (`model:download-done` is broadcast; replacements/vocab refresh on the next `start_dictation`).
+- **`tests/e2e/` mock serialization.** Playwright mocks at `tests/e2e/_mock.ts` are serialized via `toString()` and rebuilt in the page context, so they can't capture closure variables — any per-test counters must go through `page.exposeFunction`.
+- **`src-tauri/capabilities/`.** Per-window. Adding a permission to a window is deliberate; every grant widens that window's blast radius. Settings-window IPCs that hit Tauri plugins (autostart, clipboard) need explicit entries in `settings.json`; custom `#[tauri::command]` functions don't.
+- **`.github/workflows/release.yml`.** macOS deployment target is 14.0 (the `macos-latest` runner's Xcode 16.4 ships the macOS 15 SDK — that's the ceiling); design target stays macOS 26. Maintainer recipe in [`docs/releases.md`](./docs/releases.md).
