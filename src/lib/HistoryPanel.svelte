@@ -48,6 +48,10 @@
     onSearchInput: (e: Event) => void;
     onCopy: (entry: HistoryEntry) => void | Promise<void>;
     onDelete: (entry: HistoryEntry) => void | Promise<void>;
+    /// Per-row CSV export for dictation entries (#357 phase 3a).
+    /// Optional so embeddings without export support stay clean —
+    /// the row hides its Export button when this is `null`.
+    onExportDictationCsv?: (entry: HistoryEntry) => void | Promise<void>;
     onMeetingDelete: (session: MeetingSession) => void | Promise<void>;
     /// Resolves the full session detail (utterances + metadata)
     /// when a meeting row is expanded. The row caches the result
@@ -74,6 +78,7 @@
     onSearchInput,
     onCopy,
     onDelete,
+    onExportDictationCsv,
     onMeetingDelete,
     onMeetingLoadDetail,
     onClearAll,
@@ -333,6 +338,7 @@
             {formatTimestamp}
             {onCopy}
             onDelete={handleRowDelete}
+            onExportCsv={onExportDictationCsv}
           />
         {:else}
           <HistoryMeetingRow

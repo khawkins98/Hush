@@ -709,6 +709,74 @@ pub async fn history_search(
         .map_err(|e| IpcError::History(e.to_string()))
 }
 
+/// Export a single dictation history row as RFC-4180 CSV.
+///
+/// Two-arg shape: the user picks `path` via
+/// `tauri-plugin-dialog`'s `save()` (which is a path picker only —
+/// it doesn't write bytes for us), and Rust writes the CSV body
+/// directly to that path. The capability for the main window grants
+/// `dialog:allow-save` only; the backend handles the actual write
+/// so we don't have to wire `tauri-plugin-fs` and broaden the
+/// filesystem surface.
+///
+/// Schema: `id,created_at,duration_ms,app_name,model,transcript`.
+/// Omitted: `window_title` (private; not in the export contract
+/// from #357 phase 3a).
+///
+/// Per-row export uses `id` to look up the entry; bulk export
+/// (pending) will reuse the same `history_csv_for_entries` helper.
+#[tauri::command]
+pub async fn history_export_row_csv(
+    state: State<'_, AppState>,
+    id: i64,
+    path: String,
+) -> IpcResult<()> {
+    let all = state
+        .data
+        .history
+        .list(i64::MAX, 0)
+        .await
+        .map_err(|e| IpcError::History(format!("history list: {e:#}")))?;
+    let entry = all
+        .into_iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| IpcError::History(format!("history row {id} not found")))?;
+    let body = history_csv_for_entries(std::slice::from_ref(&entry))
+        .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;
+    tokio::fs::write(&path, body)
+        .await
+        .map_err(|e| IpcError::Internal(format!("write {path}: {e}")))?;
+    Ok(())
+}
+
+/// Pure CSV-emit helper. Held outside the IPC entry point so unit
+/// tests can call it without an `AppState` around the corner. RFC
+/// 4180 escaping handled by the `csv` crate — embedded quotes /
+/// newlines / commas are quote-wrapped + double-quoted as needed.
+fn history_csv_for_entries(entries: &[HistoryEntry]) -> anyhow::Result<String> {
+    let mut wtr = csv::Writer::from_writer(vec![]);
+    wtr.write_record([
+        "id",
+        "created_at",
+        "duration_ms",
+        "app_name",
+        "model",
+        "transcript",
+    ])?;
+    for e in entries {
+        wtr.write_record(&[
+            e.id.to_string(),
+            e.created_at.clone(),
+            e.duration_ms.map(|n| n.to_string()).unwrap_or_default(),
+            e.app_name.clone().unwrap_or_default(),
+            e.model.clone(),
+            e.transcript.clone(),
+        ])?;
+    }
+    let bytes = wtr.into_inner()?;
+    Ok(String::from_utf8(bytes)?)
+}
+
 /// Delete a single history row. No-op (returns Ok) if `id` does not
 /// exist — mirrors the trait contract.
 #[tauri::command]
@@ -2556,5 +2624,73 @@ mod tests {
             Ok(other) => panic!("expected fresh check to fail; got {other:?}"),
             Err(_) => {}
         }
+    }
+
+    // -- history CSV export (#357 phase 3a) ----------------------------
+
+    fn history_entry(
+        id: i64,
+        transcript: &str,
+        app: Option<&str>,
+        duration: Option<i64>,
+    ) -> HistoryEntry {
+        HistoryEntry {
+            id,
+            transcript: transcript.to_owned(),
+            app_name: app.map(str::to_owned),
+            window_title: None,
+            model: "ggml-base.bin".to_owned(),
+            duration_ms: duration,
+            created_at: "2026-05-01T10:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn history_csv_for_entries_emits_header_and_one_row_per_entry() {
+        let entries = vec![
+            history_entry(1, "Hello world", Some("iTerm2"), Some(2_500)),
+            history_entry(2, "Second line", None, None),
+        ];
+        let csv = history_csv_for_entries(&entries).expect("csv ok");
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3, "header + 2 rows; got: {csv:?}");
+        assert_eq!(
+            lines[0],
+            "id,created_at,duration_ms,app_name,model,transcript"
+        );
+        assert!(lines[1].starts_with("1,2026-05-01T10:00:00Z,2500,iTerm2"));
+        // None app / duration render as empty fields, not "null" or "None".
+        assert_eq!(
+            lines[2], "2,2026-05-01T10:00:00Z,,,ggml-base.bin,Second line",
+            "got: {:?}",
+            lines[2]
+        );
+    }
+
+    #[test]
+    fn history_csv_escapes_quotes_commas_and_newlines() {
+        // RFC-4180 escape rules — embedded quotes get doubled,
+        // commas / newlines force quote-wrapping. The csv crate
+        // does the heavy lifting; this test pins that we route
+        // through it correctly and don't accidentally hand-roll
+        // an `escape` somewhere that would double-encode.
+        let entries = vec![history_entry(
+            7,
+            "She said \"hi\", then\nleft.",
+            Some("Notes,Inc"),
+            None,
+        )];
+        let csv = history_csv_for_entries(&entries).expect("csv ok");
+        // Transcript field: leading + trailing quote, embedded
+        // quote doubled, newline preserved inside the quoted field.
+        assert!(
+            csv.contains("\"She said \"\"hi\"\", then\nleft.\""),
+            "transcript should be quote-wrapped with doubled quotes\n{csv}"
+        );
+        // App-name field: comma triggers quoting too.
+        assert!(
+            csv.contains("\"Notes,Inc\""),
+            "comma in app name should force quoting\n{csv}"
+        );
     }
 }

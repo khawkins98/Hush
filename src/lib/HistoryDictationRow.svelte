@@ -33,10 +33,23 @@
     /// or fires based on the current row's `confirming` state and
     /// resets any other armed row.
     onDelete: (entry: HistoryEntry) => void;
+    /// Per-row CSV export (#357 phase 3a). The parent fires the
+    /// IPC + drives the OS save dialog; the row just exposes the
+    /// affordance. `null` if the parent didn't pass a handler —
+    /// the button hides in that case so an embedding without
+    /// export support stays clean.
+    onExportCsv?: (entry: HistoryEntry) => void | Promise<void>;
   };
 
-  let { entry, confirming, models, formatTimestamp, onCopy, onDelete }: Props =
-    $props();
+  let {
+    entry,
+    confirming,
+    models,
+    formatTimestamp,
+    onCopy,
+    onDelete,
+    onExportCsv,
+  }: Props = $props();
 
   function displayModelName(filename: string | null): string | null {
     if (!filename) return null;
@@ -69,6 +82,16 @@
   </p>
   <div class="history-actions">
     <button class="ghost" onclick={() => onCopy(entry)}>Copy</button>
+    {#if onExportCsv}
+      <button
+        class="ghost"
+        onclick={() => onExportCsv?.(entry)}
+        data-testid="history-export-{entry.id}"
+        aria-label="Export this transcript as CSV"
+      >
+        Export CSV
+      </button>
+    {/if}
     <button
       class="ghost danger"
       class:confirming

@@ -437,6 +437,38 @@
     }
   }
 
+  /// Export a single dictation transcript as CSV (#357 phase 3a).
+  /// Two-step round-trip:
+  ///   1. tauri-plugin-dialog's `save()` runs the OS Save File
+  ///      picker; the user picks the location.
+  ///   2. The backend writes the CSV body directly to that path.
+  /// We deliberately avoid `tauri-plugin-fs` — its broad
+  /// fs surface is more than this single feature needs. The
+  /// backend writing the file keeps the trust boundary at the
+  /// IPC and lets the capability stay narrow (`dialog:allow-save`
+  /// only).
+  ///
+  /// Cancelling the picker is a no-op (no toast, no error).
+  /// Failures inside the IPC route to the existing history-error
+  /// region — same channel `history_search` and the rest use.
+  async function exportDictationCsv(entry: HistoryEntry) {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const datePart = entry.createdAt.slice(0, 10);
+      const path = await save({
+        defaultPath: `hush-dictation-${datePart}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (path === null) {
+        // User cancelled the dialog — quietly do nothing.
+        return;
+      }
+      await invoke("history_export_row_csv", { id: entry.id, path });
+    } catch (e) {
+      historyError = formatErrorDisplay(e);
+    }
+  }
+
   async function clearAllHistory() {
     try {
       const removed = await invoke<number>("history_clear");
@@ -879,6 +911,7 @@
       {onSearchInput}
       onCopy={copyHistoryEntry}
       onDelete={deleteHistoryEntry}
+      onExportDictationCsv={exportDictationCsv}
       onMeetingDelete={deleteMeetingSession}
       onMeetingLoadDetail={loadMeetingSessionDetail}
       onClearAll={clearAllHistory}
