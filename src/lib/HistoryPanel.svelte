@@ -1,8 +1,22 @@
 <script lang="ts">
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import HistoryDictationRow from "./HistoryDictationRow.svelte";
+  import HistoryMeetingRow from "./HistoryMeetingRow.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
-  import type { HistoryEntry, ModelCard } from "./types";
+  import type {
+    HistoryEntry,
+    MeetingSession,
+    MeetingSessionDetail,
+    ModelCard,
+  } from "./types";
+
+  /// Filter chip values for the unified History feed (#357 phase 2).
+  /// "all" interleaves both kinds of rows by recency; "dictation"
+  /// and "meetings" scope to a single kind. Search across meetings
+  /// requires backend FTS that lands in a follow-up — while the
+  /// search box has a query, the filter is forced to "dictation"
+  /// since meetings can't match.
+  export type HistoryFilter = "all" | "dictation" | "meetings";
 
   type Props = {
     historyEntries: HistoryEntry[];
@@ -15,6 +29,15 @@
     /// copy. Different from `historyEntries.length` when the user
     /// has a search query active.
     historyTotalCount: number;
+    /// Meeting sessions to interleave with dictation entries (#357
+    /// phase 2). Sorted by `startedAt` desc on the parent side; the
+    /// panel reconciles the two streams by recency before rendering.
+    /// Empty array when no meetings have been captured yet.
+    meetingSessions: MeetingSession[];
+    /// True after the parent's `meeting_sessions_list` IPC has
+    /// resolved at least once, so the panel can distinguish "still
+    /// loading" from "actually empty".
+    meetingSessionsLoaded: boolean;
     /// Model catalog. Used to render a friendly display name in
     /// each row's meta line ("Whisper Base") instead of the raw
     /// filename ("ggml-base.bin"); the latter leaks implementation
@@ -25,9 +48,14 @@
     onSearchInput: (e: Event) => void;
     onCopy: (entry: HistoryEntry) => void | Promise<void>;
     onDelete: (entry: HistoryEntry) => void | Promise<void>;
-    /// Wipes every history row. The panel handles the click-to-
-    /// confirm dance in-component so the parent doesn't have to
-    /// thread a confirming-flag through props.
+    onMeetingDelete: (session: MeetingSession) => void | Promise<void>;
+    /// Resolves the full session detail (utterances + metadata)
+    /// when a meeting row is expanded. The row caches the result
+    /// locally so a re-toggle is free.
+    onMeetingLoadDetail: (id: number) => Promise<MeetingSessionDetail>;
+    /// Wipes every dictation row. Meetings have their own per-row
+    /// Delete; bulk meeting delete pends until the export work in
+    /// phase 3 ships an Export-filtered + Delete-filtered pair.
     onClearAll: () => void | Promise<void>;
   };
 
@@ -39,13 +67,67 @@
     historyError,
     historyVersion,
     historyTotalCount,
+    meetingSessions,
+    meetingSessionsLoaded,
     models,
     formatTimestamp,
     onSearchInput,
     onCopy,
     onDelete,
+    onMeetingDelete,
+    onMeetingLoadDetail,
     onClearAll,
   }: Props = $props();
+
+  // User-selected filter chip. Defaults to "all" so the unified
+  // surface lands on first paint. Forced to "dictation" while the
+  // search box has a query — see `effectiveFilter` below.
+  let userFilter = $state<HistoryFilter>("all");
+
+  let hasQuery = $derived(historyQuery.trim().length > 0);
+  let effectiveFilter = $derived<HistoryFilter>(
+    hasQuery ? "dictation" : userFilter,
+  );
+
+  // Merged feed. Each entry tags its kind so the {#each} below can
+  // dispatch to the right row component, and the sort key is the
+  // creation/start instant in ms so the two streams interleave by
+  // recency (newest first). Pre-#357-phase-2 the panel was
+  // dictation-only and the parent's pagination already returned
+  // entries newest-first; meetings are sorted parent-side too.
+  type FeedRow =
+    | { kind: "dictation"; sortKey: number; entry: HistoryEntry }
+    | { kind: "meeting"; sortKey: number; session: MeetingSession };
+
+  let mergedFeed = $derived<FeedRow[]>(
+    (() => {
+      const includeDictation =
+        effectiveFilter === "all" || effectiveFilter === "dictation";
+      const includeMeetings =
+        effectiveFilter === "all" || effectiveFilter === "meetings";
+      const rows: FeedRow[] = [];
+      if (includeDictation) {
+        for (const entry of historyEntries) {
+          rows.push({
+            kind: "dictation",
+            sortKey: Date.parse(entry.createdAt) || 0,
+            entry,
+          });
+        }
+      }
+      if (includeMeetings) {
+        for (const session of meetingSessions) {
+          rows.push({
+            kind: "meeting",
+            sortKey: Date.parse(session.startedAt) || 0,
+            session,
+          });
+        }
+      }
+      rows.sort((a, b) => b.sortKey - a.sortKey);
+      return rows;
+    })(),
+  );
 
   // Click-to-confirm state for the "Clear all" button. Same shape
   // as the meeting-mode Stop session confirmation: first click
@@ -55,24 +137,58 @@
   let clearConfirming = $state(false);
   let clearTimer: number | undefined;
 
-  // Per-row Delete also click-to-confirm. Each row arms
-  // independently — clicking Delete on a different row resets
-  // the previous arm. 5 s auto-reset matches Clear-all's window.
-  let confirmingDeleteId = $state<number | null>(null);
+  // Per-row Delete is click-to-confirm. Only one row across the
+  // entire feed can be armed at a time — clicking Delete on a
+  // different row resets the previous arm. The compound key
+  // disambiguates a dictation row id from a meeting session id
+  // (both are integer PKs from different tables).
+  type ConfirmingRow =
+    | { kind: "dictation"; id: number }
+    | { kind: "meeting"; id: number };
+  let confirmingDelete = $state<ConfirmingRow | null>(null);
   let confirmDeleteTimer: number | undefined;
 
+  function isConfirming(kind: "dictation" | "meeting", id: number): boolean {
+    return (
+      confirmingDelete?.kind === kind && confirmingDelete?.id === id
+    );
+  }
+
+  function armConfirm(row: ConfirmingRow) {
+    window.clearTimeout(confirmDeleteTimer);
+    confirmingDelete = row;
+    confirmDeleteTimer = window.setTimeout(() => {
+      confirmingDelete = null;
+    }, 5000);
+  }
+
   function handleRowDelete(entry: HistoryEntry) {
-    if (confirmingDeleteId === entry.id) {
+    if (isConfirming("dictation", entry.id)) {
       window.clearTimeout(confirmDeleteTimer);
-      confirmingDeleteId = null;
+      confirmingDelete = null;
       void onDelete(entry);
       return;
     }
+    armConfirm({ kind: "dictation", id: entry.id });
+  }
+
+  function handleMeetingDelete(session: MeetingSession) {
+    if (isConfirming("meeting", session.id)) {
+      window.clearTimeout(confirmDeleteTimer);
+      confirmingDelete = null;
+      void onMeetingDelete(session);
+      return;
+    }
+    armConfirm({ kind: "meeting", id: session.id });
+  }
+
+  function selectFilter(next: HistoryFilter) {
+    userFilter = next;
+    // Don't drag a stale armed confirm across a filter switch —
+    // the user has changed view, the muscle-memory of the prior
+    // armed click no longer applies.
     window.clearTimeout(confirmDeleteTimer);
-    confirmingDeleteId = entry.id;
-    confirmDeleteTimer = window.setTimeout(() => {
-      confirmingDeleteId = null;
-    }, 5000);
+    confirmingDelete = null;
   }
 
   function startClear() {
@@ -155,33 +271,81 @@
     </div>
   </header>
 
+  <!--
+    Filter chips (#357 phase 2). "All" interleaves dictation +
+    meeting rows by recency; the kind-specific chips scope to one
+    stream. The chip strip is hidden when no rows of either kind
+    exist (so a fresh install doesn't render a filter UI for
+    nothing); the search-active state forces the filter to
+    "Dictation" because cross-stream FTS lands in a follow-up.
+  -->
+  {#if historyTotalCount > 0 || meetingSessions.length > 0}
+    <div class="history-filters" role="group" aria-label="Filter history">
+      {#each [{ value: "all", label: "All" }, { value: "dictation", label: "Dictation" }, { value: "meetings", label: "Meetings" }] as chip (chip.value)}
+        <button
+          type="button"
+          class="filter-chip"
+          class:active={effectiveFilter === chip.value}
+          aria-pressed={effectiveFilter === chip.value}
+          disabled={hasQuery && chip.value !== "dictation"}
+          onclick={() => selectFilter(chip.value as HistoryFilter)}
+          data-testid="history-filter-{chip.value}"
+        >
+          {chip.label}
+        </button>
+      {/each}
+      {#if hasQuery}
+        <span class="filter-note" role="note">
+          Search covers dictation only — meetings come in a follow-up.
+        </span>
+      {/if}
+    </div>
+  {/if}
+
   {#if historyError}
     <ErrorDisplay error={historyError} scope="History" />
   {/if}
 
-  {#if !historyLoaded}
+  {#if !historyLoaded || !meetingSessionsLoaded}
     <p class="loading-skeleton">Loading history…</p>
-  {:else if historyEntries.length === 0}
+  {:else if mergedFeed.length === 0}
     <p class="empty-history">
       {#if historyQuery.trim().length > 0}
         No matches for "<em>{historyQuery}</em>". Try a shorter query.
+      {:else if effectiveFilter === "dictation"}
+        No dictation transcripts yet. Press the toggle hotkey or
+        the Start button on the Dictation panel — the transcript
+        will land here.
+      {:else if effectiveFilter === "meetings"}
+        No meeting sessions yet. Start a meeting from the
+        Dictation panel — the session shows up here once it
+        wraps up.
       {:else}
-        No transcriptions yet. Switch to the Dictation tab and
-        press the toggle hotkey or the Start button — the
-        transcript will land here.
+        Nothing here yet. Press the toggle hotkey or the Start
+        button on the Dictation panel — your first transcript
+        will land here.
       {/if}
     </p>
   {:else}
     <ul class="history-list" data-version={historyVersion}>
-      {#each historyEntries as entry (entry.id)}
-        <HistoryDictationRow
-          {entry}
-          confirming={confirmingDeleteId === entry.id}
-          {models}
-          {formatTimestamp}
-          {onCopy}
-          onDelete={handleRowDelete}
-        />
+      {#each mergedFeed as row (row.kind + ":" + (row.kind === "dictation" ? row.entry.id : row.session.id))}
+        {#if row.kind === "dictation"}
+          <HistoryDictationRow
+            entry={row.entry}
+            confirming={isConfirming("dictation", row.entry.id)}
+            {models}
+            {formatTimestamp}
+            {onCopy}
+            onDelete={handleRowDelete}
+          />
+        {:else}
+          <HistoryMeetingRow
+            session={row.session}
+            confirming={isConfirming("meeting", row.session.id)}
+            onLoadDetail={onMeetingLoadDetail}
+            onDelete={handleMeetingDelete}
+          />
+        {/if}
       {/each}
     </ul>
   {/if}
@@ -244,6 +408,47 @@
   background-color: #fbeaea;
   border-color: #d83a3a;
   color: #8a0000;
+}
+
+.history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+.filter-chip {
+  appearance: none;
+  padding: 0.3em 0.85em;
+  font-size: 0.82rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: #444;
+  background-color: #f0f0f3;
+  border: 1px solid #d8d8dc;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+.filter-chip:hover:not(:disabled) {
+  background-color: #e5e5e9;
+  border-color: #c2c2c6;
+}
+.filter-chip.active {
+  background-color: rgba(44, 62, 143, 0.14);
+  border-color: rgba(44, 62, 143, 0.4);
+  color: #2c3e8f;
+  font-weight: 600;
+}
+.filter-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.filter-note {
+  font-size: 0.78rem;
+  color: #777;
+  font-style: italic;
+  margin-left: 0.25rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -400,6 +605,23 @@ button.ghost.danger:hover:not(:disabled) {
   }
   .history-header h2 {
     color: #d8d8d8;
+  }
+  .filter-chip {
+    background-color: #2a2a2d;
+    border-color: #38383b;
+    color: #c0c0c0;
+  }
+  .filter-chip:hover:not(:disabled) {
+    background-color: #353539;
+    border-color: #4a4a4d;
+  }
+  .filter-chip.active {
+    background-color: rgba(150, 170, 240, 0.18);
+    border-color: rgba(150, 170, 240, 0.5);
+    color: #b8c8ff;
+  }
+  .filter-note {
+    color: #8a8a90;
   }
   button.ghost {
     border-color: #3a3a3a;

@@ -848,7 +848,7 @@
   <section id="history-section" class="page-section">
     <header class="section-header">
       <h1>History</h1>
-      <p class="tagline">Every dictation transcript, searchable.</p>
+      <p class="tagline">Every transcript Hush has captured, searchable.</p>
     </header>
     <HistoryPanel
       {historyEntries}
@@ -858,11 +858,15 @@
       {historyError}
       {historyVersion}
       {historyTotalCount}
+      meetingSessions={meetingSessions}
+      meetingSessionsLoaded={meetingSessionsLoaded}
       {models}
       {formatTimestamp}
       {onSearchInput}
       onCopy={copyHistoryEntry}
       onDelete={deleteHistoryEntry}
+      onMeetingDelete={deleteMeetingSession}
+      onMeetingLoadDetail={loadMeetingSessionDetail}
       onClearAll={clearAllHistory}
     />
   </section>
