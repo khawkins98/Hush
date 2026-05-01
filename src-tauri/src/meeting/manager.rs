@@ -1619,6 +1619,22 @@ impl AppClassifier {
         classifier
     }
 
+    /// Read-only view of the built-in `(app_name, kind)` table —
+    /// the curated list in `default_table()`, **excluding** any
+    /// user overrides. Order matches the source order in
+    /// `default_table()` (curated by app) so callers can group
+    /// adjacent rows by display name without re-sorting.
+    ///
+    /// Used by the Settings → Meeting → App Classification panel
+    /// (#320) to show users what's already covered, so they
+    /// don't add redundant overrides.
+    pub fn default_entries(&self) -> Vec<(String, MeetingAppKind)> {
+        self.entries
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect()
+    }
+
     pub fn classify(&self, app_name: &str) -> MeetingAppKind {
         // User overrides win over defaults — even when an override
         // explicitly maps an app the table classifies as Meeting to
