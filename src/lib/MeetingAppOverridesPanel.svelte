@@ -1,12 +1,21 @@
 <script lang="ts">
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
-  import type { MeetingAppKind, MeetingAppOverride } from "./types";
+  import type {
+    BuiltinAppEntry,
+    MeetingAppKind,
+    MeetingAppOverride,
+  } from "./types";
 
   type Props = {
     overrides: MeetingAppOverride[];
     overridesLoaded: boolean;
     overridesError: ErrorDisplayShape | null;
+    /// Built-in classification table (#320). Read-only; rendered
+    /// inside a `<details>` disclosure so users can see what's
+    /// already covered before adding a redundant override.
+    /// Empty array is fine — the disclosure just stays empty.
+    defaults: BuiltinAppEntry[];
     // Form fields are bindable so the parent owns the state and can
     // clear them after a successful add.
     newAppName: string;
@@ -24,6 +33,7 @@
     overrides,
     overridesLoaded,
     overridesError,
+    defaults,
     newAppName = $bindable(),
     newKind = $bindable(),
     inputEl = $bindable(),
@@ -31,6 +41,33 @@
     onChangeKind,
     onDelete,
   }: Props = $props();
+
+  // Redundant-override warning (#320). When the user types an
+  // app_name that's already in the built-in defaults table, surface
+  // a non-blocking notice so they don't add a redundant row. Live
+  // — recomputes as they type. Trim to match the backend's
+  // upsert trim.
+  let redundantDefault = $derived.by(() => {
+    const trimmed = newAppName.trim();
+    if (trimmed.length === 0) return null;
+    return defaults.find((d) => d.appName === trimmed) ?? null;
+  });
+
+  // Group defaults by classification kind so the disclosure renders
+  // Meeting and Media as separate visual sections. Source order
+  // within each kind is preserved (mirrors `default_table()`'s
+  // curated order).
+  let defaultsByKind = $derived.by(() => {
+    const meeting: BuiltinAppEntry[] = [];
+    const media: BuiltinAppEntry[] = [];
+    const other: BuiltinAppEntry[] = [];
+    for (const entry of defaults) {
+      if (entry.kind === "meeting") meeting.push(entry);
+      else if (entry.kind === "media") media.push(entry);
+      else other.push(entry);
+    }
+    return { meeting, media, other };
+  });
 
   // Per-row click-to-confirm. First click arms the row's Remove
   // button (label flips to "Click to confirm"); second click within
@@ -98,6 +135,20 @@
     </button>
   </form>
 
+  {#if redundantDefault}
+    <p class="override-redundant-note" data-testid="override-redundant-note">
+      <strong>{redundantDefault.appName}</strong> is already classified as
+      <em
+        >{redundantDefault.kind === "meeting"
+          ? "Meeting"
+          : redundantDefault.kind === "media"
+            ? "Media"
+            : "Ignore"}</em
+      >
+      by default — you only need an override to change that.
+    </p>
+  {/if}
+
   {#if !overridesLoaded}
     <p class="loading-skeleton">Loading overrides…</p>
   {:else if overrides.length === 0}
@@ -137,6 +188,49 @@
         </li>
       {/each}
     </ul>
+  {/if}
+
+  {#if defaults.length > 0}
+    <details class="override-defaults" data-testid="override-defaults">
+      <summary>
+        Built-in defaults ({defaults.length} entries)
+      </summary>
+      <p class="hint-prose">
+        Meeting Mode classifies these without any override. Each
+        platform variant is a separate row — macOS returns reverse-DNS
+        bundle ids, Windows returns the executable basename
+        (<code>.exe</code>), Linux returns the process name. Adding
+        an override for any of these is redundant unless you're
+        re-classifying it.
+      </p>
+
+      {#if defaultsByKind.meeting.length > 0}
+        <h3 class="override-defaults-heading">Meeting</h3>
+        <ul class="override-defaults-list">
+          {#each defaultsByKind.meeting as entry (entry.appName)}
+            <li><code>{entry.appName}</code></li>
+          {/each}
+        </ul>
+      {/if}
+
+      {#if defaultsByKind.media.length > 0}
+        <h3 class="override-defaults-heading">Media</h3>
+        <ul class="override-defaults-list">
+          {#each defaultsByKind.media as entry (entry.appName)}
+            <li><code>{entry.appName}</code></li>
+          {/each}
+        </ul>
+      {/if}
+
+      {#if defaultsByKind.other.length > 0}
+        <h3 class="override-defaults-heading">Ignored</h3>
+        <ul class="override-defaults-list">
+          {#each defaultsByKind.other as entry (entry.appName)}
+            <li><code>{entry.appName}</code></li>
+          {/each}
+        </ul>
+      {/if}
+    </details>
   {/if}
 </section>
 

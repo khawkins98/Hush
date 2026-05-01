@@ -178,6 +178,40 @@ pub async fn meeting_app_override_upsert(
         .map_err(|e| IpcError::MeetingSessions(format!("app overrides upsert: {e:#}")))
 }
 
+/// One entry in the built-in app classification table — a single
+/// `(app_name, kind)` row from `AppClassifier::default_table()`.
+/// The Settings panel renders these read-only so users can see
+/// what's already covered before adding a redundant override
+/// (#320).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinAppEntry {
+    /// The exact string `active-win-pos-rs` returns for this app
+    /// on whichever platform — bundle ID on macOS, exe basename
+    /// on Windows, process name on Linux. The classifier uses
+    /// exact-string matching with no normalisation, so each
+    /// platform variant is its own row.
+    pub app_name: String,
+    pub kind: crate::meeting::MeetingAppKind,
+}
+
+/// Read the built-in classification table. Stable for a given
+/// build of Hush; the panel reads it once on mount + caches.
+/// Order matches `default_table()` (curated by app) so the panel
+/// can render meaningful groupings without re-sorting.
+#[tauri::command]
+pub fn meeting_app_classifier_defaults() -> IpcResult<Vec<BuiltinAppEntry>> {
+    let classifier = crate::meeting::AppClassifier::default_table();
+    Ok(classifier
+        .default_entries()
+        .iter()
+        .map(|(name, kind)| BuiltinAppEntry {
+            app_name: name.clone(),
+            kind: *kind,
+        })
+        .collect())
+}
+
 /// Delete the override for the given app. No-op if no row exists.
 #[tauri::command]
 pub async fn meeting_app_override_delete(

@@ -257,6 +257,19 @@ export async function installMocks(
         };
       },
       meeting_app_override_delete: () => undefined,
+      // Built-in classification table (#320). Default mock returns
+      // a small representative subset — full table is ~70 entries
+      // and most tests don't care about the exact contents. Specs
+      // that exercise the redundant-override warning override per-
+      // test with a known entry.
+      meeting_app_classifier_defaults: () => [
+        { appName: "us.zoom.xos", kind: "meeting" },
+        { appName: "Zoom.exe", kind: "meeting" },
+        { appName: "com.microsoft.teams2", kind: "meeting" },
+        { appName: "Teams.exe", kind: "meeting" },
+        { appName: "com.spotify.client", kind: "media" },
+        { appName: "Spotify.exe", kind: "media" },
+      ],
     };
 
     // Rebuild override functions from their stringified source. The

@@ -58,6 +58,7 @@
     IpcError,
     MacosPermissionDiagnostic,
     MacosPermissionResetResult,
+    BuiltinAppEntry,
     MeetingAppKind,
     MeetingAppOverride,
     ModelCard,
@@ -213,6 +214,10 @@
   let newOverrideName = $state("");
   let newOverrideKind = $state<MeetingAppKind>("meeting");
   let overrideInputEl = $state<HTMLInputElement | null>(null);
+  // Built-in classification table (#320). Loaded once on mount; the
+  // panel renders these in a read-only disclosure so users can see
+  // what's already covered before adding a redundant override.
+  let appDefaults = $state<BuiltinAppEntry[]>([]);
 
   // Meeting auto-start mode dropdown. Backend serde encoding is
   // kebab-case ("off" / "always") so the values bind directly to
@@ -324,6 +329,19 @@
       appOverridesError = formatErrorDisplay(e);
     } finally {
       appOverridesLoaded = true;
+    }
+  }
+
+  async function loadAppDefaults(): Promise<void> {
+    // The built-in table is stable per build; we read it once on
+    // mount + cache. Failure here is non-fatal — the disclosure
+    // just stays empty; the user-overrides UI still works.
+    try {
+      appDefaults = await invoke<BuiltinAppEntry[]>(
+        "meeting_app_classifier_defaults",
+      );
+    } catch (e) {
+      console.warn("[hush] meeting_app_classifier_defaults failed", e);
     }
   }
 
@@ -648,6 +666,7 @@
       loadSoundCuesEnabled(),
       loadAppMetadata(),
       loadAppOverrides(),
+      loadAppDefaults(),
       loadMeetingAutostartMode(),
       loadDiarizationEnabled(),
       loadDiarizerModelStatus(),
@@ -1256,6 +1275,7 @@
         overrides={appOverrides}
         overridesLoaded={appOverridesLoaded}
         overridesError={appOverridesError}
+        defaults={appDefaults}
         bind:newAppName={newOverrideName}
         bind:newKind={newOverrideKind}
         bind:inputEl={overrideInputEl}
