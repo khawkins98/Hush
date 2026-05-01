@@ -59,8 +59,7 @@ If telemetry or auto-update ever ships, it will be opt-in with a separate privac
 
 | Platform | Status | Hands-on tested |
 |---|---|---|
-| **macOS 26** | Primary target. Daily-driven by the maintainer. | ✅ Yes |
-| **macOS ≤ 15** | Not directly supported. Code may compile and run; older-macOS APIs are not gated against. | ❌ Not supported |
+| **macOS 26** | Primary target. Daily-driven by the maintainer (macOS ≤ 15 may work, but I've not tested). | ✅ Yes |
 | **Linux (X11)** | Theoretically supported; CI builds + tests on `ubuntu-latest`. | ⚠️ Not hands-on tested |
 | **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ⚠️ Not hands-on tested |
 | **Windows** | Built and published in the release pipeline. | ⚠️ Not hands-on tested |
@@ -76,6 +75,7 @@ If telemetry or auto-update ever ships, it will be opt-in with a separate privac
 | **Discovering Hush** — what it does | This README + the live app (install it, open Settings → menus describe what each thing does) |
 | **What's shipped right now** | [STATUS.md](./STATUS.md) (rolling snapshot), [CHANGELOG.md](./CHANGELOG.md) (release-by-release record) |
 | **What it's meant to be** | [hush-prd.md](./hush-prd.md) — product spec, scope, non-goals, milestone plan |
+| **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, three-window topology, trait seams, meeting pump, module map |
 | **Installing + using** | [Releases](https://github.com/khawkins98/Hush/releases), [`docs/macos-permissions.md`](./docs/macos-permissions.md) for macOS TCC troubleshooting |
 | **Building + contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md), [CLAUDE.md](./CLAUDE.md) for the Claude-assisted contributor workflow |
 | **Why decisions were made** | [learnings.md](./learnings.md) — append-only engineering decision log |

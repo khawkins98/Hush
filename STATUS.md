@@ -106,37 +106,15 @@ visual / structural fixes (#225) and a Permissions surface refactor
 
 ## Modules at a glance
 
-Backend (`src-tauri/src/`):
+The full module map (backend + frontend, with responsibilities) is in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md). The high-level shape:
 
-- `audio/` — cpal mic + ScreenCaptureKit system-audio + the
-  `AudioSession` handle trait used by the meeting pump.
-- `transcription/` — `Transcribe` trait, whisper-rs backend, GGUF
-  auto-download (SHA-256 verified, host-restricted to
-  `huggingface.co` and `hf.co`), sliding-window streaming.
-- `meeting/` — `SessionManager` + chunking pump + `AppClassifier`.
-- `ipc/` — `AppState`, `AppStateBuilder`, `IpcError`. Commands split
-  into `commands/{mod,meeting,models,macos}.rs` per domain.
-- `hotkey/` — `tauri-plugin-global-shortcut` for the toggle hotkey;
-  pinned `fufesou/rdev` for PTT (the Narsil upstream's macOS-26 fix
-  is incomplete; fufesou attaches the tap to `CFRunLoopGetMain()`).
-- `hud/` — borderless transparent always-on-top recording pill with
-  drag + dismiss + level meter.
-- `settings_window/` — `show()`/`hide()` for the Settings window.
-- `app_menu/` — native macOS menu bar (no-op elsewhere).
-- `tray/` — status-bar / system-tray icon (cross-platform).
-- `macos_perms/` — programmatic TCC reads via AVFoundation /
-  CoreGraphics / IOKit (no OS prompts triggered).
-
-Frontend (`src/`):
-
-- `routes/+page.svelte` — main window; orchestrates Dictation /
-  Meetings / History sections.
-- `routes/settings/+page.svelte` — standalone Settings window.
-- `routes/hud/+page.svelte` — recording HUD pill.
-- `lib/*.svelte` — Svelte 5 (runes-based) component library:
-  `AppSidebar`, `PttHotkeyEditor`, plus the existing panels.
-- `lib/format.ts`, `lib/types.ts` — shared TS types mirroring backend
-  serde shapes (camelCase).
+- **Backend** (`src-tauri/src/`): `audio/`, `transcription/`,
+  `diarization/`, `meeting/`, `ipc/`, `hotkey/`, `hud/`,
+  `settings_window/`, `app_menu/`, `tray/`, `macos_perms/`, `updater/`.
+- **Frontend** (`src/`): `routes/{+page,settings,hud}/+page.svelte`
+  for the three windows; `lib/*.svelte` for the Svelte 5 component
+  library; `lib/{types,errors,format}.ts` for shared TS shapes.
 
 ---
 
