@@ -21,7 +21,7 @@
 <script lang="ts">
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { Events } from "$lib/events";
 
   // Latest RMS from the backend pump, in roughly [0, 1]. We hold
@@ -45,11 +45,19 @@
   // recording state too, so this is just a safe initial render.
   let hudState = $state<"recording" | "processing">("recording");
 
-  onMount(() => {
-    let unlistenLevel: UnlistenFn | undefined;
-    let unlistenState: UnlistenFn | undefined;
-    let raf: number | undefined;
+  // Pre-#330 these were closure-locals inside `onMount`'s synchronous
+  // teardown, populated by `.then()`. Hoisted to module scope and
+  // assigned via `await listen(...)` inside an async `onMount` so the
+  // teardown in `onDestroy` always sees the resolved unlisten fns —
+  // even when the HUD is hidden + recreated faster than the listen
+  // promises resolve. Pre-fix the listeners leaked across HUD
+  // lifecycles, accumulating one extra `audio:level` handler per
+  // dictation cycle (#330).
+  let unlistenLevel: UnlistenFn | null = null;
+  let unlistenState: UnlistenFn | null = null;
+  let raf: number | undefined;
 
+  onMount(async () => {
     const ATTACK = 0.6;
     const RELEASE = 0.12;
 
@@ -60,13 +68,11 @@
       raf = requestAnimationFrame(tick);
     };
 
-    listen<number>(Events.AudioLevel, (event) => {
+    unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
       rms = event.payload ?? 0;
-    }).then((fn) => {
-      unlistenLevel = fn;
     });
 
-    listen<string>(Events.HudState, (event) => {
+    unlistenState = await listen<string>(Events.HudState, (event) => {
       const next = event.payload;
       if (next === "recording" || next === "processing") {
         hudState = next;
@@ -79,17 +85,20 @@
           displayLevel = 0;
         }
       }
-    }).then((fn) => {
-      unlistenState = fn;
     });
 
     raf = requestAnimationFrame(tick);
+  });
 
-    return () => {
-      unlistenLevel?.();
-      unlistenState?.();
-      if (raf !== undefined) cancelAnimationFrame(raf);
-    };
+  onDestroy(() => {
+    unlistenLevel?.();
+    unlistenLevel = null;
+    unlistenState?.();
+    unlistenState = null;
+    if (raf !== undefined) {
+      cancelAnimationFrame(raf);
+      raf = undefined;
+    }
   });
 
   // Map RMS roughly into a visual bar fill. RMS for normal speech
