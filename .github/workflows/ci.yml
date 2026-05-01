@@ -163,6 +163,49 @@ jobs:
         working-directory: src-tauri
         run: cargo test --features whisper
 
+  supply-chain-pins:
+    name: Supply-chain pin allowlist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Detect if a contributor has added a new RC pin or a new git
+      # dep that isn't already on the documented allowlist (#327).
+      # The allowlist is encoded as the set of lines that match the
+      # patterns *and* are already on main; new matches fail the
+      # build so the additions are reviewed under "Supply-chain pins"
+      # in `learnings.md`.
+      - name: New RC / git dep?
+        run: |
+          set -euo pipefail
+          # Skip comment lines (those starting with #) — comments
+          # explain the policy and may legitimately mention "rc.X"
+          # or example git URLs without those being live deps.
+          # Match only on dep-table lines.
+          current=$(grep -nE '^(ort|rdev|ndarray|[a-zA-Z0-9_-]+) *=' src-tauri/Cargo.toml \
+            | grep -E 'rc\.[0-9]+|git = "https' || true)
+          # Allowlisted *exact* dep-table lines (kept in lockstep
+          # with `learnings.md` → "Supply-chain pins").
+          allowed=$(cat <<'EOF'
+          ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "ndarray", "tls-rustls"], optional = true }
+          rdev = { git = "https://github.com/fufesou/rdev", rev = "a90dbe1172f8832f54c97c62e823c5a34af5fdfe" }
+          EOF
+          )
+          # Strip "<lineno>:" prefix from each `current` entry, then
+          # diff against the allowlist.
+          unexpected=$(echo "$current" | sed 's/^[0-9]*://' | while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if ! echo "$allowed" | grep -qF -- "$line"; then
+              echo "$line"
+            fi
+          done)
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unallowlisted RC pin or git dep in src-tauri/Cargo.toml:" >&2
+            echo "$unexpected" >&2
+            echo "::error::Either remove it, or add it to learnings.md 'Supply-chain pins' AND the allowlist in .github/workflows/ci.yml::supply-chain-pins." >&2
+            exit 1
+          fi
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest

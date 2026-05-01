@@ -119,15 +119,22 @@ whisper-rs = { version = "0.14", features = [], optional = true }
 # only); without it the default-features-off build pulls in no
 # TLS provider and ort-sys's build script fails.
 #
-# Pinned to 2.0.0-rc.12 because rc.10 had an upstream ort-sys
+# Pinned to =2.0.0-rc.12 because rc.10 had an upstream ort-sys
 # build script that referenced `ureq::tls` (a path that no
 # longer exists in the current ureq line). rc.12 builds clean.
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "ndarray", "tls-rustls"], optional = true }
+# The exact-version pin (`=`, not `^`) prevents a `cargo update`
+# from quietly bumping to a future rc that ships unrelated API
+# breakage — see learnings.md "Supply-chain pins" for the
+# bump-when policy. TODO(#327): drop the exact pin when ort 2.0
+# stable ships.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "ndarray", "tls-rustls"], optional = true }
 
-# Tensor type that `ort` re-exports. Pinned to 0.17 to match
-# ort's expected version; `std` is required for `NdFloat` +
-# the linalg traits we use for embedding mean / norm.
-ndarray = { version = "0.17", default-features = false, features = ["std"], optional = true }
+# Tensor type that `ort` re-exports. Exact-pinned to =0.17 to
+# match ort's expected version — ort's exposed types are generic
+# over `ndarray::ArrayBase`, so a bump in either crate without
+# coordination breaks the build. `std` is required for `NdFloat`
+# + the linalg traits we use for embedding mean / norm.
+ndarray = { version = "=0.17", default-features = false, features = ["std"], optional = true }
 
 # Real-input FFT for the D2 diarizer's Mel-Filterbank feature
 # extraction (#111). The wespeaker speaker-embedding model takes
