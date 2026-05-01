@@ -1272,7 +1272,7 @@ fn push_samples<T: Copy>(
 /// Returns an empty `Vec` when the ring is empty — the "user
 /// pressed Stop almost immediately" path. Never errors: rtrb's
 /// `Consumer` cannot be poisoned the way a `Mutex` could.
-fn drain_consumer(consumer: &mut Consumer<f32>) -> Vec<f32> {
+pub(super) fn drain_consumer(consumer: &mut Consumer<f32>) -> Vec<f32> {
     let n = consumer.slots();
     if n == 0 {
         return Vec::new();
@@ -1292,7 +1292,7 @@ fn drain_consumer(consumer: &mut Consumer<f32>) -> Vec<f32> {
 /// the same rate-limiting policy. Resets the flag on read so a
 /// future overflow logs again on its next drain — chronic overflow
 /// surfaces but a single transient blip doesn't shout.
-fn log_overflow_if_set(flag: &AtomicBool) {
+pub(super) fn log_overflow_if_set(flag: &AtomicBool) {
     if flag.swap(false, Ordering::Relaxed) {
         tracing::warn!(
             buffer_cap_frames = MAX_BUFFER_FRAMES,
