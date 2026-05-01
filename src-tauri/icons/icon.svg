@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+
+  <!--
+    Shield + chat-bubble app icon.
+
+    Shield: thick stroke-only path, transparent interior.
+    The lower curves use matching tangent directions at the bottom point
+    (512, 878) so the tip is smooth, not kinked.
+
+    Chat bubble: solid-fill rounded rect with a bottom-left tail.
+    The tail polygon fills the concave corner cut of the rounded rect
+    at bottom-left and extends to the tail tip, so the two shapes
+    union into a clean single speech-bubble silhouette.
+  -->
+
+  <!-- Shield outline -->
+  <path
+    d="M 248 132
+       L 776 132
+       Q 880 132 880 236
+       L 880 490
+       C 880 676 640 878 512 878
+       C 384 878 144 676 144 490
+       L 144 236
+       Q 144 132 248 132
+       Z"
+    fill="none"
+    stroke="#1877F2"
+    stroke-width="64"
+    stroke-linejoin="round"
+  />
+
+  <!-- Chat bubble body -->
+  <rect x="358" y="345" width="300" height="228" rx="50" ry="50" fill="#1877F2"/>
+
+  <!--
+    Tail: quadrilateral that fills the bottom-left rounded-corner cut
+    (vertices trace the bounding-box corner so the concave arc is
+    covered) and extends as the speech-bubble tail to (270, 642).
+    Because it shares the fill colour with the rect above, the union
+    reads as one solid bubble shape.
+  -->
+  <polygon points="358,523 358,573 408,573 270,642" fill="#1877F2"/>
+
+</svg>
