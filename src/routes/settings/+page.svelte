@@ -168,6 +168,15 @@
   let soundCuesBusy = $state(false);
   let soundCuesError = $state<string | null>(null);
 
+  // Whisper inference threads (#255). Backend clamps to [1, 16].
+  // Bigger model + slower CPU benefits from more threads;
+  // background-friendly setups want fewer. Persists across launches
+  // and is read on every inference call via a shared atomic, so a
+  // slider change takes effect on the next chunk without restart.
+  let inferenceThreads = $state(4);
+  let inferenceThreadsBusy = $state(false);
+  let inferenceThreadsError = $state<string | null>(null);
+
   // Diarization (#111). Default off — opt-in. When the toggle is
   // on AND the wespeaker .onnx model is present in the models
   // directory, the meeting pump labels utterances per-speaker
@@ -665,6 +674,7 @@
       loadAutostartState(),
       loadHudEnabled(),
       loadSoundCuesEnabled(),
+      loadInferenceThreads(),
       loadAppMetadata(),
       loadAppOverrides(),
       loadAppDefaults(),
@@ -854,6 +864,34 @@
       await loadSoundCuesEnabled();
     } finally {
       soundCuesBusy = false;
+    }
+  }
+
+  async function loadInferenceThreads(): Promise<void> {
+    try {
+      inferenceThreads = await invoke<number>("get_inference_threads");
+      inferenceThreadsError = null;
+    } catch (e) {
+      inferenceThreadsError = "Couldn't read inference-threads setting.";
+      console.warn("[hush] get_inference_threads failed", e);
+    }
+  }
+
+  async function onInferenceThreadsChange(e: Event) {
+    const next = Number((e.target as HTMLInputElement).value);
+    if (!Number.isFinite(next)) {
+      return;
+    }
+    inferenceThreadsBusy = true;
+    inferenceThreadsError = null;
+    try {
+      await invoke("set_inference_threads", { threads: next });
+      inferenceThreads = next;
+    } catch (err) {
+      inferenceThreadsError = formatErrorMessage(err);
+      await loadInferenceThreads();
+    } finally {
+      inferenceThreadsBusy = false;
     }
   }
 
@@ -1083,6 +1121,39 @@
         </p>
         <h3 class="subgroup-heading">Push-to-talk</h3>
         <PttHotkeyEditor {isMacOS} />
+      </section>
+
+      <section class="settings-group" aria-labelledby="settings-performance-heading">
+        <h2 id="settings-performance-heading" class="group-heading">Performance</h2>
+        <label class="slider-row">
+          <span class="toggle-label">
+            <span class="toggle-name">
+              Whisper inference threads:
+              <span data-testid="settings-inference-threads-value">{inferenceThreads}</span>
+            </span>
+            <span class="toggle-desc">
+              How many CPU threads whisper.cpp uses per chunk. More
+              threads finish each chunk faster on a multi-core CPU but
+              compete with other apps for cores. The default (4) suits
+              most laptops; bump it up if transcription lags on a
+              larger model, drop it if you want Hush to run quietly
+              alongside heavy workloads.
+            </span>
+          </span>
+          <input
+            type="range"
+            min="1"
+            max="16"
+            step="1"
+            data-testid="settings-inference-threads-slider"
+            disabled={inferenceThreadsBusy}
+            value={inferenceThreads}
+            onchange={onInferenceThreadsChange}
+          />
+        </label>
+        {#if inferenceThreadsError}
+          <p class="settings-error">{inferenceThreadsError}</p>
+        {/if}
       </section>
 
       <section class="settings-group" aria-labelledby="settings-firstrun-heading">
@@ -1845,6 +1916,23 @@
     line-height: 1.4;
   }
 
+  /* Slider-shaped settings row — same bordered-card pattern as
+     `.toggle-row`. Label + description on the left, range input
+     stretches across the bottom for fine-grained adjustment. */
+  .slider-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.65rem 0.85rem;
+    background-color: white;
+    border: 1px solid #e1e1e6;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .slider-row input[type="range"] {
+    width: 100%;
+  }
+
   /* Select-shaped settings row — same bordered-card pattern as
      `.toggle-row` so the visual rhythm across General, Interface,
      and Meeting auto-start stays consistent. Label + description
@@ -2148,6 +2236,7 @@
     .placeholder { color: #a8a8a8; }
     .toggle-row,
     .select-row,
+    .slider-row,
     .settings-row {
       background-color: #2a2a2d;
       border-color: #38383b;

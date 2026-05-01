@@ -1025,6 +1025,43 @@ pub(crate) async fn set_diarization_enabled_inner(
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Read the live inference thread count (#255). Settings →
+/// General reads this on mount so the slider renders the
+/// persisted value rather than the cross-platform default.
+#[tauri::command]
+pub fn get_inference_threads(state: State<'_, AppState>) -> IpcResult<i32> {
+    Ok(state
+        .inference_threads
+        .load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Persist the inference thread count + update the in-memory
+/// atomic the loaded `WhisperTranscription` reads on every
+/// inference call. Same pattern as `set_hud_enabled` —
+/// optimistically updates the atomic + persists to settings.
+/// Clamped to `[MIN_INFERENCE_THREADS, MAX_INFERENCE_THREADS]`
+/// (1–16) so a malformed input can't push past whisper.cpp's
+/// happy band.
+#[tauri::command]
+pub async fn set_inference_threads(state: State<'_, AppState>, threads: i32) -> IpcResult<()> {
+    set_inference_threads_inner(&state, threads).await
+}
+
+pub(crate) async fn set_inference_threads_inner(state: &AppState, threads: i32) -> IpcResult<()> {
+    let clamped = threads.clamp(1, 16);
+    state
+        .inference_threads
+        .store(clamped, std::sync::atomic::Ordering::Relaxed);
+    state
+        .settings
+        .set(
+            crate::settings::keys::INFERENCE_THREADS,
+            &clamped.to_string(),
+        )
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
 /// Status of the diarizer model file (#301). The Settings →
 /// Speakers panel reads this on mount + after every download
 /// progress event so the UI can render "model not installed",
@@ -2164,6 +2201,66 @@ mod tests {
             .await
             .expect("settings get ok");
         assert_eq!(persisted.as_deref(), Some("true"));
+    }
+
+    // ---- Inference-threads IPC commands ---------------------------------
+
+    #[tokio::test]
+    async fn set_inference_threads_persists_value_within_bounds() {
+        let state = crate::ipc::tests::mock_state();
+        set_inference_threads_inner(&state, 8)
+            .await
+            .expect("set ok");
+        assert_eq!(
+            state
+                .inference_threads
+                .load(std::sync::atomic::Ordering::Relaxed),
+            8,
+            "atomic should hold the requested thread count"
+        );
+        let persisted = state
+            .settings
+            .get(crate::settings::keys::INFERENCE_THREADS)
+            .await
+            .expect("settings get ok");
+        assert_eq!(persisted.as_deref(), Some("8"));
+    }
+
+    #[tokio::test]
+    async fn set_inference_threads_clamps_above_max() {
+        // Anyone hand-editing the settings row could push past the
+        // upper bound; the inner setter must clamp so a malformed
+        // value can't reach `set_n_threads`.
+        let state = crate::ipc::tests::mock_state();
+        set_inference_threads_inner(&state, 999)
+            .await
+            .expect("set ok");
+        assert_eq!(
+            state
+                .inference_threads
+                .load(std::sync::atomic::Ordering::Relaxed),
+            16
+        );
+        let persisted = state
+            .settings
+            .get(crate::settings::keys::INFERENCE_THREADS)
+            .await
+            .expect("settings get ok");
+        assert_eq!(persisted.as_deref(), Some("16"));
+    }
+
+    #[tokio::test]
+    async fn set_inference_threads_clamps_below_min() {
+        let state = crate::ipc::tests::mock_state();
+        set_inference_threads_inner(&state, 0)
+            .await
+            .expect("set ok");
+        assert_eq!(
+            state
+                .inference_threads
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[tokio::test]

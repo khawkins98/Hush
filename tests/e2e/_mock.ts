@@ -51,6 +51,10 @@ export async function installMocks(
       set_hud_enabled: () => undefined,
       get_sound_cues_enabled: () => false,
       set_sound_cues_enabled: () => undefined,
+      // Whisper inference threads (Settings → General → Performance,
+      // #255). Default 4 mirrors the backend default.
+      get_inference_threads: () => 4,
+      set_inference_threads: () => undefined,
       // Meeting auto-start mode (Settings → Meeting). Default
       // matches the backend's "off" default; specs that exercise
       // the dropdown override per-test.

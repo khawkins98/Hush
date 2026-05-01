@@ -103,6 +103,17 @@ pub mod keys {
     /// existing source-derived `"mic"` / `"system"` labels stand in
     /// for proper speaker IDs.
     pub const DIARIZATION_ENABLED: &str = "diarization_enabled";
+
+    /// Whisper inference thread count (#255). Stored as the
+    /// integer literal in decimal (e.g. `"4"`); parsed back via
+    /// `i32::from_str` and clamped to `[MIN_INFERENCE_THREADS,
+    /// MAX_INFERENCE_THREADS]` (= `[1, 16]`) on read so a
+    /// malformed row can't push past the band whisper.cpp is
+    /// happy with. Absent rows fall back to
+    /// `DEFAULT_INFERENCE_THREADS` (= 4) — same value the const
+    /// shipped pre-#255, so existing installs see no behaviour
+    /// change until the user touches the slider.
+    pub const INFERENCE_THREADS: &str = "inference_threads";
 }
 
 /// Repository trait at the storage boundary.
