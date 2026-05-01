@@ -273,3 +273,9 @@ export type DiarizerModelStatus = {
   sha256: string;
   expectedPath: string;
 };
+
+// Format selectors for the per-row meeting export popover (#357
+// phase 3b). Lowercase tokens are deliberately chosen to match the
+// backend's `MeetingExportFormat` serde shape — the IPC accepts
+// these strings verbatim.
+export type MeetingExportFormat = "text" | "csv" | "json";

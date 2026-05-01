@@ -19,6 +19,7 @@
     HistoryEntry,
     MacosPermissionDiagnostic,
     ModelCard,
+    MeetingExportFormat,
     MeetingSession,
     MeetingSessionDetail,
     PermissionStatuses,
@@ -469,6 +470,39 @@
     }
   }
 
+  /// Export a single meeting session in the user's chosen format
+  /// (#357 phase 3b). Same two-step shape as the dictation export:
+  /// dialog plugin picks the path, the backend writes the bytes.
+  /// Format-specific filename stem ("hush-meeting-<date>.txt" /
+  /// ".csv" / ".json") so the OS picker pre-populates a
+  /// recognisable name. Cancellation is silent.
+  async function exportMeetingSession(
+    session: MeetingSession,
+    format: MeetingExportFormat,
+  ) {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const datePart = session.startedAt.slice(0, 10);
+      const ext = format === "text" ? "txt" : format;
+      const filterName =
+        format === "text" ? "Plain text" : format === "csv" ? "CSV" : "JSON";
+      const path = await save({
+        defaultPath: `hush-meeting-${datePart}.${ext}`,
+        filters: [{ name: filterName, extensions: [ext] }],
+      });
+      if (path === null) {
+        return;
+      }
+      await invoke("meeting_session_export", {
+        id: session.id,
+        format,
+        path,
+      });
+    } catch (e) {
+      meetingSessionsError = formatErrorDisplay(e);
+    }
+  }
+
   async function clearAllHistory() {
     try {
       const removed = await invoke<number>("history_clear");
@@ -914,6 +948,7 @@
       onExportDictationCsv={exportDictationCsv}
       onMeetingDelete={deleteMeetingSession}
       onMeetingLoadDetail={loadMeetingSessionDetail}
+      onMeetingExport={exportMeetingSession}
       onClearAll={clearAllHistory}
     />
   </section>

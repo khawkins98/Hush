@@ -248,6 +248,11 @@ export async function installMocks(
         throw { kind: "settings", message: "meeting session not found (default mock)" };
       },
       meeting_session_delete: () => undefined,
+      // Per-row meeting export (#357 phase 3b). Accepts `{ id,
+      // format, path }`; same no-op default as the dictation
+      // sibling. Specs that exercise the popover flow override
+      // per-test.
+      meeting_session_export: () => undefined,
       meeting_session_set_notes: () => undefined,
       meeting_active_session: () => ({ active: null }),
       meeting_start_manual: () => ({

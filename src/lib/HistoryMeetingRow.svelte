@@ -19,7 +19,11 @@
   list) lives in the parent so each row can stay self-contained.
 -->
 <script lang="ts">
-  import type { MeetingSession, MeetingSessionDetail } from "./types";
+  import type {
+    MeetingExportFormat,
+    MeetingSession,
+    MeetingSessionDetail,
+  } from "./types";
 
   type Props = {
     session: MeetingSession;
@@ -32,9 +36,31 @@
     /// Click handler for Delete. The parent's implementation arms
     /// or fires based on the current row's `confirming` state.
     onDelete: (session: MeetingSession) => void;
+    /// Per-row export (#357 phase 3b). Drives the OS save picker +
+    /// the IPC. `null` if the parent didn't pass a handler — the
+    /// Export button hides in that case so an embedding without
+    /// export support stays clean.
+    onExport?: (
+      session: MeetingSession,
+      format: MeetingExportFormat,
+    ) => void | Promise<void>;
   };
 
-  let { session, confirming, onLoadDetail, onDelete }: Props = $props();
+  let { session, confirming, onLoadDetail, onDelete, onExport }: Props = $props();
+
+  // Open/close state for the Export popover. Toggled by the
+  // `Export ▾` button; closes itself once the user picks a
+  // format. We keep this dead simple — a single boolean — rather
+  // than wiring a custom click-outside handler. The parent `<li>`
+  // element catches the focus + the inline-flow positioning means
+  // a stale-open popover isn't visually disruptive while the user
+  // continues to scroll.
+  let exportOpen = $state(false);
+
+  function pickFormat(format: MeetingExportFormat) {
+    exportOpen = false;
+    void onExport?.(session, format);
+  }
 
   // Inline-expand state for the transcript view. Initial click
   // fires `loadDetail`; subsequent toggles use the cached
@@ -152,6 +178,57 @@
     >
       {expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount})`}
     </button>
+    {#if onExport}
+      <div class="export-popover">
+        <button
+          type="button"
+          class="ghost"
+          onclick={() => (exportOpen = !exportOpen)}
+          aria-haspopup="menu"
+          aria-expanded={exportOpen}
+          data-testid="meeting-export-toggle-{session.id}"
+        >
+          Export ▾
+        </button>
+        {#if exportOpen}
+          <ul class="export-menu" role="menu">
+            <li>
+              <button
+                type="button"
+                role="menuitem"
+                class="export-menu-item"
+                onclick={() => pickFormat("text")}
+                data-testid="meeting-export-text-{session.id}"
+              >
+                Plain text (.txt)
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                role="menuitem"
+                class="export-menu-item"
+                onclick={() => pickFormat("csv")}
+                data-testid="meeting-export-csv-{session.id}"
+              >
+                CSV (.csv)
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                role="menuitem"
+                class="export-menu-item"
+                onclick={() => pickFormat("json")}
+                data-testid="meeting-export-json-{session.id}"
+              >
+                JSON (.json)
+              </button>
+            </li>
+          </ul>
+        {/if}
+      </div>
+    {/if}
     <button
       class="ghost danger"
       class:confirming
@@ -233,6 +310,45 @@
   .history-actions {
     display: flex;
     gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .export-popover {
+    position: relative;
+    display: inline-block;
+  }
+  .export-menu {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    left: 0;
+    z-index: 5;
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem;
+    background-color: white;
+    border: 1px solid #d1d1d1;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    min-width: 11rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+  .export-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.4rem 0.7rem;
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    color: #2a2a2a;
+    cursor: pointer;
+  }
+  .export-menu-item:hover {
+    background-color: #f0f0f3;
   }
 
   button.ghost {
@@ -312,6 +428,17 @@
     .meeting-sources { color: #9a9aa0; }
     .meeting-app-title { color: #b0b0b8; }
     .meeting-notes { color: #c0c0c0; }
+    .export-menu {
+      background-color: #2a2a2d;
+      border-color: #38383b;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .export-menu-item {
+      color: #e8e8e8;
+    }
+    .export-menu-item:hover {
+      background-color: #353539;
+    }
     button.ghost {
       color: #d8d8d8;
       border-color: #38383b;
