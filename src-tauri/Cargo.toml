@@ -193,6 +193,19 @@ active-win-pos-rs = "0.10"
 # Bump-to-published when EITHER:
 #   - Narsil ships a release that completes the listen-path fix, OR
 #   - fufesou publishes their fork to crates.io.
+#
+# Supply-chain audit notes (refs #256 part 2):
+# - Pinned to a specific commit SHA, not a branch. Cargo.lock
+#   captures the resolved tree below this commit so
+#   `cargo audit --deny warnings` can flag known-vulnerable
+#   transitives.
+# - The fork is what RustDesk ships in production (millions of
+#   end-user installs); it is not a one-person fork with no
+#   independent review. Their security posture covers ours.
+# - To verify the pinned rev hasn't drifted upstream:
+#     git fetch https://github.com/fufesou/rdev a90dbe1172f8832f54c97c62e823c5a34af5fdfe
+#   If the fetch fails the rev was rewritten — investigate before
+#   bumping. Document any audit findings in `learnings.md`.
 # See learnings.md 2026-04-27 entry for full context. Refs #69, #70.
 rdev = { git = "https://github.com/fufesou/rdev", rev = "a90dbe1172f8832f54c97c62e823c5a34af5fdfe" }
 
