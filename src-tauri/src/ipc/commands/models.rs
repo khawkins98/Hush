@@ -135,8 +135,9 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
     // already persisted, so the picker remembers across restarts.
     let models_dir = state.models_dir.clone();
     let id_for_load = id.clone();
+    let inference_threads = std::sync::Arc::clone(&state.inference_threads);
     let load_result = tauri::async_runtime::spawn_blocking(move || {
-        crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir)
+        crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir, &inference_threads)
     })
     .await
     .map_err(|e| IpcError::Internal(format!("blocking task panicked: {e}")))?;

@@ -402,6 +402,8 @@ pub fn run() {
             ipc::commands::set_meeting_autostart_mode,
             ipc::commands::get_diarization_enabled,
             ipc::commands::set_diarization_enabled,
+            ipc::commands::get_inference_threads,
+            ipc::commands::set_inference_threads,
             ipc::commands::get_diarizer_model_status,
             ipc::commands::download_diarizer_model,
             ipc::commands::check_for_updates,

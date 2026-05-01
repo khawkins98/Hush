@@ -138,6 +138,28 @@ test.describe("settings window — General tab", () => {
     await expect(toggle).toBeChecked();
   });
 
+  test("inference-threads slider mounts at the persisted value and updates the value label", async ({
+    page,
+  }) => {
+    // Backend reports 8 threads persisted. Slider should mount at 8
+    // and the inline value label next to the slider should match.
+    await installMocks(page, {
+      get_inference_threads: () => 8,
+    });
+    await page.goto("/settings");
+
+    const slider = page.locator(
+      '[data-testid="settings-inference-threads-slider"]',
+    );
+    await expect(slider).toBeVisible();
+    await expect(slider).toHaveValue("8");
+
+    const label = page.locator(
+      '[data-testid="settings-inference-threads-value"]',
+    );
+    await expect(label).toHaveText("8");
+  });
+
   test("first-run reset button shows confirmation copy after click", async ({
     page,
   }) => {

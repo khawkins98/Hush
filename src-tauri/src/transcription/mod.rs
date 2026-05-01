@@ -57,7 +57,9 @@ pub mod streaming;
 pub mod whisper;
 
 #[cfg(feature = "whisper")]
-pub use whisper::WhisperTranscription;
+pub use whisper::{
+    WhisperTranscription, DEFAULT_INFERENCE_THREADS, MAX_INFERENCE_THREADS, MIN_INFERENCE_THREADS,
+};
 
 pub use streaming::{
     SlidingWindowConfig, SlidingWindowState, StreamSegment, StreamingTranscribeSession,
