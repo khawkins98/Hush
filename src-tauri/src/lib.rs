@@ -169,23 +169,32 @@ pub fn run() {
             let ptt_active_for_listener = std::sync::Arc::clone(&state.ptt_active);
             let ptt_spawned_for_listener = std::sync::Arc::clone(&state.ptt_listener_spawned);
 
-            // Orphan-session reconciliation (#249). Sessions left
-            // open by a previous process that exited without
+            // Clone the meeting-manager handle out before `manage`
+            // for the orphan-reconcile spawn below.
+            let meeting_manager_for_reconcile = std::sync::Arc::clone(&state.meeting_manager);
+
+            app.manage(state);
+
+            // Orphan-session reconciliation (#249, #329). Sessions
+            // left open by a previous process that exited without
             // `stop_manual` (kill, OS crash, panic) get their
             // `ended_at` stamped now so the panel doesn't render
             // them as still-active. Best-effort: a DB failure here
             // is logged inside the manager and doesn't block
             // startup.
             //
-            // Done before `app.manage(state)` so the meeting
-            // manager's own boot path completes before any IPC
-            // command can land on it. block_on is acceptable here
-            // for the same reason `build_default` was — we're in
-            // the synchronous Tauri `setup` hook and the cost is
-            // a single SELECT + zero-or-more UPDATE statements.
-            tauri::async_runtime::block_on(state.meeting_manager.reconcile_orphan_sessions());
-
-            app.manage(state);
+            // Spawned (not block_on'd) so the SELECT + UPDATEs
+            // don't hold the synchronous setup hook open while the
+            // first paint is waiting (#329). The pump tasks below
+            // and the IPC handlers don't depend on this completing
+            // — the meeting manager's own internal locking handles
+            // any race between a reconcile-in-flight and a fresh
+            // `meeting_start_manual`.
+            tauri::async_runtime::spawn(async move {
+                meeting_manager_for_reconcile
+                    .reconcile_orphan_sessions()
+                    .await;
+            });
 
             // Hide-on-close for main + settings (#263). Tauri 2's
             // default destroys the window on red-✕; combined with
@@ -315,16 +324,25 @@ pub fn run() {
             //
             // Throttling: 33 ms ≈ 30 fps, matches the HUD's pulse
             // animation cadence and is well above the audio callback
-            // rate (~100 Hz at 48 kHz / 480-frame chunks). At idle we
-            // still tick — `current_level()` returns `0.0` while not
-            // recording, the emit is cheap, and any HUD listeners get
-            // a clean idle baseline.
+            // rate (~100 Hz at 48 kHz / 480-frame chunks).
+            //
+            // Activity gate (#329). Pre-fix the pump emitted at 30 Hz
+            // for the entire process lifetime — ~2.6M IPC emits/day
+            // at idle with the HUD hidden and no recording. Now we
+            // skip the emit when nothing is recording: the HUD only
+            // shows during recording anyway, and a stale "0.0"
+            // doesn't help any other listener. Cadence stays at 30 Hz
+            // so the meter goes live within one tick of capture
+            // start without a separate kickoff signal.
             let app_for_pump = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut ticker =
                     tokio::time::interval(std::time::Duration::from_millis(33));
                 loop {
                     ticker.tick().await;
+                    if !audio_for_pump.is_recording() {
+                        continue;
+                    }
                     let level = audio_for_pump.current_level();
                     if let Err(e) = app_for_pump.emit("audio:level", level) {
                         // No listener attached yet (HUD window hidden) is
