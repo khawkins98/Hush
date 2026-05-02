@@ -67,7 +67,7 @@ pub const CUE_RECORDING_START: &str = "Tink";
 pub const CUE_TRANSCRIPTION_READY: &str = "Glass";
 
 /// Play a cue sound. No-op when `enabled` is false; the caller
-/// passes `state.sound_cues_enabled.load(Ordering::Relaxed)` so the
+/// passes `state.runtime_flags.sound_cues_enabled.load(Ordering::Relaxed)` so the
 /// hot path doesn't have to branch.
 pub fn play_if_enabled(enabled: bool, name: &str) {
     if !enabled {
