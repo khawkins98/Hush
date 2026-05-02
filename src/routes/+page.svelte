@@ -1251,10 +1251,18 @@
 
 <header class="app-bar">
   <div class="brand">
+    <!--
+      SVG over the PNG (#395). The original `app-icon.png` /
+      `@2x.png` were exported with an opaque white background, so
+      the rounded-corner crop on `.brand-icon` rendered a visible
+      white badge against the grey app-bar. The SVG is line-art
+      with `fill: none`, so it composites cleanly over any
+      background. Width/height attrs match the previous render
+      size; the browser scales the SVG losslessly.
+    -->
     <img
       class="brand-icon"
-      src="/app-icon.png"
-      srcset="/app-icon.png 1x, /app-icon@2x.png 2x"
+      src="/app-icon.svg"
       alt=""
       aria-hidden="true"
       width="22"
