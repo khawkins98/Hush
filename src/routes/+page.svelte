@@ -281,6 +281,21 @@
       if (!recording || busy) return;
       void stop();
     });
+
+    // Startup permission probe (#378 follow-up). The IPC's auto-
+    // stamp-on-first-Granted only seeds `last_confirmed` when
+    // `get_permission_health` is called. Pre-fix this only ran
+    // from the Settings → Permissions tab — a user who never
+    // opened that tab never seeded the timestamp, and a later
+    // Stale verdict (the cert / bundle-id rotation case the
+    // feature exists to detect) read as NotGranted instead.
+    // Calling once on main-page mount means every launch where
+    // permissions are currently granted seeds the row, so future
+    // staleness is detectable from any flow. Fire-and-forget
+    // because nothing on this page renders the result.
+    void invoke("get_permission_health").catch((err) => {
+      console.warn("[hush] startup get_permission_health failed", err);
+    });
   });
 
   onDestroy(() => {
@@ -334,6 +349,19 @@
       if (meetingActiveId !== null) {
         setTimeout(() => void refreshMeetingSessions(), 200);
       }
+      // Strongest-signal mic confirmation (#378). A clean
+      // stop_dictation means we just opened the mic, captured
+      // audio, and read it back — the underlying capability is
+      // alive. Stamp `last_confirmed` so the Permissions tab can
+      // distinguish a future Stale (was-granted-now-revoked)
+      // verdict from a fresh-install NotGranted. Fire-and-forget
+      // — the user's transcript is the load-bearing thing here;
+      // a settings-write hiccup shouldn't surface.
+      void invoke("confirm_permission", { permission: "microphone" }).catch(
+        (err) => {
+          console.warn("[hush] confirm_permission(mic) failed", err);
+        },
+      );
     } catch (e) {
       error = formatErrorDisplay(e);
       // Even if transcription failed, the recording itself stopped on the
@@ -836,6 +864,20 @@
       // app via active-win-pos-rs at click time.
       await invoke("meeting_start_manual", { sources, appName: null });
       await refreshMeetingSessions();
+      // Strongest-signal Screen Recording confirmation (#378).
+      // A clean `meeting_start_manual` with system-audio in the
+      // source list means SCK actually opened — the TCC entry is
+      // alive. Same fire-and-forget shape as the mic confirm in
+      // `stop()`. Skipped when no system-audio source was in the
+      // request: starting a mic-only meeting tells us nothing
+      // about Screen Recording state.
+      if (sources.some((s) => s.kind === "system-audio")) {
+        void invoke("confirm_permission", {
+          permission: "screen-recording",
+        }).catch((err) => {
+          console.warn("[hush] confirm_permission(screen-recording) failed", err);
+        });
+      }
     } catch (e) {
       // Use the shared formatError so the actual `IpcError::MeetingSessions`
       // message (which already names the permission gap or the conflicting
