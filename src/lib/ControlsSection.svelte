@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AudioWaveform from "./AudioWaveform.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import Select from "./Select.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
@@ -328,6 +329,23 @@
       longer for big models.
     {/if}
   </p>
+
+  <!--
+    Live waveform during active recording (#411 phase B). Mirrors
+    the HUD pill's affordance into the main window so the user
+    sees mic activity without needing the floating overlay visible
+    (or for users who dismissed it). Only mounted while
+    `recording === true` so the audio:level subscription doesn't
+    sit live during idle or transcription. `active` is redundant
+    given the conditional render but kept explicit so the prop's
+    semantic ("track or flatten") stays self-documenting at the
+    consumer call site.
+  -->
+  {#if recording}
+    <div class="status-waveform">
+      <AudioWaveform active={recording} />
+    </div>
+  {/if}
 </section>
 
 {#if error}
@@ -658,6 +676,17 @@ button.primary:hover:not(:disabled) {
 .status-mode[data-record-mode="meeting"] {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* AudioWaveform sits below the status line during recording (#411
+   phase B). Centred to align with the rest of the controls
+   column. The 60×16 footprint is set inside the component; the
+   wrapper just gives it vertical breathing room so it doesn't
+   crowd the status text above. */
+.status-waveform {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.5rem;
 }
 
 @keyframes pulse {

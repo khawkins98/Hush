@@ -23,64 +23,43 @@
   import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { onDestroy, onMount } from "svelte";
   import { Events } from "$lib/events";
-
-  // Latest RMS from the backend pump, in roughly [0, 1]. We hold
-  // it as a runes-state float and let the meter's CSS width track
-  // it directly. No throttling on the receive side — the backend
-  // already throttles to ~30 Hz.
-  let rms = $state(0);
-
-  // Smoothed display value with a simple attack/release envelope so
-  // the bar doesn't jitter on every callback. Attack is fast (the
-  // user expects an instant reaction when they speak); release is
-  // slow (silence between words shouldn't drop the bar to 0).
-  let displayLevel = $state(0);
+  import AudioWaveform from "$lib/AudioWaveform.svelte";
 
   // HUD lifecycle state (#291). Backend emits `hud:state` with
-  // `"recording"` or `"processing"`. Recording is the existing
-  // visual (pulsing dot + level meter); Processing replaces the
-  // meter with a static label so the user knows transcription is
-  // in flight and pasting too early would be premature. Defaults
-  // to recording — start_dictation always fires the explicit
-  // recording state too, so this is just a safe initial render.
+  // `"recording"` or `"processing"`. Recording renders the pulsing
+  // dot + waveform; Processing replaces the waveform with a
+  // shimmer so the user knows transcription is in flight and
+  // pasting too early would be premature. Defaults to recording —
+  // start_dictation always fires the explicit recording state too,
+  // so this is just a safe initial render.
   let hudState = $state<"recording" | "processing">("recording");
 
   // Recording-duration timer (#360). `recordingStartedAt` is set
   // when the backend emits `hud:state === "recording"`, freezes
   // when state flips to `processing`, and resets between cycles so
   // back-to-back dictations each start at 0:00. The visible
-  // `elapsedLabel` is recomputed on every rAF tick — same loop
-  // that smooths the level meter, so no extra timer.
+  // `elapsedLabel` is recomputed on every rAF tick — separate
+  // from the AudioWaveform's internal animation loop because the
+  // timer label is HUD-specific.
   let recordingStartedAt = $state<number | null>(null);
   let elapsedLabel = $state("0:00");
 
-  // Waveform ring buffer (#362). One entry per visible bar, in
-  // chronological order — index 0 is oldest, the last is the
-  // freshest. Each entry is a smoothed `displayLevel` snapshot in
-  // [0, 1]. The renderer turns each value into a bar height.
-  // Bar count + sample rate are component constants — see the
-  // BAR_COUNT / WAVEFORM_INTERVAL_MS constants below — so the
-  // density / speed of the visualiser can be re-dialled without
-  // touching the tick logic.
-  const BAR_COUNT = 14;
-  let waveform = $state<number[]>(new Array(BAR_COUNT).fill(0));
-
-  // Pre-#330 these were closure-locals inside `onMount`'s synchronous
-  // teardown, populated by `.then()`. Hoisted to module scope and
-  // assigned via `await listen(...)` inside an async `onMount` so the
-  // teardown in `onDestroy` always sees the resolved unlisten fns —
-  // even when the HUD is hidden + recreated faster than the listen
-  // promises resolve. Pre-fix the listeners leaked across HUD
-  // lifecycles, accumulating one extra `audio:level` handler per
-  // dictation cycle (#330).
-  let unlistenLevel: UnlistenFn | null = null;
+  // Pre-#330 the unlisten handle was a closure-local inside
+  // `onMount`'s synchronous teardown, populated by `.then()`.
+  // Hoisted to module scope and assigned via `await listen(...)`
+  // inside an async `onMount` so the teardown in `onDestroy` always
+  // sees the resolved unlisten fn — even when the HUD is hidden +
+  // recreated faster than the listen promise resolves. Pre-fix the
+  // listener leaked across HUD lifecycles, accumulating one extra
+  // `hud:state` handler per dictation cycle (#330). The
+  // `audio:level` listener that previously lived here moved into
+  // `AudioWaveform.svelte` along with the rest of the waveform
+  // logic in #411 phase B.
   let unlistenState: UnlistenFn | null = null;
   let raf: number | undefined;
 
   // Format a millisecond duration as `M:SS` (under an hour) or
   // `H:MM:SS` (one hour and beyond — meetings hit this routinely).
-  // Lives outside `tick()` so the `onMount` close-over captures a
-  // stable reference rather than re-allocating on every frame.
   function formatElapsed(ms: number): string {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -93,68 +72,26 @@
   }
 
   onMount(async () => {
-    const ATTACK = 0.6;
-    const RELEASE = 0.12;
-    // Push a fresh waveform sample every ~80 ms (#362). At ~12 Hz
-    // and 14 bars the visible window covers ~1.2 s — fast enough
-    // to capture the rhythm of speech, slow enough that the bars
-    // actually move across the strip rather than blurring. The
-    // rAF loop runs at 60 Hz; this throttle keeps the buffer's
-    // visual scroll rate roughly fixed regardless of display
-    // refresh rate.
-    const WAVEFORM_INTERVAL_MS = 80;
-    let lastWaveformPush = 0;
-
     const tick = () => {
-      const target = rms;
-      const coeff = target > displayLevel ? ATTACK : RELEASE;
-      displayLevel += (target - displayLevel) * coeff;
-      // Update the elapsed-time label on every frame the timer is
-      // running. The wall-clock check is cheap; recomputing the
-      // formatted string ~30 times per second is fine for a label
-      // that changes once per second and Svelte's diffing skips
-      // re-renders when the string is unchanged.
       const now = Date.now();
       if (recordingStartedAt !== null) {
         elapsedLabel = formatElapsed(now - recordingStartedAt);
       }
-      // Sample the smoothed level into the waveform buffer at
-      // the throttled cadence. We snapshot `displayLevel` rather
-      // than raw `rms` so each bar reflects the same envelope-
-      // smoothed value the old single bar showed — keeps the
-      // visual rhythm continuous with what users were used to.
-      if (now - lastWaveformPush >= WAVEFORM_INTERVAL_MS) {
-        waveform = [...waveform.slice(1), displayLevel];
-        lastWaveformPush = now;
-      }
       raf = requestAnimationFrame(tick);
     };
-
-    unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
-      rms = event.payload ?? 0;
-    });
 
     unlistenState = await listen<string>(Events.HudState, (event) => {
       const next = event.payload;
       if (next === "recording" || next === "processing") {
         hudState = next;
-        // Freeze the level meter on transition into Processing
-        // so a stray late-arriving `audio:level` event (the pump
-        // ticks at ~30 Hz and may have one in flight) doesn't
-        // briefly relight the bar after capture has stopped.
         if (next === "processing") {
-          rms = 0;
-          displayLevel = 0;
-          // Reset the waveform to flat so the post-stop processing
-          // strip doesn't show a stale recording trace. The bars
-          // are hidden anyway during processing (the shimmer takes
-          // their place), but a same-tick `recording` flip back
-          // would otherwise paint a few stale samples first.
-          waveform = new Array(BAR_COUNT).fill(0);
           // Freeze the timer (don't reset) — the user still sees
           // the final duration of the just-finished capture during
           // the post-stop transcription window. A back-to-back
           // dictation will reset on the next `recording` event.
+          // The waveform's own freeze-on-flip-off behaviour is
+          // driven by `active={hudState === "recording"}` on the
+          // AudioWaveform component below.
           recordingStartedAt = null;
         } else {
           // Recording — start a fresh timer. Resets cleanly across
@@ -178,8 +115,6 @@
   });
 
   onDestroy(() => {
-    unlistenLevel?.();
-    unlistenLevel = null;
     unlistenState?.();
     unlistenState = null;
     if (raf !== undefined) {
@@ -256,21 +191,14 @@
   {/if}
   {#if hudState === "recording"}
     <!--
-      Waveform visualiser (#362). Replaces the single-bar level
-      meter with N bars driven by a small ring buffer of recent
-      smoothed RMS samples. Each bar is mirrored centre-out (the
-      filled span is centred on the strip's vertical midline)
-      because that reads as "voice activity" more cleanly than a
-      bottom-anchored bar. Heights are derived from the buffer
-      via the same ×4 amplification the old `barWidth` derived
-      used, so the visual gain matches what users were used to.
+      Waveform visualiser (#362). The component owns its own
+      audio:level subscription, attack/release smoothing, and ring
+      buffer; we just gate it with `active` so the post-stop
+      shimmer doesn't flash the bars. Extracted to $lib in #411
+      phase B so the main window's recording status row can render
+      the same affordance.
     -->
-    <div class="hud-waveform" role="presentation">
-      {#each waveform as level, i (i)}
-        {@const heightPct = Math.min(100, Math.max(6, level * 400))}
-        <span class="hud-waveform-bar" style="height: {heightPct}%"></span>
-      {/each}
-    </div>
+    <AudioWaveform active={hudState === "recording"} />
   {:else}
     <!--
       Processing state: replace the level meter with a slim
@@ -413,44 +341,9 @@
     letter-spacing: 0.01em;
   }
 
-  /* Waveform visualiser (#362). N bars in a horizontal strip, each
-     centred on the vertical midline so the filled span grows
-     centre-out — reads as "voice activity" more naturally than
-     bottom-anchored bars. Same overall footprint as the old
-     single bar (60×16-ish px) so the pill geometry doesn't shift.
-     Bar fill matches the recording-dot palette so the visual idiom
-     stays "red = capturing". */
-  .hud-waveform {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 60px;
-    height: 16px;
-    gap: 1px;
-  }
-  .hud-waveform-bar {
-    flex: 1 1 0;
-    min-width: 2px;
-    background: linear-gradient(180deg, #ff8080 0%, #ff4040 100%);
-    border-radius: 1px;
-    /* The height value is set inline from the ring-buffer sample;
-       a short transition smooths the inter-sample step so the bar
-       glides between heights instead of snapping. JS already does
-       attack/release smoothing on the *value*; the CSS transition
-       just bridges the discrete time-step between waveform pushes
-       (~80 ms) so the eye sees motion. */
-    transition: height 60ms linear;
-    will-change: height;
-  }
-
-  /* Reduced-motion users get the same bars without the glide —
-     same policy as the dot's pulse + the old meter fill: convey
-     the signal, skip the motion. */
-  @media (prefers-reduced-motion: reduce) {
-    .hud-waveform-bar {
-      transition: none;
-    }
-  }
+  /* Waveform visualiser (#362) styles moved to AudioWaveform.svelte
+     in #411 phase B. The default palette (red gradient) matches the
+     pre-extraction look exactly so the HUD pill renders unchanged. */
 
   @keyframes hud-pulse {
     0%, 100% { opacity: 1; transform: scale(1); }

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Live waveform in main window's recording row (#411 phase B)
+
+- Extracted the HUD's inline waveform animation (attack/release smoothing + 14-bar ring buffer + `audio:level` subscription) into a reusable `src/lib/AudioWaveform.svelte` leaf component. Default palette matches the HUD's red gradient; consumers can override via `--audio-waveform-bar-color`.
+- Main window's `ControlsSection` now renders the waveform below the recording status row whenever `recording === true`. Dictation and meeting modes both feed the same `audio:level` pump, so the bars track mic activity in either path.
+- HUD pill still renders the waveform; behaviour and visuals unchanged. `audio:level` listener moved from the HUD's `+page.svelte` into the component, so the HUD now only owns the elapsed-timer + lifecycle-state listeners.
+
 #### Appearance / theme override (#411 phase A)
 
 - **Settings → General → Appearance** picker (System / Light / Dark) lets users override the OS dark-mode preference. System (default) follows `prefers-color-scheme`; explicit values force the chosen theme regardless.
