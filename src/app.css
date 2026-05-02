@@ -8,12 +8,7 @@
  * surfaces; this file is the single source of truth.
  *
  * The two named variables here cover ~90 % of accent uses across
- * the components. The `rgba(44, 62, 143, X)` sidebar backgrounds and
- * the `#2c3e8f` sidebar text are kept verbatim in `AppSidebar.svelte`
- * because they describe a more saturated "active row on light bg"
- * shape that doesn't match the primary accent — splitting them off
- * here would imply "any component can use the sidebar palette,"
- * which isn't the intent.
+ * the components.
  *
  * Light + dark both use the same accent values: `#6a8cf0` reads as
  * a "trustworthy blue" against either #ffffff or #1a1a1a backdrops,

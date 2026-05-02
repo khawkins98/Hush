@@ -109,10 +109,9 @@
     return `${hours}h ${remMin}m`;
   }
 
-  // Same source-list mapping the deprecated MeetingSessionsPanel
-  // used: persisted as `mic` / `system` in the DB; surfaced to the
-  // user as friendlier names. Unknown values pass through so a
-  // future source kind still renders something.
+  // Source kinds are persisted as `mic` / `system` in the DB and
+  // surfaced here under friendlier names. Unknown values pass
+  // through so a future source kind still renders something.
   function sourceLabel(kind: string): string {
     switch (kind) {
       case "mic":
