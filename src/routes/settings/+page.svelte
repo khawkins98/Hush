@@ -31,19 +31,15 @@
   import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { platform } from "@tauri-apps/plugin-os";
-  import {
-    disable as disableAutostart,
-    enable as enableAutostart,
-    isEnabled as isAutostartEnabled,
-  } from "@tauri-apps/plugin-autostart";
+  /* (autostart + plugin-os imports moved to GeneralTab.svelte
+     in #332 phase 1.) */
   import { onDestroy, onMount, tick } from "svelte";
 
   import { openExternal } from "$lib/openExternal";
   import MeetingAppOverridesPanel from "$lib/MeetingAppOverridesPanel.svelte";
   import PermissionsTab from "$lib/PermissionsTab.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
-  import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
+  import GeneralTab from "$lib/GeneralTab.svelte";
   import ReplacementsTab from "$lib/ReplacementsTab.svelte";
   import VocabularyTab from "$lib/VocabularyTab.svelte";
   import {
@@ -86,7 +82,7 @@
   // to `false` until the IPC round-trip lands in onMount; only
   // affects the modifier-glyph copy in the PTT hotkey display, so
   // a one-frame default-then-correct flicker is imperceptible.
-  let isMacOS = $state(false);
+  /* (`isMacOS` lives in GeneralTab.svelte in #332 phase 1.) */
 
   const tabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
     { key: "general", label: "General", testId: "settings-tab-general" },
@@ -134,55 +130,9 @@
   /* (Permissions-tab window-focus listener handle moved to
      PermissionsTab.svelte in #332 phase 1.) */
 
-  // ---- General-tab state ------------------------------------------------
-  // Autostart toggle: queried on mount via the autostart plugin and
-  // mirrored locally so the checkbox can show optimistic UI while the
-  // plugin call is in flight.
-  let autostartEnabled = $state(false);
-  let autostartBusy = $state(false);
-  let autostartError = $state<string | null>(null);
-  // LaunchAgent path-staleness flag (#317). Read on mount; surfaces
-  // as a warning row when the boot-time re-register failed. Cleared
-  // by a successful retry.
-  let autostartPathStale = $state(false);
-  let autostartRetryBusy = $state(false);
-  let autostartRetryFailed = $state(false);
-  // First-run reset: brief confirmation message replaces the button
-  // label after a successful reset, then clears on a 3 s timer.
-  let firstRunResetBusy = $state(false);
-  let firstRunResetMessage = $state<string | null>(null);
-
-  // HUD-overlay-enabled toggle. Defaults to true on the backend
-  // (the recording HUD is on by default — first-time users
-  // benefit from the visual cue that the mic is hot). Power
-  // users who'd rather not see the floating pill can flip it off
-  // here. Optimistically updated on click; on failure the
-  // checkbox snaps back to the persisted value.
-  let hudEnabled = $state(true);
-  let hudBusy = $state(false);
-  let hudError = $state<string | null>(null);
-
-  // Audio cues (#292). Default off — opt-in only. Same load /
-  // optimistic-update / error-snap-back shape as hudEnabled.
-  let soundCuesEnabled = $state(false);
-  let soundCuesBusy = $state(false);
-  let soundCuesError = $state<string | null>(null);
-
-  // Transcription threads (#255). Backend clamps to [1, 16].
-  // Bigger model + slower CPU benefits from more threads;
-  // background-friendly setups want fewer. Persists across launches
-  // and is read on every inference call via a shared atomic, so a
-  // slider change takes effect on the next chunk without restart.
-  //
-  // Two state cells (#348): `inferenceThreads` is the persisted
-  // value (source of truth from the backend); `inferenceThreadsDisplay`
-  // tracks the slider thumb live during drag so the inline label
-  // updates in real time without firing one IPC per pixel. The
-  // change-event (release) is what actually persists.
-  let inferenceThreads = $state(4);
-  let inferenceThreadsDisplay = $state(4);
-  let inferenceThreadsBusy = $state(false);
-  let inferenceThreadsError = $state<string | null>(null);
+  /* (General-tab state — autostart, HUD, sound cues, inference
+     threads, first-run reset — moved to GeneralTab.svelte in
+     #332 phase 1.) */
 
   // Diarization (#111). Default off — opt-in. When the toggle is
   // on AND the wespeaker .onnx model is present in the models
@@ -500,14 +450,9 @@
   // ---- Lifecycle ---------------------------------------------------------
 
   onMount(async () => {
-    // Platform glyph (#272). Resolves via `plugin-os`; failure
-    // leaves the default `false` (Right Ctrl glyph in the PTT
-    // hint), same fallback `navigator.platform` would have given.
-    try {
-      isMacOS = (await platform()) === "macos";
-    } catch (e) {
-      console.warn("[hush] platform() probe failed; defaulting to non-macOS glyph", e);
-    }
+    /* (Platform-glyph probe moved to GeneralTab.svelte in #332
+       phase 1; the PTT-hotkey display is the only consumer of
+       `isMacOS` and it now lives inside the tab.) */
 
     type DownloadProgressEvent = { id: string; bytesReceived: number; bytesTotal: number | null };
     type DownloadStatusEvent = { id: string; message: string | null };
@@ -576,11 +521,6 @@
 
     await Promise.all([
       loadModels(),
-      loadAutostartState(),
-      loadAutostartPathStatus(),
-      loadHudEnabled(),
-      loadSoundCuesEnabled(),
-      loadInferenceThreads(),
       loadAppMetadata(),
       loadAppOverrides(),
       loadAppDefaults(),
@@ -673,165 +613,6 @@
   }
 
   // ---- General-tab handlers --------------------------------------------
-
-  async function loadAutostartState(): Promise<void> {
-    try {
-      autostartEnabled = await isAutostartEnabled();
-      autostartError = null;
-    } catch (e) {
-      // Plugin missing on this build / platform. Treat as disabled
-      // and surface a single-line note rather than the raw error.
-      autostartEnabled = false;
-      autostartError = "Couldn't read autostart state on this platform.";
-      console.warn("[hush] isAutostartEnabled failed", e);
-    }
-  }
-
-  async function loadAutostartPathStatus(): Promise<void> {
-    try {
-      const status = await invoke<{ stale: boolean }>(
-        "get_autostart_path_status",
-      );
-      autostartPathStale = status.stale;
-    } catch (e) {
-      // Failure is non-fatal — the warning just doesn't render.
-      console.warn("[hush] get_autostart_path_status failed", e);
-      autostartPathStale = false;
-    }
-  }
-
-  async function onRetryAutostartRegistration() {
-    if (autostartRetryBusy) return;
-    autostartRetryBusy = true;
-    autostartRetryFailed = false;
-    try {
-      const ok = await invoke<boolean>("retry_autostart_registration");
-      if (ok) {
-        autostartPathStale = false;
-      } else {
-        autostartRetryFailed = true;
-      }
-    } catch (e) {
-      autostartRetryFailed = true;
-      console.warn("[hush] retry_autostart_registration failed", e);
-    } finally {
-      autostartRetryBusy = false;
-    }
-  }
-
-  async function onAutostartToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    autostartBusy = true;
-    autostartError = null;
-    try {
-      if (checked) await enableAutostart();
-      else await disableAutostart();
-      autostartEnabled = checked;
-    } catch (err) {
-      autostartError = formatErrorMessage(err);
-      // Re-read so the checkbox reverts to truth rather than the
-      // optimistic state that didn't persist.
-      await loadAutostartState();
-    } finally {
-      autostartBusy = false;
-    }
-  }
-
-  async function loadHudEnabled(): Promise<void> {
-    try {
-      hudEnabled = await invoke<boolean>("get_hud_enabled");
-      hudError = null;
-    } catch (e) {
-      hudError = "Couldn't read HUD setting.";
-      console.warn("[hush] get_hud_enabled failed", e);
-    }
-  }
-
-  async function onHudToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    hudBusy = true;
-    hudError = null;
-    try {
-      await invoke("set_hud_enabled", { enabled: checked });
-      hudEnabled = checked;
-    } catch (err) {
-      hudError = formatErrorMessage(err);
-      // Re-read on failure so the checkbox reflects the persisted
-      // value rather than the optimistic state.
-      await loadHudEnabled();
-    } finally {
-      hudBusy = false;
-    }
-  }
-
-  async function loadSoundCuesEnabled(): Promise<void> {
-    try {
-      soundCuesEnabled = await invoke<boolean>("get_sound_cues_enabled");
-      soundCuesError = null;
-    } catch (e) {
-      soundCuesError = "Couldn't read audio-cues setting.";
-      console.warn("[hush] get_sound_cues_enabled failed", e);
-    }
-  }
-
-  async function onSoundCuesToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    soundCuesBusy = true;
-    soundCuesError = null;
-    try {
-      await invoke("set_sound_cues_enabled", { enabled: checked });
-      soundCuesEnabled = checked;
-    } catch (err) {
-      soundCuesError = formatErrorMessage(err);
-      await loadSoundCuesEnabled();
-    } finally {
-      soundCuesBusy = false;
-    }
-  }
-
-  async function loadInferenceThreads(): Promise<void> {
-    try {
-      inferenceThreads = await invoke<number>("get_inference_threads");
-      inferenceThreadsDisplay = inferenceThreads;
-      inferenceThreadsError = null;
-    } catch (e) {
-      inferenceThreadsError = "Couldn't read inference-threads setting.";
-      console.warn("[hush] get_inference_threads failed", e);
-    }
-  }
-
-  /// Live drag handler. Only updates the visible label so the user
-  /// sees the slider thumb's position in real time without firing
-  /// one IPC per pixel of movement. The `change` event below fires
-  /// on release and is what actually persists. (#348 follow-up)
-  function onInferenceThreadsInput(e: Event) {
-    const next = Number((e.target as HTMLInputElement).value);
-    if (Number.isFinite(next)) {
-      inferenceThreadsDisplay = next;
-    }
-  }
-
-  async function onInferenceThreadsChange(e: Event) {
-    const next = Number((e.target as HTMLInputElement).value);
-    if (!Number.isFinite(next)) {
-      return;
-    }
-    inferenceThreadsBusy = true;
-    inferenceThreadsError = null;
-    try {
-      await invoke("set_inference_threads", { threads: next });
-      inferenceThreads = next;
-      inferenceThreadsDisplay = next;
-    } catch (err) {
-      inferenceThreadsError = formatErrorMessage(err);
-      // Snap the display back to the persisted value so the user
-      // can see their drag didn't take. `loadInferenceThreads`
-      // syncs both `inferenceThreads` and the display.
-      await loadInferenceThreads();
-    } finally {
-      inferenceThreadsBusy = false;
-    }
-  }
 
   async function loadDiarizationEnabled(): Promise<void> {
     // Refresh-only path: re-read the persisted value, but don't
@@ -929,24 +710,6 @@
     }
   }
 
-  async function onResetFirstRun() {
-    firstRunResetBusy = true;
-    try {
-      await invoke("reset_first_run");
-      firstRunResetMessage = "Welcome will show on next launch.";
-      // Clear the confirmation after a moment so the button label
-      // returns to its actionable state (in case the user changes
-      // their mind in this same session).
-      setTimeout(() => {
-        firstRunResetMessage = null;
-      }, 3000);
-    } catch (e) {
-      firstRunResetMessage = formatErrorMessage(e);
-    } finally {
-      firstRunResetBusy = false;
-    }
-  }
-
   onDestroy(() => {
     unlistenDownloadProgress?.();
     unlistenDownloadDone?.();
@@ -987,201 +750,7 @@
 
   <section class="tab-body" aria-live="polite">
     {#if active === "general"}
-      <h2 class="tab-title">General</h2>
-
-      <section class="settings-group" aria-labelledby="settings-startup-heading">
-        <h2 id="settings-startup-heading" class="group-heading">Startup</h2>
-        <label class="toggle-row">
-          <input
-            type="checkbox"
-            data-testid="settings-autostart-toggle"
-            disabled={autostartBusy}
-            checked={autostartEnabled}
-            onchange={onAutostartToggle}
-          />
-          <span class="toggle-label">
-            <span class="toggle-name">Launch Hush at login</span>
-            <span class="toggle-desc">
-              Hush opens automatically when you sign in. The window
-              stays in the background — your hotkey still works.
-            </span>
-          </span>
-        </label>
-        {#if autostartError}
-          <p class="settings-error">{autostartError}</p>
-        {/if}
-
-        {#if autostartPathStale}
-          <!--
-            Stale-LaunchAgent warning (#317). The setup hook re-
-            registers the plist on every launch; if that re-register
-            failed (read-only home, fs permission), the LaunchAgent
-            still points at whatever path it had before. Surface the
-            failure with a retry button so the user isn't left with
-            a silent broken autostart.
-          -->
-          <div
-            class="settings-warning-row"
-            data-testid="autostart-path-stale-warning"
-            role="alert"
-          >
-            <p class="settings-row-name">⚠ Autostart path is out of date</p>
-            <p class="settings-row-desc">
-              Hush couldn't refresh the LaunchAgent at startup, so
-              "Launch at Login" may not work after the next restart.
-              Click below to retry — usually a one-click fix.
-            </p>
-            <button
-              type="button"
-              class="ghost"
-              data-testid="autostart-retry-button"
-              disabled={autostartRetryBusy}
-              onclick={onRetryAutostartRegistration}
-            >
-              {autostartRetryBusy ? "Retrying…" : "Click to update"}
-            </button>
-            {#if autostartRetryFailed}
-              <p
-                class="settings-error"
-                data-testid="autostart-retry-error"
-              >
-                Retry failed too. Check that <code
-                  >~/Library/LaunchAgents/</code
-                > is writable, then try again.
-              </p>
-            {/if}
-          </div>
-        {/if}
-      </section>
-
-      <section class="settings-group" aria-labelledby="settings-interface-heading">
-        <h2 id="settings-interface-heading" class="group-heading">Interface</h2>
-        <label class="toggle-row">
-          <input
-            type="checkbox"
-            data-testid="settings-hud-toggle"
-            disabled={hudBusy}
-            checked={hudEnabled}
-            onchange={onHudToggle}
-          />
-          <span class="toggle-label">
-            <span class="toggle-name">Show recording HUD</span>
-            <span class="toggle-desc">
-              The floating pill that appears in the top-right corner
-              while Hush is capturing audio. Off hides it for both
-              dictation and meeting mode; recording itself is
-              unaffected.
-            </span>
-          </span>
-        </label>
-        {#if hudError}
-          <p class="settings-error">{hudError}</p>
-        {/if}
-
-        <!--
-          Audio cues toggle (#292). Sits in the Interface group
-          alongside the HUD toggle since both are sensory-feedback
-          settings the user calibrates to their environment. Off by
-          default — opt-in deliberately because cues are intrusive
-          in shared spaces / meeting rooms / focus modes.
-        -->
-        <label class="toggle-row">
-          <input
-            type="checkbox"
-            data-testid="settings-sound-cues-toggle"
-            disabled={soundCuesBusy}
-            checked={soundCuesEnabled}
-            onchange={onSoundCuesToggle}
-          />
-          <span class="toggle-label">
-            <span class="toggle-name">Audio cues</span>
-            <span class="toggle-desc">
-              Plays a short macOS system sound when recording
-              starts (Tink) and when transcription completes
-              (Glass — "safe to paste"). Honours your system
-              volume and Do Not Disturb. Off keeps Hush silent.
-            </span>
-          </span>
-        </label>
-        {#if soundCuesError}
-          <p class="settings-error">{soundCuesError}</p>
-        {/if}
-      </section>
-
-      <section class="settings-group" aria-labelledby="settings-hotkeys-heading">
-        <h2 id="settings-hotkeys-heading" class="group-heading">Hotkeys</h2>
-        <p class="settings-row">
-          <span class="row-label">Toggle recording</span>
-          <span class="row-value">
-            <span class="chord"><kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd></span>
-            <span class="row-note">Not currently editable — the push-to-talk combo below is.</span>
-          </span>
-        </p>
-        <h3 class="subgroup-heading">Push-to-talk</h3>
-        <PttHotkeyEditor {isMacOS} />
-      </section>
-
-      <section class="settings-group" aria-labelledby="settings-performance-heading">
-        <h2 id="settings-performance-heading" class="group-heading">Performance</h2>
-        <label class="slider-row">
-          <span class="toggle-label">
-            <span class="toggle-name">
-              Transcription threads:
-              <span
-                data-testid="settings-inference-threads-value"
-                aria-live="polite"
-              >{inferenceThreadsDisplay}</span>
-              {#if inferenceThreadsBusy}
-                <span class="row-note" aria-live="polite">Saving…</span>
-              {/if}
-            </span>
-            <span id="settings-inference-threads-desc" class="toggle-desc">
-              How many CPU threads whisper.cpp uses per chunk. More
-              threads finish each chunk faster on a multi-core CPU but
-              compete with other apps for cores. The default (4) suits
-              most laptops; bump it up if transcription lags on a
-              larger model, drop it if you want Hush to run quietly
-              alongside heavy workloads.
-            </span>
-          </span>
-          <input
-            type="range"
-            min="1"
-            max="16"
-            step="1"
-            data-testid="settings-inference-threads-slider"
-            aria-label="Transcription threads"
-            aria-describedby="settings-inference-threads-desc"
-            aria-valuetext={`${inferenceThreadsDisplay} threads`}
-            disabled={inferenceThreadsBusy}
-            value={inferenceThreadsDisplay}
-            oninput={onInferenceThreadsInput}
-            onchange={onInferenceThreadsChange}
-          />
-        </label>
-        {#if inferenceThreadsError}
-          <p class="settings-error">{inferenceThreadsError}</p>
-        {/if}
-      </section>
-
-      <section class="settings-group" aria-labelledby="settings-firstrun-heading">
-        <h2 id="settings-firstrun-heading" class="group-heading">First-run welcome</h2>
-        <p class="settings-row settings-row-stack">
-          <button
-            type="button"
-            class="ghost"
-            data-testid="settings-reset-first-run"
-            disabled={firstRunResetBusy}
-            onclick={onResetFirstRun}
-          >
-            {firstRunResetMessage ?? "Show welcome on next launch"}
-          </button>
-          <span class="row-note">
-            Re-shows the permissions explainer the next time you open
-            Hush. Doesn't affect any other state.
-          </span>
-        </p>
-      </section>
+      <GeneralTab />
     {:else if active === "model"}
       <ModelPickerPanel
         models={modelFetch.models}
@@ -1823,16 +1392,6 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
-  .subgroup-heading {
-    margin: 1rem 0 0.5rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #444;
-  }
-  @media (prefers-color-scheme: dark) {
-    .subgroup-heading { color: #d0d0d0; }
-  }
-
   .toggle-row {
     display: flex;
     align-items: flex-start;
@@ -1860,33 +1419,6 @@
     font-size: 0.82rem;
     color: #666;
     line-height: 1.4;
-  }
-
-  /* Slider-shaped settings row — same bordered-card pattern as
-     `.toggle-row`. Label + description on the left, range input
-     stretches across the bottom for fine-grained adjustment. */
-  .slider-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.65rem 0.85rem;
-    background-color: white;
-    border: 1px solid #e1e1e6;
-    border-radius: 8px;
-    cursor: pointer;
-  }
-  .slider-row input[type="range"] {
-    width: 100%;
-    /* Defensive dark-mode contrast (#348). The settings-window root
-       sets `accent-color: auto` + `color-scheme: light dark`, so the
-       slider thumb already adapts to the system theme on most
-       backends. WebKit on macOS dark mode can render the native
-       thumb with low contrast against the dark card background;
-       pinning `color-scheme: light dark` *on the input itself*
-       lets WebKit pick the dark-mode form-control palette directly
-       rather than inheriting through the wrapper. No-op on
-       light-mode and on backends that already render correctly. */
-    color-scheme: light dark;
   }
 
   /* Select-shaped settings row — same bordered-card pattern as
@@ -1927,57 +1459,6 @@
     font-family: inherit;
   }
 
-  .settings-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 1rem;
-    margin: 0 0 0.5rem;
-    padding: 0.55rem 0.85rem;
-    background-color: white;
-    border: 1px solid #e1e1e6;
-    border-radius: 8px;
-  }
-  .settings-row-stack {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
-  }
-  .row-label {
-    font-weight: 500;
-    color: #333;
-  }
-  .row-value {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.2rem;
-    color: #555;
-  }
-  /* Inline-flex chord wrapper keeps `<kbd> + <kbd> + <kbd>` on one
-     line as a single flex item inside the column-flex `.row-value`,
-     so the chord doesn't stack vertically next to the `.row-note`
-     beneath it. Without this, each `<kbd>` and the `+` separators
-     were treated as siblings and stacked. */
-  .chord {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-  .row-note {
-    display: block;
-    font-size: 0.75rem;
-    color: #888;
-    text-align: right;
-  }
-  .settings-row-stack .row-note {
-    text-align: left;
-  }
-  .settings-row-stack .row-note {
-    text-align: left;
-  }
   .settings-error {
     margin: 0.4rem 0 0;
     color: #8a1f1f;
@@ -2064,16 +1545,6 @@
     cursor: not-allowed;
   }
 
-  kbd {
-    display: inline-block;
-    padding: 0.05em 0.35em;
-    border: 1px solid #d1d1d8;
-    border-radius: 4px;
-    background-color: #fafafa;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-    font-size: 0.85em;
-  }
-
   @media (prefers-color-scheme: dark) {
     :global(html), :global(body) {
       background-color: #1d1d1f;
@@ -2094,9 +1565,7 @@
       color: #b8c8ff;
     }
     .toggle-row,
-    .select-row,
-    .slider-row,
-    .settings-row {
+    .select-row {
       background-color: #2a2a2d;
       border-color: #38383b;
     }
@@ -2109,9 +1578,6 @@
       color: #e8e8e8;
       border-color: #38383b;
     }
-    .row-label { color: #d8d8d8; }
-    .row-value { color: #b0b0b0; }
-    .row-note { color: #888; }
     .group-heading { color: #888; }
     button.ghost {
       background-color: #2a2a2d;
@@ -2121,11 +1587,6 @@
     button.ghost:hover:not(:disabled) {
       background-color: #38383b;
       border-color: #4a4a4d;
-    }
-    kbd {
-      background-color: #2a2a2d;
-      border-color: #4a4a4d;
-      color: #d8d8d8;
     }
   }
 </style>
