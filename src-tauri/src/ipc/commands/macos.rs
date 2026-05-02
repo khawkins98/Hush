@@ -304,7 +304,15 @@ pub async fn get_permission_health(
     // than "never asked". Restricting the write to the
     // first-seen-Granted case keeps the row stable instead of
     // re-stamping on every read.
+    // `effective_screen_lc` is only mutated inside the macOS-gated
+    // SCK-validation block below; declaring it `mut` unconditionally
+    // trips clippy's `unused_mut` lint on Linux / Windows. Split the
+    // binding by cfg to match the cfg-gated re-export of
+    // `validate_screen_recording_capability` itself.
+    #[cfg(target_os = "macos")]
     let mut effective_screen_lc = screen_recording_last_confirmed.clone();
+    #[cfg(not(target_os = "macos"))]
+    let effective_screen_lc = screen_recording_last_confirmed.clone();
     let mut effective_mic_lc = microphone_last_confirmed.clone();
     // Strongest-signal validation (#378 follow-up review). The
     // `validate_screen_recording_capability` helper is a macOS-only
