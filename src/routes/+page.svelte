@@ -28,6 +28,8 @@
     MeetingSession,
     MeetingSessionDetail,
     PermissionStatuses,
+    PermissionsHealth,
+    PermissionHealthResponse,
   } from "$lib/types";
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
@@ -300,20 +302,17 @@
       void stop();
     });
 
-    // Startup permission probe (#378 follow-up). The IPC's auto-
-    // stamp-on-first-Granted only seeds `last_confirmed` when
-    // `get_permission_health` is called. Pre-fix this only ran
-    // from the Settings → Permissions tab — a user who never
-    // opened that tab never seeded the timestamp, and a later
-    // Stale verdict (the cert / bundle-id rotation case the
-    // feature exists to detect) read as NotGranted instead.
-    // Calling once on main-page mount means every launch where
-    // permissions are currently granted seeds the row, so future
-    // staleness is detectable from any flow. Fire-and-forget
-    // because nothing on this page renders the result.
-    void invoke("get_permission_health").catch((err) => {
-      console.warn("[hush] startup get_permission_health failed", err);
-    });
+    // Permission health probe (#378). Pre-#369 this was fire-and-
+    // forget — only seeded the `last_confirmed` row in settings so
+    // the Settings tab could later distinguish Stale from
+    // NotGranted. With the unified Record flow (#369), the result
+    // also drives the mode decision (mic-only dictation vs meeting-
+    // pump multi-source) AND the mic-only badge on the Record
+    // button, so we now hold it as reactive state. Refresh on focus
+    // so a user who flipped Screen Recording in System Settings
+    // sees the upgrade without restart.
+    void refreshPermissionHealth();
+    window.addEventListener("focus", refreshPermissionHealth);
   });
 
   onDestroy(() => {
@@ -323,8 +322,38 @@
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
     unlistenMeetingSourceFailed?.();
+    window.removeEventListener("focus", refreshPermissionHealth);
   });
 
+  async function refreshPermissionHealth() {
+    try {
+      const res = await invoke<PermissionHealthResponse>("get_permission_health");
+      permissionHealth = res.health;
+    } catch (e) {
+      // Non-fatal: the badge falls back to the raw permStatuses
+      // and the Record button still works (will pick mode based
+      // on whatever permissionHealth was last set to, including
+      // null which evaluates to mic-only).
+      console.warn("[hush] get_permission_health failed", e);
+    }
+  }
+
+  // Active recording mode (#369). The Record button branches at
+  // click time — mic + Screen Recording confirmed → meeting-pump
+  // session (multi-speaker output, lands as a History meeting row);
+  // anything else → existing mic-only `start_dictation` (single-
+  // utterance, lands as a History dictation row + auto-copies the
+  // transcript to clipboard). PTT (hotkey-driven) always uses the
+  // dictation path so the instant-clipboard semantic that
+  // power-users rely on is preserved. `stop()` reads this state to
+  // call the matching stop IPC.
+  let recordMode = $state<"dictation" | "meeting" | null>(null);
+
+  // PTT path: hotkey-driven recording. Always dictation — instant
+  // clipboard write on stop is the load-bearing UX for hold-to-
+  // talk users. Click-driven recording goes through `startRecord`
+  // (below) which may upgrade to meeting mode based on Screen
+  // Recording health.
   async function start() {
     error = null;
     result = null;
@@ -332,8 +361,78 @@
     try {
       await invoke("start_dictation", { source: selectedAsAudioSource() });
       recording = true;
+      recordMode = "dictation";
     } catch (e) {
       error = formatErrorDisplay(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Click-driven Record (#369). The Start button on ControlsSection
+  // calls this; PTT keeps using `start()` so the hotkey path stays
+  // pure dictation.
+  //
+  // Mode decision: mic source + Screen Recording confirmed →
+  // meeting-pump (mic + system-audio); otherwise → dictation
+  // (single source). Capability is checked at click time rather
+  // than cached because TCC state can flip between launches (a
+  // notarisation rebuild rotates the bundle id and silently
+  // invalidates the entry — see #378's staleness model).
+  async function startRecord() {
+    error = null;
+    result = null;
+    busy = true;
+    const sourceShape = selectedAsAudioSource();
+    // Upgrade to meeting mode only when:
+    //   - the user picked a microphone (system-audio sole-source
+    //     stays single-source — picking it explicitly is a
+    //     deliberate "just record system audio" intent),
+    //   - SCK currently reads as confirmed (not Stale, not
+    //     NotGranted — Stale is honest about a rotated TCC
+    //     entry, the badge nudges the user to re-grant).
+    const upgradeToMeeting =
+      sourceShape !== null
+      && sourceShape.kind === "microphone"
+      && screenRecordingLive;
+    try {
+      if (upgradeToMeeting) {
+        // Build the meeting-pump source list: the user's selected
+        // mic + the system-audio entry. The pump handles diarisation
+        // across both buckets; with only a single bucket per
+        // direction the source-count guard in the diarizer
+        // (#369) skips the ONNX pass for mic-only fallbacks but
+        // still runs it here.
+        const sources: AudioSource[] = [
+          { kind: "microphone", deviceId: sourceShape.deviceId },
+          { kind: "system-audio" },
+        ];
+        await invoke("meeting_start_manual", { sources, appName: null });
+        recording = true;
+        recordMode = "meeting";
+        // Same strongest-signal SCK confirmation as the existing
+        // meeting flow (#382): a clean start with system-audio in
+        // the source list means SCK actually opened.
+        void invoke("confirm_permission", {
+          permission: "screen-recording",
+        }).catch((err) => {
+          console.warn("[hush] confirm_permission(screen-recording) failed", err);
+        });
+      } else {
+        await invoke("start_dictation", { source: sourceShape });
+        recording = true;
+        recordMode = "dictation";
+      }
+    } catch (e) {
+      error = formatErrorDisplay(e);
+      // Permission-shaped meeting failures pop the reusable
+      // dialog (#232) so the next click opens System Settings.
+      if (upgradeToMeeting && isPermissionShapedError(e)) {
+        permissionsDialogIntro =
+          (error.headline ?? "Screen Recording permission needed")
+          + " — open System Settings below to grant access, then try Record again.";
+        showPermissionsDialog = true;
+      }
     } finally {
       busy = false;
     }
@@ -352,29 +451,61 @@
 
   async function stop() {
     busy = true;
+    // Snapshot the active mode before we clear it; stop_dictation
+    // and meeting_stop_manual have different return shapes and
+    // post-stop refresh paths, so the branch reads from the
+    // captured value rather than racing with an interleaved
+    // start.
+    const mode = recordMode;
     try {
-      result = await invoke<DictationResult>("stop_dictation");
-      recording = false;
-      // Backend persists the row on a fire-and-forget task; refresh
-      // shortly after so the new entry shows up. Small delay so the
-      // INSERT has a chance to commit; on a slow disk this could miss
-      // the new row, but the next interaction will catch it.
-      setTimeout(() => void refreshHistory(), 150);
-      // If a meeting session is active, the backend just appended
-      // this transcript as an utterance under it (fire-and-forget
-      // path in stop_dictation). Refresh the panel after a similar
-      // delay so the new utterance appears in the list.
-      if (meetingActiveId !== null) {
-        setTimeout(() => void refreshMeetingSessions(), 200);
+      if (mode === "meeting") {
+        // Meeting-pump stop (#369). The pump finalises any in-
+        // flight chunks and writes the session + utterances rows;
+        // refresh the meeting feed so the new card appears in
+        // History. No `result` block on the Dictation panel — the
+        // multi-speaker output lives in the History meeting row,
+        // which renders the joined transcript with speaker labels.
+        //
+        // TODO(#385): meeting-mode stop should also auto-copy the
+        // joined transcript to clipboard for parity with the
+        // dictation path's instant-paste UX. Deferred from #384
+        // because the implementation needs a polling/retry shape
+        // to handle the case where the pump's final whisper batch
+        // hasn't flushed by the time `refreshMeetingSessions`
+        // settles.
+        await invoke("meeting_stop_manual");
+        recording = false;
+        recordMode = null;
+        // Slightly longer delay than the dictation path: the
+        // pump's final transcription pass can lag the stop_manual
+        // return by a few hundred ms while the last whisper batch
+        // drains.
+        setTimeout(() => void refreshMeetingSessions(), 300);
+        setTimeout(() => void refreshHistory(), 300);
+      } else {
+        result = await invoke<DictationResult>("stop_dictation");
+        recording = false;
+        recordMode = null;
+        // Backend persists the row on a fire-and-forget task; refresh
+        // shortly after so the new entry shows up. Small delay so the
+        // INSERT has a chance to commit; on a slow disk this could miss
+        // the new row, but the next interaction will catch it.
+        setTimeout(() => void refreshHistory(), 150);
+        // If a meeting session is active (e.g. PTT dictation
+        // landed inside an in-flight meeting), the backend
+        // appended this transcript as an utterance under it.
+        if (meetingActiveId !== null) {
+          setTimeout(() => void refreshMeetingSessions(), 200);
+        }
       }
-      // Strongest-signal mic confirmation (#378). A clean
-      // stop_dictation means we just opened the mic, captured
+      // Strongest-signal mic confirmation (#378). A clean stop
+      // (either mode) means we just opened the mic, captured
       // audio, and read it back — the underlying capability is
       // alive. Stamp `last_confirmed` so the Permissions tab can
-      // distinguish a future Stale (was-granted-now-revoked)
-      // verdict from a fresh-install NotGranted. Fire-and-forget
-      // — the user's transcript is the load-bearing thing here;
-      // a settings-write hiccup shouldn't surface.
+      // distinguish a future Stale verdict from a fresh-install
+      // NotGranted. Fire-and-forget — the user's transcript is
+      // the load-bearing thing here; a settings-write hiccup
+      // shouldn't surface.
       void invoke("confirm_permission", { permission: "microphone" }).catch(
         (err) => {
           console.warn("[hush] confirm_permission(mic) failed", err);
@@ -385,6 +516,7 @@
       // Even if transcription failed, the recording itself stopped on the
       // Rust side — surface that so the UI is never stuck in "recording".
       recording = false;
+      recordMode = null;
     } finally {
       busy = false;
     }
@@ -696,6 +828,22 @@
   //    hint vs missing-list when something is denied.
   let macosCapable = $state(false);
   let permStatuses = $state<PermissionStatuses | null>(null);
+  // Three-state permission health (#378), fetched on mount + every
+  // window-focus. Drives the unified Record flow's mode decision
+  // (#369) — when `screenRecording === "confirmed"`, a click-driven
+  // Record on a mic source upgrades to a meeting-pump session
+  // (mic + system-audio); anything else falls back to the existing
+  // mic-only `start_dictation` path. Also feeds the mic-only badge
+  // on the Record button so users see why they're not getting
+  // speaker separation, with a distinct hint copy for the stale
+  // case (TCC entry was once granted but the cert/bundle-id
+  // rotated — Re-enable in System Settings) vs never-granted.
+  let permissionHealth = $state<PermissionsHealth | null>(null);
+  // Convenience: SCK is "live" right now per the most recent
+  // probe. Used by both the Record-mode branch and the badge.
+  let screenRecordingLive = $derived(
+    permissionHealth?.screenRecording === "confirmed",
+  );
   // True iff all three perms (mic, screen recording, input
   // monitoring) report `granted`. When true, the hint becomes a
   // small green "Permissions OK" pill instead of the yellow
@@ -1063,10 +1211,12 @@
       {transcribing}
       {noModelInstalled}
       {error}
-      onStart={start}
+      onStart={startRecord}
       onStop={stop}
       onScrollToModelPicker={openModelSettings}
       activeModelName={activeModel?.displayName ?? null}
+      screenRecordingHealth={permissionHealth?.screenRecording ?? null}
+      onOpenPermissions={() => openSettingsTab("permissions")}
     />
 
     {#if result}
