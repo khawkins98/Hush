@@ -29,6 +29,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { onDestroy, onMount, tick } from "svelte";
 
+  import AdvancedSection from "./AdvancedSection.svelte";
   import MeetingAppOverridesPanel from "./MeetingAppOverridesPanel.svelte";
   import { openExternal } from "./openExternal";
   import { Events } from "./events";
@@ -569,19 +570,34 @@
   {/if}
 </section>
 
-<MeetingAppOverridesPanel
-  overrides={appOverrides}
-  overridesLoaded={appOverridesLoaded}
-  overridesError={appOverridesError}
-  defaults={appDefaults}
-  bind:newAppName={newOverrideName}
-  bind:newKind={newOverrideKind}
-  bind:inputEl={overrideInputEl}
-  onSubmit={addAppOverride}
-  onSubmitVariants={addAppOverrideVariants}
-  onChangeKind={changeAppOverrideKind}
-  onDelete={deleteAppOverride}
-/>
+<!--
+  App-classifier overrides — power-user surface (#427 Item 2).
+  Most users never need to teach Hush "this app is a meeting app";
+  the static defaults catch Zoom / Teams / Meet / etc. The
+  override panel lets advanced users add custom mappings
+  (auto-start a meeting session when a specific in-house tool
+  focuses, or veto a default that misclassified a media app as a
+  meeting). Hidden behind a disclosure so a first-time MeetingTab
+  visit doesn't lead with a row of empty form fields.
+-->
+<AdvancedSection
+  label="Advanced — app overrides"
+  testId="settings-meeting-advanced-toggle"
+>
+  <MeetingAppOverridesPanel
+    overrides={appOverrides}
+    overridesLoaded={appOverridesLoaded}
+    overridesError={appOverridesError}
+    defaults={appDefaults}
+    bind:newAppName={newOverrideName}
+    bind:newKind={newOverrideKind}
+    bind:inputEl={overrideInputEl}
+    onSubmit={addAppOverride}
+    onSubmitVariants={addAppOverrideVariants}
+    onChangeKind={changeAppOverrideKind}
+    onDelete={deleteAppOverride}
+  />
+</AdvancedSection>
 
 <style>
   /* Card primitives (.tab-title, .settings-group, .toggle-row,

@@ -29,6 +29,7 @@
   } from "@tauri-apps/plugin-autostart";
   import { platform } from "@tauri-apps/plugin-os";
 
+  import AdvancedSection from "./AdvancedSection.svelte";
   import PttHotkeyEditor from "./PttHotkeyEditor.svelte";
   import { formatErrorMessage } from "./errors";
   import { readStoredTheme, setTheme, type ThemePref } from "./theme";
@@ -447,67 +448,80 @@
   <PttHotkeyEditor {isMacOS} />
 </section>
 
-<section class="settings-group" aria-labelledby="settings-performance-heading">
-  <h2 id="settings-performance-heading" class="group-heading">Performance</h2>
-  <label class="slider-row">
-    <span class="toggle-label">
-      <span class="toggle-name">
-        Transcription threads:
-        <span
-          data-testid="settings-inference-threads-value"
-          aria-live="polite"
-        >{inferenceThreadsDisplay}</span>
-        {#if inferenceThreadsBusy}
-          <span class="row-note" aria-live="polite">Saving…</span>
-        {/if}
+<!--
+  Performance + First-run-welcome live inside an Advanced
+  disclosure (#427 Item 2) — neither is something a first-time
+  user needs to think about. The slider's default (4 threads)
+  works for most laptops; the welcome-reset is a diagnostic
+  affordance for re-showing the permissions explainer. Power
+  users click the toggle and see both.
+-->
+<AdvancedSection
+  label="Advanced"
+  testId="settings-general-advanced-toggle"
+>
+  <section class="settings-group" aria-labelledby="settings-performance-heading">
+    <h2 id="settings-performance-heading" class="group-heading">Performance</h2>
+    <label class="slider-row">
+      <span class="toggle-label">
+        <span class="toggle-name">
+          Transcription threads:
+          <span
+            data-testid="settings-inference-threads-value"
+            aria-live="polite"
+          >{inferenceThreadsDisplay}</span>
+          {#if inferenceThreadsBusy}
+            <span class="row-note" aria-live="polite">Saving…</span>
+          {/if}
+        </span>
+        <span id="settings-inference-threads-desc" class="toggle-desc">
+          How many CPU threads whisper.cpp uses per chunk. More
+          threads finish each chunk faster on a multi-core CPU but
+          compete with other apps for cores. The default (4) suits
+          most laptops; bump it up if transcription lags on a
+          larger model, drop it if you want Hush to run quietly
+          alongside heavy workloads.
+        </span>
       </span>
-      <span id="settings-inference-threads-desc" class="toggle-desc">
-        How many CPU threads whisper.cpp uses per chunk. More
-        threads finish each chunk faster on a multi-core CPU but
-        compete with other apps for cores. The default (4) suits
-        most laptops; bump it up if transcription lags on a
-        larger model, drop it if you want Hush to run quietly
-        alongside heavy workloads.
-      </span>
-    </span>
-    <input
-      type="range"
-      min="1"
-      max="16"
-      step="1"
-      data-testid="settings-inference-threads-slider"
-      aria-label="Transcription threads"
-      aria-describedby="settings-inference-threads-desc"
-      aria-valuetext={`${inferenceThreadsDisplay} threads`}
-      disabled={inferenceThreadsBusy}
-      value={inferenceThreadsDisplay}
-      oninput={onInferenceThreadsInput}
-      onchange={onInferenceThreadsChange}
-    />
-  </label>
-  {#if inferenceThreadsError}
-    <p class="settings-error">{inferenceThreadsError}</p>
-  {/if}
-</section>
+      <input
+        type="range"
+        min="1"
+        max="16"
+        step="1"
+        data-testid="settings-inference-threads-slider"
+        aria-label="Transcription threads"
+        aria-describedby="settings-inference-threads-desc"
+        aria-valuetext={`${inferenceThreadsDisplay} threads`}
+        disabled={inferenceThreadsBusy}
+        value={inferenceThreadsDisplay}
+        oninput={onInferenceThreadsInput}
+        onchange={onInferenceThreadsChange}
+      />
+    </label>
+    {#if inferenceThreadsError}
+      <p class="settings-error">{inferenceThreadsError}</p>
+    {/if}
+  </section>
 
-<section class="settings-group" aria-labelledby="settings-firstrun-heading">
-  <h2 id="settings-firstrun-heading" class="group-heading">First-run welcome</h2>
-  <p class="settings-row settings-row-stack">
-    <button
-      type="button"
-      class="ghost"
-      data-testid="settings-reset-first-run"
-      disabled={firstRunResetBusy}
-      onclick={onResetFirstRun}
-    >
-      {firstRunResetMessage ?? "Show welcome on next launch"}
-    </button>
-    <span class="row-note">
-      Re-shows the permissions explainer the next time you open
-      Hush. Doesn't affect any other state.
-    </span>
-  </p>
-</section>
+  <section class="settings-group" aria-labelledby="settings-firstrun-heading">
+    <h2 id="settings-firstrun-heading" class="group-heading">First-run welcome</h2>
+    <p class="settings-row settings-row-stack">
+      <button
+        type="button"
+        class="ghost"
+        data-testid="settings-reset-first-run"
+        disabled={firstRunResetBusy}
+        onclick={onResetFirstRun}
+      >
+        {firstRunResetMessage ?? "Show welcome on next launch"}
+      </button>
+      <span class="row-note">
+        Re-shows the permissions explainer the next time you open
+        Hush. Doesn't affect any other state.
+      </span>
+    </p>
+  </section>
+</AdvancedSection>
 
 <!--
   Card-primitive CSS imported from src/lib/settings-tab.css (#392).
