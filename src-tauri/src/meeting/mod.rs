@@ -39,6 +39,7 @@ pub mod audio_buffer;
 pub mod autostart;
 pub mod autostart_poller;
 pub mod manager;
+pub mod pump;
 pub mod sqlite;
 
 pub use app_overrides::{
