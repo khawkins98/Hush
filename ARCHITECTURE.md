@@ -128,7 +128,7 @@ System-audio capture uses **ScreenCaptureKit** on macOS (linked unconditionally 
 - **`OnnxDiarizer`** — wespeaker ResNet34-LM ONNX speaker-embedding (~26 MB) + online 1-NN-with-threshold clustering for session-stable IDs. Model auto-downloads from Hugging Face on first enable, SHA-256 verified.
 - **`NoopDiarizer`** — fallback. Source-derived `"mic"` / `"system"` tags pass through and the panel maps them to "You" / "Remote".
 
-The `OnnxDiarizer` is gated behind the `diarization-onnx` Cargo feature (default-on). `EnergyDiarizer` (D1, silence-gap heuristic) sits on disk for reference but isn't wired — D2 superseded it.
+The `OnnxDiarizer` is gated behind the `diarization-onnx` Cargo feature (default-on). The earlier D1 silence-gap heuristic (`EnergyDiarizer`) and the offline agglomerative `cluster_with_threshold` were both removed in #310 once the streaming D2 matcher proved stable; `cluster.rs` retains only `cosine_distance` + `DEFAULT_DISTANCE_THRESHOLD`.
 
 ---
 
