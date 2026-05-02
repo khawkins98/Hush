@@ -1127,7 +1127,7 @@ pub(crate) async fn set_hud_enabled_inner(state: &AppState, enabled: bool) -> Ip
         .settings
         .set(
             crate::settings::keys::HUD_ENABLED,
-            if enabled { "true" } else { "false" },
+            crate::settings::codec::encode_bool(enabled),
         )
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))
@@ -1158,7 +1158,7 @@ pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool
         .settings
         .set(
             crate::settings::keys::SOUND_CUES_ENABLED,
-            if enabled { "true" } else { "false" },
+            crate::settings::codec::encode_bool(enabled),
         )
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))
@@ -1195,7 +1195,7 @@ pub(crate) async fn set_diarization_enabled_inner(
         .settings
         .set(
             crate::settings::keys::DIARIZATION_ENABLED,
-            if enabled { "true" } else { "false" },
+            crate::settings::codec::encode_bool(enabled),
         )
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))
@@ -1865,7 +1865,7 @@ pub async fn ptt_set_config(
         .settings
         .set(
             crate::settings::keys::PTT_ENABLED,
-            if enabled { "true" } else { "false" },
+            crate::settings::codec::encode_bool(enabled),
         )
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))?;

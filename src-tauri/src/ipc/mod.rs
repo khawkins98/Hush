@@ -828,33 +828,31 @@ impl crate::meeting::MeetingEventEmitter for AppHandleMeetingEventEmitter {
 }
 
 /// Parse the persisted [`crate::settings::keys::HUD_ENABLED`] row
-/// into a bool. The on-disk encoding is the literal string
-/// `"true"` / `"false"`; absent rows and any other value fall back
-/// to `true` (the HUD is on by default — first-time users benefit
-/// from the visual cue that the mic is hot, and a corrupted row
-/// shouldn't silently turn it off).
+/// into a bool. Wire encoding lives in [`crate::settings::codec`];
+/// this helper layers on the per-key absent-row default of `true`
+/// (the HUD is on by default — first-time users benefit from the
+/// visual cue that the mic is hot, and a corrupted row shouldn't
+/// silently turn it off either).
 pub(crate) fn parse_hud_enabled_setting(raw: Option<String>) -> bool {
-    !matches!(raw.as_deref(), Some("false"))
+    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(true)
 }
 
 /// Parse the persisted [`crate::settings::keys::SOUND_CUES_ENABLED`]
-/// row (#292). Encoding is the literal string `"true"` / `"false"`;
-/// absent rows + any other value fall back to `false` (audio cues
-/// are off by default — they'd be intrusive in shared spaces /
-/// meeting rooms, opt-in is the right shape).
+/// row (#292). Wire encoding lives in [`crate::settings::codec`];
+/// per-key default is `false` (audio cues are off by default —
+/// they'd be intrusive in shared spaces / meeting rooms, opt-in is
+/// the right shape).
 pub(crate) fn parse_sound_cues_setting(raw: Option<String>) -> bool {
-    matches!(raw.as_deref(), Some("true"))
+    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(false)
 }
 
 /// Parse the persisted [`crate::settings::keys::DIARIZATION_ENABLED`]
-/// row (#111). Encoding is `"true"` / `"false"`; absent rows + any
-/// other value fall back to `false` — diarization is opt-in until the
-/// PR-B model-download flow lands. A corrupted row shouldn't silently
-/// turn it on either, since the production diarizer in this PR is
-/// `NoopDiarizer` and a `true` setting would be misleading until the
-/// real impl arrives.
+/// row (#111). Wire encoding lives in [`crate::settings::codec`];
+/// per-key default is `false` — diarization is opt-in, and a
+/// corrupted row shouldn't silently turn it on since that flips the
+/// pump into the wespeaker model-download path.
 pub(crate) fn parse_diarization_enabled_setting(raw: Option<String>) -> bool {
-    matches!(raw.as_deref(), Some("true"))
+    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(false)
 }
 
 /// Parse the persisted [`crate::settings::keys::INFERENCE_THREADS`]
