@@ -20,6 +20,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onDestroy, onMount } from "svelte";
   import type { PttConfig } from "./types";
+  import "./settings-tab.css";
 
   type Props = {
     isMacOS: boolean;
@@ -388,34 +389,9 @@
     max-width: 44rem;
   }
 
-  .toggle-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.65rem 0.85rem;
-    background-color: white;
-    border: 1px solid #e1e1e6;
-    border-radius: 8px;
-    cursor: pointer;
-  }
-  .toggle-row input[type="checkbox"] {
-    margin-top: 0.2rem;
-    flex-shrink: 0;
-  }
-  .toggle-label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .toggle-name {
-    font-weight: 600;
-    color: #222;
-  }
-  .toggle-desc {
-    font-size: 0.82rem;
-    color: #666;
-    line-height: 1.4;
-  }
+  /* `.toggle-row`, `.toggle-label`, `.toggle-name`, `.toggle-desc`,
+     `.row-label`, `button.ghost` (+ dark-mode variants), `kbd`,
+     `.settings-error` imported from `settings-tab.css` (#392). */
 
   .combo-row {
     display: flex;
@@ -426,9 +402,10 @@
     border: 1px solid #e1e1e6;
     border-radius: 8px;
   }
+  /* PttHotkeyEditor's `.row-label` adds a min-width to keep the
+     "Hotkey:" label aligned with adjacent rows; the base
+     properties come from settings-tab.css. */
   .row-label {
-    font-weight: 500;
-    color: #333;
     min-width: 4rem;
   }
   .combo-display {
@@ -441,24 +418,8 @@
     display: flex;
     gap: 0.5rem;
   }
-  button.ghost {
-    padding: 0.4em 0.85em;
-    font-size: 0.85rem;
-    font-weight: 500;
-    background-color: white;
-    border: 1px solid #d1d1d8;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #2c3e8f;
-  }
-  button.ghost:hover:not(:disabled) {
-    background-color: #f4f5fa;
-    border-color: #b8c1d8;
-  }
-  button.ghost:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
+  /* `.ghost-subtle` is a PttHotkeyEditor-only quieter variant of
+     `button.ghost` for the secondary "Reset" affordance. */
   button.ghost-subtle {
     color: #666;
   }
@@ -483,55 +444,22 @@
     color: #8a1f1f;
     transition: color 0.18s ease-out;
   }
-  .settings-error {
-    margin: 0.4rem 0 0;
-    color: #8a1f1f;
-    font-size: 0.85rem;
-  }
   .muted {
     color: #888;
     font-size: 0.85rem;
   }
 
-  kbd {
-    display: inline-block;
-    padding: 0.05em 0.45em;
-    border: 1px solid #d1d1d8;
-    border-radius: 4px;
-    background-color: #fafafa;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-    font-size: 0.85em;
-  }
-
   @media (prefers-color-scheme: dark) {
-    .toggle-row,
     .combo-row {
       background-color: #2a2a2d;
       border-color: #38383b;
     }
-    .toggle-name { color: #e8e8e8; }
-    .toggle-desc { color: #a8a8a8; }
-    .row-label { color: #d8d8d8; }
     .settings-hint { color: #a8a8a8; }
     .settings-hint.warn {
       color: #ffd591;
       background-color: #3a2c00;
       border-color: #6b5300;
     }
-    button.ghost {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-      color: #b8c8ff;
-    }
-    button.ghost:hover:not(:disabled) {
-      background-color: #38383b;
-      border-color: #4a4a4d;
-    }
     button.ghost-subtle { color: #888; }
-    kbd {
-      background-color: #2a2a2d;
-      border-color: #4a4a4d;
-      color: #d8d8d8;
-    }
   }
 </style>
