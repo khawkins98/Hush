@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Rich single-dictation export formats (#427 Item 4)
+
+- **Export-format picker** below the transcript in `ResultBlock.svelte`. The dictation transcript is still on the clipboard automatically as plain text; the picker re-writes the clipboard with the chosen format on click.
+- Four formats: **Plain text**, **Markdown** (heading + body), **SRT** (single cue covering the captured duration), **WebVTT** (single cue, `.` separator + `WEBVTT` header).
+- Last-used format is persisted in `localStorage["hush.export.format"]` and highlighted on next paint so a user who exports as the same shape repeatedly sees their preference surface.
+- Pure conversion logic lives in `src/lib/export-formats.ts` so the helpers are reusable if a future surface (meeting-session export, quick action) wants the same formats.
+
 #### Live waveform in main window's recording row (#411 phase B)
 
 - Extracted the HUD's inline waveform animation (attack/release smoothing + 14-bar ring buffer + `audio:level` subscription) into a reusable `src/lib/AudioWaveform.svelte` leaf component. Default palette matches the HUD's red gradient; consumers can override via `--audio-waveform-bar-color`.
