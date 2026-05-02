@@ -1375,7 +1375,19 @@ async fn diarize_and_dispatch_merged(
         chronological.push(u);
         chronological_audio.push(audio);
     }
-    diarize.label_utterances(&mut chronological, &chronological_audio, CANONICAL_FORMAT);
+    // Single-source guard (#369). When the user records with only
+    // one source bucket — the canonical case once the unified
+    // Record flow lands and Screen Recording isn't granted — the
+    // ONNX diarizer can produce spurious Speaker A / Speaker B
+    // alternation against a single talker (~50–200 ms of inference
+    // wasted per utterance). Skip the call; `dispatch_utterances`
+    // falls back to the source-derived `"mic"` / `"system"` label,
+    // which is what the user wants in the mic-only Record case
+    // anyway. Multi-source buckets still hit the diarizer
+    // unconditionally — that's where it earns its keep.
+    if source_labels.len() > 1 {
+        diarize.label_utterances(&mut chronological, &chronological_audio, CANONICAL_FORMAT);
+    }
 
     // Re-split the labelled vec back into per-source buckets,
     // preserving original source order so the dispatch order
@@ -2478,6 +2490,12 @@ mod tests {
         // to empty audio chunks rather than panicking. The diarizer
         // still runs (just without signal); source-only labels
         // stand. This is the "we'd rather degrade than crash" path.
+        //
+        // Uses two buckets (mic + system) so the single-source
+        // guard from #369 doesn't kick in — that guard
+        // intentionally skips the diarizer for single-source input,
+        // which would otherwise mask the length-mismatch behaviour
+        // this test pins.
         let mgr = fresh_manager().await;
         let session = mgr
             .start_manual(vec![AudioSource::default_microphone()], None, None)
@@ -2490,15 +2508,73 @@ mod tests {
         });
         let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
 
-        // Bucket has 2 utterances but only 1 audio chunk — the
-        // mismatch should trigger the fallback to empty chunks.
-        let bucket = TickBucket {
+        // Mic bucket has 2 utterances but only 1 audio chunk — the
+        // mismatch should trigger the fallback to empty chunks for
+        // those two utterances. System bucket is well-formed so the
+        // multi-source path runs the diarizer.
+        let mic_bucket = TickBucket {
             source_label: "mic".to_owned(),
             utterances: vec![
                 make_final("a", 100, 200, "mic"),
                 make_final("b", 300, 400, "mic"),
             ],
             audio: vec![vec![0.0; 50]],
+        };
+        let sys_bucket = TickBucket {
+            source_label: "system".to_owned(),
+            utterances: vec![make_final("s", 250, 350, "system")],
+            audio: vec![vec![0.0; 75]],
+        };
+
+        diarize_and_dispatch_merged(
+            session.id,
+            vec![mic_bucket, sys_bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+        )
+        .await;
+
+        // Chronological order: mic-100 (empty fallback), sys-250
+        // (75), mic-300 (empty fallback). Two zeros from the
+        // mismatched mic bucket, one 75 from the well-formed
+        // system bucket.
+        let lens = recorder.seen_audio_lens.lock().unwrap().clone();
+        assert_eq!(
+            lens,
+            vec![0, 75, 0],
+            "length-mismatch fallback should hand the diarizer empty audio chunks for the broken bucket only"
+        );
+    }
+
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_skips_diarizer_for_single_source() {
+        // #369: when only one source bucket arrives — the canonical
+        // case once the unified Record flow runs in mic-only mode —
+        // the ONNX diarizer call is skipped because its
+        // multi-speaker labelling is wasted (and noisy: spurious
+        // Speaker A / Speaker B alternation against a single
+        // talker). Utterances flow through with their source-
+        // derived labels intact via dispatch_utterances' fallback.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .await
+            .unwrap();
+
+        let recorder = Arc::new(RecordingDiarizer {
+            seen_starts: Mutex::new(Vec::new()),
+            seen_audio_lens: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+
+        let bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![
+                make_final("a", 100, 200, "mic"),
+                make_final("b", 300, 400, "mic"),
+            ],
+            audio: vec![vec![0.0; 200], vec![0.0; 400]],
         };
 
         diarize_and_dispatch_merged(
@@ -2510,12 +2586,24 @@ mod tests {
         )
         .await;
 
-        let lens = recorder.seen_audio_lens.lock().unwrap().clone();
-        assert_eq!(
-            lens,
-            vec![0, 0],
-            "length-mismatch fallback should hand the diarizer empty audio chunks"
+        let seen = recorder.seen_starts.lock().unwrap().clone();
+        assert!(
+            seen.is_empty(),
+            "diarizer should not be invoked on single-source input; saw {:?}",
+            seen
         );
+
+        // Utterances still landed in the DB with their source
+        // label — the dispatch fallback at dispatch_utterances
+        // ensures speaker_label is populated even without the
+        // diarizer's contribution.
+        let persisted = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert_eq!(persisted.len(), 2);
+        for u in &persisted {
+            assert_eq!(u.speaker_label.as_deref(), Some("mic"));
+        }
+
+        mgr.stop_manual().await.unwrap();
     }
 
     #[tokio::test]
