@@ -40,6 +40,7 @@
 // a hidden `__cmd__<name>` symbol as a sibling of each command, and
 // `pub use` re-exports do not carry that symbol with them. See the
 // 2026-04-25 entry in `learnings.md`.
+pub mod dictionary;
 pub mod export;
 pub mod macos;
 pub mod meeting;
@@ -53,10 +54,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::{AudioSource, AudioSourceListing};
-use crate::dictionary::{
-    apply_replacements, format_vocabulary_prompt, NewReplacementRule, NewVocabularyTerm,
-    ReplacementRule, VocabularyTerm,
-};
+use crate::dictionary::{apply_replacements, format_vocabulary_prompt, ReplacementRule};
 use crate::history::{HistoryEntry, NewHistoryEntry};
 
 use super::{AppState, ForegroundApp};
@@ -929,129 +927,12 @@ pub async fn get_dictation_stats(
         .map_err(|e| IpcError::History(e.to_string()))
 }
 
-// -- Replacement-rule CRUD -----------------------------------------------
+// Vocabulary + replacement-rule CRUD commands live in
+// `crate::ipc::commands::dictionary` — extracted under #431. The
+// pure-logic [`apply_replacements`] (used inside `stop_dictation`
+// above) stays in `crate::dictionary`; only the thin IPC handlers
+// moved.
 //
-// Settings-shaped commands the frontend's "Replacements" panel binds to.
-// All four are async because the underlying repository is async; the IPC
-// surface is intentionally thin — the pure-logic [`apply_replacements`]
-// is in `dictionary` and runs on the dictation hot-path inside
-// `stop_dictation` above.
-
-/// All replacement rules in `(sort_order, id)` order.
-#[tauri::command]
-pub async fn replacements_list(state: State<'_, AppState>) -> IpcResult<Vec<ReplacementRule>> {
-    state
-        .data
-        .replacements
-        .list()
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
-
-/// Insert a new replacement. Returns the persisted row (with the
-/// database-assigned id) so the frontend can append it to its local list
-/// without a follow-up `list` round-trip.
-#[tauri::command]
-pub async fn replacement_create(
-    state: State<'_, AppState>,
-    find_text: String,
-    replace_text: String,
-    sort_order: i64,
-) -> IpcResult<ReplacementRule> {
-    state
-        .data
-        .replacements
-        .create(NewReplacementRule {
-            find_text,
-            replace_text,
-            sort_order,
-        })
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
-
-/// Update an existing replacement's fields. The frontend passes the full
-/// rule (not a partial diff) so the backend never has to reason about
-/// "which fields changed". No-op if `id` does not exist.
-#[tauri::command]
-pub async fn replacement_update(
-    state: State<'_, AppState>,
-    rule: ReplacementRule,
-) -> IpcResult<()> {
-    state
-        .data
-        .replacements
-        .update(rule)
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
-
-/// Delete a single replacement. No-op if `id` does not exist.
-#[tauri::command]
-pub async fn replacement_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
-    state
-        .data
-        .replacements
-        .delete(id)
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
-
-// -- Vocabulary CRUD -----------------------------------------------------
-//
-// Errors here surface as `IpcError::Replacements` rather than a
-// dedicated `Vocabulary` variant because users see one combined
-// "Dictionary settings" surface in the UI for both subsystems —
-// keeping the error `kind` unified means the frontend's error switch
-// doesn't sprout two near-identical branches that drift over time.
-
-/// All vocabulary terms in insertion order.
-#[tauri::command]
-pub async fn vocabulary_list(state: State<'_, AppState>) -> IpcResult<Vec<VocabularyTerm>> {
-    state
-        .data
-        .vocabulary
-        .list()
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
-
-/// Insert a new vocabulary term. The schema enforces `UNIQUE` on `term`,
-/// so duplicates surface as an error here for the frontend to render.
-#[tauri::command]
-pub async fn vocabulary_create(
-    state: State<'_, AppState>,
-    term: String,
-) -> IpcResult<VocabularyTerm> {
-    state
-        .data
-        .vocabulary
-        .create(NewVocabularyTerm { term })
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
-
-/// Update an existing vocabulary term. No-op if `id` does not exist.
-#[tauri::command]
-pub async fn vocabulary_update(state: State<'_, AppState>, term: VocabularyTerm) -> IpcResult<()> {
-    state
-        .data
-        .vocabulary
-        .update(term)
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
-
-/// Delete a vocabulary term. No-op if `id` does not exist.
-#[tauri::command]
-pub async fn vocabulary_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
-    state
-        .data
-        .vocabulary
-        .delete(id)
-        .await
-        .map_err(|e| IpcError::Replacements(e.to_string()))
-}
 // Model-picker commands (catalog / select / download / cancel /
 // remove + types + download events) live in
 // `crate::ipc::commands::models` — extracted under #82.
