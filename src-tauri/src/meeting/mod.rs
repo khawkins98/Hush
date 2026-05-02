@@ -48,7 +48,7 @@ pub use app_overrides::{
 };
 pub use autostart::{AutostartDecision, MeetingAutostartMode};
 pub use autostart_poller::{evaluate_autostart_tick, ForegroundAppProbe, TickOutcome};
-pub use manager::{AppClassifier, MeetingEventEmitter, NoopMeetingEventEmitter, SessionManager};
+pub use manager::{AppClassifier, SessionManager};
 pub use sqlite::SqliteMeetingSessionRepository;
 
 use anyhow::Result;
