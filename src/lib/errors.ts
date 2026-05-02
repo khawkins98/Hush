@@ -32,6 +32,29 @@ export type ErrorDisplay = {
   details?: string;
 };
 
+/// Heuristic check for "this failure is a missing macOS TCC
+/// permission" (#232). The backend chains context strings rather
+/// than emitting a dedicated `IpcError` variant, so detection
+/// matches the same substring patterns `formatErrorDisplay` uses
+/// to pick its tailored headlines. Callers use this to decide
+/// whether to surface the reusable PermissionsDialog alongside
+/// the error chip — putting the next click in the right place
+/// instead of leaving the user to read the hint and navigate by
+/// hand. Returns false for non-IPC throwables.
+export function isPermissionShapedError(e: unknown): boolean {
+  if (typeof e !== "object" || e === null || !("kind" in e)) {
+    return false;
+  }
+  const ipc = e as IpcError;
+  const lower = (ipc.message ?? "").toLowerCase();
+  return (
+    lower.includes("screen recording") ||
+    lower.includes("declined tccs") ||
+    (lower.includes("microphone") && lower.includes("not authorized")) ||
+    lower.includes("input monitoring")
+  );
+}
+
 /// Map an unknown thrown value into the rich display shape. The
 /// frontend's catch blocks pass `unknown`; the function inspects
 /// the IpcError tag + message to pick the friendliest copy.
