@@ -473,6 +473,7 @@ pub fn run() {
             ipc::commands::set_inference_threads,
             ipc::commands::get_diarizer_model_status,
             ipc::commands::download_diarizer_model,
+            ipc::commands::remove_diarizer_model,
             ipc::commands::get_autostart_path_status,
             ipc::commands::retry_autostart_registration,
             ipc::commands::check_for_updates,
