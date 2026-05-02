@@ -148,6 +148,21 @@ pub enum IpcError {
     #[error("meeting-sessions: {0}")]
     MeetingSessions(String),
 
+    /// Permission-shaped failure surfaced from a deeper error chain
+    /// (typically SCK / TCC / AVFoundation rejections wrapped through
+    /// `meeting_start_manual` or the dictation start path). Payload
+    /// is the permission name in kebab-case: `"screen-recording"`,
+    /// `"microphone"`, or `"input-monitoring"`. Pre-#386 these were
+    /// emitted as `MeetingSessions(message)` and the frontend
+    /// substring-matched against the wrapped chain to detect them
+    /// — fragile, since any future error mentioning "screen
+    /// recording" in unrelated context would trigger the
+    /// permissions-dialog launch heuristic. Classifying once at the
+    /// IPC boundary lets the frontend match on `kind` instead of
+    /// scraping copy.
+    #[error("permission-denied: {0}")]
+    PermissionDenied(String),
+
     /// In-process state guard panicked while a lock was held. Should not
     /// happen in practice — only the IPC commands lock our internal
     /// mutexes and they don't panic — but a poisoned lock surfacing here
@@ -164,6 +179,39 @@ pub(crate) type IpcResult<T> = std::result::Result<T, IpcError>;
 /// message string is consistent across call sites.
 pub(super) fn poisoned<T>(_: PoisonError<T>) -> IpcError {
     IpcError::Internal("internal state lock poisoned".to_owned())
+}
+
+/// Inspect an error chain and, if it looks permission-shaped,
+/// return the permission name (`"screen-recording"`, `"microphone"`,
+/// or `"input-monitoring"`) so a caller can promote it to
+/// [`IpcError::PermissionDenied`] (#386). Uses the same substring
+/// patterns the frontend's pre-typed-variant heuristic used —
+/// just runs once at the IPC boundary instead of leaking the
+/// detection into UI code.
+///
+/// Patterns:
+/// - SCK / system-audio failures land with `"screen recording"` or
+///   `"declined tccs"` somewhere in the anyhow chain.
+/// - AVFoundation mic refusals land with `"microphone"` plus
+///   `"not authorized"`.
+/// - rdev / IOKit Input Monitoring rejections include
+///   `"input monitoring"` verbatim.
+///
+/// Returns `None` for any error chain that doesn't match,
+/// preserving the existing wrap-as-`MeetingSessions(...)` behaviour
+/// for the unrecognised case.
+pub(crate) fn classify_permission_error(err: &anyhow::Error) -> Option<&'static str> {
+    let chain = format!("{err:#}").to_lowercase();
+    if chain.contains("screen recording") || chain.contains("declined tccs") {
+        return Some("screen-recording");
+    }
+    if chain.contains("microphone") && chain.contains("not authorized") {
+        return Some("microphone");
+    }
+    if chain.contains("input monitoring") {
+        return Some("input-monitoring");
+    }
+    None
 }
 
 /// Enumerate every audio source the user can pick from in the source
@@ -1877,6 +1925,63 @@ mod tests {
         let json = serde_json::to_string(&IpcError::Internal("locked".into())).unwrap();
         assert!(json.contains("\"kind\":\"internal\""), "got: {json}");
         assert!(json.contains("\"message\":\"locked\""), "got: {json}");
+    }
+
+    // -- classify_permission_error (#386) --------------------------------
+
+    #[test]
+    fn classify_permission_screen_recording_chains() {
+        // SCK / system-audio failures wrap "screen recording" in
+        // their anyhow chain (the user-visible TCC string Apple
+        // surfaces on rejection).
+        let err = anyhow::anyhow!("ScreenCaptureKit: query shareable content")
+            .context("declined TCCs for application, window, display capture");
+        assert_eq!(classify_permission_error(&err), Some("screen-recording"));
+        let err2 = anyhow::anyhow!("Screen Recording permission required");
+        assert_eq!(classify_permission_error(&err2), Some("screen-recording"));
+    }
+
+    #[test]
+    fn classify_permission_microphone_requires_both_terms() {
+        // The mic classifier needs *both* "microphone" and
+        // "not authorized" so a generic "microphone level low"
+        // log message doesn't trigger the dialog.
+        let positive = anyhow::anyhow!("microphone access not authorized");
+        assert_eq!(classify_permission_error(&positive), Some("microphone"));
+        let negative = anyhow::anyhow!("microphone level too low");
+        assert_eq!(classify_permission_error(&negative), None);
+    }
+
+    #[test]
+    fn classify_permission_input_monitoring() {
+        let err = anyhow::anyhow!("Input Monitoring permission denied");
+        assert_eq!(classify_permission_error(&err), Some("input-monitoring"));
+    }
+
+    #[test]
+    fn classify_permission_returns_none_for_unrelated_chain() {
+        // The substring patterns are intentionally narrow: a
+        // generic "audio device gone" failure should fall through
+        // to the existing wrap path, not get re-classified as a
+        // permission issue.
+        let err = anyhow::anyhow!("audio device disconnected mid-stream");
+        assert_eq!(classify_permission_error(&err), None);
+    }
+
+    #[test]
+    fn ipc_error_permission_denied_serde_round_trip() {
+        // Wire shape pinned for the frontend's discriminant
+        // check: `kind: "permission-denied", message: "<perm>"`.
+        let json =
+            serde_json::to_string(&IpcError::PermissionDenied("screen-recording".into())).unwrap();
+        assert!(
+            json.contains("\"kind\":\"permission-denied\""),
+            "got: {json}"
+        );
+        assert!(
+            json.contains("\"message\":\"screen-recording\""),
+            "got: {json}"
+        );
     }
 
     // -- start_dictation_inner regression tests ---------------------------
