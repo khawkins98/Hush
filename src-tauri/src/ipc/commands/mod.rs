@@ -311,26 +311,47 @@ fn start_dictation_inner(state: &AppState, source: AudioSource) -> IpcResult<()>
 
     let foreground = capture_foreground();
 
+    // Upfront mic-permission probe (#417). cpal's actual macOS-
+    // mic-denial chain reads "Audio Unit: kAudioUnitErr_…" with
+    // no "microphone" substring, so the post-call classifier in
+    // the `.map_err` below rarely catches mic denials. Instead,
+    // ask AVAuthorizationStatus directly before touching cpal:
+    // if it's Denied (which `macos_perms` also normalises
+    // Restricted into for UX purposes), surface the typed
+    // variant upfront. NotDetermined falls through so the OS
+    // prompt fires on the actual cpal call (the user hasn't
+    // been asked yet). Same shape `meeting_start_manual` uses
+    // post-#416 for SCK; this is the analogue for the dictation
+    // mic path.
+    //
+    // Cfg-gated to macOS because the AVAuthorizationStatus
+    // surface only exists there; on Linux/Windows the cpal
+    // failure chain carries the platform-native diagnostic and
+    // the post-call classifier handles it.
+    #[cfg(target_os = "macos")]
+    if matches!(source, AudioSource::Microphone(_)) {
+        let mic_status = crate::macos_perms::read_all().microphone;
+        if matches!(mic_status, crate::macos_perms::PermissionStatus::Denied) {
+            return Err(IpcError::PermissionDenied("microphone".to_owned()));
+        }
+    }
+
     state.audio.start_with_source(source).map_err(|e| {
         // Promote permission-shaped chains to the typed
         // `PermissionDenied` variant (#386 / #416 close-out).
         // Mirrors the meeting_start_manual pattern so the
         // dictation start path goes through the same
-        // discriminant the frontend can switch on, retiring
-        // the substring fallback in `errors.ts` for this
-        // call site.
+        // discriminant the frontend can switch on.
         //
-        // Caveat (#417): cpal's actual macOS-mic-denial chain
-        // typically reads "Audio Unit: kAudioUnitErr_…" or
-        // similar — neither contains the substring
-        // "microphone", so this classification rarely fires
-        // in practice. The branch is defensive: if a future
-        // .context() somewhere in the audio stack adds the
-        // canonical "microphone … not authorized" wording
-        // (or if cpal upstream's text changes), the typed
-        // variant kicks in automatically. Until then the SCK
-        // arm still fires correctly for the system-audio
-        // dictation source.
+        // The mic arm of the classifier rarely fires from here
+        // (#417): cpal's actual mic-denial chain doesn't
+        // contain "microphone" or "not authorized", so this
+        // branch mostly catches the SCK case (system-audio
+        // source). Mic Denied is now caught upfront via the
+        // AVAuthorizationStatus probe above; this stays
+        // defensive for any future cpal text change AND for
+        // the SCK case when the dictation source is
+        // system-audio.
         if let Some(perm) = classify_permission_error(&e) {
             IpcError::PermissionDenied(perm.to_owned())
         } else {
