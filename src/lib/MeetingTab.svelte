@@ -32,6 +32,7 @@
   import MeetingAppOverridesPanel from "./MeetingAppOverridesPanel.svelte";
   import { openExternal } from "./openExternal";
   import { formatErrorDisplay, formatErrorMessage, type ErrorDisplay } from "./errors";
+  import "./settings-tab.css";
   import type {
     BuiltinAppEntry,
     DiarizerModelStatus,
@@ -582,102 +583,11 @@
 />
 
 <style>
-  /* Per-tab style block (#332 phase 1). Shared classes hoist
-     to a CSS module once all tabs are extracted — TODO(#392). */
-  .tab-title {
-    margin: 0 0 0.75rem;
-    font-size: 1.4rem;
-    letter-spacing: -0.01em;
-  }
-  .settings-group {
-    margin: 0 0 1.75rem;
-    max-width: 44rem;
-  }
-  .group-heading {
-    margin: 0 0 0.6rem;
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: #666;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .toggle-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.65rem 0.85rem;
-    background-color: white;
-    border: 1px solid #e1e1e6;
-    border-radius: 8px;
-    cursor: pointer;
-  }
-  .toggle-row input[type="checkbox"] {
-    margin-top: 0.2rem;
-    flex-shrink: 0;
-  }
-  .toggle-label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .toggle-name {
-    font-weight: 600;
-    color: #222;
-  }
-  .toggle-desc {
-    font-size: 0.82rem;
-    color: #666;
-    line-height: 1.4;
-  }
-  .select-row {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.65rem 0.85rem;
-    background-color: white;
-    border: 1px solid #e1e1e6;
-    border-radius: 8px;
-  }
-  .select-label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    flex: 1;
-    min-width: 0;
-  }
-  .select-name {
-    font-weight: 600;
-    color: #222;
-  }
-  .select-desc {
-    font-size: 0.82rem;
-    color: #666;
-    line-height: 1.4;
-  }
-  .select-row select {
-    flex-shrink: 0;
-    align-self: flex-start;
-    padding: 0.35rem 0.55rem;
-    font-size: 0.85rem;
-    font-family: inherit;
-  }
-  .settings-error {
-    margin: 0.4rem 0 0;
-    color: #8a1f1f;
-    font-size: 0.85rem;
-  }
-  .settings-row-name {
-    margin: 0;
-    font-weight: 600;
-    color: #222;
-  }
-  .settings-row-desc {
-    margin: 0.25rem 0 0.55rem;
-    font-size: 0.85rem;
-    color: #555;
-    line-height: 1.4;
-  }
+  /* Card primitives (.tab-title, .settings-group, .toggle-row,
+     .select-row, .settings-error, .settings-row-name/.desc,
+     button.ghost, dark-mode variants) imported from
+     `settings-tab.css` (#392). Only the diarizer-installed-
+     model details below are tab-specific. */
 
   /* Speakers panel — installed-model details (#351). */
   .diarizer-installed-details {
@@ -739,53 +649,5 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
-  }
-
-  button.ghost {
-    padding: 0.4em 0.85em;
-    font-size: 0.85rem;
-    font-weight: 500;
-    background-color: white;
-    border: 1px solid #d1d1d8;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #2c3e8f;
-  }
-  button.ghost:hover:not(:disabled) {
-    background-color: #f4f5fa;
-    border-color: #b8c1d8;
-  }
-  button.ghost:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .group-heading { color: #888; }
-    .toggle-row,
-    .select-row {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-    }
-    .toggle-name,
-    .select-name { color: #e8e8e8; }
-    .toggle-desc,
-    .select-desc { color: #a8a8a8; }
-    .select-row select {
-      background-color: #1f1f22;
-      color: #e8e8e8;
-      border-color: #38383b;
-    }
-    .settings-row-name { color: #e8e8e8; }
-    .settings-row-desc { color: #a8a8a8; }
-    button.ghost {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-      color: #b8c8ff;
-    }
-    button.ghost:hover:not(:disabled) {
-      background-color: #38383b;
-      border-color: #4a4a4d;
-    }
   }
 </style>

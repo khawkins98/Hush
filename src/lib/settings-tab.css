@@ -1,0 +1,294 @@
+/*
+ * Shared "settings tab" CSS primitives (#332 phase 1 close-out, #392).
+ *
+ * After Phase 1 split the Settings monolith into one component
+ * per tab (PermissionsTab, VocabularyTab, ReplacementsTab,
+ * GeneralTab, MeetingTab, AboutTab, plus the inline
+ * PttHotkeyEditor that several tabs render), each tab carried
+ * its own scoped copy of the same ~150 lines of card-primitive
+ * CSS — Svelte's scoped styles don't reach child-component
+ * markup, so duplication was the in-flight escape hatch.
+ *
+ * This module collapses the duplication. Imported once per tab
+ * via `import "./settings-tab.css"`, the rules become global
+ * for the bundle. That's deliberate: the class names
+ * (`.toggle-row`, `.settings-group`, `button.ghost`, `kbd`,
+ * etc.) are deliberately settings-shaped and were already
+ * coordinated across the tabs. A leak into unrelated UI is
+ * possible but unlikely — the Hush frontend doesn't reuse
+ * these names in non-Settings surfaces (verified at hoist
+ * time).
+ *
+ * Tab-specific selectors (`.about-meta`, `.diarizer-*`,
+ * `.perm-recovery-intro`, etc.) stay in the owning component's
+ * scoped `<style>` block — those are genuinely local.
+ */
+
+/* ── Headings ───────────────────────────────────────────── */
+.tab-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+}
+
+/* ── Group container + group heading ────────────────────── */
+.settings-group {
+  margin: 0 0 1.75rem;
+  max-width: 44rem;
+}
+.group-heading {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.subgroup-heading {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #444;
+}
+
+/* ── Toggle (checkbox) row ──────────────────────────────── */
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  background-color: white;
+  border: 1px solid #e1e1e6;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.toggle-row input[type="checkbox"] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+.toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.toggle-name {
+  font-weight: 600;
+  color: #222;
+}
+.toggle-desc {
+  font-size: 0.82rem;
+  color: #666;
+  line-height: 1.4;
+}
+
+/* ── Select (dropdown) row ──────────────────────────────── */
+.select-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  background-color: white;
+  border: 1px solid #e1e1e6;
+  border-radius: 8px;
+}
+.select-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-width: 0;
+}
+.select-name {
+  font-weight: 600;
+  color: #222;
+}
+.select-desc {
+  font-size: 0.82rem;
+  color: #666;
+  line-height: 1.4;
+}
+.select-row select {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+/* ── Slider row ─────────────────────────────────────────── */
+.slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  background-color: white;
+  border: 1px solid #e1e1e6;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.slider-row input[type="range"] {
+  width: 100%;
+  /* Defensive dark-mode contrast (#348) — pin color-scheme on
+     the input itself so WebKit picks the dark-mode form-control
+     palette directly. No-op on light mode. */
+  color-scheme: light dark;
+}
+
+/* ── Plain rows + label/value/chord/note ────────────────── */
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin: 0 0 0.5rem;
+  padding: 0.55rem 0.85rem;
+  background-color: white;
+  border: 1px solid #e1e1e6;
+  border-radius: 8px;
+}
+.settings-row-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.row-label {
+  font-weight: 500;
+  color: #333;
+}
+.row-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  color: #555;
+}
+.chord {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.row-note {
+  display: block;
+  font-size: 0.75rem;
+  color: #888;
+  text-align: right;
+}
+.settings-row-stack .row-note {
+  text-align: left;
+}
+
+/* ── Errors + warnings ──────────────────────────────────── */
+.settings-error {
+  margin: 0.4rem 0 0;
+  color: #8a1f1f;
+  font-size: 0.85rem;
+}
+.settings-warning-row {
+  margin-top: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  background-color: #fdf6e3;
+  border: 1px solid #e7c887;
+  border-radius: 8px;
+  color: #7a4e00;
+}
+.settings-row-name {
+  margin: 0;
+  font-weight: 600;
+  color: #222;
+}
+.settings-row-desc {
+  margin: 0.25rem 0 0.55rem;
+  font-size: 0.85rem;
+  color: #555;
+  line-height: 1.4;
+}
+/* Inside the warning row, the name + desc inherit the amber
+   palette so the whole card reads as one cohesive warning. */
+.settings-warning-row .settings-row-name {
+  color: #5a3700;
+}
+.settings-warning-row .settings-row-desc {
+  color: #6a4500;
+}
+
+/* ── Ghost button (consistent across every tab) ─────────── */
+button.ghost {
+  padding: 0.4em 0.85em;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background-color: white;
+  border: 1px solid #d1d1d8;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #2c3e8f;
+}
+button.ghost:hover:not(:disabled) {
+  background-color: #f4f5fa;
+  border-color: #b8c1d8;
+}
+button.ghost:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Inline keycap rendering for hotkey hints ───────────── */
+kbd {
+  display: inline-block;
+  padding: 0.05em 0.35em;
+  border: 1px solid #d1d1d8;
+  border-radius: 4px;
+  background-color: #fafafa;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.85em;
+}
+
+/* ── Dark mode ──────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  .group-heading { color: #888; }
+  .subgroup-heading { color: #d0d0d0; }
+  .toggle-row,
+  .select-row,
+  .slider-row,
+  .settings-row {
+    background-color: #2a2a2d;
+    border-color: #38383b;
+  }
+  .toggle-name,
+  .select-name { color: #e8e8e8; }
+  .toggle-desc,
+  .select-desc { color: #a8a8a8; }
+  .select-row select {
+    background-color: #1f1f22;
+    color: #e8e8e8;
+    border-color: #38383b;
+  }
+  .row-label { color: #d8d8d8; }
+  .row-value { color: #b0b0b0; }
+  .row-note { color: #888; }
+  .settings-warning-row {
+    background-color: #3d2f12;
+    border-color: #6c4e1a;
+    color: #f0c878;
+  }
+  .settings-row-name { color: #e8e8e8; }
+  .settings-row-desc { color: #a8a8a8; }
+  .settings-warning-row .settings-row-name { color: #ffd790; }
+  .settings-warning-row .settings-row-desc { color: #d8b46a; }
+  button.ghost {
+    background-color: #2a2a2d;
+    border-color: #38383b;
+    color: #b8c8ff;
+  }
+  button.ghost:hover:not(:disabled) {
+    background-color: #38383b;
+    border-color: #4a4a4d;
+  }
+  kbd {
+    background-color: #2a2a2d;
+    border-color: #4a4a4d;
+    color: #d8d8d8;
+  }
+}
