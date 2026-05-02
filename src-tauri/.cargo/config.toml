@@ -42,3 +42,36 @@ rustflags = [
     "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
     "-C", "link-arg=-Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx",
 ]
+
+# macOS deployment target (#393).
+#
+# `whisper-rs-sys`'s vendored `whisper.cpp` uses C++17
+# `std::filesystem` symbols (`exists`, `path`,
+# `directory_iterator`) that clang marks unavailable below macOS
+# 10.15. Without a deployment target set, clang falls back to a
+# pre-10.15 baseline and refuses to compile, producing a cascade
+# of "introduced in macOS 10.15" errors from `ggml-backend-reg.cpp`
+# during the cmake build.
+#
+# The release workflow + `scripts/tauri-bundle-macos.sh` already
+# set this from their own environments; placing it here makes
+# `npm run tauri dev`, `cargo tauri dev`, and bare `cargo build`
+# inherit the same baseline with zero shell-environment
+# dependency. Both vars are needed:
+#
+#   - `MACOSX_DEPLOYMENT_TARGET` — read by rustc / linker / clang
+#   - `CMAKE_OSX_DEPLOYMENT_TARGET` — read by cmake-rs (the
+#     wrapper whisper-rs-sys's build script uses)
+#
+# `14.0` matches the release workflow's value (the `macos-latest`
+# runner's Xcode 16.4 SDK ceiling). Production design target
+# stays macOS 26; this is a *minimum* deployment target, not a
+# feature gate. Cargo's `[env]` table merges with the inherited
+# environment, so a contributor who sets their own value
+# upstream (rare; only the release workflow does today) still
+# wins — `force = false` is the default.
+#
+# Linux/Windows builds ignore both vars; the gate is macOS-only.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
