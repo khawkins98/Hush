@@ -45,7 +45,7 @@
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
   import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
   import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
-  import VocabularyPanel from "$lib/VocabularyPanel.svelte";
+  import VocabularyTab from "$lib/VocabularyTab.svelte";
   import {
     formatErrorDisplay,
     formatErrorMessage,
@@ -63,7 +63,6 @@
     ModelCard,
     ModelSelectNotice,
     ReplacementRule,
-    VocabularyTerm,
   } from "$lib/types";
 
   type SettingsTab =
@@ -221,12 +220,8 @@
   let diarizerRemoveBusy = $state(false);
   let diarizerRemoveError = $state<string | null>(null);
 
-  // ---- Vocabulary state --------------------------------------------------
-  let vocabulary = $state<VocabularyTerm[]>([]);
-  let vocabularyLoaded = $state(false);
-  let vocabularyError = $state<ErrorDisplay | null>(null);
-  let newVocab = $state("");
-  let vocabInputEl = $state<HTMLInputElement | null>(null);
+  /* (Vocabulary state + handlers moved to VocabularyTab.svelte
+     in #332 phase 1.) */
 
   // ---- Replacements state -----------------------------------------------
   let replacements = $state<ReplacementRule[]>([]);
@@ -298,17 +293,6 @@
       modelFetch.error = formatErrorDisplay(e);
     } finally {
       modelFetch.loaded = true;
-    }
-  }
-
-  async function loadVocabulary(): Promise<void> {
-    try {
-      vocabulary = await invoke<VocabularyTerm[]>("vocabulary_list");
-      vocabularyError = null;
-    } catch (e) {
-      vocabularyError = formatErrorDisplay(e);
-    } finally {
-      vocabularyLoaded = true;
     }
   }
 
@@ -480,32 +464,6 @@
 
   // ---- Mutators ----------------------------------------------------------
 
-  async function addVocabulary(e: Event) {
-    e.preventDefault();
-    const term = newVocab.trim();
-    if (!term) return;
-    try {
-      const created = await invoke<VocabularyTerm>("vocabulary_create", { term });
-      vocabulary = [...vocabulary, created];
-      newVocab = "";
-      vocabularyError = null;
-      await tick();
-      vocabInputEl?.focus();
-    } catch (err) {
-      vocabularyError = formatErrorDisplay(err);
-    }
-  }
-
-  async function deleteVocabulary(term: VocabularyTerm) {
-    try {
-      await invoke("vocabulary_delete", { id: term.id });
-      vocabulary = vocabulary.filter((v) => v.id !== term.id);
-      vocabularyError = null;
-    } catch (e) {
-      vocabularyError = formatErrorDisplay(e);
-    }
-  }
-
   async function addReplacement(e: Event) {
     e.preventDefault();
     const find = newFind.trim();
@@ -666,7 +624,6 @@
 
     await Promise.all([
       loadModels(),
-      loadVocabulary(),
       loadReplacements(),
       loadAutostartState(),
       loadAutostartPathStatus(),
@@ -1289,15 +1246,7 @@
         onRemove={removeModel}
       />
     {:else if active === "vocabulary"}
-      <VocabularyPanel
-        {vocabulary}
-        {vocabularyLoaded}
-        {vocabularyError}
-        bind:newVocab
-        bind:inputEl={vocabInputEl}
-        onSubmit={addVocabulary}
-        onDelete={deleteVocabulary}
-      />
+      <VocabularyTab />
     {:else if active === "replacements"}
       <ReplacementsPanel
         {replacements}
