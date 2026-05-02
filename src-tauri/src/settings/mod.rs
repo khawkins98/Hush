@@ -114,6 +114,26 @@ pub mod keys {
     /// shipped pre-#255, so existing installs see no behaviour
     /// change until the user touches the slider.
     pub const INFERENCE_THREADS: &str = "inference_threads";
+
+    /// Last successful Screen Recording permission probe (#378).
+    /// ISO-8601 instant. Set by the macOS health-probe path when
+    /// `CGPreflightScreenCaptureAccess` returns true AND
+    /// `SCShareableContent::get` succeeds; read by
+    /// `evaluate_permissions_health` to disambiguate "never asked"
+    /// from "was granted, now stale" (cert / bundle-id rotation
+    /// invalidates the TCC entry without flipping any user-
+    /// visible state). Absent → never confirmed; present →
+    /// `preflight=false` becomes a Stale verdict.
+    pub const PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED: &str =
+        "permissions_screen_recording_last_confirmed";
+
+    /// Last successful Microphone permission probe (#378). Same
+    /// shape as the Screen Recording sibling; less load-bearing
+    /// because `AVCaptureDevice.authorizationStatus` already
+    /// distinguishes Denied from NotDetermined natively. Kept for
+    /// parity so future TCC-fingerprint shifts can lean on the
+    /// same persistence shape.
+    pub const PERMISSIONS_MICROPHONE_LAST_CONFIRMED: &str = "permissions_microphone_last_confirmed";
 }
 
 /// Repository trait at the storage boundary.

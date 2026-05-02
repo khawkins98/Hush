@@ -58,6 +58,9 @@
     DownloadProgress,
     IpcError,
     MacosPermissionDiagnostic,
+    PermissionHealth,
+    PermissionHealthResponse,
+    PermissionsHealth,
     MacosPermissionResetResult,
     BuiltinAppEntry,
     MeetingAppKind,
@@ -283,6 +286,12 @@
 
   // ---- macOS permission diagnostic --------------------------------------
   let macosDiagnostic = $state<MacosPermissionDiagnostic | null>(null);
+  // Three-state permission health (#378). Populated alongside the
+  // diagnostic — the Permissions-tab traffic-light row reads from
+  // this, falling back to the diagnostic's raw status if the
+  // health IPC errored (older builds, transient settings-DB
+  // hiccup).
+  let permissionHealth = $state<PermissionsHealth | null>(null);
   let macosDiagnosticOpen = $state(true); // open by default in the dedicated tab
   let macosResetMessage = $state<string | null>(null);
   let macosResetting = $state(false);
@@ -341,12 +350,21 @@
   async function loadMacosDiagnostic(): Promise<void> {
     macosDiagnosticRefreshing = true;
     try {
-      const res = await invoke<MacosPermissionDiagnostic>(
-        "diagnose_macos_permissions",
-      );
+      // Fetch the diagnostic + the three-state health in parallel.
+      // The Permissions tab needs both: the diagnostic carries
+      // the recovery hints + bundle id; the health drives the
+      // traffic-light dot per row (#378).
+      const [res, healthRes] = await Promise.all([
+        invoke<MacosPermissionDiagnostic>("diagnose_macos_permissions"),
+        invoke<PermissionHealthResponse>("get_permission_health").catch(
+          () => null,
+        ),
+      ]);
       macosDiagnostic = res.canReset ? res : null;
+      permissionHealth = healthRes?.health ?? null;
     } catch {
       macosDiagnostic = null;
+      permissionHealth = null;
     } finally {
       macosDiagnosticRefreshing = false;
     }
@@ -1654,26 +1672,37 @@
             { key: "screenRecording", paneTarget: "screen-recording" as const, label: "Screen Recording", status: macosDiagnostic.statuses.screenRecording, why: "Required for system-audio capture in meetings." },
             { key: "inputMonitoring", paneTarget: "input-monitoring" as const, label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Required for push-to-talk (on by default). Disable PTT in General → Hotkeys if you'd rather skip the prompt." },
           ] as row (row.key)}
-            <li class="perm-row" data-perm={row.key} data-status={row.status}>
+            {@const health = permissionHealth?.[row.key as keyof PermissionsHealth] ?? null}
+            <li
+              class="perm-row"
+              data-perm={row.key}
+              data-status={row.status}
+              data-health={health ?? "unknown"}
+            >
               <!--
                 Two-column layout: text block on the left
                 (title-line + why subtitle), action button on the
-                right. Replaces the previous 4-column grid where
-                the status label drifted horizontally between rows
-                and competed with the action button for the right
-                edge of the row. The status now lives as a
-                coloured pill inline with the title — one signal
-                instead of dot + uppercase label, anchored to the
-                row's content rather than floating mid-row. Mirrors
-                System Settings → Privacy & Security's visual
-                idiom (status next to the name; controls flush
-                right).
+                right. The traffic-light dot (#378) lives inline
+                with the row title, before the existing status
+                pill. Three colours map to the three-state health
+                model: green (confirmed), yellow (was granted, now
+                stale — the cert / bundle-id rotation case), red
+                (no prior grant). Falls back to a neutral grey dot
+                when the health IPC errored / hasn't loaded yet —
+                the row still works against the raw status pill
+                in that case.
               -->
               <div class="perm-text">
                 <div class="perm-title-line">
+                  <span
+                    class="perm-health-dot"
+                    data-health={health ?? "unknown"}
+                    aria-hidden="true"
+                  ></span>
                   <span class="perm-name">{row.label}</span>
                   <span class="perm-status-pill">
-                    {#if row.status === "granted"}Granted
+                    {#if health === "stale"}Was granted — now revoked
+                    {:else if row.status === "granted"}Granted
                     {:else if row.status === "denied"}Denied
                     {:else if row.status === "not-determined"}Not yet granted
                     {:else}Not applicable
@@ -1681,6 +1710,13 @@
                   </span>
                 </div>
                 <span class="perm-why">{row.why}</span>
+                {#if health === "stale"}
+                  <span class="perm-stale-hint">
+                    A recent app update likely rotated the signing
+                    identity. Open System Settings and re-enable
+                    {row.label} for Hush to restore access.
+                  </span>
+                {/if}
               </div>
               <!--
                 Per-row deep-link to the relevant System Settings
@@ -2449,6 +2485,49 @@
     background: #fbe3e3;
     color: #8a1f1f;
   }
+  /* Stale (#378) overrides the status-pill colour — the live OS
+     status is "denied/not-determined" but the health verdict
+     differentiates "was granted, now revoked" from "never asked".
+     Yellow signals "needs attention but not red-alert". */
+  .perm-row[data-health="stale"] .perm-status-pill {
+    background: #fdf1d8;
+    color: #7a4e00;
+  }
+
+  /* Traffic-light dot (#378). One per row, sits inline with the
+     title. Green / yellow / red / grey track the four health
+     verdicts plus the "unknown" fallback when the health IPC
+     hasn't loaded yet (older builds, transient settings hiccup). */
+  .perm-health-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background-color: #c0c0c5;
+  }
+  .perm-health-dot[data-health="confirmed"] {
+    background-color: #1f9d3a;
+  }
+  .perm-health-dot[data-health="stale"] {
+    background-color: #e0a020;
+  }
+  .perm-health-dot[data-health="not-granted"] {
+    background-color: #d83a3a;
+  }
+  .perm-health-dot[data-health="not-applicable"] {
+    background-color: #c0c0c5;
+  }
+  .perm-stale-hint {
+    display: block;
+    margin-top: 0.3rem;
+    font-size: 0.78rem;
+    color: #7a4e00;
+    background-color: #fdf6e3;
+    border-left: 3px solid #e0a020;
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+  }
+
   .perm-why {
     display: block;
     margin-top: 0.15rem;
