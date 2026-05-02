@@ -63,6 +63,25 @@ pub struct HistoryEntry {
     pub created_at: String,
 }
 
+/// Aggregate stats over the entire history table (#293). Powers the
+/// "you've dictated N words across M sessions" tile-bar above the
+/// History list. All four numbers are derived from a single SQL
+/// pass so the IPC stays cheap.
+///
+/// `total_chars` doubles as the keystrokes-saved approximation —
+/// every character spoken is one keystroke not typed. Slightly
+/// under-counts modifier presses + autocorrect, but the UI labels
+/// the value as approximate ("~148,200 keystrokes") so the
+/// imprecision is honest.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationStats {
+    pub session_count: i64,
+    pub word_count: i64,
+    pub total_recording_ms: i64,
+    pub total_chars: i64,
+}
+
 /// Fields callers supply when inserting a new row. Separate from
 /// [`HistoryEntry`] so the database-generated id and timestamp can't be
 /// accidentally hand-rolled.
@@ -121,4 +140,13 @@ pub trait HistoryRepository: Send + Sync {
     /// Total row count (no filter). Used by the frontend to drive
     /// pagination state ("page 3 of 12") without paging back to the end.
     async fn count(&self) -> Result<i64>;
+
+    /// Aggregate counts for the History stats bar (#293). Returns
+    /// zeros for an empty table so the caller doesn't need to
+    /// handle a missing-row case. The `word_count` calculation is
+    /// "whitespace tokens" — done in SQL via a length-after-trim
+    /// minus length-after-removing-spaces, plus one — which matches
+    /// the simple split-on-whitespace shape a user would intuit
+    /// without bringing a tokenizer into the path.
+    async fn get_stats(&self) -> Result<DictationStats>;
 }

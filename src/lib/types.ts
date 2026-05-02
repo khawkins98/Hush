@@ -56,6 +56,25 @@ export type HistoryEntry = {
   createdAt: string;
 };
 
+// Aggregate dictation stats (#293). Powers the "you've dictated N
+// words across M sessions" tile bar above the History list. All
+// four numbers are derived from a single SQL pass on the history
+// table; the IPC name is `get_dictation_stats`.
+//
+// `totalChars` doubles as the keystrokes-saved approximation —
+// every character spoken is one keystroke not typed. The UI
+// labels the value as "~N keystrokes" so the imprecision (it
+// under-counts modifier keys + autocorrect) reads as honest.
+//
+// Time saved is derived in the frontend from `wordCount`:
+// `totalMinutes = wordCount / 40` (40 wpm baseline).
+export type DictationStats = {
+  sessionCount: number;
+  wordCount: number;
+  totalRecordingMs: number;
+  totalChars: number;
+};
+
 export type ReplacementRule = {
   id: number;
   findText: string;

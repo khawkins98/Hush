@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DictationStatsBar from "./DictationStatsBar.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import ExportOptionsDialog from "./ExportOptionsDialog.svelte";
   import HistoryDictationRow from "./HistoryDictationRow.svelte";
@@ -6,6 +7,7 @@
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type {
     BundleSelection,
+    DictationStats,
     HistoryEntry,
     MeetingExportFormat,
     MeetingSession,
@@ -81,6 +83,11 @@
     /// Delete; bulk meeting delete pends until the export work in
     /// phase 3 ships an Export-filtered + Delete-filtered pair.
     onClearAll: () => void | Promise<void>;
+    /// Aggregate stats for the summary tile bar above the list
+    /// (#293). `null` while the IPC is still in flight, then the
+    /// snapshot. The bar hides itself when sessionCount === 0,
+    /// so a fresh install doesn't show a row of zeros.
+    dictationStats?: DictationStats | null;
   };
 
   let {
@@ -104,6 +111,7 @@
     onMeetingExport,
     onExportBundle,
     onClearAll,
+    dictationStats = null,
   }: Props = $props();
 
   // User-selected filter chip. Defaults to "all" so the unified
@@ -324,6 +332,14 @@
       {/if}
     </div>
   </header>
+
+  <!--
+    Usage stats summary (#293). Sits between the header and the
+    filter chips so it reads as a "you've done this much"
+    overview before the user dives into rows. Hidden on first
+    install via the bar's own `sessionCount === 0` gate.
+  -->
+  <DictationStatsBar stats={dictationStats} />
 
   <!--
     Filter chips (#357 phase 2). "All" interleaves dictation +

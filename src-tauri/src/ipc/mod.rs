@@ -1465,6 +1465,9 @@ mod tests {
         async fn count(&self) -> anyhow::Result<i64> {
             Ok(0)
         }
+        async fn get_stats(&self) -> anyhow::Result<crate::history::DictationStats> {
+            Ok(crate::history::DictationStats::default())
+        }
     }
 
     /// Tiny mock that returns an empty rules list so the dictation
