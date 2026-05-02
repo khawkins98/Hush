@@ -327,49 +327,73 @@ pub async fn get_permission_health(
         crate::macos_perms::PermissionStatus::Granted
     ) && screen_recording_last_confirmed.is_none()
     {
-        // A stale TCC row (cert / bundle-id rotation) can return
-        // preflight=true while the real `SCShareableContent::get()`
-        // call still fails — exactly the case the staleness model
-        // is built to detect. Run the real probe via
-        // spawn_blocking and only stamp when it succeeds. If the
-        // probe fails, leave `last_confirmed` unset; the next
-        // false-preflight tick reads NotGranted (honest — no
-        // evidence the capability works in this install yet).
-        let probe = tauri::async_runtime::spawn_blocking(
-            crate::audio::validate_screen_recording_capability,
-        )
-        .await;
-        match probe {
-            Ok(Ok(())) => {
-                match stamp_last_confirmed(
-                    &state,
-                    crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
-                )
-                .await
-                {
-                    Ok(stamped) => {
-                        effective_screen_lc = Some(stamped);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "permission health: stamp screen-recording confirmed failed"
-                        );
+        // Serialise the SCK probe across concurrent
+        // `get_permission_health` calls (#386). Two near-
+        // simultaneous callers (Settings tab open + window-focus
+        // refresh + startup probe) all read `last_confirmed = None`
+        // at the same time and would each spawn_blocking the
+        // Cocoa round-trip without this guard. After taking the
+        // lock, re-read the settings row — the in-flight holder
+        // we waited for may have just stamped, in which case we
+        // skip the probe entirely.
+        let _probe_lock = state.sck_probe_lock.lock().await;
+        let recheck_screen_lc = state
+            .settings
+            .get(crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED)
+            .await
+            .map_err(|e| IpcError::Settings(e.to_string()))?;
+        if let Some(stamped) = recheck_screen_lc {
+            // Another caller stamped while we were waiting for
+            // the lock. Reuse their value.
+            effective_screen_lc = Some(stamped);
+        } else {
+            // We hold the lock and there's still no stamp; we're
+            // the one to do the probe. A stale TCC row (cert /
+            // bundle-id rotation) can return preflight=true while
+            // the real `SCShareableContent::get()` call still
+            // fails — exactly the case the staleness model is
+            // built to detect. Run the real probe via
+            // spawn_blocking and only stamp when it succeeds. If
+            // the probe fails, leave `last_confirmed` unset; the
+            // next false-preflight tick reads NotGranted (honest
+            // — no evidence the capability works in this install
+            // yet).
+            let probe = tauri::async_runtime::spawn_blocking(
+                crate::audio::validate_screen_recording_capability,
+            )
+            .await;
+            match probe {
+                Ok(Ok(())) => {
+                    match stamp_last_confirmed(
+                        &state,
+                        crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
+                    )
+                    .await
+                    {
+                        Ok(stamped) => {
+                            effective_screen_lc = Some(stamped);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "permission health: stamp screen-recording confirmed failed"
+                            );
+                        }
                     }
                 }
-            }
-            Ok(Err(e)) => {
-                tracing::info!(
-                    error = %e,
-                    "permission health: SCK probe failed despite preflight=true; \
-                     leaving last_confirmed unset"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "permission health: SCK probe task panicked; treating as unconfirmed"
-                );
+                Ok(Err(e)) => {
+                    tracing::info!(
+                        error = %e,
+                        "permission health: SCK probe failed despite preflight=true; \
+                         leaving last_confirmed unset"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "permission health: SCK probe task panicked; treating as unconfirmed"
+                    );
+                }
             }
         }
     }
