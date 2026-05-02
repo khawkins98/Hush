@@ -297,3 +297,25 @@ export type BundleSelection = {
   kind: BundleKind;
   meetingFormat: MeetingExportFormat;
 };
+
+// Three-state permission health (#378). `confirmed` = currently
+// granted; `stale` = was granted, OS now reports false (cert /
+// bundle-id rotation invalidated the TCC entry); `not-granted` =
+// no prior grant on record. `not-applicable` is the non-macOS
+// branch. Lowercase + kebab-case matches the Rust enum's serde
+// shape.
+export type PermissionHealth =
+  | "confirmed"
+  | "stale"
+  | "not-granted"
+  | "not-applicable";
+
+export type PermissionsHealth = {
+  microphone: PermissionHealth;
+  screenRecording: PermissionHealth;
+  inputMonitoring: PermissionHealth;
+};
+
+export type PermissionHealthResponse = {
+  health: PermissionsHealth;
+};
