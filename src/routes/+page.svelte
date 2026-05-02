@@ -8,8 +8,13 @@
   import ResultBlock from "$lib/ResultBlock.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
+  import PermissionsDialog from "$lib/PermissionsDialog.svelte";
   import MacosPermsPill from "$lib/MacosPermsPill.svelte";
-  import { formatErrorDisplay, type ErrorDisplay } from "$lib/errors";
+  import {
+    formatErrorDisplay,
+    isPermissionShapedError,
+    type ErrorDisplay,
+  } from "$lib/errors";
   import { Events } from "$lib/events";
   import { formatTimestamp } from "$lib/format";
   import type {
@@ -95,6 +100,19 @@
   // never shows again on this install. Modal markup, focus trap,
   // keydown handling, and styles live in `FirstRunModal.svelte`.
   let showFirstRun = $state(false);
+
+  // Reusable permissions dialog (#232). Two open paths:
+  //   - After the welcome modal's Got It dismiss on first run, so
+  //     the user gets an actionable "grant these now" step right
+  //     after the privacy-posture explainer.
+  //   - From `startMeetingSession`'s catch when the failure is
+  //     permission-shaped (Screen Recording or Microphone denied),
+  //     so the next click lands on a button that opens System
+  //     Settings rather than buried in an error-chip hint.
+  // The dialog fetches its own diagnostic + health snapshot when
+  // `show` flips to true; consumers don't need to thread state.
+  let showPermissionsDialog = $state(false);
+  let permissionsDialogIntro: string | undefined = $state(undefined);
 
   // Listener for the broadcast `model:download-done` event. The
   // Settings window's picker drives the actual download UX; we only
@@ -638,6 +656,21 @@
       // broken. Logged for diagnostics.
       console.error("mark_first_run_completed failed:", e);
     }
+    // After the privacy-posture explainer, chain into the
+    // reusable permissions dialog (#232) so the user gets an
+    // actionable next step with live status. The dialog stays
+    // useful even if all permissions are already granted —
+    // confirms the green-light state and offers Open-in-Settings
+    // shortcuts. Consciously keeping the chain unconditional
+    // rather than gating on "any non-granted" so the user always
+    // sees the explicit "all set" confirmation on first run.
+    permissionsDialogIntro = undefined;
+    showPermissionsDialog = true;
+  }
+
+  function dismissPermissionsDialog() {
+    showPermissionsDialog = false;
+    permissionsDialogIntro = undefined;
   }
 
   async function openPrivacyPane(
@@ -885,6 +918,18 @@
       // tagged IPC errors, so a plain `e.message` check would silently
       // mask the helpful copy.
       meetingSessionsError = formatErrorDisplay(e);
+      // If the failure is permission-shaped (#232), also pop the
+      // reusable permissions dialog so the next click lands on a
+      // button that opens System Settings rather than buried in
+      // the error-chip hint. The chip stays — it carries the
+      // technical details for debugging — but the dialog is the
+      // primary recovery path.
+      if (isPermissionShapedError(e)) {
+        permissionsDialogIntro =
+          meetingSessionsError.headline +
+          " — open System Settings below to grant access, then try the meeting again.";
+        showPermissionsDialog = true;
+      }
     } finally {
       meetingBusy = false;
     }
@@ -962,6 +1007,13 @@
   show={showFirstRun}
   onDismiss={dismissFirstRun}
   onOpenPrivacyPane={openPrivacyPane}
+/>
+
+<PermissionsDialog
+  show={showPermissionsDialog}
+  onDismiss={dismissPermissionsDialog}
+  onOpenPrivacyPane={openPrivacyPane}
+  intro={permissionsDialogIntro}
 />
 
 <header class="app-bar">
