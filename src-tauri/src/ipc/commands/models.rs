@@ -21,8 +21,9 @@
 //! `DownloadStatus`) and helpers, all moved together.
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
+use crate::ipc::events::{EventEmitter, TauriEventEmitter};
 use crate::ipc::AppState;
 use crate::settings::keys as settings_keys;
 use crate::transcription::catalog::{self, ModelMetadata};
@@ -214,6 +215,11 @@ pub struct DownloadStatus {
 /// integrity is non-negotiable. A model with an empty hash surfaces
 /// as a clear error and the picker tells the user to download
 /// manually until a contributor fills in the catalog.
+///
+/// Implementation delegates to [`model_download_inner`] (the
+/// testable seam introduced in #315 follow-up) so the spawned-
+/// task paths (cancel-handle cleanup, failure emit) can be
+/// driven from a `#[tokio::test]` without a real Tauri runtime.
 #[tauri::command]
 pub async fn model_download(
     app: AppHandle,
@@ -226,6 +232,50 @@ pub async fn model_download(
         ))
     })?;
 
+    let emitter: std::sync::Arc<dyn EventEmitter> =
+        std::sync::Arc::new(TauriEventEmitter::new(app));
+    model_download_inner(
+        ModelDownloadDeps {
+            emitter,
+            downloads: std::sync::Arc::clone(&state.downloads),
+            http: state.http.clone(),
+            models_dir: state.models_dir.clone(),
+        },
+        model,
+    )
+    .await
+}
+
+/// Bundled dependencies the Whisper download needs at runtime.
+/// Pulled out of [`AppState`] so [`model_download_inner`] can run
+/// from a `#[tokio::test]` without a real `AppHandle` /
+/// `tauri::State` (#315 follow-up; mirrors the diarizer's
+/// `DiarizerDownloadDeps`).
+pub(crate) struct ModelDownloadDeps {
+    pub emitter: std::sync::Arc<dyn EventEmitter>,
+    pub downloads:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, CancelHandle>>>,
+    pub http: reqwest::Client,
+    pub models_dir: std::path::PathBuf,
+}
+
+/// Inner implementation of [`model_download`]. Same behaviour as
+/// the `#[tauri::command]` wrapper but takes the dependencies as
+/// plain values so tests can drive both:
+///
+/// - the duplicate-rejection guard inside `state.downloads.lock()`;
+///   and
+/// - the cancel-handle cleanup on the spawned task's failure
+///   branch (the same pattern the diarizer download uses).
+///
+/// The `dest.exists()` pre-check stays outside the critical
+/// section here — same shape as it was pre-#315; the Whisper path
+/// hasn't picked up the audit-2 TOCTOU fix the diarizer got. That
+/// can be a separate PR.
+pub(crate) async fn model_download_inner(
+    deps: ModelDownloadDeps,
+    model: ModelMetadata,
+) -> IpcResult<()> {
     if model.sha256.trim().is_empty() {
         return Err(IpcError::Settings(format!(
             "auto-download is not yet enabled for {} — its SHA-256 hasn't been verified. \
@@ -234,7 +284,8 @@ pub async fn model_download(
         )));
     }
 
-    let dest = state.models_dir.join(&model.filename);
+    let id = model.id.clone();
+    let dest = deps.models_dir.join(&model.filename);
     if dest.exists() {
         return Err(IpcError::Settings(format!(
             "{} is already downloaded",
@@ -247,7 +298,7 @@ pub async fn model_download(
     // concurrent download per model is the contract.
     let cancel = CancelHandle::new();
     {
-        let mut guard = state.downloads.lock().map_err(poisoned)?;
+        let mut guard = deps.downloads.lock().map_err(poisoned)?;
         if guard.contains_key(&id) {
             return Err(IpcError::Settings(format!(
                 "{} is already downloading",
@@ -257,27 +308,23 @@ pub async fn model_download(
         guard.insert(id.clone(), cancel.clone());
     }
 
-    let app_for_task = app.clone();
+    let emitter_for_task = std::sync::Arc::clone(&deps.emitter);
+    let downloads_for_task = std::sync::Arc::clone(&deps.downloads);
     let id_for_task = id.clone();
     let url = model.download_url.clone();
     let sha = model.sha256.clone();
-    let http = state.http.clone();
-    // Hold an Arc-clone of the downloads map directly so the
-    // spawned task can clean up its own entry without reaching
-    // back through `AppHandle::try_state` (#315 — that path is
-    // hard to test).
-    let downloads_for_task = std::sync::Arc::clone(&state.downloads);
+    let http = deps.http.clone();
 
     tauri::async_runtime::spawn(async move {
         // Progress callback emits a Tauri event with the latest
         // counts. Cheap; reqwest streams in ~16-128 KiB chunks for
         // the typical Hugging Face CDN response.
-        let app_for_progress = app_for_task.clone();
+        let emitter_for_progress = std::sync::Arc::clone(&emitter_for_task);
         let id_for_progress = id_for_task.clone();
         let progress: Box<download::ProgressCallback> = Box::new(move |update| {
-            let _ = app_for_progress.emit(
+            emitter_for_progress.emit(
                 "model:download-progress",
-                DownloadProgress {
+                &DownloadProgress {
                     id: id_for_progress.clone(),
                     bytes_received: update.bytes_received,
                     bytes_total: update.bytes_total,
@@ -296,9 +343,9 @@ pub async fn model_download(
 
         match result {
             Ok(()) => {
-                let _ = app_for_task.emit(
+                emitter_for_task.emit(
                     "model:download-done",
-                    DownloadStatus {
+                    &DownloadStatus {
                         id: id_for_task,
                         message: None,
                     },
@@ -306,9 +353,9 @@ pub async fn model_download(
             }
             Err(e) => {
                 tracing::error!(error = ?e, model_id = %id_for_task, "model download failed");
-                let _ = app_for_task.emit(
+                emitter_for_task.emit(
                     "model:download-failed",
-                    DownloadStatus {
+                    &DownloadStatus {
                         id: id_for_task,
                         message: Some(format!("{e:#}")),
                     },
@@ -365,4 +412,177 @@ pub async fn model_remove(state: State<'_, AppState>, id: String) -> IpcResult<(
     let _ = tokio::fs::remove_file(part).await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a Whisper-shaped catalog entry pointing at whatever
+    /// URL the test wants. SHA is a 64-char hex placeholder; the
+    /// duplicate-rejection test never reaches the integrity check
+    /// and the failure-cleanup test fails on connect before SHA
+    /// is consulted.
+    fn make_test_model(url: &str) -> ModelMetadata {
+        ModelMetadata {
+            id: "whisper-test".into(),
+            display_name: "Whisper (test)".into(),
+            filename: "ggml-test.bin".into(),
+            size_mb: 1,
+            speed_rating: 5,
+            accuracy_rating: 5,
+            description: "test entry".into(),
+            is_default: false,
+            download_url: url.into(),
+            sha256: "0".repeat(64),
+        }
+    }
+
+    fn build_deps(
+        emitter: std::sync::Arc<dyn EventEmitter>,
+        downloads: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashMap<String, CancelHandle>>,
+        >,
+        models_dir: std::path::PathBuf,
+    ) -> ModelDownloadDeps {
+        ModelDownloadDeps {
+            emitter,
+            downloads,
+            http: reqwest::Client::new(),
+            models_dir,
+        }
+    }
+
+    #[tokio::test]
+    async fn model_download_rejects_duplicate_concurrent_clicks() {
+        // Pre-seed the downloads map with a cancel handle (as if a
+        // prior click had spawned a task). Second call must return
+        // `IpcError::Settings` and emit nothing.
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            CancelHandle,
+        >::new()));
+        let model = make_test_model("http://127.0.0.1:1/never-fetched");
+        downloads
+            .lock()
+            .unwrap()
+            .insert(model.id.clone(), CancelHandle::new());
+
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn EventEmitter> = std::sync::Arc::new(recorder.clone());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = build_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        match model_download_inner(deps, model.clone()).await {
+            Err(IpcError::Settings(msg)) => {
+                assert!(
+                    msg.contains("already downloading"),
+                    "expected duplicate-rejection message, got: {msg}"
+                );
+            }
+            other => panic!("expected IpcError::Settings, got: {other:?}"),
+        }
+
+        assert!(
+            recorder.events().is_empty(),
+            "duplicate rejection should not emit any events; got {:?}",
+            recorder.events()
+        );
+        assert!(
+            downloads.lock().unwrap().contains_key(&model.id),
+            "pre-existing cancel handle was clobbered by the rejection path"
+        );
+    }
+
+    #[tokio::test]
+    async fn model_download_rejects_empty_sha_with_clear_error() {
+        // Catalog hygiene gate: a model whose SHA hasn't been
+        // verified should never auto-download. Mirrors the message
+        // the picker UI surfaces verbatim.
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            CancelHandle,
+        >::new()));
+        let mut model = make_test_model("http://127.0.0.1:1/will-never-be-tried");
+        model.sha256 = String::new();
+
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn EventEmitter> = std::sync::Arc::new(recorder.clone());
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = build_deps(emitter, downloads, tmp.path().to_path_buf());
+
+        match model_download_inner(deps, model.clone()).await {
+            Err(IpcError::Settings(msg)) => {
+                assert!(
+                    msg.contains("SHA-256 hasn't been verified"),
+                    "expected sha-gate message, got: {msg}"
+                );
+            }
+            other => panic!("expected IpcError::Settings, got: {other:?}"),
+        }
+        assert!(recorder.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn model_download_clears_cancel_handle_on_failure() {
+        // Drive the download into the failure branch by pointing
+        // it at an unbindable port (127.0.0.1:1). The spawned task
+        // must remove its cancel-handle entry from `downloads` AND
+        // emit `model:download-failed` with a non-empty message.
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            CancelHandle,
+        >::new()));
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn EventEmitter> = std::sync::Arc::new(recorder.clone());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let model = make_test_model("http://127.0.0.1:1/will-fail");
+        let deps = build_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        model_download_inner(deps, model.clone())
+            .await
+            .expect("inner returns Ok before the spawn — failure happens inside the task");
+
+        let cleared = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !downloads.lock().unwrap().contains_key(&model.id) {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+        assert!(
+            cleared,
+            "cancel handle should have been removed by the failure branch"
+        );
+
+        let failures = recorder.payloads_for("model:download-failed");
+        assert_eq!(
+            failures.len(),
+            1,
+            "exactly one failure event expected; got {failures:?}"
+        );
+        let payload = &failures[0];
+        assert_eq!(
+            payload["id"],
+            serde_json::Value::String(model.id.clone()),
+            "failure event id should match the requested model id"
+        );
+        let msg = payload["message"]
+            .as_str()
+            .expect("failure event should carry a message string");
+        assert!(!msg.is_empty(), "failure event message should be populated");
+    }
 }
