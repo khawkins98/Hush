@@ -197,6 +197,16 @@ export async function installMocks(
       history_delete: () => undefined,
       history_count: () => 0,
       history_clear: () => 0,
+      // Dictation stats (#293). Default to all-zeros so the
+      // stats bar's `sessionCount === 0` guard hides it on
+      // baseline mocks; specs that want the bar visible
+      // override per-test.
+      get_dictation_stats: () => ({
+        sessionCount: 0,
+        wordCount: 0,
+        totalRecordingMs: 0,
+        totalChars: 0,
+      }),
 
       // ---- replacements ----
       replacements_list: () => [],

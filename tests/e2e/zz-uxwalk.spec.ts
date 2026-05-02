@@ -203,6 +203,16 @@ test.describe("UX walkthrough — main window", () => {
   test("history: populated", async ({ page }) => {
     await installMocks(page, {
       history_count: () => 4,
+      // Dictation stats (#293) — visible above the list when
+      // session_count > 0. Numbers shaped to land "11h 52m saved"
+      // and "~148,200 keystrokes" on the stats bar so the
+      // walkthrough screenshot exercises the populated state.
+      get_dictation_stats: () => ({
+        sessionCount: 142,
+        wordCount: 28450,
+        totalRecordingMs: 8 * 60 * 60 * 1000,
+        totalChars: 148200,
+      }),
       history_search: () => [
         {
           id: 1,

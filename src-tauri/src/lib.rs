@@ -491,6 +491,7 @@ pub fn run() {
             ipc::commands::history_delete,
             ipc::commands::history_count,
             ipc::commands::history_clear,
+            ipc::commands::get_dictation_stats,
             ipc::commands::replacements_list,
             ipc::commands::replacement_create,
             ipc::commands::replacement_update,

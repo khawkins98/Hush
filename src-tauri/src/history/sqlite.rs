@@ -12,7 +12,7 @@ use async_trait::async_trait;
 
 use crate::db::SqliteDatabase;
 
-use super::{HistoryEntry, HistoryRepository, NewHistoryEntry};
+use super::{DictationStats, HistoryEntry, HistoryRepository, NewHistoryEntry};
 
 /// Hard cap on `limit` parameters. Big enough to back any realistic UI
 /// page size, small enough that a misbehaving caller can't accidentally
@@ -142,6 +142,42 @@ impl HistoryRepository for SqliteHistoryRepository {
             .await
             .context("count history")?;
         Ok(row.0)
+    }
+
+    async fn get_stats(&self) -> Result<DictationStats> {
+        // Single-pass aggregate over the history table (#293).
+        // Word count is "whitespace tokens" — for non-empty
+        // transcripts: (length-of-trimmed-text minus
+        // length-after-removing-spaces) plus one. This matches a
+        // simple split-on-whitespace; tabs/newlines aren't
+        // counted as separators but transcripts are space-
+        // delimited in practice. `total_chars` is the keystroke-
+        // saved approximation; the UI labels it "~N keystrokes"
+        // so the imprecision is honest.
+        let row: (i64, i64, i64, i64) = sqlx::query_as(
+            r#"
+            SELECT
+              COUNT(*),
+              COALESCE(SUM(
+                CASE
+                  WHEN TRIM(transcript) = '' OR transcript IS NULL THEN 0
+                  ELSE LENGTH(TRIM(transcript)) - LENGTH(REPLACE(TRIM(transcript), ' ', '')) + 1
+                END
+              ), 0),
+              COALESCE(SUM(duration_ms), 0),
+              COALESCE(SUM(LENGTH(COALESCE(transcript, ''))), 0)
+            FROM history
+            "#,
+        )
+        .fetch_one(self.db.pool())
+        .await
+        .context("get history stats")?;
+        Ok(DictationStats {
+            session_count: row.0,
+            word_count: row.1,
+            total_recording_ms: row.2,
+            total_chars: row.3,
+        })
     }
 }
 
@@ -351,6 +387,43 @@ mod tests {
         let removed = repo.clear().await.unwrap();
         assert_eq!(removed, 3);
         assert_eq!(repo.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn get_stats_returns_zeros_on_empty_table() {
+        let repo = fresh_repo().await;
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats, DictationStats::default());
+    }
+
+    #[tokio::test]
+    async fn get_stats_aggregates_words_and_chars_and_duration() {
+        // Three rows with distinct shapes:
+        //   - "hello world" — 11 chars, 2 words, 1234 ms
+        //   - "one two three four" — 18 chars, 4 words, 1234 ms
+        //   - "" — 0 chars, 0 words, 1234 ms (still counts toward
+        //     session_count)
+        // Totals: 3 sessions, 6 words, 3702 ms, 29 chars.
+        let repo = fresh_repo().await;
+        repo.create(sample("hello world", None)).await.unwrap();
+        repo.create(sample("one two three four", None)).await.unwrap();
+        repo.create(sample("", None)).await.unwrap();
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats.session_count, 3);
+        assert_eq!(stats.word_count, 6, "two + four = 6 words");
+        assert_eq!(stats.total_recording_ms, 3702);
+        assert_eq!(stats.total_chars, 29);
+    }
+
+    #[tokio::test]
+    async fn get_stats_word_count_handles_leading_trailing_whitespace() {
+        // The TRIM-then-count-spaces formula must not over-count
+        // when the user's transcript has padding whitespace (the
+        // whisper pipeline can produce these in practice).
+        let repo = fresh_repo().await;
+        repo.create(sample("  hello world  ", None)).await.unwrap();
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats.word_count, 2);
     }
 
     #[tokio::test]
