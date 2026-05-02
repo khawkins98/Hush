@@ -379,7 +379,7 @@ pub fn run() {
                                 "autostart: re-register failed; LaunchAgent path may be stale (#271)"
                             );
                             if let Some(state) = app.try_state::<ipc::AppState>() {
-                                state.autostart_path_stale.store(
+                                state.runtime_flags.autostart_path_stale.store(
                                     true,
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
@@ -627,6 +627,7 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
 
         let mode = ipc::decode_autostart_mode(
             state
+                .runtime_flags
                 .meeting_autostart_mode
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
