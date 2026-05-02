@@ -61,10 +61,10 @@
 
 <nav class="app-sidebar" aria-label="Main navigation">
   <div class="brand">
+    <!-- SVG over the PNG (#395) — see +page.svelte for rationale. -->
     <img
       class="brand-icon"
-      src="/app-icon.png"
-      srcset="/app-icon.png 1x, /app-icon@2x.png 2x"
+      src="/app-icon.svg"
       alt=""
       aria-hidden="true"
       width="22"
