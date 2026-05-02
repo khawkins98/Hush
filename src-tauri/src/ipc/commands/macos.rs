@@ -424,8 +424,12 @@ async fn stamp_last_confirmed(state: &AppState, key: &str) -> anyhow::Result<Str
 /// frontend after a `start_dictation` (mic) or a successful
 /// meeting start with system-audio (screen recording) — the
 /// strongest possible signal that the underlying capability is
-/// alive. Writes the current ISO-8601 timestamp to the persisted
-/// settings row keyed by the permission name.
+/// alive. Writes the current Unix-epoch-millis (decimal string)
+/// to the persisted settings row keyed by the permission name.
+/// `evaluate_permissions_health` only checks `Some/None` on the
+/// row, so the wire format is opaque today; documenting it here
+/// so a future migration that tries to parse doesn't trip over
+/// the assumption.
 ///
 /// The permission name argument is a stable string token rather
 /// than the typed enum so the frontend can bind the call without
@@ -437,7 +441,14 @@ pub async fn confirm_permission(state: State<'_, AppState>, permission: String) 
         "screen-recording" => crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
         "microphone" => crate::settings::keys::PERMISSIONS_MICROPHONE_LAST_CONFIRMED,
         other => {
-            return Err(IpcError::Settings(format!(
+            // Argument-shape error rather than a settings-DB
+            // failure: the frontend sent a token the contract
+            // doesn't accept. Pre-#386 this returned
+            // `IpcError::Settings` which `formatErrorDisplay`
+            // renders as "Settings update failed" — wrong framing
+            // for a frontend-bug class. `IpcError::Internal` is
+            // the right "shouldn't happen at runtime" bucket.
+            return Err(IpcError::Internal(format!(
                 "unknown permission token {other:?} (expected 'screen-recording' or 'microphone')"
             )));
         }

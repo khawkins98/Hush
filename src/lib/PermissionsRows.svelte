@@ -91,9 +91,9 @@
         <span class="perm-why">{row.why}</span>
         {#if rowHealth === "stale"}
           <span class="perm-stale-hint">
-            A recent app update likely rotated the signing
-            identity. Open System Settings and re-enable
-            {row.label} for Hush to restore access.
+            macOS no longer recognises a previous grant for Hush
+            (common after app updates). Re-enable {row.label} in
+            System Settings to restore access.
           </span>
         {/if}
       </div>
