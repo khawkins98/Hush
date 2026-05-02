@@ -28,14 +28,16 @@
   and have the main window listen.
 -->
 <script lang="ts">
-  import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
+  /* (`@tauri-apps/api/app` imports moved to AboutTab.svelte in
+     #332 phase 1 final slice — appName / version / Tauri runtime
+     are About-tab-only data.) */
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   /* (autostart + plugin-os imports moved to GeneralTab.svelte
      in #332 phase 1.) */
   import { onDestroy, onMount, tick } from "svelte";
 
-  import { openExternal } from "$lib/openExternal";
+  import AboutTab from "$lib/AboutTab.svelte";
   import GeneralTab from "$lib/GeneralTab.svelte";
   import MeetingTab from "$lib/MeetingTab.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
@@ -122,7 +124,8 @@
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenDownloadFailed: UnlistenFn | null = null;
   let unlistenGotoTab: UnlistenFn | null = null;
-  let unlistenUpdaterResult: UnlistenFn | null = null;
+  /* (`unlistenUpdaterResult` moved to AboutTab.svelte in #332
+     phase 1 final slice.) */
   /* (Permissions-tab window-focus listener handle moved to
      PermissionsTab.svelte in #332 phase 1.) */
 
@@ -141,26 +144,9 @@
      app-classifier overrides, auto-start mode — moved to
      MeetingTab.svelte in #332 phase 1.) */
 
-  // ---- About tab --------------------------------------------------------
-  // Version pulled from Tauri at runtime so the displayed value
-  // tracks `tauri.conf.json` / `Cargo.toml` instead of a hardcoded
-  // string that would silently rot. `getName` returns the
-  // `productName` field, which is what users see in the menu bar.
-  let appVersion = $state<string>("");
-  let appName = $state<string>("Hush");
-  let tauriVersion = $state<string>("");
-
-  // Manual "Check for updates" probe (#223). Tagged-union result
-  // from the Rust side; the dialog renders one of three branches
-  // (up to date / update available / failed). `null` means the
-  // user hasn't clicked Check yet — common state. Cleared on tab
-  // change is overkill; the result is small and harmless to keep.
-  type UpdateCheckResult =
-    | { kind: "upToDate"; current: string }
-    | { kind: "updateAvailable"; current: string; latest: string; releaseUrl: string }
-    | { kind: "checkFailed"; reason: string };
-  let updateCheck = $state<UpdateCheckResult | null>(null);
-  let updateChecking = $state(false);
+  /* (About-tab state — appName, appVersion, tauriVersion, the
+     UpdateCheckResult union, updateCheck, updateChecking — moved
+     to AboutTab.svelte in #332 phase 1 final slice.) */
 
   // (macOS permission diagnostic state + handlers moved to
   // `PermissionsTab.svelte` in #332 phase 1 — the Permissions tab
@@ -273,30 +259,12 @@
     // diagnostic" link / future menu items. Payload is the tab key
     // — silently ignored if it isn't one we know, so future tabs
     // added on the main window don't crash a stale settings build.
-    // Menu-driven Check for Updates lands here as an event
-    // (#265) — the macOS menu fires the probe directly and emits
-    // the result to all windows. Stash it in the same state
-    // the in-tab button uses so the About tab renders the
-    // outcome whether the user clicked the menu or the button.
-    //
-    // Gate on `!updateChecking` (review #4 UX-1): if the user
-    // clicked the in-tab button and *also* clicked the menu mid-
-    // probe, the broadcast event would clobber `updateChecking`
-    // and double-mutate `updateCheck`, causing a screen-reader
-    // double-announce on the `role="status"` paragraph and a
-    // potential UI race when the in-flight invoke returns. The
-    // locally-issued probe is the source of truth; menu events
-    // fired *outside* an active local probe still land
-    // (the common case is "I clicked the menu and nothing else").
-    unlistenUpdaterResult = await listen<UpdateCheckResult>(
-      Events.UpdaterResult,
-      (e) => {
-        if (updateChecking) {
-          return;
-        }
-        updateCheck = e.payload;
-      },
-    );
+
+    /* Menu-driven `updater:result` listener moved to AboutTab.svelte
+       in #332 phase 1 final slice. The race window between the
+       menu's probe spawn and the AboutTab's onMount listener
+       registration is well below the probe's network floor — see
+       AboutTab's header comment for the full reasoning. */
 
     unlistenGotoTab = await listen<string>(Events.SettingsGotoTab, (e) => {
       const target = e.payload;
@@ -313,71 +281,26 @@
       }
     });
 
-    await Promise.all([
-      loadModels(),
-      loadAppMetadata(),
-    ]);
+    await loadModels();
 
-    /* Diarizer-download lifecycle listeners (#301) +
-       Meeting-tab eager loads moved to MeetingTab.svelte in
-       #332 phase 1; Permissions-tab window-focus listener
-       moved to PermissionsTab.svelte. */
+    /* Diarizer-download lifecycle listeners (#301) + Meeting-tab
+       eager loads moved to MeetingTab.svelte in #332 phase 1;
+       Permissions-tab window-focus listener moved to
+       PermissionsTab.svelte; About-tab metadata + updater
+       listener moved to AboutTab.svelte. */
   });
 
-  // Run the manual update probe. The backend returns a tagged
-  // union; we just stash it and let the markup pick the branch.
-  // Idempotent — repeated clicks just re-fetch.
-  async function onCheckForUpdates() {
-    updateChecking = true;
-    updateCheck = null;
-    try {
-      updateCheck = await invoke<UpdateCheckResult>("check_for_updates");
-    } catch (e) {
-      // The Rust side already maps transport errors to a
-      // `checkFailed` variant; an exception here means the IPC
-      // itself blew up (e.g. the command isn't registered in a
-      // stale build). Surface a generic failure rather than
-      // dropping silently.
-      updateCheck = {
-        kind: "checkFailed",
-        reason: formatErrorMessage(e),
-      };
-    } finally {
-      updateChecking = false;
-    }
-  }
-
-  // Pull build identity from Tauri. Failures are non-fatal — the
-  // About tab just falls back to the default empty strings, which
-  // render as "Hush" + an empty version line.
-  async function loadAppMetadata(): Promise<void> {
-    try {
-      const [name, version, tauri] = await Promise.all([
-        getName(),
-        getVersion(),
-        getTauriVersion(),
-      ]);
-      appName = name;
-      appVersion = version;
-      tauriVersion = tauri;
-    } catch {
-      // Ignored; the About tab just shows the static copy.
-    }
-  }
-
-  // ---- General-tab handlers --------------------------------------------
-
-  /* (Diarization + diarizer-model handlers moved to
-     MeetingTab.svelte in #332 phase 1.) */
+  /* (`onCheckForUpdates` + `loadAppMetadata` moved to
+     AboutTab.svelte in #332 phase 1 final slice.) */
 
   onDestroy(() => {
     unlistenDownloadProgress?.();
     unlistenDownloadDone?.();
     unlistenDownloadFailed?.();
     unlistenGotoTab?.();
-    unlistenUpdaterResult?.();
-    /* (Diarizer-listener teardown moved to MeetingTab.svelte
-       in #332 phase 1.) */
+    /* (Updater-result listener teardown moved to AboutTab.svelte;
+       diarizer-listener teardown to MeetingTab.svelte; both in
+       #332 phase 1.) */
   });
 </script>
 
@@ -433,147 +356,7 @@
     {:else if active === "permissions"}
       <PermissionsTab />
     {:else if active === "about"}
-      <h2 class="tab-title">About</h2>
-      <section class="about-tab">
-        <header class="about-header">
-          <!--
-            App name is subordinate to the "About" tab title (H2),
-            so it's H3. Pre-fix it was a sibling H2 — two H2s with
-            no semantic relationship was a hierarchy violation
-            flagged in review #3.
-          -->
-          <h3 class="about-name">{appName}</h3>
-          {#if appVersion}
-            <p class="about-version">Version {appVersion}</p>
-          {/if}
-        </header>
-
-        <p class="about-blurb">
-          Local-only voice-to-text. Hotkey-driven dictation plus
-          long-running meeting capture, powered by whisper.cpp on
-          your own hardware. No cloud, no telemetry.
-        </p>
-
-        <!--
-          Manual "Check for updates" probe (#223). Sits below the
-          version line so the comparison is contextual: user sees
-          their version, clicks Check, gets a result inline.
-          Auto-update via tauri-plugin-updater is the heavier
-          follow-up — see #10.
-        -->
-        <div class="about-updates">
-          <button
-            type="button"
-            class="ghost"
-            data-testid="settings-check-updates"
-            disabled={updateChecking}
-            onclick={onCheckForUpdates}
-            aria-label="Check for application updates"
-          >
-            {updateChecking ? "Checking…" : "Check for updates"}
-          </button>
-          {#if updateCheck}
-            {#if updateCheck.kind === "upToDate"}
-              <p class="about-update-result about-update-ok" role="status">
-                You're on {updateCheck.current} — that's the
-                latest.
-              </p>
-            {:else if updateCheck.kind === "updateAvailable"}
-              <p class="about-update-result about-update-available" role="status">
-                <strong>Update available:</strong>
-                {updateCheck.latest} (you're on
-                {updateCheck.current}).
-                <a
-                  href={updateCheck.releaseUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >Open release notes</a>.
-              </p>
-            {:else if updateCheck.kind === "checkFailed"}
-              <!--
-                Bare `reason` strings (e.g. "Try again in a few
-                minutes.") read as fragmentary without a headline.
-                With #281 the same surface now lights up from a
-                menu click (potentially while the user's attention
-                is elsewhere); the bold lead anchors what the
-                paragraph is about.
-              -->
-              <p class="about-update-result about-update-failed" role="status">
-                <strong>Couldn't check for updates.</strong>
-                {updateCheck.reason}
-              </p>
-            {/if}
-          {/if}
-        </div>
-
-        <dl class="about-meta">
-          <dt>License</dt>
-          <dd>
-            <a
-              href="https://www.apache.org/licenses/LICENSE-2.0"
-              onclick={(e) => {
-                e.preventDefault();
-                openExternal("https://www.apache.org/licenses/LICENSE-2.0");
-              }}
-              rel="noopener noreferrer">Apache License 2.0</a
-            >
-          </dd>
-          <dt>Source</dt>
-          <dd>
-            <a
-              href="https://github.com/khawkins98/Hush"
-              onclick={(e) => {
-                e.preventDefault();
-                openExternal("https://github.com/khawkins98/Hush");
-              }}
-              rel="noopener noreferrer">github.com/khawkins98/Hush</a
-            >
-          </dd>
-          <dt>Report a bug</dt>
-          <dd>
-            <a
-              href="https://github.com/khawkins98/Hush/issues/new"
-              onclick={(e) => {
-                e.preventDefault();
-                openExternal("https://github.com/khawkins98/Hush/issues/new");
-              }}
-              rel="noopener noreferrer">Open an issue</a
-            >
-          </dd>
-          {#if tauriVersion}
-            <dt>Tauri runtime</dt>
-            <dd><code>{tauriVersion}</code></dd>
-          {/if}
-        </dl>
-
-        <p class="about-credit">
-          Built on
-          <a
-            href="https://github.com/ggerganov/whisper.cpp"
-            onclick={(e) => {
-              e.preventDefault();
-              openExternal("https://github.com/ggerganov/whisper.cpp");
-            }}
-            rel="noopener noreferrer">whisper.cpp</a
-          >,
-          <a
-            href="https://tauri.app"
-            onclick={(e) => {
-              e.preventDefault();
-              openExternal("https://tauri.app");
-            }}
-            rel="noopener noreferrer">Tauri</a
-          >, and
-          <a
-            href="https://svelte.dev"
-            onclick={(e) => {
-              e.preventDefault();
-              openExternal("https://svelte.dev");
-            }}
-            rel="noopener noreferrer">Svelte</a
-          >.
-        </p>
-      </section>
+      <AboutTab />
     {/if}
   </section>
 </main>
@@ -692,155 +475,10 @@
     margin-top: 0;
   }
 
-  .tab-title {
-    margin: 0 0 0.75rem;
-    font-size: 1.4rem;
-    letter-spacing: -0.01em;
-  }
-
-  /* (`.permissions-tab-header`, `.placeholder`, `.perm-recovery-intro`
-     CSS moved to PermissionsTab.svelte in #332 phase 1.) */
-
-  .about-tab {
-    max-width: 36rem;
-    line-height: 1.5;
-  }
-  .about-header {
-    margin-bottom: 1.25rem;
-  }
-  .about-name {
-    margin: 0;
-    font-size: 1.05rem;
-    font-weight: 600;
-  }
-  .about-version {
-    margin: 0.15rem 0 0;
-    color: #666;
-    font-size: 0.85rem;
-  }
-  .about-blurb {
-    margin: 0 0 1.25rem;
-    font-size: 0.95rem;
-    color: #333;
-  }
-
-  .about-updates {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    margin: 0 0 1.25rem;
-  }
-  .about-updates button {
-    align-self: flex-start;
-  }
-  .about-update-result {
-    margin: 0;
-    padding: 0.55rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.9rem;
-    line-height: 1.4;
-  }
-  .about-update-ok {
-    background-color: #e7f8ec;
-    border: 1px solid #b6e5c5;
-    color: #2a6b3c;
-  }
-  .about-update-available {
-    background-color: #eef2ff;
-    border: 1px solid #c7d2fe;
-    color: #1e1b4b;
-  }
-  .about-update-failed {
-    background-color: #fff7e6;
-    border: 1px solid #ffd591;
-    color: #8a5a00;
-  }
-  .about-meta {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    column-gap: 1rem;
-    row-gap: 0.4rem;
-    margin: 0 0 1.25rem;
-    font-size: 0.9rem;
-  }
-  .about-meta dt {
-    color: #666;
-    font-weight: 500;
-  }
-  .about-meta dd {
-    margin: 0;
-  }
-  .about-meta code {
-    font-family:
-      ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.85em;
-    color: #444;
-  }
-  .about-credit {
-    margin: 0;
-    color: #666;
-    font-size: 0.85rem;
-  }
-  .about-tab a {
-    color: var(--accent-hover);
-  }
-  @media (prefers-color-scheme: dark) {
-    .about-version,
-    .about-meta dt,
-    .about-credit {
-      color: #9a9a9a;
-    }
-    .about-blurb {
-      color: #d8d8d8;
-    }
-    .about-meta code {
-      color: #b8b8b8;
-    }
-    .about-tab a {
-      color: var(--accent);
-    }
-    .about-update-ok {
-      background-color: rgba(46, 170, 83, 0.15);
-      border-color: #2a6b3c;
-      color: #b6e5c5;
-    }
-    .about-update-available {
-      background-color: rgba(106, 140, 240, 0.15);
-      border-color: #3a4a7a;
-      color: #d8e0ff;
-    }
-    .about-update-failed {
-      background-color: rgba(255, 193, 7, 0.12);
-      border-color: #6b5300;
-      color: #ffd591;
-    }
-  }
-
-  /* (`.settings-group`, `.group-heading`, `.toggle-*`, `.select-*`,
-     `.settings-error`, `.diarizer-*`, `.path-code`, `.link-like` —
-     all the per-tab card primitives — moved to GeneralTab.svelte
-     and MeetingTab.svelte in #332 phase 1. They'll hoist to a
-     shared module per #392 once the remaining About-tab slice
-     lands.) */
-
-  button.ghost {
-    padding: 0.4em 0.85em;
-    font-size: 0.85rem;
-    font-weight: 500;
-    background-color: white;
-    border: 1px solid #d1d1d8;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #2c3e8f;
-  }
-  button.ghost:hover:not(:disabled) {
-    background-color: #f4f5fa;
-    border-color: #b8c1d8;
-  }
-  button.ghost:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
+  /* All per-tab CSS moved to its respective tab component in
+     #332 phase 1 (PermissionsTab, VocabularyTab, ReplacementsTab,
+     GeneralTab, MeetingTab, AboutTab). Shared card primitives
+     hoist to a CSS module per #392 once that lands. */
 
   @media (prefers-color-scheme: dark) {
     :global(html), :global(body) {
@@ -860,15 +498,6 @@
       background-color: #1d1d1f;
       border-color: #38383b;
       color: #b8c8ff;
-    }
-    button.ghost {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-      color: #b8c8ff;
-    }
-    button.ghost:hover:not(:disabled) {
-      background-color: #38383b;
-      border-color: #4a4a4d;
     }
   }
 </style>
