@@ -10,9 +10,10 @@
   not dictation.
 
   This variant is a microphone — the canonical glyph for an
-  audio-capture app. Two simple shapes:
-    1. The capsule (rounded rectangle, 8 × 12 viewport units)
-    2. The stand (a "U"-shape arc plus a vertical post)
+  audio-capture app. Two simple shapes inside the 24 × 24
+  viewBox:
+    1. The capsule (rounded rectangle, 6 × 11)
+    2. The stand (a "U"-shape arc + a vertical post + a base)
   Both stroked at 1.6 viewport-units so the strokes survive
   the downscale to 22 px without going sub-pixel.
 
