@@ -349,6 +349,16 @@
   // call the matching stop IPC.
   let recordMode = $state<"dictation" | "meeting" | null>(null);
 
+  // Session id captured from `meeting_start_manual`'s return value
+  // when click-driven Record upgrades to meeting mode (#385).
+  // Used by `stop()` to fetch the just-finished session's
+  // utterances and auto-copy the joined transcript to clipboard,
+  // restoring parity with the dictation path's instant-paste UX
+  // that the unified Record flow regressed in #384. Cleared once
+  // the copy lands, so a subsequent dictation-mode session
+  // doesn't accidentally re-copy it.
+  let lastMeetingId: number | null = null;
+
   // PTT path: hotkey-driven recording. Always dictation — instant
   // clipboard write on stop is the load-bearing UX for hold-to-
   // talk users. Click-driven recording goes through `startRecord`
@@ -407,9 +417,13 @@
           { kind: "microphone", deviceId: sourceShape.deviceId },
           { kind: "system-audio" },
         ];
-        await invoke("meeting_start_manual", { sources, appName: null });
+        const session = await invoke<MeetingSession>("meeting_start_manual", {
+          sources,
+          appName: null,
+        });
         recording = true;
         recordMode = "meeting";
+        lastMeetingId = session.id;
         // Same strongest-signal SCK confirmation as the existing
         // meeting flow (#382): a clean start with system-audio in
         // the source list means SCK actually opened.
@@ -466,13 +480,6 @@
         // multi-speaker output lives in the History meeting row,
         // which renders the joined transcript with speaker labels.
         //
-        // TODO(#385): meeting-mode stop should also auto-copy the
-        // joined transcript to clipboard for parity with the
-        // dictation path's instant-paste UX. Deferred from #384
-        // because the implementation needs a polling/retry shape
-        // to handle the case where the pump's final whisper batch
-        // hasn't flushed by the time `refreshMeetingSessions`
-        // settles.
         await invoke("meeting_stop_manual");
         recording = false;
         recordMode = null;
@@ -482,6 +489,32 @@
         // drains.
         setTimeout(() => void refreshMeetingSessions(), 300);
         setTimeout(() => void refreshHistory(), 300);
+        // Auto-copy parity (#385). Click-driven Record in meeting
+        // mode previously dropped the dictation path's instant-
+        // clipboard UX. Fetch the just-finished session's
+        // utterances and join them; write to clipboard with the
+        // same delay used for the meeting feed refresh so the
+        // pump's final whisper batch has settled. PTT keeps
+        // running through `start_dictation` and gets clipboard
+        // via `stop_dictation`'s normal return path, so the
+        // hotkey hold-to-talk experience is unchanged.
+        //
+        // Edge cases consciously not handled:
+        // - If the final whisper batch hasn't flushed at 350 ms,
+        //   the copy misses the trailing utterance. The user can
+        //   recopy from History. A retry/poll loop would handle
+        //   this but adds complexity for a corner case.
+        // - If the session has zero utterances (silence /
+        //   capture failure), skip the clipboard write entirely
+        //   so we don't blow away whatever else the user has on
+        //   the clipboard with empty text.
+        if (lastMeetingId !== null) {
+          const idAtStop = lastMeetingId;
+          lastMeetingId = null;
+          setTimeout(() => {
+            void copyMeetingSessionToClipboard(idAtStop);
+          }, 350);
+        }
       } else {
         result = await invoke<DictationResult>("stop_dictation");
         recording = false;
@@ -1008,6 +1041,44 @@
     } catch (e) {
       meetingSessionsError = formatErrorDisplay(e);
       throw e;
+    }
+  }
+
+  /// Auto-copy parity for click-driven Record (#385). Fetches the
+  /// just-finished meeting session, joins finalised utterances
+  /// (with speaker prefixes when the diarizer labelled them), and
+  /// writes the result to the clipboard. Best-effort: the user's
+  /// transcript is the load-bearing thing, and a copy hiccup is
+  /// recoverable via the History meeting row's own copy
+  /// affordance, so any failure is swallowed with a console.warn.
+  async function copyMeetingSessionToClipboard(id: number): Promise<void> {
+    try {
+      const detail = await invoke<MeetingSessionDetail>(
+        "meeting_session_get",
+        { id },
+      );
+      const finals = detail.utterances.filter((u) => u.isFinal);
+      if (finals.length === 0) {
+        // Silence / capture failure — leave the clipboard alone.
+        return;
+      }
+      // Format: speaker prefix when the diarizer set a label,
+      // plain text otherwise. Multi-speaker meetings get
+      // "Speaker A: …" prefixes; single-source mic-only sessions
+      // (the diarizer-skipped path from #369) get the source-
+      // derived label like "mic: …" — same labelling the
+      // History meeting row renders.
+      const joined = finals
+        .map((u) =>
+          u.speakerLabel ? `${u.speakerLabel}: ${u.text}` : u.text,
+        )
+        .join("\n\n");
+      await navigator.clipboard.writeText(joined);
+    } catch (err) {
+      console.warn(
+        "[hush] auto-copy of meeting transcript failed; user can recopy from History",
+        err,
+      );
     }
   }
 
