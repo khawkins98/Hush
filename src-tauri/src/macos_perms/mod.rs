@@ -32,7 +32,7 @@
 //! against the framework + a thin objc2 call for the AV one is
 //! ~50 LOC and zero new transitive deps.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Programmatic status of a single TCC-gated permission. Mirrors the
 /// `AVAuthorizationStatus` shape (the most expressive of the three
@@ -71,6 +71,101 @@ pub struct PermissionStatuses {
     pub microphone: PermissionStatus,
     pub screen_recording: PermissionStatus,
     pub input_monitoring: PermissionStatus,
+}
+
+/// Three-state health view per permission (#378). Differentiates
+/// "never granted" from "was granted, now revoked" — which the
+/// raw OS APIs collapse into a single `false` for Screen
+/// Recording (a notarised rebuild rotates the signing identity,
+/// TCC's bundle-ID + signature fingerprint no longer matches, the
+/// row is silently invalidated). The frontend renders a traffic-
+/// light dot per state; the Stale variant gets a clearer "access
+/// was revoked — restore in System Settings" hint than a generic
+/// "enable in System Settings".
+///
+/// Mapping from raw `PermissionStatus` + `last_confirmed`:
+///
+/// | status        | last_confirmed | health      |
+/// |---------------|----------------|-------------|
+/// | Granted       | any            | Confirmed   |
+/// | Denied / NotDetermined | Some  | Stale       |
+/// | Denied / NotDetermined | None  | NotGranted  |
+/// | NotApplicable | any            | NotApplicable |
+///
+/// `NotApplicable` keeps the type usable on non-macOS without
+/// forcing the frontend to special-case the platform.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionHealth {
+    /// Currently granted — preflight returned true. The dot reads
+    /// green; no action affordance.
+    Confirmed,
+    /// Previously granted (we have a `last_confirmed` timestamp on
+    /// disk) but preflight now returns false. Almost always means
+    /// a notarisation rebuild rotated the signing identity and TCC
+    /// invalidated the entry. Yellow dot + "access was revoked"
+    /// copy.
+    Stale,
+    /// No record of a prior grant. Either fresh install or the
+    /// user reset permissions via `tccutil`. Red dot + "enable in
+    /// System Settings" copy.
+    NotGranted,
+    /// Hush is on a non-macOS host.
+    NotApplicable,
+}
+
+/// Companion to `PermissionStatuses`: the same three permissions
+/// but expressed as health states (#378). Returned by the
+/// `get_permission_health` IPC; the frontend uses it to render
+/// the Permissions tab traffic-light row + the small main-window
+/// status dot.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionsHealth {
+    pub microphone: PermissionHealth,
+    pub screen_recording: PermissionHealth,
+    pub input_monitoring: PermissionHealth,
+}
+
+/// Resolve raw permission statuses + persisted `last_confirmed`
+/// timestamps into a [`PermissionsHealth`] snapshot (#378).
+///
+/// Pulled out of the IPC entry point so the three-state transition
+/// logic has a unit-testable seam without an `AppState`. Each
+/// timestamp arg is `Option<&str>` matching the settings repo's
+/// return shape — `None` means "no row in the settings table" and
+/// is the load-bearing signal for the NotGranted vs Stale split.
+pub fn evaluate_permissions_health(
+    statuses: PermissionStatuses,
+    screen_recording_last_confirmed: Option<&str>,
+    microphone_last_confirmed: Option<&str>,
+) -> PermissionsHealth {
+    PermissionsHealth {
+        microphone: classify_health(statuses.microphone, microphone_last_confirmed),
+        screen_recording: classify_health(
+            statuses.screen_recording,
+            screen_recording_last_confirmed,
+        ),
+        // Input Monitoring isn't covered by the staleness story —
+        // the IOHIDCheckAccess API already exposes Denied vs
+        // NotDetermined accurately, so the three-state mapping is
+        // mechanical: Granted → Confirmed, Denied → NotGranted,
+        // NotDetermined → NotGranted, NotApplicable → NotApplicable.
+        // Future-proofed in `classify_health` by passing `None` for
+        // last_confirmed; the helper handles it.
+        input_monitoring: classify_health(statuses.input_monitoring, None),
+    }
+}
+
+fn classify_health(status: PermissionStatus, last_confirmed: Option<&str>) -> PermissionHealth {
+    match status {
+        PermissionStatus::Granted => PermissionHealth::Confirmed,
+        PermissionStatus::NotApplicable => PermissionHealth::NotApplicable,
+        PermissionStatus::Denied | PermissionStatus::NotDetermined => match last_confirmed {
+            Some(_) => PermissionHealth::Stale,
+            None => PermissionHealth::NotGranted,
+        },
+    }
 }
 
 /// Read the current grant state for all three permissions. Cheap
@@ -223,5 +318,90 @@ mod tests {
         assert_eq!(s.microphone, PermissionStatus::NotApplicable);
         assert_eq!(s.screen_recording, PermissionStatus::NotApplicable);
         assert_eq!(s.input_monitoring, PermissionStatus::NotApplicable);
+    }
+
+    // -- evaluate_permissions_health (#378) ------------------------------
+
+    #[test]
+    fn classify_granted_is_confirmed_regardless_of_last_confirmed() {
+        // Granted always wins over the timestamp — the live OS API
+        // is the source of truth when the answer is yes.
+        assert_eq!(
+            classify_health(PermissionStatus::Granted, None),
+            PermissionHealth::Confirmed
+        );
+        assert_eq!(
+            classify_health(PermissionStatus::Granted, Some("2026-04-01T10:00:00Z")),
+            PermissionHealth::Confirmed
+        );
+    }
+
+    #[test]
+    fn classify_denied_with_history_is_stale() {
+        // Was granted before, no longer is — the cert / bundle
+        // rotation case the issue calls out as the load-bearing
+        // user-experience problem.
+        assert_eq!(
+            classify_health(PermissionStatus::Denied, Some("2026-04-01T10:00:00Z"),),
+            PermissionHealth::Stale
+        );
+        assert_eq!(
+            classify_health(
+                PermissionStatus::NotDetermined,
+                Some("2026-04-01T10:00:00Z"),
+            ),
+            PermissionHealth::Stale,
+            "preflight-false on Screen Recording (which can't \
+             distinguish denied vs not-asked) maps to Stale when \
+             we have a prior grant"
+        );
+    }
+
+    #[test]
+    fn classify_denied_without_history_is_not_granted() {
+        // Fresh install — no record on disk, no grant in the live
+        // status. Red dot.
+        assert_eq!(
+            classify_health(PermissionStatus::Denied, None),
+            PermissionHealth::NotGranted
+        );
+        assert_eq!(
+            classify_health(PermissionStatus::NotDetermined, None),
+            PermissionHealth::NotGranted
+        );
+    }
+
+    #[test]
+    fn classify_not_applicable_passes_through() {
+        // Linux / Windows builds — the type stays usable without
+        // forcing the frontend to special-case platform.
+        assert_eq!(
+            classify_health(PermissionStatus::NotApplicable, None),
+            PermissionHealth::NotApplicable
+        );
+        assert_eq!(
+            classify_health(
+                PermissionStatus::NotApplicable,
+                Some("2026-04-01T10:00:00Z"),
+            ),
+            PermissionHealth::NotApplicable
+        );
+    }
+
+    #[test]
+    fn evaluate_combines_three_permissions_with_independent_history() {
+        // End-to-end: mic granted (no history needed), screen
+        // recording stale (history but preflight-false), input
+        // monitoring not granted. The composed struct should
+        // carry each verdict independently.
+        let statuses = PermissionStatuses {
+            microphone: PermissionStatus::Granted,
+            screen_recording: PermissionStatus::Denied,
+            input_monitoring: PermissionStatus::NotDetermined,
+        };
+        let health = evaluate_permissions_health(statuses, Some("2026-04-30T14:00:00Z"), None);
+        assert_eq!(health.microphone, PermissionHealth::Confirmed);
+        assert_eq!(health.screen_recording, PermissionHealth::Stale);
+        assert_eq!(health.input_monitoring, PermissionHealth::NotGranted);
     }
 }

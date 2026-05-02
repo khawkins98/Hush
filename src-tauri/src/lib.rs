@@ -528,6 +528,8 @@ pub fn run() {
             ipc::commands::macos::open_macos_privacy_pane,
             ipc::commands::macos::diagnose_macos_permissions,
             ipc::commands::macos::reset_macos_permissions,
+            ipc::commands::macos::get_permission_health,
+            ipc::commands::macos::confirm_permission,
             ipc::commands::macos::prime_screen_recording_permission,
             ipc::commands::meeting::meeting_sessions_list,
             ipc::commands::meeting::meeting_sessions_search,

@@ -27,12 +27,16 @@
 //! that travel with the commands cleanly.
 
 use serde::Serialize;
+use tauri::State;
 
-// `IpcError` is only referenced inside `#[cfg(target_os = "macos")]`
-// blocks; the non-macOS Linux/Windows compilations don't need the
-// name in scope. Gate the import accordingly so clippy's
-// `unused-imports` lint stays clean across CI targets.
-#[cfg(target_os = "macos")]
+use crate::ipc::AppState;
+
+// `IpcError` was previously only referenced inside
+// `#[cfg(target_os = "macos")]` blocks; the cfg gate on the import
+// kept clippy's `unused-imports` lint quiet on Linux/Windows.
+// The new `get_permission_health` + `confirm_permission` commands
+// (#378) reference IpcError unconditionally, so the gate is no
+// longer correct. The import is now ungated.
 use super::IpcError;
 use super::IpcResult;
 
@@ -247,6 +251,153 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
             statuses,
         })
     }
+}
+
+/// Three-state permission health snapshot (#378). Wraps
+/// [`crate::macos_perms::PermissionsHealth`] and returns it from
+/// the new [`get_permission_health`] IPC; the frontend uses the
+/// per-permission verdicts to render Settings → Permissions
+/// traffic-light rows + the small main-window status dot.
+///
+/// `PermissionsHealth` is itself serde-shaped, so this wrapper is
+/// just a transport. Pulled into its own struct so the IPC return
+/// type is a named struct rather than a bare alias — matches every
+/// other macOS permissions command's shape.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionHealthResponse {
+    pub health: crate::macos_perms::PermissionsHealth,
+}
+
+/// Read the three-state permission health (#378). Combines the
+/// live OS preflight calls (cheap, no prompt) with the persisted
+/// `last_confirmed` timestamps to disambiguate "never granted"
+/// from "was granted, now stale".
+///
+/// Frontend calls this on Permissions-tab mount and on window
+/// focus. The probe never prompts the user — preflight calls are
+/// side-effect-free; the strongest confirmation comes from the
+/// success path of `start_dictation` / SCK probe, which write
+/// the `last_confirmed` timestamps from inside the Rust pipeline
+/// (out of scope for this command).
+#[tauri::command]
+pub async fn get_permission_health(
+    state: State<'_, AppState>,
+) -> IpcResult<PermissionHealthResponse> {
+    let statuses = crate::macos_perms::read_all();
+    let screen_recording_last_confirmed = state
+        .settings
+        .get(crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED)
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+    let microphone_last_confirmed = state
+        .settings
+        .get(crate::settings::keys::PERMISSIONS_MICROPHONE_LAST_CONFIRMED)
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+
+    // Auto-confirm on probe success (#378). When the live OS
+    // status is Granted *and* we don't have a `last_confirmed`
+    // row yet, seed one. This is what makes the Stale verdict
+    // possible later: a future probe that flips to false against
+    // an existing row reads as "was granted, now revoked" rather
+    // than "never asked". Restricting the write to the
+    // first-seen-Granted case keeps the row stable instead of
+    // re-stamping on every read.
+    let mut effective_screen_lc = screen_recording_last_confirmed.clone();
+    let mut effective_mic_lc = microphone_last_confirmed.clone();
+    if matches!(
+        statuses.screen_recording,
+        crate::macos_perms::PermissionStatus::Granted
+    ) && screen_recording_last_confirmed.is_none()
+    {
+        match stamp_last_confirmed(
+            &state,
+            crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
+        )
+        .await
+        {
+            Ok(stamped) => {
+                effective_screen_lc = Some(stamped);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "permission health: stamp screen-recording confirmed failed");
+            }
+        }
+    }
+    if matches!(
+        statuses.microphone,
+        crate::macos_perms::PermissionStatus::Granted
+    ) && microphone_last_confirmed.is_none()
+    {
+        match stamp_last_confirmed(
+            &state,
+            crate::settings::keys::PERMISSIONS_MICROPHONE_LAST_CONFIRMED,
+        )
+        .await
+        {
+            Ok(stamped) => {
+                effective_mic_lc = Some(stamped);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "permission health: stamp microphone confirmed failed");
+            }
+        }
+    }
+
+    let health = crate::macos_perms::evaluate_permissions_health(
+        statuses,
+        effective_screen_lc.as_deref(),
+        effective_mic_lc.as_deref(),
+    );
+    Ok(PermissionHealthResponse { health })
+}
+
+/// Write the current Unix-epoch-millis to a settings key, returning
+/// the value that was written so the caller can keep its in-memory
+/// view in sync without a re-read. Used both by the auto-confirm
+/// path inside [`get_permission_health`] and the explicit
+/// [`confirm_permission`] entry point.
+async fn stamp_last_confirmed(state: &AppState, key: &str) -> anyhow::Result<String> {
+    let now_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+        .to_string();
+    state
+        .settings
+        .set(key, &now_millis)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    Ok(now_millis)
+}
+
+/// Mark a permission as recently confirmed (#378). Called from the
+/// frontend after a `start_dictation` (mic) or a successful
+/// meeting start with system-audio (screen recording) — the
+/// strongest possible signal that the underlying capability is
+/// alive. Writes the current ISO-8601 timestamp to the persisted
+/// settings row keyed by the permission name.
+///
+/// The permission name argument is a stable string token rather
+/// than the typed enum so the frontend can bind the call without
+/// importing the Rust enum's serde shape — same pattern the rest
+/// of the macOS commands use for path tokens.
+#[tauri::command]
+pub async fn confirm_permission(state: State<'_, AppState>, permission: String) -> IpcResult<()> {
+    let key = match permission.as_str() {
+        "screen-recording" => crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
+        "microphone" => crate::settings::keys::PERMISSIONS_MICROPHONE_LAST_CONFIRMED,
+        other => {
+            return Err(IpcError::Settings(format!(
+                "unknown permission token {other:?} (expected 'screen-recording' or 'microphone')"
+            )));
+        }
+    };
+    stamp_last_confirmed(&state, key)
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))?;
+    Ok(())
 }
 
 /// What [`reset_macos_permissions`] returns. The string is a one-line

@@ -147,6 +147,18 @@ export async function installMocks(
         anyReset: false,
         summary: "Mocked reset (e2e — no real tccutil call).",
       }),
+      // Three-state permission health (#378). Default to all
+      // not-applicable so the panel renders the same neutral
+      // shape as the diagnostic mock above. Specs that exercise
+      // the traffic-light states override per-test.
+      get_permission_health: () => ({
+        health: {
+          microphone: "not-applicable",
+          screenRecording: "not-applicable",
+          inputMonitoring: "not-applicable",
+        },
+      }),
+      confirm_permission: () => undefined,
 
       // ---- audio sources ----
       // `audio_list_sources` is the picker-shaped enumeration: every
