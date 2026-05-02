@@ -19,7 +19,43 @@ pub mod transcription;
 pub mod tray;
 pub mod updater;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::{Emitter, Manager};
+
+/// Set by the tray's "Quit Hush" / app-menu "Quit" handlers right
+/// before they call `app_handle.exit(0)`. Read by the
+/// `RunEvent::ExitRequested` interceptor in `run()` to distinguish
+/// "user explicitly quit" from "Tauri's runtime decided to exit
+/// because no webview windows are visible" (#328).
+///
+/// On Linux/Windows the runtime's default is to quit when the
+/// last window closes — but Hush's close-hide pattern (`#263`)
+/// hides every window so a normal close-the-main-window action
+/// would leave the runtime with zero visible windows and the
+/// tray icon would vanish along with the app. Same risk theoretical
+/// on macOS though `set_activation_policy(Accessory)` masks it on
+/// the background-launch path. The flag is the single source of
+/// truth for "intentional quit" across both Quit paths.
+///
+/// `static` rather than threaded through `AppState` because the
+/// menu / tray handlers live in `setup` closures that don't have
+/// access to AppState yet (it's `manage`'d slightly earlier but
+/// the menu builders capture `&AppHandle`, not `State`). A static
+/// AtomicBool is the simplest cross-handler signal — no
+/// coordination, no locking, deterministic memory model.
+static USER_QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Public helper called from the tray + app-menu Quit handlers.
+/// Sets the flag synchronously, then calls `app_handle.exit(0)`.
+/// The synchronous-before-exit ordering matters: the
+/// `RunEvent::ExitRequested` handler reads the flag, and `exit`
+/// dispatches the event later in the runtime. By the time the
+/// event fires the flag is already set.
+pub fn request_user_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    USER_QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
 
 /// Did the LaunchAgent fire us with `--background`? Returns true if
 /// any arg in the iterator is exactly `"--background"`. Extracted
@@ -218,14 +254,24 @@ pub fn run() {
             });
 
             // Hide-on-close for main + settings (#263). Tauri 2's
-            // default destroys the window on red-✕; combined with
-            // `exitOnLastWindowClose: false` (set in
-            // tauri.conf.json), the user could close the main
-            // window expecting it to hide and find Hush had quit
-            // (tray icon gone), or close Settings and find that
-            // ⌘, no longer reopens it (window is destroyed, only
-            // re-creatable on app restart). Both flows now
-            // intercept CloseRequested and call `hide()` instead.
+            // default destroys the window on red-✕; without an
+            // intercept the user would close the main window
+            // expecting it to hide and find Hush had quit (tray
+            // icon gone), or close Settings and find that ⌘, no
+            // longer reopens it (window is destroyed, only re-
+            // creatable on app restart). Both flows now intercept
+            // CloseRequested and call `hide()` instead.
+            //
+            // Pairs with the `RunEvent::ExitRequested` interceptor
+            // wired below (#328): on Linux/Windows the runtime's
+            // default is to quit when the last window goes away,
+            // so hiding all windows would otherwise drop the tray
+            // icon along with the app. The interceptor blocks
+            // every runtime-driven exit; the only paths that quit
+            // are the tray's "Quit Hush" item and the macOS
+            // app-menu's Quit item, both of which call
+            // `request_user_quit` to set a flag the interceptor
+            // honours.
             //
             // Done from setup so the handlers are wired before
             // any user interaction can fire CloseRequested. The
@@ -497,8 +543,35 @@ pub fn run() {
             ipc::commands::meeting::meeting_app_override_delete,
             ipc::commands::meeting::meeting_app_classifier_defaults,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Hush");
+        .build(tauri::generate_context!())
+        .expect("error while building Hush")
+        .run(|_app_handle, event| {
+            // Intercept the runtime's "all webviews are gone, time
+            // to exit" event (#328). On Linux/Windows that's the
+            // default behaviour; macOS dodges it via Accessory
+            // mode but only on the background-launch path. Hush's
+            // close-hide pattern leaves zero visible webviews
+            // after a normal close, so without this interceptor
+            // the tray icon would vanish and the user would have
+            // to relaunch from the LaunchAgent / start menu /
+            // .desktop entry to recover.
+            //
+            // The flag distinguishes user-initiated quit (tray's
+            // "Quit Hush", macOS app-menu's Quit) from runtime-
+            // driven exit. Both quit menu items call
+            // `request_user_quit` which sets the flag synchronously
+            // before invoking `app.exit(0)`; by the time the
+            // resulting `ExitRequested` event lands here, the
+            // flag is already set and we let the exit proceed.
+            // The flag stays `true` once set (no reset) — the
+            // process is on its way out and there's no
+            // "consumer" pattern that would care.
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if !USER_QUIT_REQUESTED.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 /// Foreground-app poller for Meeting Mode auto-start (#112).
