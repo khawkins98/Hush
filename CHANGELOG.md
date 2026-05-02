@@ -9,20 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Speaker diarization (D2)** — opt-in per-speaker labels in
-  meeting transcripts ("Speaker 1", "Speaker 2", …) via the
-  wespeaker ResNet34-LM ONNX model. Settings → Meeting → Speakers
-  toggle persists; first-time enable auto-downloads the 26 MB
-  model from Hugging Face (SHA-256 verified) and hot-swaps the
-  diarizer without an app restart. Falls back to the existing
-  source-tagged You / Remote labels when off or when the model
-  isn't available. New `diarization-onnx` Cargo feature
-  (default-on) gates the ort runtime + ndarray + realfft deps;
-  contributors building `--no-default-features` skip the
-  ~50 MB ORT vendored libs. Closes #111. PRs #295, #296, #297,
-  #298, #299, #300 (initial chain) + #303, #304, #305 (audit
-  follow-up: per-tick cluster-stability fix, in-app download,
-  Playwright coverage).
+#### Permission health: traffic-light staleness model (#378, #381, #382, #383, #384)
+
+Three-state per-permission verdict (`confirmed` / `stale` / `not-granted`) layered on top of the live OS grant state, persisted via `permissions_*_last_confirmed` settings keys.
+
+- **Backend** (#381) — `get_permission_health` IPC + `evaluate_permissions_health` classifier. `confirm_permission` writes a Unix-epoch-millis stamp from `start_dictation`'s success path so a future probe that flips to false against an existing stamp reads as Stale (was-granted-now-revoked) rather than NotGranted.
+- **Wiring + SCK validation** (#382) — `confirm_permission` fires from `stop_dictation` (mic) and meeting-start (screen-recording) success paths; `validate_screen_recording_capability` runs a real `SCShareableContent::get()` call before stamping so a preflight=true / capability-actually-broken case (post cert/bundle-id rotation) is caught.
+- **Reusable PermissionsDialog** (#383) — extracted `PermissionsRows` + `PermissionsDialog` from the Settings tab; chained from FirstRunModal's Got It dismiss for first-run actionability and popped from `meeting_start_manual` failures so the next click opens System Settings rather than getting buried in an error chip. Closes #232.
+- **Unified Record flow** (#384) — single Record button auto-detects multi-speaker capability. SCK confirmed + mic source → meeting pump (mic + system audio); anything else → existing `start_dictation`. Mic-only badge with stale vs not-granted variants. Single-source diarizer guard skips the ONNX call when only one source bucket arrives. Closes #369 (UI slice).
+- **Auto-copy parity** (#398) — click-driven Record in meeting mode now writes the joined transcript to the clipboard on Stop, matching the dictation path's instant-paste UX. Closes #385.
+- **In-flight mode visibility** (#414) — recording status line shows "Recording · mic only / mic + system audio" so the mode change is visible mid-record, not just after Stop. Closes #409.
+- **Auto-copy outcome notice** (#415) — success/failure toast above HistoryPanel; failure variant points at the History meeting row for manual recovery. Closes #408.
+- **Typed PermissionDenied variant** (#416) — `IpcError::PermissionDenied(<permission>)` replaces substring scraping the chained message. Classifier runs at the IPC boundary (meeting + dictation start). Frontend `isPermissionShapedError` switches to discriminant check. Closes #386 partial.
+- **Upfront mic AVAuthorizationStatus probe** (#424) — cpal's mic-denial chain doesn't include "microphone", so the post-call classifier rarely fired. Probing AVAuthorizationStatus before opening cpal surfaces the typed variant directly. Closes #417.
+- **SCK probe race-protection** (#422) — `tokio::sync::Mutex` around the SCK auto-confirm so concurrent `get_permission_health` calls (window-focus + startup probe) don't each `spawn_blocking` the Cocoa round-trip. Closes #386.
+
+#### Settings monolith decomposition (#332, #387, #389, #390, #391, #394, #396, #397, #392)
+
+Six tab components extracted from the 2.4k-LOC `settings/+page.svelte`. Page becomes a thin tab-switcher (~500 LOC) wrapping lazy-mounted children that own their own state, IPC, and lifecycle. Cumulative shrink: **2428 → ~500 LOC (-79%)**.
+
+- `PermissionsTab.svelte` (#387) — diagnostic + reset + permission-rows
+- `VocabularyTab.svelte` (#389) — vocabulary CRUD + form
+- `ReplacementsTab.svelte` (#390) — replacement CRUD + form
+- `GeneralTab.svelte` (#391) — autostart + HUD + audio cues + transcription threads + PTT (largest slice, -590 LOC alone)
+- `MeetingTab.svelte` (#394) — auto-start + diarization + diarizer-model installer + app-classifier overrides
+- `AboutTab.svelte` (#396) — app metadata + manual update probe + license/source links. Closes #332 phase 1.
+- `settings-tab.css` (#397) — shared module for the card primitives (`.settings-group`, `.toggle-row`, `button.ghost`, etc.) so palette tweaks land in one place. Closes #392.
+
+#### Dictation usage stats (#293, #399, #407, #412)
+
+Aggregate `get_dictation_stats` IPC + summary tile bar above History list: Sessions / Words / ~Saved (40 wpm baseline) / ~Keystrokes. Hidden when `sessionCount === 0`. Pluralization + estimate-honesty pass in #407. Multi-space word-count behaviour pinned in #412 (closes #406).
+
+#### Test scaffold for IPC commands that emit Tauri events (#315, #400, #402, #420, #421)
+
+- `ipc::events::EventEmitter` trait (#400) wraps `AppHandle::emit` so spawned-task paths can be driven from `#[tokio::test]` without a real Tauri runtime. `RecordingEventEmitter` (test-only) captures `(event, payload)` pairs into a `Mutex<Vec<…>>`.
+- `download_diarizer_model_inner` extraction (#400) + `model_download_inner` extraction (#402). Both test the duplicate-rejection guard + cancel-handle cleanup-on-failure.
+- `start_dictation_inner` updated to use the classifier (#420), and the Whisper download's exists-check moved inside the lock to close the audit-2 TOCTOU (#421). Closes #315.
+
+#### Build + CI hardening
+
+- `MACOSX_DEPLOYMENT_TARGET` + `CMAKE_OSX_DEPLOYMENT_TARGET` set via `.cargo/config.toml` `[env]` table (#404), so `npm run tauri dev` and bare `cargo build` both inherit the 14.0 baseline without shell-environment dependency. Closes #393 follow-up.
+- New CI job `cargo-env-allowlist` lints the `[env]` keys against a hardcoded list (#413, hardened to `tomllib` parser in #423 to close edge-cases around quoted / indented / dotted-table keys). Closes #410, #418.
+
+#### UI: brand icon refresh (#395, #401, #405)
+
+- Transparent SVG over the white-bg PNG (#401) — no more white badge against the grey toolbar
+- Custom microphone glyph for the 22 px optical size (#405) — replaces the original speech-bubbles-in-shield asset that read as "chat" rather than dictation. Closes #395.
+
+#### Other UX + cleanup
+
+- Permissions UX & copy polish (#388, #403): `confirm_permission` returns `IpcError::Internal` instead of `Settings` for unknown tokens; stale-hint copy softened to be observable rather than causal; PermissionsDialog default intro trimmed; focus-event debounce on `refreshPermissionHealth` (250 ms trailing edge).
 
 ### Fixed
 
@@ -30,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the post-failure refresh (`loadDiarizationEnabled` was
   clobbering `diarizationError` on a successful read; the setter
   now owns that field exclusively). Caught by #302 e2e.
+
+### Notes
+
+- Diarization (D2) entry that previously lived here moves into the next tagged release alongside the headline items above. The work landed in PRs #295–#305 with the audit follow-up; behaviour is unchanged.
+
+  Original entry: opt-in per-speaker labels in meeting transcripts ("Speaker 1", "Speaker 2", …) via the wespeaker ResNet34-LM ONNX model. Settings → Meeting → Speakers toggle persists; first-time enable auto-downloads the 26 MB model from Hugging Face (SHA-256 verified) and hot-swaps the diarizer without an app restart. Falls back to source-tagged You / Remote labels when off or unavailable. New `diarization-onnx` Cargo feature (default-on) gates the ort runtime + ndarray + realfft deps; contributors building `--no-default-features` skip the ~50 MB ORT vendored libs. Closes #111.
 
 ## [0.2.0] - 2026-04-30
 
