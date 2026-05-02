@@ -53,7 +53,8 @@
   <section class="dictation-stats" aria-label="Dictation usage statistics">
     <p class="stats-hero">
       You've dictated
-      <strong>{stats.wordCount.toLocaleString()}</strong> words across
+      <strong>{stats.wordCount.toLocaleString()}</strong>
+      {stats.wordCount === 1 ? "word" : "words"} across
       <strong>{stats.sessionCount.toLocaleString()}</strong>
       {stats.sessionCount === 1 ? "session" : "sessions"}.
     </p>
@@ -63,20 +64,18 @@
           >{stats.sessionCount.toLocaleString()}</span
         >
         <span class="tile-label">{stats.sessionCount === 1 ? "Session" : "Sessions"}</span>
-        <span class="tile-sub">recordings completed</span>
       </li>
       <li class="stats-tile">
         <span class="tile-value" data-testid="stats-words"
           >{stats.wordCount.toLocaleString()}</span
         >
-        <span class="tile-label">Words</span>
-        <span class="tile-sub">words generated</span>
+        <span class="tile-label">{stats.wordCount === 1 ? "Word" : "Words"}</span>
       </li>
       {#if timeSaved}
         <li class="stats-tile">
           <span class="tile-value" data-testid="stats-time-saved">~{timeSaved}</span>
           <span class="tile-label">Saved</span>
-          <span class="tile-sub">vs. typing at 40 wpm</span>
+          <span class="tile-sub">est. at 40 wpm typing</span>
         </li>
       {/if}
       <li class="stats-tile">
@@ -84,7 +83,7 @@
           >~{stats.totalChars.toLocaleString()}</span
         >
         <span class="tile-label">Keystrokes</span>
-        <span class="tile-sub">not typed by hand</span>
+        <span class="tile-sub">est. not typed by hand</span>
       </li>
     </ul>
   </section>
