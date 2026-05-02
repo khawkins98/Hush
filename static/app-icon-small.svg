@@ -1,0 +1,47 @@
+<!--
+  Brand icon, 22 px optical size variant (#395 follow-up).
+
+  Replaces the dense "speech bubbles inside a shield" line-art
+  that the original `app-icon.svg` carries. That icon was
+  designed for the macOS bundle (.icns / 128px+) where the
+  inner detail is visible; squashing it into the 22 × 22 px
+  app-bar slot left the inner bubbles essentially unreadable
+  AND the "speech bubbles" framing read as chat / messaging,
+  not dictation.
+
+  This variant is a microphone — the canonical glyph for an
+  audio-capture app. Two simple shapes:
+    1. The capsule (rounded rectangle, 8 × 12 viewport units)
+    2. The stand (a "U"-shape arc plus a vertical post)
+  Both stroked at 1.6 viewport-units so the strokes survive
+  the downscale to 22 px without going sub-pixel.
+
+  Colour `#2c3e8f` matches the rest of the Hush UI accent
+  (button.ghost, link-like) rather than the legacy `#1877F2`
+  Facebook-blue the original SVG used; that colour was a
+  bundle-only choice from the original asset and never read as
+  intentional inside the app.
+
+  Used by `routes/+page.svelte` (header) and
+  `lib/AppSidebar.svelte` (sidebar). The full-detail
+  `app-icon.svg` stays for any future place that wants the
+  branded original.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="#2c3e8f"
+  stroke-width="1.6"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+>
+  <!-- Microphone capsule -->
+  <rect x="9" y="3" width="6" height="11" rx="3" />
+  <!-- "U"-shaped cradle -->
+  <path d="M6 11a6 6 0 0 0 12 0" />
+  <!-- Stand post + base -->
+  <line x1="12" y1="17" x2="12" y2="20" />
+  <line x1="9" y1="20" x2="15" y2="20" />
+</svg>

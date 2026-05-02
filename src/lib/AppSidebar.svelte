@@ -61,10 +61,14 @@
 
 <nav class="app-sidebar" aria-label="Main navigation">
   <div class="brand">
-    <!-- SVG over the PNG (#395) — see +page.svelte for rationale. -->
+    <!--
+      Small-optical-size brand icon (#395 follow-up) —
+      microphone glyph at 22 px. See +page.svelte for the full
+      rationale.
+    -->
     <img
       class="brand-icon"
-      src="/app-icon.svg"
+      src="/app-icon-small.svg"
       alt=""
       aria-hidden="true"
       width="22"
