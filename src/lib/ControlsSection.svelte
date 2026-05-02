@@ -2,7 +2,7 @@
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import Select from "./Select.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
-  import type { AudioSourceListing } from "./types";
+  import type { AudioSourceListing, PermissionHealth } from "./types";
 
   type Props = {
     sources: AudioSourceListing[];
@@ -26,6 +26,15 @@
     // Renders an inline model chip above the audio picker so the two
     // session-config controls are visually co-located.
     activeModelName: string | null;
+    // Screen Recording permission health for the unified Record
+    // flow's mic-only badge (#369). `null` when the health probe
+    // hasn't returned yet — badge stays hidden until we have a
+    // signal. `confirmed` hides the badge (Record will upgrade to
+    // multi-source meeting mode); `stale` / `not-granted` show
+    // distinct copy + the deep-link to Settings → Permissions.
+    // `not-applicable` (Linux/Windows) also hides the badge.
+    screenRecordingHealth?: PermissionHealth | null;
+    onOpenPermissions?: () => void;
   };
 
   let {
@@ -41,7 +50,23 @@
     onStop,
     onScrollToModelPicker,
     activeModelName,
+    screenRecordingHealth = null,
+    onOpenPermissions,
   }: Props = $props();
+
+  // Show the badge when the user has a mic selected (so the upgrade
+  // would actually apply), is not already recording, and SCK is
+  // either stale or never granted. `confirmed` and `not-applicable`
+  // both hide. Picking system-audio explicitly also hides — that's
+  // a deliberate "just record the system" intent the badge
+  // shouldn't second-guess.
+  let badgeVisible = $derived(
+    !recording
+      && selected !== null
+      && selected !== "system"
+      && (screenRecordingHealth === "stale" || screenRecordingHealth === "not-granted"),
+  );
+  let badgeIsStale = $derived(screenRecordingHealth === "stale");
 
   // Derived: separate the mic devices from the system-audio entry so
   // the picker can group them (mics first, then system audio with a
@@ -203,6 +228,36 @@
       aria-label="Stop recording and transcribe"
     >
       <span class="rec-dot stop" aria-hidden="true"></span> Stop and transcribe
+    </button>
+  {/if}
+
+  {#if badgeVisible}
+    <!--
+      Mic-only badge (#369). Surfaces alongside the Record button
+      to explain why a click won't capture system audio: the
+      Screen Recording permission isn't currently confirmed.
+      Distinct copy for `stale` (was granted, TCC entry rotated —
+      re-enable to recover) vs `not-granted` (never asked, grant
+      to unlock speaker separation). Click routes to Settings →
+      Permissions, where the existing per-row deep-link opens
+      System Settings.
+    -->
+    <button
+      type="button"
+      class="record-mode-badge"
+      data-health={badgeIsStale ? "stale" : "not-granted"}
+      onclick={onOpenPermissions}
+      aria-label="Open Permissions in Settings"
+      data-testid="record-mode-badge"
+    >
+      <span class="record-mode-badge-dot" aria-hidden="true"></span>
+      {#if badgeIsStale}
+        Mic-only — Screen Recording was granted but is now stale.
+        Re-enable for speaker separation.
+      {:else}
+        Mic-only — grant Screen Recording to unlock multi-speaker
+        meeting capture.
+      {/if}
     </button>
   {/if}
 
@@ -431,6 +486,71 @@ button.primary:hover:not(:disabled) {
 
 .rec-dot.stop {
   background-color: white;
+}
+
+/* ── Mic-only / stale Record badge (#369) ────────────────── */
+.record-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  align-self: center;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  font-family: inherit;
+  border-radius: 999px;
+  border: 1px solid #d1d1d8;
+  background-color: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+.record-mode-badge:hover {
+  background-color: var(--bg-elevated);
+  border-color: var(--accent-hover);
+  color: var(--text-primary);
+}
+.record-mode-badge:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+.record-mode-badge-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background-color: #c0c0c5;
+  flex-shrink: 0;
+}
+.record-mode-badge[data-health="stale"] .record-mode-badge-dot {
+  background-color: #e0a020;
+}
+.record-mode-badge[data-health="not-granted"] .record-mode-badge-dot {
+  background-color: #d83a3a;
+}
+.record-mode-badge[data-health="stale"] {
+  background-color: #fdf6e3;
+  border-color: #e7c887;
+  color: #7a4e00;
+}
+.record-mode-badge[data-health="stale"]:hover {
+  background-color: #f9efce;
+  border-color: #d8b46a;
+  color: #5a3700;
+}
+@media (prefers-color-scheme: dark) {
+  .record-mode-badge[data-health="stale"] {
+    background-color: #3d2f12;
+    color: #f0c878;
+    border-color: #6c4e1a;
+  }
+  .record-mode-badge[data-health="stale"]:hover {
+    background-color: #4a3a18;
+    color: #ffd790;
+    border-color: #8a6520;
+  }
 }
 
 /* ── Status line ─────────────────────────────────────────── */
