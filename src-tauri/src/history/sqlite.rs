@@ -406,7 +406,9 @@ mod tests {
         // Totals: 3 sessions, 6 words, 3702 ms, 29 chars.
         let repo = fresh_repo().await;
         repo.create(sample("hello world", None)).await.unwrap();
-        repo.create(sample("one two three four", None)).await.unwrap();
+        repo.create(sample("one two three four", None))
+            .await
+            .unwrap();
         repo.create(sample("", None)).await.unwrap();
         let stats = repo.get_stats().await.unwrap();
         assert_eq!(stats.session_count, 3);
