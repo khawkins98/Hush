@@ -4,6 +4,28 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-02 — Sync-primitive conventions in `AppState` and `SessionManager` (#431)
+
+`AppState` (`src-tauri/src/ipc/mod.rs`) and `SessionManager` (`src-tauri/src/meeting/manager.rs`) collectively reach for four kinds of synchronisation primitive — `std::sync::Mutex`, `std::sync::RwLock`, `tokio::sync::Mutex`, and the `Atomic*` family. Each call site is individually defensible, but the rules for which one to pick weren't written down. Audit follow-up (#431) flagged this as a "next contributor will re-derive it" smell. Recording the convention here so they don't.
+
+### Rule of thumb
+
+1. **Reach for an `Atomic*` first.** A primitive `bool` / `i32` / `u8` that's set on one path and read on many is the right shape for an atomic. Examples: `hud_enabled`, `inference_threads`, `meeting_autostart_mode`, `ptt_active`, `diarization_enabled`. No locking, no contention, no risk of starving a reader.
+2. **Use `std::sync::Mutex` for short critical sections in sync code.** Synchronous IPC handlers, `setup` hooks, and most `AppState` field initialisation run synchronously; a non-async mutex is the cheapest fit and avoids dragging tokio into call sites that don't need it. Examples: `pending_foreground`, `last_update_check`, the inner `Option<Arc<dyn Trait>>` slot for `TranscribeSlot` / `DiarizeSlot`.
+3. **Use `tokio::sync::Mutex` only when the critical section needs to `.await`.** The async lock holds across awaits; the std lock would deadlock if the runtime parked the task while the lock was held. Example: `sck_probe_lock` in #422, which serialises a `spawn_blocking` Cocoa probe across concurrent IPC calls.
+4. **Use `std::sync::RwLock` only when reads dominate and the writer doesn't need to `.await`.** Examples: `ptt_combo` (read by every event-loop iteration; written rarely from Settings).
+5. **Wrap collections in `Arc<Mutex<…>>` rather than `Mutex<Arc<…>>`.** The Arc gives the wrapped state shared ownership across spawned tasks; the Mutex provides exclusion. Inverting the order means clones produce independent locks. Example: `downloads: Arc<Mutex<HashMap<String, CancelHandle>>>`.
+
+### Anti-patterns to avoid
+
+- **Don't reach for `tokio::sync::Mutex` "just in case" we go async later.** It's slower than `std::sync::Mutex` because every lock acquisition allocates a future, and the `Send` requirement infects every consumer of the guard. Pick the sync one and migrate later if the call site genuinely needs to await — the upgrade is mechanical.
+- **Don't reach for `RwLock` over `Mutex` without proof of read contention.** Reader/writer locks have measurable per-acquisition overhead; for typical IPC handlers a `Mutex` is faster on the contended path and only marginally slower on the uncontended path.
+- **Don't mix `std::sync` and `tokio::sync` on the same field.** A single field has a single lock type; pick by call-site needs and stick with it. The mix-and-match in `AppState` happened organically and that's why this entry exists.
+
+### Audit context
+
+The 22-field `AppState` currently uses 9 atomics, 5 std `Mutex`es, 1 std `RwLock`, and 1 tokio `Mutex` — each defensible individually. The audit's other open recommendation (regrouping fields into a `RuntimeFlags` substruct) is independent of this convention; this entry just documents which lock type to pick when adding new fields, regardless of where they live structurally.
+
 ## 2026-05-02 — Traffic-light permission health: two-signal model + implementation decisions (#378)
 
 The `macos_perms::PermissionHealth` classifier (landed in the unnamed colleague's PR, post-#378) surfaces three states — Confirmed / Stale / NotGranted — by combining two independent signals:
