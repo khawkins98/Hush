@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Audio pipeline diagram in welcome + About surfaces (#427 Item 3)
+
+- New `src/lib/AudioPipelineDiagram.svelte` — inline-SVG left-to-right diagram of the active capture path: Microphone (and System audio when a meeting is active) → Whisper engine → Transcript. Source / engine / output nodes pick up CSS tokens (`--accent`, `--bg-surface`, `--text-on-accent`) so dark-mode and the manual `data-theme` override flow through without per-theme variants.
+- **Embedded in `FirstRunModal.svelte`** as a visual lead-in above the permissions sections — a first-time user sees the chain ending in their clipboard before reading any copy.
+- **Embedded in `AboutTab.svelte`** as a later-encounter "how it works" explainer for users who skipped or forgot the first-run modal.
+- Caption: *"Audio stays on your device end-to-end."* — restates the privacy posture in the same place a user is taking in the routing diagram.
+
+The Phase C carry-over from #411 (a separate `WelcomePanel.svelte` surface) is intentionally not built — the existing `FirstRunModal.svelte` already covers the welcome experience with thoughtful a11y plumbing (focus trap, escape key, role=dialog), so the diagram embeds there directly rather than duplicating into a new component.
+
 #### Progressive disclosure in Settings (#427 Item 2)
 
 - New `src/lib/AdvancedSection.svelte` — a reusable `<details>`-style disclosure wrapper that hides power-user controls behind a labeled toggle. First-time visitors see only the essentials; power users click once and see everything.

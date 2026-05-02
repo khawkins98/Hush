@@ -21,6 +21,8 @@
   parent page.
 -->
 <script lang="ts">
+  import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
+
   type Props = {
     show: boolean;
     onDismiss: () => void | Promise<void>;
@@ -115,6 +117,15 @@
           Local, private voice-to-text. Here's what to know about
           permissions and privacy before you start.
         </p>
+        <!--
+          Audio pipeline diagram (#427 Item 3). Sits as a visual
+          lead-in so a user immediately sees the chain — mic /
+          system audio → Whisper → transcript — before reading
+          the permissions sections below. The caption ("Audio
+          stays on your device end-to-end") seeds the privacy
+          framing the modal's footer reinforces.
+        -->
+        <AudioPipelineDiagram />
       </header>
 
       <section class="first-run-section">
