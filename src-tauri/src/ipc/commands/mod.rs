@@ -816,6 +816,22 @@ pub async fn history_clear(state: State<'_, AppState>) -> IpcResult<i64> {
         .map_err(|e| IpcError::History(e.to_string()))
 }
 
+/// Aggregate stats for the History stats bar (#293). Returns
+/// session count, total words, total recording time, and total
+/// transcript characters. Empty-history case returns all zeros so
+/// the frontend can render a consistent shape.
+#[tauri::command]
+pub async fn get_dictation_stats(
+    state: State<'_, AppState>,
+) -> IpcResult<crate::history::DictationStats> {
+    state
+        .data
+        .history
+        .get_stats()
+        .await
+        .map_err(|e| IpcError::History(e.to_string()))
+}
+
 // -- Replacement-rule CRUD -----------------------------------------------
 //
 // Settings-shaped commands the frontend's "Replacements" panel binds to.
