@@ -268,10 +268,15 @@ pub(crate) struct ModelDownloadDeps {
 /// - the cancel-handle cleanup on the spawned task's failure
 ///   branch (the same pattern the diarizer download uses).
 ///
-/// The `dest.exists()` pre-check stays outside the critical
-/// section here — same shape as it was pre-#315; the Whisper path
-/// hasn't picked up the audit-2 TOCTOU fix the diarizer got. That
-/// can be a separate PR.
+/// Both the duplicate-rejection guard *and* the on-disk
+/// existence check now live inside the same
+/// `deps.downloads.lock()` critical section. Pre-#421 the
+/// existence check sat outside the lock and two rapid clicks
+/// could both pass it before either took the lock; one would
+/// then start a download on top of a freshly-finalized file
+/// (the other click's task having just removed its cancel
+/// handle and written the file). Mirrors the audit-2 fix
+/// landed for `download_diarizer_model_inner` in #308.
 pub(crate) async fn model_download_inner(
     deps: ModelDownloadDeps,
     model: ModelMetadata,
@@ -286,19 +291,27 @@ pub(crate) async fn model_download_inner(
 
     let id = model.id.clone();
     let dest = deps.models_dir.join(&model.filename);
-    if dest.exists() {
-        return Err(IpcError::Settings(format!(
-            "{} is already downloaded",
-            model.display_name
-        )));
-    }
 
-    // Register a cancel handle and bail if a download is already in
-    // flight for this model. The HashMap is keyed by id; one
-    // concurrent download per model is the contract.
+    // Register a cancel handle, re-check on-disk presence, and
+    // refuse a duplicate concurrent click — all inside a single
+    // critical section. The exists-check moved inside the lock
+    // (audit-2 close-out, mirroring the diarizer fix from #308):
+    // pre-fix two rapid clicks could both pass the on-disk check
+    // before either took the lock, then both insert + start.
+    // Holding the lock for the existence test means a concurrent
+    // download that *just* finished is observable as either
+    // "file exists now" or "cancel handle still in flight" —
+    // caller gets a clean error either way and we never start a
+    // duplicate download on top of a freshly-finalized file.
     let cancel = CancelHandle::new();
     {
         let mut guard = deps.downloads.lock().map_err(poisoned)?;
+        if dest.exists() {
+            return Err(IpcError::Settings(format!(
+                "{} is already downloaded",
+                model.display_name
+            )));
+        }
         if guard.contains_key(&id) {
             return Err(IpcError::Settings(format!(
                 "{} is already downloading",
@@ -496,6 +509,55 @@ mod tests {
         assert!(
             downloads.lock().unwrap().contains_key(&model.id),
             "pre-existing cancel handle was clobbered by the rejection path"
+        );
+    }
+
+    #[tokio::test]
+    async fn model_download_rejects_when_destination_already_exists() {
+        // Audit-2 TOCTOU close (#308 / #421). Pre-fix the on-disk
+        // existence check sat outside the lock; this test pins
+        // that it's now part of the rejection path inside the
+        // critical section. Pre-place the destination file, then
+        // call the inner — must return `IpcError::Settings`
+        // ("already downloaded") and emit no events.
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            CancelHandle,
+        >::new()));
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn EventEmitter> = std::sync::Arc::new(recorder.clone());
+        let tmp = tempfile::tempdir().unwrap();
+        let model = make_test_model("http://127.0.0.1:1/never-fetched");
+
+        // Pre-place the dest file as if a prior download had
+        // landed it.
+        let dest = tmp.path().join(&model.filename);
+        std::fs::write(&dest, b"already here").unwrap();
+
+        let deps = build_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        match model_download_inner(deps, model.clone()).await {
+            Err(IpcError::Settings(msg)) => {
+                assert!(
+                    msg.contains("already downloaded"),
+                    "expected exists-rejection message, got: {msg}"
+                );
+            }
+            other => panic!("expected IpcError::Settings, got: {other:?}"),
+        }
+        assert!(
+            recorder.events().is_empty(),
+            "exists rejection should not emit any events"
+        );
+        // The cancel handle map must NOT have an entry for this
+        // id — the rejection bailed before insert.
+        assert!(
+            !downloads.lock().unwrap().contains_key(&model.id),
+            "exists rejection should not register a cancel handle"
         );
     }
 
