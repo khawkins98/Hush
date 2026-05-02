@@ -19,7 +19,8 @@
 //! the catalog's `sha256` is empty (the initial state before a
 //! contributor verifies the upstream hash), the IPC command refuses
 //! to start the download and the picker falls back to "place file
-//! manually" — see TODO(#41) for the verification process.
+//! manually" — see #41 (closed) for the verification process used
+//! when seeding the per-model SHAs.
 //!
 //! There is **no trust-on-first-use mode**. The point of SHA
 //! verification is to detect tampering between the upstream and the
