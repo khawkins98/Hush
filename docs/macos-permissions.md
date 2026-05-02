@@ -154,6 +154,27 @@ The same procedure applies if you switch between dev (unsigned `npm run tauri de
 
 ---
 
+## Traffic-light permission health in Settings → Permissions
+
+As of #378 each permission row shows a coloured dot:
+
+- 🟢 **Green (Confirmed)** — the OS preflight returns true right now. All good.
+- 🟡 **Yellow (Stale)** — the OS preflight returns false, but Hush has a record of it being granted before. Almost always means a notarisation rebuild rotated the ad-hoc signing identity and TCC silently invalidated the entry.
+- 🔴 **Red (Not granted)** — no prior grant on record. Fresh install or a `tccutil reset`.
+- ⚫ **Grey (Not applicable)** — Linux / Windows builds where the TCC concept doesn't apply.
+
+**Stale is the tricky one.** macOS's `CGPreflightScreenCaptureAccess()` API returns a single boolean — it cannot distinguish "explicitly denied" from "never asked" from "was granted but the signing identity changed." Hush resolves the ambiguity by persisting a `last_confirmed` timestamp the first time a permission is observed as Granted (and updating it after each successful capability use via the `confirm_permission` IPC). A later probe that returns false against an existing timestamp → Stale; same probe with no timestamp → NotGranted.
+
+The Stale recovery recipe:
+
+1. Settings → Permissions → the yellow row's **Grant in Settings…** button (deep-links to the right pane).
+2. If multiple `Hush.app` rows appear in the pane, `-` delete the stale ones, then toggle Allow on the current row.
+3. Hush auto-detects the new grant on the next Settings tab open (or click Refresh).
+
+If the yellow dot reappears immediately after granting, you have the stale-rows problem — see "Dev-loop: stale Hush.app rows after a re-bundle" above.
+
+---
+
 ## What about Hush's first-run welcome modal?
 
 The welcome modal (the dismissible card on first launch) explains the permissions and links out to the right System Settings panes via the `open_macos_privacy_pane` IPC command. It does **not** trigger the prompts itself — it can't, macOS doesn't expose a programmatic "ask for X" API. The OS prompts already fire from the cpal / rdev / SCK call sites. The modal is an explainer, not a button to grant.
