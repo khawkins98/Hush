@@ -27,6 +27,16 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 echo "[hush tauri:bundle] building debug .app — this is slow (full link + frontend build)…"
+
+# whisper-rs-sys (and ggml inside it) use std::filesystem APIs that require
+# macOS 10.15+. Without a deployment target set, cmake defaults to an older
+# baseline and the build fails with "'exists' is unavailable: introduced in
+# macOS 10.15" errors. Both vars are required: MACOSX_DEPLOYMENT_TARGET is
+# read by cargo/rustc; CMAKE_OSX_DEPLOYMENT_TARGET is read by cmake-rs.
+# 14.0 matches the release workflow (release.yml "Set macOS clang flags" step).
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
+export CMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}"
+
 # `tauri build` honours `bundle.active = true` in tauri.conf.json by
 # default, so we don't pass --no-bundle / --bundles. --debug skips
 # release-profile optimisations that would push the build past the
