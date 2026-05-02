@@ -306,22 +306,27 @@ pub async fn get_permission_health(
     // re-stamping on every read.
     let mut effective_screen_lc = screen_recording_last_confirmed.clone();
     let mut effective_mic_lc = microphone_last_confirmed.clone();
+    // Strongest-signal validation (#378 follow-up review). The
+    // `validate_screen_recording_capability` helper is a macOS-only
+    // re-export — Screen Recording is a macOS-only TCC concept, so
+    // the whole stamp-on-validation block is cfg-gated. On Linux /
+    // Windows `statuses.screen_recording` is always NotApplicable
+    // and this branch wouldn't fire anyway; the gate just keeps
+    // the symbol resolution clean.
+    #[cfg(target_os = "macos")]
     if matches!(
         statuses.screen_recording,
         crate::macos_perms::PermissionStatus::Granted
     ) && screen_recording_last_confirmed.is_none()
     {
-        // Strongest-signal validation (#378 follow-up review). A
-        // stale TCC row (cert / bundle-id rotation) can return
+        // A stale TCC row (cert / bundle-id rotation) can return
         // preflight=true while the real `SCShareableContent::get()`
-        // call still fails — exactly the case the staleness
-        // model is built to detect. So don't treat preflight-true
-        // as sufficient evidence on its own; run the real probe
-        // via spawn_blocking and only stamp when it succeeds. If
-        // the probe fails, leave `last_confirmed` unset; the next
-        // false-preflight tick reads NotGranted (not Stale),
-        // which is honest: we have no evidence the capability
-        // works in this install yet.
+        // call still fails — exactly the case the staleness model
+        // is built to detect. Run the real probe via
+        // spawn_blocking and only stamp when it succeeds. If the
+        // probe fails, leave `last_confirmed` unset; the next
+        // false-preflight tick reads NotGranted (honest — no
+        // evidence the capability works in this install yet).
         let probe = tauri::async_runtime::spawn_blocking(
             crate::audio::validate_screen_recording_capability,
         )
