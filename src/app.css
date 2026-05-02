@@ -71,6 +71,28 @@
   --control-padding-x: 0.85rem;
 }
 
+/*
+ * Theme tokens come in three layers (#411 phase A):
+ *
+ *  1. The default `:root` block above is the light palette and
+ *     applies whenever no explicit override is set.
+ *  2. `@media (prefers-color-scheme: dark)` swaps to dark when the
+ *     OS asks for it — the existing automatic behaviour.
+ *  3. `:root[data-theme="…"]` is a manual user override set by
+ *     `lib/theme.ts` from the Settings → General → Appearance
+ *     picker. Attribute selectors out-specific the bare `:root`
+ *     used inside the `@media` block, so a user on a dark OS who
+ *     picks Light still gets the light tokens (and vice versa).
+ *     When `data-theme` is absent the OS preference wins.
+ *
+ * The light + dark token bodies are repeated rather than aliased
+ * because the manual override has to re-state the full palette
+ * (a dark OS + manual Light otherwise inherits dark from the
+ * media query). Keep the three blocks — `:root` default,
+ * `[data-theme="light"]`, `@media`/`[data-theme="dark"]` — in
+ * sync when adjusting the palette.
+ */
+
 @media (prefers-color-scheme: dark) {
   :root {
     --bg-app:      #1a1a1a;
@@ -98,4 +120,58 @@
     --info-border:    #3a4a7a;
     --info-text:      #c0d0ff;
   }
+}
+
+:root[data-theme="light"] {
+  --bg-app:      #f6f6f6;
+  --bg-sidebar:  #f0f0f3;
+  --bg-surface:  #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-input:    #ffffff;
+
+  --text-primary:   #111111;
+  --text-secondary: #444444;
+  --text-muted:     #888888;
+
+  --border:        #e1e1e4;
+  --border-subtle: #ebebef;
+  --border-input:  #d1d1d8;
+
+  --accent-subtle: rgba(106, 140, 240, 0.12);
+
+  --danger-bg:      #fff0f0;
+  --danger-border:  #f5c0c0;
+  --warning-bg:     #fff7e6;
+  --warning-border: #f0c87b;
+  --warning-text:   #6a4a00;
+  --info-bg:        #eef2ff;
+  --info-border:    #c7d2fe;
+  --info-text:      #2c3e8f;
+}
+
+:root[data-theme="dark"] {
+  --bg-app:      #1a1a1a;
+  --bg-sidebar:  #1d1d1f;
+  --bg-surface:  #242428;
+  --bg-elevated: #2a2a2e;
+  --bg-input:    #2a2a2a;
+
+  --text-primary:   #f0f0f0;
+  --text-secondary: #c0c0c0;
+  --text-muted:     #888888;
+
+  --border:        #2f2f33;
+  --border-subtle: #252528;
+  --border-input:  #3a3a3e;
+
+  --accent-subtle: rgba(106, 140, 240, 0.18);
+
+  --danger-bg:      #2a1010;
+  --danger-border:  #5a2020;
+  --warning-bg:     #3a2e10;
+  --warning-border: #7a5a20;
+  --warning-text:   #f0d090;
+  --info-bg:        #1e2a4a;
+  --info-border:    #3a4a7a;
+  --info-text:      #c0d0ff;
 }

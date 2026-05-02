@@ -31,6 +31,7 @@
 
   import PttHotkeyEditor from "./PttHotkeyEditor.svelte";
   import { formatErrorMessage } from "./errors";
+  import { readStoredTheme, setTheme, type ThemePref } from "./theme";
   import "./settings-tab.css";
 
   let autostartEnabled = $state(false);
@@ -65,6 +66,27 @@
   let inferenceThreadsError = $state<string | null>(null);
 
   let isMacOS = $state(false);
+
+  // Appearance / theme override (#411 phase A). Default "system"
+  // means follow `prefers-color-scheme`; explicit values force
+  // light or dark regardless of OS preference. Persistence is
+  // localStorage; the layout listens for a Tauri event to re-
+  // apply when the setting changes from another window. Read at
+  // mount rather than at script-evaluation time so the picker
+  // reflects whatever the layout already applied.
+  let themePref = $state<ThemePref>("system");
+  let themeBusy = $state(false);
+
+  async function onThemeChange(next: ThemePref) {
+    if (themeBusy || next === themePref) return;
+    themeBusy = true;
+    try {
+      await setTheme(next);
+      themePref = next;
+    } finally {
+      themeBusy = false;
+    }
+  }
 
   async function loadAutostartState(): Promise<void> {
     try {
@@ -254,6 +276,7 @@
     } catch (e) {
       console.warn("[hush] platform() failed in GeneralTab", e);
     }
+    themePref = readStoredTheme();
   });
 </script>
 
@@ -376,6 +399,39 @@
   {#if soundCuesError}
     <p class="settings-error">{soundCuesError}</p>
   {/if}
+</section>
+
+<section class="settings-group" aria-labelledby="settings-appearance-heading">
+  <h2 id="settings-appearance-heading" class="group-heading">Appearance</h2>
+  <div
+    class="settings-row settings-row-stack"
+    data-testid="settings-theme-row"
+  >
+    <span class="row-label" id="settings-theme-label">Theme</span>
+    <div
+      class="segmented"
+      role="radiogroup"
+      aria-labelledby="settings-theme-label"
+    >
+      {#each [["system", "System"], ["light", "Light"], ["dark", "Dark"]] as [value, label] (value)}
+        <button
+          type="button"
+          class="segmented-option"
+          role="radio"
+          aria-checked={themePref === value}
+          data-testid={`settings-theme-${value}`}
+          disabled={themeBusy}
+          onclick={() => onThemeChange(value as ThemePref)}
+        >
+          {label}
+        </button>
+      {/each}
+    </div>
+    <span class="row-note">
+      System follows your macOS appearance setting. Light and Dark
+      override regardless of the OS preference.
+    </span>
+  </div>
 </section>
 
 <section class="settings-group" aria-labelledby="settings-hotkeys-heading">
