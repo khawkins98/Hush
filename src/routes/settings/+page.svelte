@@ -40,9 +40,8 @@
   import { onDestroy, onMount, tick } from "svelte";
 
   import { openExternal } from "$lib/openExternal";
-  import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
   import MeetingAppOverridesPanel from "$lib/MeetingAppOverridesPanel.svelte";
-  import PermissionsRows from "$lib/PermissionsRows.svelte";
+  import PermissionsTab from "$lib/PermissionsTab.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
   import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
   import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
@@ -58,11 +57,6 @@
     DiarizerModelStatus,
     DownloadProgress,
     IpcError,
-    MacosPermissionDiagnostic,
-    PermissionHealth,
-    PermissionHealthResponse,
-    PermissionsHealth,
-    MacosPermissionResetResult,
     BuiltinAppEntry,
     MeetingAppKind,
     MeetingAppOverride,
@@ -139,10 +133,8 @@
   let unlistenDownloadFailed: UnlistenFn | null = null;
   let unlistenGotoTab: UnlistenFn | null = null;
   let unlistenUpdaterResult: UnlistenFn | null = null;
-  /// Handle for the window-focus listener wired in onMount. Stored
-  /// so onDestroy can remove it; without removal a closed-then-
-  /// reopened Settings window would accumulate listeners.
-  let settingsFocusHandler: ((this: Window, ev: FocusEvent) => void) | null = null;
+  /* (Permissions-tab window-focus listener handle moved to
+     PermissionsTab.svelte in #332 phase 1.) */
 
   // ---- General-tab state ------------------------------------------------
   // Autostart toggle: queried on mount via the autostart plugin and
@@ -285,24 +277,16 @@
   let updateCheck = $state<UpdateCheckResult | null>(null);
   let updateChecking = $state(false);
 
-  // ---- macOS permission diagnostic --------------------------------------
-  let macosDiagnostic = $state<MacosPermissionDiagnostic | null>(null);
-  // Three-state permission health (#378). Populated alongside the
-  // diagnostic — the Permissions-tab traffic-light row reads from
-  // this, falling back to the diagnostic's raw status if the
-  // health IPC errored (older builds, transient settings-DB
-  // hiccup).
-  let permissionHealth = $state<PermissionsHealth | null>(null);
-  let macosDiagnosticOpen = $state(true); // open by default in the dedicated tab
-  let macosResetMessage = $state<string | null>(null);
-  let macosResetting = $state(false);
+  // (macOS permission diagnostic state + handlers moved to
+  // `PermissionsTab.svelte` in #332 phase 1 — the Permissions tab
+  // owns its own state, IPC, and lifecycle now.)
 
   // Error formatting: routed through `lib/errors.ts` (#205) so the
   // main and Settings windows share one source of truth.
   // Rich-shaped state uses `formatErrorDisplay`; the few string-
   // shaped surfaces in this file (`autostartError`,
-  // `firstRunResetMessage`, `macosResetMessage`, per-card
-  // `downloadFailed`) use `formatErrorMessage`.
+  // `firstRunResetMessage`, per-card `downloadFailed`) use
+  // `formatErrorMessage`.
 
   // ---- Loaders -----------------------------------------------------------
 
@@ -336,38 +320,6 @@
       replacementsError = formatErrorDisplay(e);
     } finally {
       replacementsLoaded = true;
-    }
-  }
-
-  /**
-   * Track whether a refresh is in flight so the manual Refresh
-   * button can show a "Checking…" affordance and disable while
-   * the IPC is round-tripping. AVFoundation / CoreGraphics /
-   * IOKit reads complete in single-digit milliseconds, but the
-   * disabled-flicker is a deliberate hint that the click did
-   * something even on a fast machine.
-   */
-  let macosDiagnosticRefreshing = $state(false);
-  async function loadMacosDiagnostic(): Promise<void> {
-    macosDiagnosticRefreshing = true;
-    try {
-      // Fetch the diagnostic + the three-state health in parallel.
-      // The Permissions tab needs both: the diagnostic carries
-      // the recovery hints + bundle id; the health drives the
-      // traffic-light dot per row (#378).
-      const [res, healthRes] = await Promise.all([
-        invoke<MacosPermissionDiagnostic>("diagnose_macos_permissions"),
-        invoke<PermissionHealthResponse>("get_permission_health").catch(
-          () => null,
-        ),
-      ]);
-      macosDiagnostic = res.canReset ? res : null;
-      permissionHealth = healthRes?.health ?? null;
-    } catch {
-      macosDiagnostic = null;
-      permissionHealth = null;
-    } finally {
-      macosDiagnosticRefreshing = false;
     }
   }
 
@@ -632,46 +584,8 @@
     }
   }
 
-  async function openPrivacyPane(
-    target: "microphone" | "input-monitoring" | "screen-recording",
-  ) {
-    try {
-      // For Screen Recording: macOS only adds Hush to the Screen
-      // & System Audio Recording list once Hush has actively
-      // queried SCK. A user who hasn't started a Meeting Mode
-      // session yet would land on the pane with no Hush row to
-      // toggle. Prime the permission first so the row appears
-      // (and the standard TCC prompt fires for not-determined
-      // state). Fire-and-forget — we don't block deep-linking on
-      // it, and the helper internally swallows the typical
-      // "denied" return.
-      if (target === "screen-recording") {
-        try {
-          await invoke("prime_screen_recording_permission");
-        } catch (primeErr) {
-          console.warn("[hush] prime SCK permission failed", primeErr);
-        }
-      }
-      await invoke("open_macos_privacy_pane", { target });
-    } catch (e) {
-      console.warn("[hush] open privacy pane failed", e);
-    }
-  }
-
-  async function runMacosReset() {
-    macosResetting = true;
-    macosResetMessage = null;
-    try {
-      const res = await invoke<MacosPermissionResetResult>(
-        "reset_macos_permissions",
-      );
-      macosResetMessage = res.summary;
-    } catch (e) {
-      macosResetMessage = formatErrorMessage(e);
-    } finally {
-      macosResetting = false;
-    }
-  }
+  /* `openPrivacyPane` + `runMacosReset` moved to
+     PermissionsTab.svelte in #332 phase 1. */
 
   // ---- Lifecycle ---------------------------------------------------------
 
@@ -754,7 +668,6 @@
       loadModels(),
       loadVocabulary(),
       loadReplacements(),
-      loadMacosDiagnostic(),
       loadAutostartState(),
       loadAutostartPathStatus(),
       loadHudEnabled(),
@@ -805,25 +718,9 @@
       },
     );
 
-    // Auto-refresh the permissions diagnostic when the Settings
-    // window regains focus. The "Grant in Settings…" button
-    // deep-links the user out to System Settings; while they're
-    // there they may toggle a permission on or off, but the
-    // diagnostic was loaded once on mount and won't notice
-    // unless we re-poll. Window-focus is the natural trigger:
-    // the user has come back to look at Hush, so it's the right
-    // moment to re-check. Cheap (single-digit ms) so re-running
-    // on every focus is fine.
-    //
-    // Only fires on the macOS-capable path (`macosDiagnostic`
-    // is the gate) — non-macOS builds skip the IPC entirely.
-    function handleSettingsFocus() {
-      if (macosDiagnostic !== null && !macosDiagnosticRefreshing) {
-        void loadMacosDiagnostic();
-      }
-    }
-    window.addEventListener("focus", handleSettingsFocus);
-    settingsFocusHandler = handleSettingsFocus;
+    /* Permissions tab's window-focus auto-refresh moved to
+       PermissionsTab.svelte in #332 phase 1 — its lifecycle
+       hooks own the listener now. */
   });
 
   // Run the manual update probe. The backend returns a tagged
@@ -1151,10 +1048,6 @@
     unlistenDiarizerProgress?.();
     unlistenDiarizerDone?.();
     unlistenDiarizerFailed?.();
-    if (settingsFocusHandler) {
-      window.removeEventListener("focus", settingsFocusHandler);
-      settingsFocusHandler = null;
-    }
   });
 </script>
 
@@ -1642,56 +1535,7 @@
         onDelete={deleteAppOverride}
       />
     {:else if active === "permissions"}
-      {#if macosDiagnostic}
-        <div class="permissions-tab-header">
-          <h2 class="tab-title">Permissions</h2>
-          <!--
-            Manual refresh button — belt-and-suspenders for the
-            window-focus auto-refresh wired in onMount. The
-            auto-refresh covers the common case (user toggles a
-            permission in System Settings, switches back to Hush);
-            the button covers the corner cases where focus didn't
-            change (Settings + System Settings side-by-side,
-            keyboard-only navigation, screen reader users) and
-            gives the user a deliberate "re-check now" affordance
-            for when they're not sure if the auto-refresh fired.
-          -->
-          <button
-            type="button"
-            class="ghost"
-            onclick={() => void loadMacosDiagnostic()}
-            disabled={macosDiagnosticRefreshing}
-            aria-label="Re-check macOS permission status"
-            data-testid="perms-refresh"
-          >
-            {macosDiagnosticRefreshing ? "Checking…" : "Refresh"}
-          </button>
-        </div>
-        <PermissionsRows
-          diagnostic={macosDiagnostic}
-          health={permissionHealth}
-          onOpenPrivacyPane={openPrivacyPane}
-        />
-        <p class="perm-recovery-intro">
-          Stuck? Open the diagnostic below to reset all three
-          permission grants (Microphone, Screen Recording, Input
-          Monitoring) at once, or learn why a permission row might
-          not appear in System Settings.
-        </p>
-        <MacosDiagnosticPanel
-          {macosDiagnostic}
-          bind:macosDiagnosticOpen
-          {macosResetMessage}
-          {macosResetting}
-          onReset={runMacosReset}
-        />
-      {:else}
-        <h2 class="tab-title">Permissions</h2>
-        <p class="placeholder">
-          Permission diagnostics are macOS-only. There's nothing
-          actionable to surface on this platform.
-        </p>
-      {/if}
+      <PermissionsTab />
     {:else if active === "about"}
       <h2 class="tab-title">About</h2>
       <section class="about-tab">
@@ -1958,29 +1802,8 @@
     letter-spacing: -0.01em;
   }
 
-  /* Permissions-tab header: aligns the title with a Refresh
-     button on the right, so the user can re-check the diagnostic
-     without leaving the tab. The auto-refresh on window focus
-     covers the common case; this button covers the edge cases
-     (side-by-side windows, keyboard-only nav). */
-  .permissions-tab-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-  }
-  .permissions-tab-header .tab-title {
-    margin: 0;
-  }
-
-  .placeholder {
-    margin: 0;
-    color: #666;
-    font-size: 0.95rem;
-    line-height: 1.5;
-    max-width: 36rem;
-  }
+  /* (`.permissions-tab-header`, `.placeholder`, `.perm-recovery-intro`
+     CSS moved to PermissionsTab.svelte in #332 phase 1.) */
 
   .about-tab {
     max-width: 36rem;
@@ -2350,16 +2173,6 @@
     cursor: not-allowed;
   }
 
-  .perm-recovery-intro {
-    margin: 0 0 1rem;
-    font-size: 0.85rem;
-    color: #555;
-    max-width: 44rem;
-  }
-  @media (prefers-color-scheme: dark) {
-    .perm-recovery-intro { color: #b0b0b0; }
-  }
-
   kbd {
     display: inline-block;
     padding: 0.05em 0.35em;
@@ -2389,7 +2202,6 @@
       border-color: #38383b;
       color: #b8c8ff;
     }
-    .placeholder { color: #a8a8a8; }
     .toggle-row,
     .select-row,
     .slider-row,
