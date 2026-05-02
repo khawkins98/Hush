@@ -54,7 +54,7 @@
     show,
     onDismiss,
     onOpenPrivacyPane,
-    intro = "Hush uses three macOS permissions. Open System Settings to grant or revoke each one — the OS prompts when an app first calls the underlying API, but you can also grant in advance from here.",
+    intro = "Hush uses three macOS permissions. Grant or revoke each below; you can also wait for Hush to prompt on first use.",
   }: Props = $props();
 
   let diagnostic: MacosPermissionDiagnostic | null = $state(null);
