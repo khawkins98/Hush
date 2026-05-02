@@ -32,20 +32,33 @@ export type ErrorDisplay = {
   details?: string;
 };
 
-/// Heuristic check for "this failure is a missing macOS TCC
-/// permission" (#232). The backend chains context strings rather
-/// than emitting a dedicated `IpcError` variant, so detection
-/// matches the same substring patterns `formatErrorDisplay` uses
-/// to pick its tailored headlines. Callers use this to decide
-/// whether to surface the reusable PermissionsDialog alongside
-/// the error chip — putting the next click in the right place
-/// instead of leaving the user to read the hint and navigate by
-/// hand. Returns false for non-IPC throwables.
+/// Check whether a thrown value is a permission-shaped IPC error
+/// (#232, refined in #386).
+///
+/// Primary check: \`kind === "permission-denied"\` — the typed
+/// variant the backend started emitting in #386 from
+/// \`meeting_start_manual\`'s error path. Once every IPC that
+/// could throw a permission-shaped error is updated to use the
+/// classifier, the substring fallback below can be retired.
+///
+/// Fallback: substring match against the chained message string
+/// for any IPC variant that hasn't been updated yet (today the
+/// dictation start path is still wrapping permission errors as
+/// \`audio: ...\`). Same patterns the Rust \`classify_permission_error\`
+/// helper uses, so the two surfaces stay coherent.
+///
+/// Callers use this to decide whether to pop the PermissionsDialog
+/// (#232) alongside the error chip — putting the next click on a
+/// button that opens System Settings rather than buried in the
+/// hint copy. Returns false for non-IPC throwables.
 export function isPermissionShapedError(e: unknown): boolean {
   if (typeof e !== "object" || e === null || !("kind" in e)) {
     return false;
   }
   const ipc = e as IpcError;
+  if (ipc.kind === "permission-denied") {
+    return true;
+  }
   const lower = (ipc.message ?? "").toLowerCase();
   return (
     lower.includes("screen recording") ||
@@ -53,6 +66,57 @@ export function isPermissionShapedError(e: unknown): boolean {
     (lower.includes("microphone") && lower.includes("not authorized")) ||
     lower.includes("input monitoring")
   );
+}
+
+/// Tailored copy for each known permission name. Used by both
+/// the typed-variant path (#386) and the substring fallback so
+/// the message a user sees is identical regardless of how the
+/// classification happened. `details` carries the original
+/// message for the collapsed `<details>` debug view; pass
+/// `undefined` when called from the typed path (the IPC's
+/// `message` field already IS the permission name, no chain
+/// content to surface).
+function formatPermissionDenied(
+  permission: string,
+  details?: string,
+): ErrorDisplay {
+  switch (permission) {
+    case "screen-recording":
+      return {
+        headline: "Screen Recording permission needed",
+        hint:
+          "Grant Hush Screen Recording access in System Settings → " +
+          "Privacy & Security → Screen Recording, then try again. " +
+          "Until then, microphone-only recording still works.",
+        details,
+      };
+    case "microphone":
+      return {
+        headline: "Microphone permission needed",
+        hint:
+          "Grant Hush microphone access in System Settings → Privacy " +
+          "& Security → Microphone, then try again.",
+        details,
+      };
+    case "input-monitoring":
+      return {
+        headline: "Input Monitoring permission needed",
+        hint:
+          "Grant Hush Input Monitoring access in System Settings → " +
+          "Privacy & Security → Input Monitoring. PTT keystrokes " +
+          "won't reach the listener until then.",
+        details,
+      };
+    default:
+      // An unknown permission name from the typed path falls
+      // through to a generic message rather than crashing or
+      // silently dropping the error.
+      return {
+        headline: "Permission needed",
+        hint: `Hush couldn't access ${permission}. Open System Settings → Privacy & Security to grant access.`,
+        details,
+      };
+  }
 }
 
 /// Map an unknown thrown value into the rich display shape. The
@@ -71,39 +135,30 @@ export function formatErrorDisplay(e: unknown): ErrorDisplay {
   const ipc = e as IpcError;
   const message = ipc.message ?? "";
 
-  // Permission-shaped errors deserve a tailored hint regardless of
-  // which IPC kind they came back as. Detect on the message text
-  // (the backend chains context strings rather than emitting a
-  // dedicated variant).
+  // Typed permission-denied (#386). Backend's
+  // `classify_permission_error` runs once at the IPC boundary and
+  // promotes the chain to `kind: "permission-denied"` with the
+  // permission name in `message`. Frontend dispatches on the
+  // permission name to render the same tailored copy the
+  // pre-typed-variant heuristic produced.
+  if (ipc.kind === "permission-denied") {
+    return formatPermissionDenied(message);
+  }
+
+  // Substring fallback. Any IPC variant that hasn't been updated
+  // to use `classify_permission_error` (today: the dictation
+  // start path's `audio:` wrap) still surfaces the chain message
+  // verbatim, so we keep this branch as a safety net. The
+  // patterns mirror the Rust classifier.
   const lower = message.toLowerCase();
   if (lower.includes("screen recording") || lower.includes("declined tccs")) {
-    return {
-      headline: "Screen Recording permission needed",
-      hint:
-        "Grant Hush Screen Recording access in System Settings → " +
-        "Privacy & Security → Screen Recording, then try again. " +
-        "Until then, microphone-only recording still works.",
-      details: message,
-    };
+    return formatPermissionDenied("screen-recording", message);
   }
   if (lower.includes("microphone") && lower.includes("not authorized")) {
-    return {
-      headline: "Microphone permission needed",
-      hint:
-        "Grant Hush microphone access in System Settings → Privacy " +
-        "& Security → Microphone, then try again.",
-      details: message,
-    };
+    return formatPermissionDenied("microphone", message);
   }
   if (lower.includes("input monitoring")) {
-    return {
-      headline: "Input Monitoring permission needed",
-      hint:
-        "Grant Hush Input Monitoring access in System Settings → " +
-        "Privacy & Security → Input Monitoring. PTT keystrokes " +
-        "won't reach the listener until then.",
-      details: message,
-    };
+    return formatPermissionDenied("input-monitoring", message);
   }
 
   // Per-kind defaults. Each branch picks a friendly headline and a

@@ -536,7 +536,18 @@ pub async fn meeting_start_manual(
         .meeting_manager
         .start_manual(sources, resolved_app_name, app_title)
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e:#}")))?;
+        .map_err(|e| {
+            // Promote permission-shaped chains to the typed
+            // `PermissionDenied` variant (#386). The frontend then
+            // matches on `kind === "permission-denied"` instead of
+            // substring-scraping the message — the substring path
+            // stays as a fallback for unrecognised chains.
+            if let Some(perm) = super::classify_permission_error(&e) {
+                IpcError::PermissionDenied(perm.to_owned())
+            } else {
+                IpcError::MeetingSessions(format!("start_manual: {e:#}"))
+            }
+        })?;
     // Show the recording HUD so the user has the same at-a-glance
     // "audio is being captured" cue meeting mode that the dictation
     // hot path already provides — best-effort, a HUD-show failure
