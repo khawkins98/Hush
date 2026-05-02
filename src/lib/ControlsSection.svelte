@@ -68,6 +68,21 @@
   );
   let badgeIsStale = $derived(screenRecordingHealth === "stale");
 
+  // True when a click on the Record button would upgrade to
+  // multi-source meeting capture (mic + system audio). Drives a
+  // distinct button label so the mode change is visible BEFORE
+  // the click — without this, the user only learns they were in
+  // meeting mode after Stop lands a History meeting row instead
+  // of writing to clipboard. UX review on #384 flagged this
+  // mode-invisibility on the happy path; the badge alone is
+  // absence-only.
+  let willRecordMeeting = $derived(
+    !recording
+      && selected !== null
+      && selected !== "system"
+      && screenRecordingHealth === "confirmed",
+  );
+
   // Derived: separate the mic devices from the system-audio entry so
   // the picker can group them (mics first, then system audio with a
   // visual divider). Disabled mic-less platforms still get the
@@ -211,11 +226,25 @@
         ? "Working"
         : noModelInstalled
           ? "Choose a model first"
-          : "Start recording"}
+          : willRecordMeeting
+            ? "Record meeting (mic plus system audio)"
+            : "Start recording"}
       title={noModelInstalled ? "Choose a model first" : undefined}
+      data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
     >
       {#if transcribing}
         <span class="spinner" aria-hidden="true"></span> Transcribing…
+      {:else if willRecordMeeting}
+        <!--
+          When SCK is confirmed the click upgrades to multi-source
+          capture; surface that on the button label so the user
+          can predict the destination (History meeting row, not
+          clipboard). UX review on #384 flagged that
+          mode-invisibility on the happy path was the worst part
+          of the auto-copy regression.
+        -->
+        <span class="rec-dot idle" aria-hidden="true"></span> Record meeting
+        <span class="record-mode-hint">mic + system audio</span>
       {:else}
         <span class="rec-dot idle" aria-hidden="true"></span> Start recording
       {/if}
@@ -234,13 +263,14 @@
   {#if badgeVisible}
     <!--
       Mic-only badge (#369). Surfaces alongside the Record button
-      to explain why a click won't capture system audio: the
-      Screen Recording permission isn't currently confirmed.
-      Distinct copy for `stale` (was granted, TCC entry rotated —
-      re-enable to recover) vs `not-granted` (never asked, grant
-      to unlock speaker separation). Click routes to Settings →
-      Permissions, where the existing per-row deep-link opens
-      System Settings.
+      to explain why a click won't capture system audio. Distinct
+      copy for `stale` (TCC entry rotated, was working) vs
+      `not-granted` (never asked) — both variants frame the
+      payoff in user-scenario terms ("other people's audio in
+      calls") rather than feature-name terms ("multi-speaker
+      capture"), per UX review on #384. Click routes to
+      Settings → Permissions, where the existing per-row deep-
+      link opens System Settings.
     -->
     <button
       type="button"
@@ -252,11 +282,11 @@
     >
       <span class="record-mode-badge-dot" aria-hidden="true"></span>
       {#if badgeIsStale}
-        Mic-only — Screen Recording was granted but is now stale.
-        Re-enable for speaker separation.
+        Mic only · Screen Recording access expired — re-grant to
+        also capture other people's audio in calls.
       {:else}
-        Mic-only — grant Screen Recording to unlock multi-speaker
-        meeting capture.
+        Mic only · grant Screen Recording to also capture other
+        people's audio in calls.
       {/if}
     </button>
   {/if}
@@ -443,6 +473,22 @@
   background-color: var(--danger);
   color: white;
   border-color: var(--danger);
+}
+
+/* Trailing-pill subtext on the Record button when SCK is
+   confirmed (#369). Reads "mic + system audio" so users see
+   the multi-source upgrade before they click. Quieter than
+   the main label so the button still reads as one click
+   target. */
+.record-mode-hint {
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  margin-left: 0.45rem;
+  background-color: var(--accent-subtle);
+  color: var(--accent);
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 .start-btn.stop:hover:not(:disabled) {

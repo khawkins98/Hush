@@ -465,6 +465,14 @@
         // History. No `result` block on the Dictation panel — the
         // multi-speaker output lives in the History meeting row,
         // which renders the joined transcript with speaker labels.
+        //
+        // TODO(#385): meeting-mode stop should also auto-copy the
+        // joined transcript to clipboard for parity with the
+        // dictation path's instant-paste UX. Deferred from #384
+        // because the implementation needs a polling/retry shape
+        // to handle the case where the pump's final whisper batch
+        // hasn't flushed by the time `refreshMeetingSessions`
+        // settles.
         await invoke("meeting_stop_manual");
         recording = false;
         recordMode = null;
