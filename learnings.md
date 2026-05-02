@@ -4,6 +4,33 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-02 — Traffic-light permission health: two-signal model + implementation decisions (#378)
+
+The `macos_perms::PermissionHealth` classifier (landed in the unnamed colleague's PR, post-#378) surfaces three states — Confirmed / Stale / NotGranted — by combining two independent signals:
+
+```
+match (os_preflight_result, last_confirmed_timestamp.is_some()) {
+    (Granted, _)      → Confirmed
+    (false,   Some)   → Stale          // was granted, now revoked
+    (false,   None)   → NotGranted     // never granted
+    (NotApplicable, _) → NotApplicable
+}
+```
+
+Four non-obvious decisions baked into the implementation:
+
+**1. `CGPreflightScreenCaptureAccess()` maps false → `NotDetermined`, not `Denied`.** The OS API can't distinguish "never asked" from "explicitly denied" — both return `false`. We call both cases `NotDetermined` rather than `Denied` so the frontend hint copy stays neutral ("not yet granted") rather than accusatory. Both map to the same `PermissionHealth` outcome, so the naming doesn't affect logic — it only affects any future `PermissionStatus`-level display surface that tries to differentiate them.
+
+**2. `CGPreflightScreenCaptureAccess()` returns `u8`, not `bool`.** Apple's `Boolean` typedef is `unsigned char`; declaring the return as Rust `bool` is technically UB if the OS ever returns a value outside {0, 1}. Use `u8` with `!= 0`. In practice macOS always returns 0 or 1, but the type-correct form is the `u8` path.
+
+**3. Auto-confirm on first-seen-Granted (inside `get_permission_health`).** Rather than requiring the UI to call `confirm_permission` explicitly on first successful use, `get_permission_health` seeds the `last_confirmed` row the first time it sees `Granted` for a permission that has no row yet. This is what makes the Stale verdict possible later: future probes that flip to false against an existing row read as "was granted, now revoked". Restricting the write to the first-seen-Granted case keeps the timestamp stable instead of re-stamping on every read.
+
+**4. Wake-grace suppression is not needed — yet.** `CGPreflightScreenCaptureAccess` transiently returns false for ~10 s after sleep/wake (undocumented by Apple, observed by ScreenPipe in production). The current implementation probes only on Permissions tab open and on Refresh click — there is no auto-probe-on-window-focus. Because there's no background probing, the transient post-wake false can't produce a spurious Stale verdict. If window-focus auto-probing is ever added, the 10 s wake grace (suppress results within 10 s of `NSWorkspace.didWakeNotification`) **must** land in the same PR. Don't add auto-probing without the grace window.
+
+The primary staleness scenario is a notarisation rebuild rotating the ad-hoc signing identity — TCC silently invalidates the entry because the bundle-ID + signature fingerprint no longer matches. The user sees yellow "Was granted — now revoked" in Settings → Permissions and can use the per-row deep-link to get back into System Settings and re-grant.
+
+---
+
 ## 2026-05-02 — Lifecycle: prevent_exit + custom Quit menu items (#328)
 
 Tauri 2's runtime auto-exits when the last webview window goes away. Hush's close-hide pattern (#263) hides every window on red-✕, which on Linux/Windows means the runtime hits zero visible webviews after a normal close and quits the whole app — tray icon and all. macOS dodges it via `set_activation_policy(Accessory)` on the background-launch path, but only there.
