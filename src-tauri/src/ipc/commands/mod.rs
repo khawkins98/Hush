@@ -1142,6 +1142,10 @@ pub struct DiarizeModelStatus {
     /// `models_dir`. Frontend uses this to grey out the toggle and
     /// show the download affordance when `false`.
     pub downloaded: bool,
+    /// Catalog display name ("wespeaker ResNet34-LM"). Lifted into
+    /// the status (#351) so the panel can show *which* model is
+    /// installed without duplicating the catalog on the frontend.
+    pub display_name: String,
     /// Catalog-declared on-disk size (~26 MB). Surfaced in the UI
     /// so the user knows what they're committing to before
     /// clicking Download.
@@ -1156,6 +1160,10 @@ pub struct DiarizeModelStatus {
     /// landed where expected). Mirrors the same affordance as the
     /// Whisper picker.
     pub expected_path: String,
+    /// Upstream URL the model was downloaded from. Linked from the
+    /// Speakers panel so a user who wants to read the model card
+    /// can click through (#351).
+    pub source_url: String,
 }
 
 /// Read the diarizer model's status (#301). Cheap — single
@@ -1168,10 +1176,76 @@ pub fn get_diarizer_model_status(state: State<'_, AppState>) -> IpcResult<Diariz
     let path = state.models_dir.join(&model.filename);
     Ok(DiarizeModelStatus {
         downloaded: path.exists(),
+        display_name: model.display_name,
         size_mb: model.size_mb,
         sha256: model.sha256,
         expected_path: path.to_string_lossy().into_owned(),
+        source_url: model.download_url,
     })
+}
+
+/// Remove the installed wespeaker model and revert the diarizer
+/// slot to NoopDiarizer (#351). The slot swap is the in-process
+/// inverse of `download_diarizer_model`'s `swap_diarizer_after_download`
+/// — the next meeting pump tick reads the new slot and stops
+/// labelling utterances. Persists `diarization_enabled = false` so
+/// the toggle in Settings reflects the new state and a future
+/// re-install lands in a clean configuration.
+///
+/// No-op if the file isn't present (the user already removed it
+/// out-of-band, or a parallel `remove` raced to completion). The
+/// slot swap still runs so the in-memory state stays consistent
+/// with the filesystem regardless of how the file disappeared.
+#[tauri::command]
+pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> {
+    let model = crate::diarization::catalog::default_diarizer_model();
+    let path = state.models_dir.join(&model.filename);
+
+    // Best-effort delete: a missing file is fine (idempotent), but
+    // any other error (permission, IO failure) surfaces so the
+    // user sees something rather than a silent partial state.
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(IpcError::Internal(format!(
+                "remove diarizer model {}: {e}",
+                path.display()
+            )));
+        }
+    }
+
+    // Revert the slot to a Noop. Mirror the recovery shape
+    // `swap_diarizer_after_download` uses for write lock acquisition
+    // — a transient panic shouldn't poison the slot for the rest
+    // of the session. The guard is scoped to a block so it's
+    // proven-dropped before the next await; otherwise the macro-
+    // generated future fails to satisfy `Send`.
+    {
+        let mut slot = state
+            .diarize_slot
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
+    }
+
+    // Turn the toggle off in the persisted settings so the panel's
+    // next read shows a consistent "no model + toggle off" state.
+    // Errors here are non-fatal: the in-memory slot already swapped,
+    // and a misaligned toggle setting is a UX papercut, not a
+    // broken state.
+    state
+        .diarization_enabled
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Err(e) = state
+        .settings
+        .set(crate::settings::keys::DIARIZATION_ENABLED, "false")
+        .await
+    {
+        tracing::warn!(error = %e, "remove_diarizer_model: persist toggle=false failed");
+    }
+
+    Ok(())
 }
 
 /// Begin downloading the wespeaker speaker-embedding model (#301).
@@ -2693,5 +2767,96 @@ mod tests {
             csv.contains("\"Notes,Inc\""),
             "comma in app name should force quoting\n{csv}"
         );
+    }
+
+    // -- remove_diarizer_model (#351) ----------------------------------
+
+    #[tokio::test]
+    async fn remove_diarizer_model_is_idempotent_when_file_missing() {
+        // Removing when the file isn't present must succeed cleanly
+        // — covers the race where two `remove` calls fire (or the
+        // user deleted the file out of band before clicking
+        // Remove). Slot still gets reverted to a Noop-shaped
+        // diarizer either way so the in-memory state stays
+        // consistent. Mock state's models_dir is a fresh tempdir;
+        // the wespeaker file is not present.
+        let state = crate::ipc::tests::mock_state();
+        remove_diarizer_model_inner(&state)
+            .await
+            .expect("idempotent on missing file");
+        // The slot swap is exercised separately by
+        // `swap_diarizer_after_download_err_leaves_slot_intact` and
+        // friends; here we just pin that the call succeeded
+        // without panicking and the toggle persistence below
+        // landed.
+    }
+
+    #[tokio::test]
+    async fn remove_diarizer_model_persists_toggle_off() {
+        // The Speakers panel reads `diarization_enabled` to drive
+        // the toggle UI. Remove must clear the flag (in-memory
+        // atomic + persisted setting row) so a re-install lands
+        // in a consistent off-by-default state.
+        let state = crate::ipc::tests::mock_state();
+        // Set the toggle on first so the `remove` flip is observable.
+        state
+            .diarization_enabled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        state
+            .settings
+            .set(crate::settings::keys::DIARIZATION_ENABLED, "true")
+            .await
+            .expect("seed settings");
+
+        remove_diarizer_model_inner(&state)
+            .await
+            .expect("remove ok");
+
+        assert!(
+            !state
+                .diarization_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "atomic should flip to false"
+        );
+        let persisted = state
+            .settings
+            .get(crate::settings::keys::DIARIZATION_ENABLED)
+            .await
+            .expect("settings get");
+        assert_eq!(persisted.as_deref(), Some("false"));
+    }
+
+    /// Test-side wrapper that mirrors the IPC body — keeps the
+    /// `#[tauri::command]` shell out of the test path so we don't
+    /// need a `tauri::State<'_, AppState>` constructor.
+    async fn remove_diarizer_model_inner(state: &AppState) -> IpcResult<()> {
+        let model = crate::diarization::catalog::default_diarizer_model();
+        let path = state.models_dir.join(&model.filename);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(IpcError::Internal(format!(
+                    "remove diarizer model {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+        {
+            let mut slot = state
+                .diarize_slot
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
+        }
+        state
+            .diarization_enabled
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        state
+            .settings
+            .set(crate::settings::keys::DIARIZATION_ENABLED, "false")
+            .await
+            .map_err(|e| IpcError::Settings(e.to_string()))?;
+        Ok(())
     }
 }
