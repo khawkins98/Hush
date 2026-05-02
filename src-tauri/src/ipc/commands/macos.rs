@@ -31,11 +31,12 @@ use tauri::State;
 
 use crate::ipc::AppState;
 
-// `IpcError` is only referenced inside `#[cfg(target_os = "macos")]`
-// blocks; the non-macOS Linux/Windows compilations don't need the
-// name in scope. Gate the import accordingly so clippy's
-// `unused-imports` lint stays clean across CI targets.
-#[cfg(target_os = "macos")]
+// `IpcError` was previously only referenced inside
+// `#[cfg(target_os = "macos")]` blocks; the cfg gate on the import
+// kept clippy's `unused-imports` lint quiet on Linux/Windows.
+// The new `get_permission_health` + `confirm_permission` commands
+// (#378) reference IpcError unconditionally, so the gate is no
+// longer correct. The import is now ungated.
 use super::IpcError;
 use super::IpcResult;
 
