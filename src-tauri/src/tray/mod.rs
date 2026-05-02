@@ -78,7 +78,15 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         true,
         Some("CmdOrCtrl+,"),
     )?;
-    let quit = PredefinedMenuItem::quit(app, Some("Quit Hush"))?;
+    // Custom Quit item (#328). Pre-fix this was
+    // `PredefinedMenuItem::quit` which routes through Tauri's
+    // platform-native quit and ends up firing
+    // `RunEvent::ExitRequested`. The new ExitRequested
+    // interceptor in `lib.rs::run` prevents *every* exit unless
+    // the user explicitly clicked Quit, so a custom item that
+    // sets the "user requested" flag synchronously before
+    // calling `app.exit(0)` is the only path that proceeds.
+    let quit = MenuItem::with_id(app, "tray:quit", "Quit Hush", true, None::<&str>)?;
 
     let separator = PredefinedMenuItem::separator(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
@@ -170,6 +178,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
                 tracing::warn!(error = ?e, "tray: failed to open settings window");
             }
         }
+        "tray:quit" => crate::request_user_quit(app),
         _ => {}
     }
 }

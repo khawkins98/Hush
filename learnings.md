@@ -4,6 +4,20 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-02 — Lifecycle: prevent_exit + custom Quit menu items (#328)
+
+Tauri 2's runtime auto-exits when the last webview window goes away. Hush's close-hide pattern (#263) hides every window on red-✕, which on Linux/Windows means the runtime hits zero visible webviews after a normal close and quits the whole app — tray icon and all. macOS dodges it via `set_activation_policy(Accessory)` on the background-launch path, but only there.
+
+**Fix.** Intercept `RunEvent::ExitRequested` in the `app.run` callback and `api.prevent_exit()` unless a `USER_QUIT_REQUESTED` static `AtomicBool` is set. The flag is set synchronously by the tray's "Quit Hush" menu item and the macOS app-menu's Quit item via a shared `request_user_quit(app)` helper that calls `app.exit(0)` after the store. Both menu items were converted from `PredefinedMenuItem::quit` / `SubmenuBuilder::quit()` to custom `MenuItem::with_id` items wired to the helper — Tauri's predefined Quit goes through the platform-native terminate path that fires `ExitRequested` with no way for us to know it was user-initiated.
+
+**Why a static, not AppState.** The menu / tray builders run in `setup` closures that capture `&AppHandle`, not `tauri::State`. Threading a state cell through every closure for one bool isn't worth it. A `static AtomicBool` has no coordination cost and the memory model is deterministic.
+
+**Why the flag never resets.** Once set, the process is on its way out. There's no "consumer" pattern that needs the flag to flip back, and an explicit reset would add a window where a runtime-driven exit could sneak in between the user clicking Quit and the actual exit.
+
+**Out of scope.** Hands-on smoke testing on Linux + Windows release artifacts to confirm the behaviour holds end-to-end. Code-side this is correct per Tauri 2's documented `RunEvent::ExitRequested` semantics, but the issue's hands-on acceptance criteria (close → tray stays + autostart-survives-relogin) needs an actual Linux / Windows desktop.
+
+---
+
 ## Supply-chain pins (policy, last reviewed 2026-05-01)
 
 Two production deps live outside the "stable crates.io release" baseline. Both are deliberate; both have a documented exit condition. Don't bump either without re-reading this section.

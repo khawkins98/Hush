@@ -75,7 +75,18 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        // Custom Quit (#328). Pre-fix this used `.quit()` which
+        // routes through Tauri's native macOS terminate path and
+        // ends up firing `RunEvent::ExitRequested`. The interceptor
+        // in `lib.rs::run` blocks every exit unless the user
+        // clicked Quit, so a custom item that sets the
+        // "user requested" flag synchronously before calling
+        // `app.exit(0)` is the only path that proceeds.
+        .item(
+            &MenuItemBuilder::with_id("app-quit", "Quit Hush")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?,
+        )
         .build()?;
 
     let edit_submenu = SubmenuBuilder::new(app, "Edit")
@@ -146,6 +157,7 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                     tracing::error!(error = ?e, "menu: open settings");
                 }
             }
+            "app-quit" => crate::request_user_quit(app),
             "check-for-updates" => {
                 // One-click semantics (#265). Pre-fix the menu
                 // opened Settings → About and waited for a second
