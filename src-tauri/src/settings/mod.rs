@@ -25,6 +25,7 @@
 //! [`SqliteSettingsRepository`] directly, so unit tests of consumers
 //! can substitute a deterministic mock without touching SQLite.
 
+pub mod codec;
 pub mod sqlite;
 
 pub use sqlite::SqliteSettingsRepository;
@@ -71,13 +72,15 @@ pub mod keys {
     /// this off in Settings → General.
     pub const HUD_ENABLED: &str = "hud_enabled";
 
-    /// Boolean stored as `"1"` / `"0"`. Whether to play short
-    /// macOS system sounds at the recording-start and
-    /// transcription-complete transitions (#292). Absent or
-    /// `"0"` means silent — the default. Distinct from
-    /// `HUD_ENABLED` because some users want visual feedback
-    /// (or none) but can't have audio (shared office, meeting
-    /// room, focus mode).
+    /// Boolean stored via [`crate::settings::codec::encode_bool`] /
+    /// [`crate::settings::codec::decode_bool`] — the canonical
+    /// `"true"` / `"false"` literals. Whether to play short macOS
+    /// system sounds at the recording-start and transcription-
+    /// complete transitions (#292). Absent rows and unparseable
+    /// values fall back to `false` — the default. Distinct from
+    /// `HUD_ENABLED` because some users want visual feedback (or
+    /// none) but can't have audio (shared office, meeting room,
+    /// focus mode).
     pub const SOUND_CUES_ENABLED: &str = "sound_cues_enabled";
 
     /// Auto-start mode for Meeting Mode. The foreground poller
