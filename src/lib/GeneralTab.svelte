@@ -32,43 +32,37 @@
   import PttHotkeyEditor from "./PttHotkeyEditor.svelte";
   import { formatErrorMessage } from "./errors";
 
-  // Autostart
   let autostartEnabled = $state(false);
   let autostartBusy = $state(false);
   let autostartError = $state<string | null>(null);
-  // LaunchAgent path-staleness (#317): set when boot-time re-
-  // register failed. Surfaced as a warning row with a retry
-  // button; cleared by a successful retry.
+  // Stale-LaunchAgent recovery (#317): set when boot-time re-
+  // register failed; cleared by a successful retry.
   let autostartPathStale = $state(false);
   let autostartRetryBusy = $state(false);
   let autostartRetryFailed = $state(false);
 
-  // First-run reset confirmation message — replaces the button
-  // label briefly after a successful reset, then clears.
   let firstRunResetBusy = $state(false);
   let firstRunResetMessage = $state<string | null>(null);
 
-  // HUD overlay toggle — defaults to true on the backend.
   let hudEnabled = $state(true);
   let hudBusy = $state(false);
   let hudError = $state<string | null>(null);
 
-  // Audio cues (#292) — opt-in, default off.
+  // Audio cues (#292) — opt-in default off; cues are intrusive
+  // in shared spaces / focus modes.
   let soundCuesEnabled = $state(false);
   let soundCuesBusy = $state(false);
   let soundCuesError = $state<string | null>(null);
 
-  // Transcription threads (#255). Two cells (#348):
-  // `inferenceThreads` = persisted value (source of truth);
-  // `inferenceThreadsDisplay` = live slider thumb during drag,
-  // so the inline label updates in real time without firing one
-  // IPC per pixel. The change-event (release) persists.
+  // Two-cell slider (#348): `inferenceThreads` is the persisted
+  // value; `inferenceThreadsDisplay` tracks the slider thumb live
+  // during drag so the inline label updates without firing one
+  // IPC per pixel — the `change` event (release) persists.
   let inferenceThreads = $state(4);
   let inferenceThreadsDisplay = $state(4);
   let inferenceThreadsBusy = $state(false);
   let inferenceThreadsError = $state<string | null>(null);
 
-  // For the PTT-hotkey editor's modifier-glyph copy.
   let isMacOS = $state(false);
 
   async function loadAutostartState(): Promise<void> {
@@ -461,9 +455,9 @@
 <style>
   /* Per-tab style block (#332 phase 1). Settings-page CSS is
      scoped at the page level, so child-component markup needs
-     its own copies. Once all tabs are extracted, the shared
-     classes (`.settings-group`, `.toggle-row`, etc.) can be
-     hoisted to a CSS module imported by each tab. */
+     its own copies. Shared classes (`.settings-group`,
+     `.toggle-row`, etc.) hoist to a CSS module once all tabs
+     are extracted — tracked in TODO(#392). */
   .tab-title {
     margin: 0 0 0.75rem;
     font-size: 1.4rem;
