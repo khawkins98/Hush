@@ -216,6 +216,66 @@ jobs:
             exit 1
           fi
 
+  cargo-env-allowlist:
+    name: Cargo [env] allowlist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Lint the keys under `[env]` in src-tauri/.cargo/config.toml
+      # against an explicit allowlist (#410). The `[env]` table
+      # affects every contributor's local `cargo build` — a malicious
+      # or careless PR adding `RUSTFLAGS`, `CC`, or `RUSTC_WRAPPER`
+      # would silently rewrite their build environment. Allowlisted
+      # keys today: `MACOSX_DEPLOYMENT_TARGET` and
+      # `CMAKE_OSX_DEPLOYMENT_TARGET` (added in #404 to give
+      # `whisper-rs-sys`'s vendored whisper.cpp a 10.15+ baseline
+      # without shell-environment dependency).
+      #
+      # Adding a new entry requires updating both the config and
+      # this allowlist in the same PR, which puts the addition
+      # under code review. The bash-only shape mirrors the
+      # supply-chain-pins job — one less tool dep to track.
+      - name: Lint .cargo/config.toml [env] keys
+        run: |
+          set -euo pipefail
+          config=src-tauri/.cargo/config.toml
+          # Extract the `[env]` section's keys. Read the file from
+          # the `[env]` line until the next `[section]` (or EOF),
+          # filter to lines that look like `KEY = ...`, and pluck
+          # the key. Comment lines (`# ...`) are skipped.
+          keys=$(awk '
+            /^\[env\]/ { in_env = 1; next }
+            /^\[/ { in_env = 0; next }
+            in_env && /^[A-Z_][A-Z0-9_]*[[:space:]]*=/ {
+              sub(/[[:space:]]*=.*/, "")
+              print
+            }
+          ' "$config")
+
+          # Allowlisted env-var names. New entries require an
+          # explicit PR that updates both `$config` and this list.
+          allowed=$(cat <<'EOF'
+          MACOSX_DEPLOYMENT_TARGET
+          CMAKE_OSX_DEPLOYMENT_TARGET
+          EOF
+          )
+
+          unexpected=$(echo "$keys" | while IFS= read -r key; do
+            [ -z "$key" ] && continue
+            if ! echo "$allowed" | grep -qFx -- "$key"; then
+              echo "$key"
+            fi
+          done)
+
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unallowlisted env-var in $config [env] table:" >&2
+            echo "$unexpected" >&2
+            echo "::error::These keys override every contributor's build environment." >&2
+            echo "::error::To add a key: update $config AND the allowlist in .github/workflows/ci.yml::cargo-env-allowlist in the same PR." >&2
+            exit 1
+          fi
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
