@@ -42,6 +42,7 @@
   import { openExternal } from "$lib/openExternal";
   import MacosDiagnosticPanel from "$lib/MacosDiagnosticPanel.svelte";
   import MeetingAppOverridesPanel from "$lib/MeetingAppOverridesPanel.svelte";
+  import PermissionsRows from "$lib/PermissionsRows.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
   import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
   import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
@@ -1666,83 +1667,11 @@
             {macosDiagnosticRefreshing ? "Checking…" : "Refresh"}
           </button>
         </div>
-        <ul class="perm-status-list" aria-label="Permission status summary">
-          {#each [
-            { key: "microphone", paneTarget: "microphone" as const, label: "Microphone", status: macosDiagnostic.statuses.microphone, why: "Required for dictation." },
-            { key: "screenRecording", paneTarget: "screen-recording" as const, label: "Screen Recording", status: macosDiagnostic.statuses.screenRecording, why: "Required for system-audio capture in meetings." },
-            { key: "inputMonitoring", paneTarget: "input-monitoring" as const, label: "Input Monitoring", status: macosDiagnostic.statuses.inputMonitoring, why: "Required for push-to-talk (on by default). Disable PTT in General → Hotkeys if you'd rather skip the prompt." },
-          ] as row (row.key)}
-            {@const health = permissionHealth?.[row.key as keyof PermissionsHealth] ?? null}
-            <li
-              class="perm-row"
-              data-perm={row.key}
-              data-status={row.status}
-              data-health={health ?? "unknown"}
-            >
-              <!--
-                Two-column layout: text block on the left
-                (title-line + why subtitle), action button on the
-                right. The traffic-light dot (#378) lives inline
-                with the row title, before the existing status
-                pill. Three colours map to the three-state health
-                model: green (confirmed), yellow (was granted, now
-                stale — the cert / bundle-id rotation case), red
-                (no prior grant). Falls back to a neutral grey dot
-                when the health IPC errored / hasn't loaded yet —
-                the row still works against the raw status pill
-                in that case.
-              -->
-              <div class="perm-text">
-                <div class="perm-title-line">
-                  <span
-                    class="perm-health-dot"
-                    data-health={health ?? "unknown"}
-                    aria-hidden="true"
-                  ></span>
-                  <span class="perm-name">{row.label}</span>
-                  <span class="perm-status-pill">
-                    {#if health === "stale"}Was granted — now revoked
-                    {:else if row.status === "granted"}Granted
-                    {:else if row.status === "denied"}Denied
-                    {:else if row.status === "not-determined"}Not yet granted
-                    {:else}Not applicable
-                    {/if}
-                  </span>
-                </div>
-                <span class="perm-why">{row.why}</span>
-                {#if health === "stale"}
-                  <span class="perm-stale-hint">
-                    A recent app update likely rotated the signing
-                    identity. Open System Settings and re-enable
-                    {row.label} for Hush to restore access.
-                  </span>
-                {/if}
-              </div>
-              <!--
-                Per-row deep-link to the relevant System Settings
-                pane. Renders for every row, not just unblocked
-                ones, because granted rows still need a way to
-                revoke / re-confirm. Copy varies with status so
-                the click target reads as the right next step
-                ("Grant in Settings…" vs "Open in Settings").
-              -->
-              {#if row.status !== "not-applicable"}
-                <button
-                  type="button"
-                  class="perm-row-action"
-                  data-testid="perm-action-{row.key}"
-                  onclick={() => openPrivacyPane(row.paneTarget)}
-                >
-                  {#if row.status === "granted"}
-                    Open in Settings
-                  {:else}
-                    Grant in Settings…
-                  {/if}
-                </button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
+        <PermissionsRows
+          diagnostic={macosDiagnostic}
+          health={permissionHealth}
+          onOpenPrivacyPane={openPrivacyPane}
+        />
         <p class="perm-recovery-intro">
           Stuck? Open the diagnostic below to reset all three
           permission grants (Microphone, Screen Recording, Input
@@ -2421,160 +2350,6 @@
     cursor: not-allowed;
   }
 
-  .perm-status-list {
-    list-style: none;
-    margin: 0 0 1.5rem;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
-    max-width: 44rem;
-  }
-  .perm-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.6rem 1rem;
-    align-items: center;
-    padding: 0.7rem 0.9rem;
-    background-color: white;
-    border: 1px solid #e1e1e6;
-    border-radius: 8px;
-  }
-  .perm-text {
-    /* min-width:0 lets the text column shrink under flex/grid
-       constraints so a long "why" wraps instead of pushing the
-       button off the row. */
-    min-width: 0;
-  }
-  .perm-title-line {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  .perm-name {
-    font-weight: 600;
-    color: #222;
-  }
-  /* Status pill — replaces the floating uppercase label AND the
-     dot. Background colour carries the state signal that the dot
-     used to carry (one element instead of two), and the inline
-     position next to the title anchors the status to its row's
-     content rather than letting it float in column 3. Mirrors
-     System Settings → Privacy & Security where state lives next
-     to the name and the right edge is reserved for controls. */
-  .perm-status-pill {
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 0.1rem 0.45rem;
-    border-radius: 999px;
-    background: #ececf0;
-    color: #555;
-    line-height: 1.4;
-    white-space: nowrap;
-  }
-  .perm-row[data-status="granted"] .perm-status-pill {
-    background: #e3f5e8;
-    color: #1f6b35;
-  }
-  .perm-row[data-status="not-determined"] .perm-status-pill {
-    background: #fdf1d8;
-    color: #7a4e00;
-  }
-  .perm-row[data-status="denied"] .perm-status-pill {
-    background: #fbe3e3;
-    color: #8a1f1f;
-  }
-  /* Stale (#378) overrides the status-pill colour — the live OS
-     status is "denied/not-determined" but the health verdict
-     differentiates "was granted, now revoked" from "never asked".
-     Yellow signals "needs attention but not red-alert". */
-  .perm-row[data-health="stale"] .perm-status-pill {
-    background: #fdf1d8;
-    color: #7a4e00;
-  }
-
-  /* Traffic-light dot (#378). One per row, sits inline with the
-     title. Green / yellow / red / grey track the four health
-     verdicts plus the "unknown" fallback when the health IPC
-     hasn't loaded yet (older builds, transient settings hiccup). */
-  .perm-health-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    background-color: #c0c0c5;
-  }
-  .perm-health-dot[data-health="confirmed"] {
-    background-color: #1f9d3a;
-  }
-  .perm-health-dot[data-health="stale"] {
-    background-color: #e0a020;
-  }
-  .perm-health-dot[data-health="not-granted"] {
-    background-color: #d83a3a;
-  }
-  .perm-health-dot[data-health="not-applicable"] {
-    background-color: #c0c0c5;
-  }
-  .perm-stale-hint {
-    display: block;
-    margin-top: 0.3rem;
-    font-size: 0.78rem;
-    color: #7a4e00;
-    background-color: #fdf6e3;
-    border-left: 3px solid #e0a020;
-    padding: 0.4rem 0.6rem;
-    border-radius: 4px;
-  }
-
-  .perm-why {
-    display: block;
-    margin-top: 0.15rem;
-    font-size: 0.82rem;
-    color: #666;
-  }
-  /* Per-row "Grant in Settings…" button. Lives in the second
-     grid column, vertically centred against the text-block on
-     the left so the click target is balanced against the
-     name+why stack. */
-  .perm-row-action {
-    align-self: center;
-    padding: 0.35rem 0.7rem;
-    font-size: 0.82rem;
-    font-weight: 500;
-    border: 1px solid #d1d1d8;
-    background-color: white;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #2c3e8f;
-    white-space: nowrap;
-    transition: background-color 0.12s, border-color 0.12s;
-  }
-  .perm-row-action:hover {
-    background-color: #f0f4ff;
-    border-color: #4a6cd0;
-  }
-  .perm-row-action:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-  }
-  /* On not-yet-granted rows the button is the primary path forward;
-     give it a hint of weight so the user reads it as the actionable
-     element. Granted rows render the same button in the quieter
-     variant above. */
-  .perm-row[data-status="not-determined"] .perm-row-action,
-  .perm-row[data-status="denied"] .perm-row-action {
-    background-color: #eef2ff;
-    border-color: #c7d2fe;
-    color: #1e1b4b;
-    font-weight: 600;
-  }
-  .perm-row[data-status="not-determined"] .perm-row-action:hover,
-  .perm-row[data-status="denied"] .perm-row-action:hover {
-    background-color: #e0e7ff;
-    border-color: var(--accent);
-  }
   .perm-recovery-intro {
     margin: 0 0 1rem;
     font-size: 0.85rem;
@@ -2582,44 +2357,7 @@
     max-width: 44rem;
   }
   @media (prefers-color-scheme: dark) {
-    .perm-row {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-    }
-    .perm-name { color: #e8e8e8; }
-    .perm-why { color: #a8a8a8; }
-    .perm-status-pill {
-      background: #3a3a3f;
-      color: #c8c8cc;
-    }
-    .perm-row[data-status="granted"] .perm-status-pill {
-      background: #1d3a26;
-      color: #8fd9a3;
-    }
-    .perm-row[data-status="not-determined"] .perm-status-pill {
-      background: #3d2f12;
-      color: #f0c878;
-    }
-    .perm-row[data-status="denied"] .perm-status-pill {
-      background: #3d1d1d;
-      color: #f0a0a0;
-    }
     .perm-recovery-intro { color: #b0b0b0; }
-    .perm-row-action {
-      background-color: #1f1f22;
-      border-color: #38383b;
-      color: #c0d0ff;
-    }
-    .perm-row-action:hover {
-      background-color: #28283a;
-      border-color: var(--accent);
-    }
-    .perm-row[data-status="not-determined"] .perm-row-action,
-    .perm-row[data-status="denied"] .perm-row-action {
-      background-color: #1e1b4b;
-      border-color: #4338ca;
-      color: #e0e7ff;
-    }
   }
 
   kbd {
