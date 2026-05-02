@@ -339,6 +339,16 @@
       clearTimeout(refreshPermissionHealthTimer);
       refreshPermissionHealthTimer = null;
     }
+    // Clear the auto-copy notice's auto-dismiss timer too —
+    // page is the only Svelte tree this component lives in
+    // today, but HMR or any future routing would otherwise
+    // leave the timer firing after teardown and writing to a
+    // stale `meetingCopyNotice` cell. Caught in the security
+    // review on #415 (the cluster review on #412–#416).
+    if (meetingCopyNoticeTimer !== null) {
+      clearTimeout(meetingCopyNoticeTimer);
+      meetingCopyNoticeTimer = null;
+    }
   });
 
   // 250 ms debounce window for the focus-event refresh. Holds the
@@ -1150,6 +1160,15 @@
   };
   let meetingCopyNotice = $state<MeetingCopyNotice | null>(null);
   let meetingCopyNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  // The notice copy ("open the History meeting row below to copy
+  // it manually") assumes the source was a meeting recording and
+  // points at HistoryPanel's meeting-row affordance. Today only
+  // `copyMeetingSessionToClipboard` calls this; if a future caller
+  // (PTT auto-copy, dictation auto-copy retrofit) needs the same
+  // surface, the failure-message text will need to vary by source.
+  // Keeping the helper meeting-shaped until that demand actually
+  // lands rather than premature-generalising. UX review caught
+  // the meeting-only assumption on #415.
   function setMeetingCopyNotice(notice: MeetingCopyNotice) {
     if (meetingCopyNoticeTimer !== null) {
       clearTimeout(meetingCopyNoticeTimer);
@@ -1413,6 +1432,13 @@
         for SR announcement; the dismiss button is a manual
         escape hatch in case the auto-clear timer (4 s success /
         10 s failure) feels too long mid-session.
+
+        The warning glyph carries an explicit `︎` variation
+        selector so macOS doesn't render it as a colour emoji
+        (yellow triangle), which would fight the amber-tinted
+        container. UX review on the original #415 caught that
+        bare U+26A0 picks up emoji presentation by default on
+        Apple platforms; the VS-15 selector forces text style.
       -->
       <div
         class="meeting-copy-notice"
@@ -1421,7 +1447,7 @@
         data-testid="meeting-copy-notice"
       >
         <span class="meeting-copy-notice-icon" aria-hidden="true">
-          {meetingCopyNotice.kind === "success" ? "✓" : "⚠"}
+          {meetingCopyNotice.kind === "success" ? "✓" : "⚠︎"}
         </span>
         <span class="meeting-copy-notice-message">
           {meetingCopyNotice.message}
@@ -1657,7 +1683,11 @@
   line-height: 1;
   cursor: pointer;
   color: inherit;
-  opacity: 0.6;
+  /* Bumped from 0.6 → 0.75 (UX review on #415). The original
+     was visually quiet enough that the dismiss path read as
+     decoration; 0.75 reads as actionable without dominating the
+     row. */
+  opacity: 0.75;
 }
 .meeting-copy-notice-dismiss:hover {
   opacity: 1;
