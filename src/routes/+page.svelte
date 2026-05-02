@@ -317,8 +317,14 @@
     // button, so we now hold it as reactive state. Refresh on focus
     // so a user who flipped Screen Recording in System Settings
     // sees the upgrade without restart.
+    //
+    // Wrapped in a 250 ms debounce (#386 security review) so a
+    // script that programmatically refocuses the window can't
+    // spam the IPC. Each call is cheap (single-digit ms) and
+    // side-effect-free after the first stamp, but politeness is
+    // free at this point.
     void refreshPermissionHealth();
-    window.addEventListener("focus", refreshPermissionHealth);
+    window.addEventListener("focus", refreshPermissionHealthDebounced);
   });
 
   onDestroy(() => {
@@ -328,8 +334,28 @@
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
     unlistenMeetingSourceFailed?.();
-    window.removeEventListener("focus", refreshPermissionHealth);
+    window.removeEventListener("focus", refreshPermissionHealthDebounced);
+    if (refreshPermissionHealthTimer !== null) {
+      clearTimeout(refreshPermissionHealthTimer);
+      refreshPermissionHealthTimer = null;
+    }
   });
+
+  // 250 ms debounce window for the focus-event refresh. Holds the
+  // outstanding setTimeout id so onDestroy can clear it; without
+  // the cancel a leftover firing after unmount would write to an
+  // unmounted reactive `permissionHealth` (Svelte tolerates this
+  // but the IPC call is wasted).
+  let refreshPermissionHealthTimer: ReturnType<typeof setTimeout> | null = null;
+  function refreshPermissionHealthDebounced() {
+    if (refreshPermissionHealthTimer !== null) {
+      clearTimeout(refreshPermissionHealthTimer);
+    }
+    refreshPermissionHealthTimer = setTimeout(() => {
+      refreshPermissionHealthTimer = null;
+      void refreshPermissionHealth();
+    }, 250);
+  }
 
   async function refreshPermissionHealth() {
     try {
