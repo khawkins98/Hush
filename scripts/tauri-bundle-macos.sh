@@ -37,11 +37,13 @@ echo "[hush tauri:bundle] building debug .app — this is slow (full link + fron
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 export CMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}"
 
-# `tauri build` honours `bundle.active = true` in tauri.conf.json by
-# default, so we don't pass --no-bundle / --bundles. --debug skips
-# release-profile optimisations that would push the build past the
-# 2 min mark.
-npx tauri build --debug
+# --bundles app: produce only the .app bundle, not the .dmg.
+# Tauri's create-dmg script mis-parses OS_MAJOR_VERSION on macOS 26+
+# (sees "26", expects ≤10 style versioning) and exits with "Not enough
+# arguments", failing the entire build even though the .app is good.
+# For TCC smoke-testing we only need the .app; DMG is a release artifact.
+# --debug skips release-profile optimisations.
+npx tauri build --debug --bundles app
 
 APP_PATH="src-tauri/target/debug/bundle/macos/Hush.app"
 if [[ ! -d "$APP_PATH" ]]; then
