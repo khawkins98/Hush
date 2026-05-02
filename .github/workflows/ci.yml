@@ -291,6 +291,71 @@ jobs:
             exit 1
           fi
 
+  mock-completeness:
+    name: Playwright mock completeness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Cross-check that every #[tauri::command] registered in the
+      # `tauri::generate_handler!` macro in src-tauri/src/lib.rs has
+      # a corresponding default handler in tests/e2e/_mock.ts (#431).
+      #
+      # The four-place IPC sync rule (CLAUDE.md) requires Rust
+      # struct + handler, generate_handler! registration, TS type,
+      # and Playwright mock to stay aligned. CI catches Rust-only
+      # and TS-only breaks via cargo / svelte-check, but a missing
+      # mock is silent: the test specs load without warning, and
+      # the unmocked invoke just returns undefined or throws at
+      # runtime — a class of e2e flakiness that's painful to
+      # diagnose. This step closes that gap.
+      #
+      # Parser is intentionally minimal: a regex against the
+      # generate_handler! block (handler list is whitespace-
+      # tolerant but always one path per line in this repo) and a
+      # second regex against the `_mock.ts` defaults object
+      # matching `^      <key>:\s*(\(|async\b)`. The 6-space indent
+      # mirrors the convention of the file; `(\(` or `async`
+      # filters out non-handler entries like the meta-key
+      # `invoke: wrapped,` at line 355. If the indent ever changes,
+      # this step's regex needs to track.
+      - name: Diff Tauri commands against Playwright mocks
+        run: |
+          set -euo pipefail
+
+          # Bare command names from generate_handler!. Strips the
+          # `ipc::commands::[..::]<name>` qualifier to the leaf.
+          rust_cmds=$(awk '/tauri::generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs \
+            | grep -oE 'ipc::commands::[a-z_:]+\b' \
+            | awk -F'::' '{print $NF}' \
+            | sort -u)
+
+          # Top-level keys in the `defaults` object of `installMocks`.
+          # Looks for `<key>: () =>` or `<key>: async` so nested
+          # field assignments (e.g. `invoke: wrapped` at line 355)
+          # don't get picked up.
+          mock_cmds=$(grep -oE '^      [a-z_][a-z_0-9]*:[[:space:]]*(\(|async\b)' tests/e2e/_mock.ts \
+            | sed -E 's/^[[:space:]]+//; s/:.*//' \
+            | sort -u)
+
+          missing=$(comm -23 <(echo "$rust_cmds") <(echo "$mock_cmds"))
+          extra=$(comm -13 <(echo "$rust_cmds") <(echo "$mock_cmds"))
+
+          if [ -n "$missing" ]; then
+            echo "::error::Tauri commands without a Playwright default mock:" >&2
+            echo "$missing" >&2
+            echo "" >&2
+            echo "Add a default to tests/e2e/_mock.ts so e2e specs that don't override the command don't get an undefined return / unhandled rejection at runtime." >&2
+            exit 1
+          fi
+
+          if [ -n "$extra" ]; then
+            echo "::warning::Mock entries with no matching Tauri command (likely stale after a command was removed):"
+            echo "$extra"
+          fi
+
+          echo "OK: $(echo "$rust_cmds" | wc -l) commands, all present in default mock."
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
