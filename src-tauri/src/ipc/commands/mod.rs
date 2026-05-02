@@ -1270,7 +1270,7 @@ pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> 
 /// (matches `catalog::WESPEAKER_RESNET34_LM_ID`).
 ///
 /// Implementation delegates to [`download_diarizer_model_inner`] —
-/// the inner takes an [`crate::ipc::events::EventEmitter`] trait
+/// the inner takes an [`crate::events::EventEmitter`] trait
 /// instead of an `AppHandle` so tests can drive both the rejection
 /// path and the failure-cleanup path without spinning up a real
 /// Tauri runtime (#315).
@@ -1280,7 +1280,7 @@ pub async fn download_diarizer_model(
     state: State<'_, AppState>,
 ) -> IpcResult<()> {
     let model = crate::diarization::catalog::default_diarizer_model();
-    let emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter> =
+    let emitter: std::sync::Arc<dyn crate::events::EventEmitter> =
         std::sync::Arc::new(crate::ipc::events::TauriEventEmitter::new(app));
     download_diarizer_model_inner(
         DiarizerDownloadDeps {
@@ -1300,7 +1300,7 @@ pub async fn download_diarizer_model(
 /// can run from a `#[tokio::test]` without a real `AppHandle` /
 /// `tauri::State` (#315).
 pub(crate) struct DiarizerDownloadDeps {
-    pub emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter>,
+    pub emitter: std::sync::Arc<dyn crate::events::EventEmitter>,
     pub downloads: std::sync::Arc<
         std::sync::Mutex<
             std::collections::HashMap<String, crate::transcription::download::CancelHandle>,
@@ -3089,7 +3089,7 @@ mod tests {
     }
 
     fn build_download_deps(
-        emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter>,
+        emitter: std::sync::Arc<dyn crate::events::EventEmitter>,
         downloads: std::sync::Arc<
             std::sync::Mutex<
                 std::collections::HashMap<String, crate::transcription::download::CancelHandle>,
@@ -3128,7 +3128,7 @@ mod tests {
         );
 
         let recorder = crate::ipc::events::RecordingEventEmitter::new();
-        let emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter> =
+        let emitter: std::sync::Arc<dyn crate::events::EventEmitter> =
             std::sync::Arc::new(recorder.clone());
 
         let tmp = tempfile::tempdir().unwrap();
@@ -3178,7 +3178,7 @@ mod tests {
             crate::transcription::download::CancelHandle,
         >::new()));
         let recorder = crate::ipc::events::RecordingEventEmitter::new();
-        let emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter> =
+        let emitter: std::sync::Arc<dyn crate::events::EventEmitter> =
             std::sync::Arc::new(recorder.clone());
 
         let tmp = tempfile::tempdir().unwrap();
