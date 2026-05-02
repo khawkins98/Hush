@@ -23,7 +23,8 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use crate::ipc::events::{EventEmitter, TauriEventEmitter};
+use crate::events::EventEmitter;
+use crate::ipc::events::TauriEventEmitter;
 use crate::ipc::AppState;
 use crate::settings::keys as settings_keys;
 use crate::transcription::catalog::{self, ModelMetadata};

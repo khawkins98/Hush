@@ -183,34 +183,30 @@ impl super::MeetingAppOverrideRepository for NoOpAppOverrides {
 /// `Arc<dyn MeetingSessionRepository>` is held internally so the
 /// manager owns the persistence handle without forcing every call
 /// site to thread it through. Cheap to clone (`Arc`).
-/// Notifies the frontend when the meeting pump's per-source state
-/// changes mid-session — specifically when a previously-running
-/// source fails (TCC revoke, device unplug, inference panic) and is
-/// dropped from the rest of the session. Without this signal the
-/// panel keeps showing "recording from mic + system audio" while
-/// one of those sources has silently gone dead.
+/// Wire-shape for the `meeting:source-failed` Tauri event. Fired
+/// when the meeting pump drops a per-source capture path mid-session
+/// (TCC revoke, device unplug, inference panic). Without this
+/// signal the panel keeps showing "recording from mic + system
+/// audio" while one of those sources has silently gone dead.
 ///
-/// Trait rather than a direct `tauri::AppHandle` dep so the
-/// `SessionManager` stays unit-testable without spinning up a
-/// Tauri runtime. The production impl in `crate::ipc::commands`
-/// wraps an `AppHandle::emit`; tests pass a no-op or a recording
-/// stub that captures emit-call args.
-pub trait MeetingEventEmitter: Send + Sync {
-    /// Fires when a per-source capture or inference path failed and
-    /// the pump dropped that source for the rest of the session.
-    /// `source_kind` is the same `kind_label` (`"microphone"` /
-    /// `"system-audio"`) the pump uses elsewhere.
-    fn source_failed(&self, session_id: i64, source_kind: &str, reason: &str);
+/// Lives here (rather than in the pump or the IPC adapter) because
+/// both sides reference the field shape — the pump emits, the
+/// frontend listens. `camelCase` so the Tauri JSON bridge gives
+/// JS consumers idiomatic field names.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MeetingSourceFailedPayload<'a> {
+    pub session_id: i64,
+    pub source_kind: &'a str,
+    pub reason: &'a str,
 }
 
-/// No-op emitter for unit tests + the `new_for_test` constructor.
-/// Production code constructs an `AppHandle`-backed emitter; the
-/// `Noop` variant means "I don't care about pump events here".
-pub struct NoopMeetingEventEmitter;
-
-impl MeetingEventEmitter for NoopMeetingEventEmitter {
-    fn source_failed(&self, _session_id: i64, _source_kind: &str, _reason: &str) {}
-}
+/// Tauri event name the pump fires through
+/// [`crate::events::EventEmitter::emit`] when [`MeetingSourceFailedPayload`]
+/// is the wire body. Centralised so the frontend's listener
+/// (`Events.MeetingSourceFailed`) and the backend emit site can't
+/// drift.
+pub(super) const MEETING_SOURCE_FAILED_EVENT: &str = "meeting:source-failed";
 
 pub struct SessionManager {
     repo: Arc<dyn MeetingSessionRepository>,
@@ -253,9 +249,13 @@ pub struct SessionManager {
     /// can drop in without changing this map's shape.
     partials: Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
     /// Surface pump-side events (per-source failure mid-session) to
-    /// the frontend. Production wires this to a `tauri::AppHandle`
-    /// emitter; tests use [`NoopMeetingEventEmitter`].
-    event_emitter: Arc<dyn MeetingEventEmitter>,
+    /// the frontend. Production wires this to a
+    /// [`crate::ipc::events::TauriEventEmitter`]; tests use
+    /// [`crate::events::NoopEventEmitter`] or a
+    /// `RecordingEventEmitter` that captures emit calls for
+    /// assertion. The pump fires `meeting:source-failed` through
+    /// this seam (see [`MeetingSourceFailedPayload`]).
+    event_emitter: Arc<dyn crate::events::EventEmitter>,
     /// Speaker diarization. Production wires
     /// [`crate::diarization::FlagGatedDiarizer`] which routes to
     /// [`crate::diarization::onnx::OnnxDiarizer`] when the
@@ -358,7 +358,7 @@ impl SessionManager {
         repo: Arc<dyn MeetingSessionRepository>,
         audio: Arc<dyn AudioCapture>,
         transcribe: crate::ipc::TranscribeSlot,
-        event_emitter: Arc<dyn MeetingEventEmitter>,
+        event_emitter: Arc<dyn crate::events::EventEmitter>,
         diarize: Arc<dyn crate::diarization::Diarize>,
         app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
     ) -> Self {
@@ -413,7 +413,8 @@ impl SessionManager {
     pub fn new_for_test(repo: Arc<dyn MeetingSessionRepository>) -> Self {
         let audio: Arc<dyn AudioCapture> = Arc::new(NoOpAudio);
         let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
-        let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
+        let emitter: Arc<dyn crate::events::EventEmitter> =
+            Arc::new(crate::events::NoopEventEmitter);
         let diarize: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
         let app_overrides: Arc<dyn super::MeetingAppOverrideRepository> =
@@ -1170,7 +1171,8 @@ mod tests {
     fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> SessionManager {
         let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
         let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
-        let emitter: Arc<dyn MeetingEventEmitter> = Arc::new(NoopMeetingEventEmitter);
+        let emitter: Arc<dyn crate::events::EventEmitter> =
+            Arc::new(crate::events::NoopEventEmitter);
         let diarize: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
         let app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =

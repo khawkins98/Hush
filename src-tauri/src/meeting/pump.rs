@@ -49,7 +49,8 @@ use anyhow::Result;
 use crate::audio::{AudioSession, AudioSource, CaptureFormat};
 use crate::transcription::{StreamingTranscribeSession, Utterance};
 
-use super::{MeetingEventEmitter, MeetingSessionRepository, NewPersistedUtterance};
+use super::manager::{MeetingSourceFailedPayload, MEETING_SOURCE_FAILED_EVENT};
+use super::{MeetingSessionRepository, NewPersistedUtterance};
 
 /// Pump tick interval — how often the streaming pump pulls samples
 /// from each audio handle and feeds them into the per-source
@@ -103,7 +104,7 @@ pub(super) struct PumpContext {
     /// mid-session. The pump fires this on the inference panic
     /// path and the streaming-feed/drain failure path that today
     /// only emit `tracing::warn!` lines the user never sees.
-    pub event_emitter: Arc<dyn MeetingEventEmitter>,
+    pub event_emitter: Arc<dyn crate::events::EventEmitter>,
     /// Diarization seam (#111). The pump runs every batch of finals
     /// through this before stamping the source-derived label, so a
     /// non-Noop impl can override `"mic"` / `"system"` with
@@ -276,10 +277,13 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                     // this source. Notify the frontend so the panel
                     // can surface "this source dropped" rather than
                     // silently rendering "still recording".
-                    ctx.event_emitter.source_failed(
-                        session_id,
-                        &source_label,
-                        "transcription task panicked",
+                    ctx.event_emitter.emit(
+                        MEETING_SOURCE_FAILED_EVENT,
+                        &MeetingSourceFailedPayload {
+                            session_id,
+                            source_kind: &source_label,
+                            reason: "transcription task panicked",
+                        },
                     );
                     continue;
                 }
@@ -304,8 +308,14 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                     // would loop the same warning every 500 ms for
                     // the rest of the meeting.
                     ctx.streaming_sessions[i] = None;
-                    ctx.event_emitter
-                        .source_failed(session_id, &source_label, &reason);
+                    ctx.event_emitter.emit(
+                        MEETING_SOURCE_FAILED_EVENT,
+                        &MeetingSourceFailedPayload {
+                            session_id,
+                            source_kind: &source_label,
+                            reason: &reason,
+                        },
+                    );
                     continue;
                 }
             };

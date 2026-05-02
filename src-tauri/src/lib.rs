@@ -6,6 +6,7 @@ pub mod audio_cues;
 pub mod db;
 pub mod diarization;
 pub mod dictionary;
+pub mod events;
 pub mod history;
 pub mod hotkey;
 pub mod hud;

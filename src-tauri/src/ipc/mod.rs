@@ -799,50 +799,12 @@ impl AppStateBuilder {
     }
 }
 
-/// Production [`crate::meeting::MeetingEventEmitter`] that wraps a
-/// `tauri::AppHandle` and forwards `source_failed` calls as the
-/// `meeting:source-failed` Tauri event. The frontend listens via
-/// `@tauri-apps/api/event::listen`. Wire shape is `{ sessionId,
-/// sourceKind, reason }` (camelCase) so JS consumers don't have to
-/// guess at the field convention.
-///
-/// Lives in `ipc/mod.rs` rather than `meeting/manager.rs` so the
-/// meeting module stays Tauri-agnostic — that module's tests can
-/// construct a `SessionManager` without importing `tauri::*`.
-struct AppHandleMeetingEventEmitter {
-    app: tauri::AppHandle,
-}
-
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MeetingSourceFailedPayload<'a> {
-    session_id: i64,
-    source_kind: &'a str,
-    reason: &'a str,
-}
-
-impl crate::meeting::MeetingEventEmitter for AppHandleMeetingEventEmitter {
-    fn source_failed(&self, session_id: i64, source_kind: &str, reason: &str) {
-        use tauri::Emitter;
-        let payload = MeetingSourceFailedPayload {
-            session_id,
-            source_kind,
-            reason,
-        };
-        if let Err(e) = self.app.emit("meeting:source-failed", &payload) {
-            // Best-effort: a failed emit shouldn't crash the pump
-            // (caller is on the pump's tokio task). The listener
-            // not yet being attached is the most likely cause and
-            // is not actionable here.
-            tracing::warn!(
-                error = ?e,
-                session_id,
-                source_kind,
-                "failed to emit meeting:source-failed event"
-            );
-        }
-    }
-}
+// `AppHandleMeetingEventEmitter` was the production glue between the
+// meeting module's `MeetingEventEmitter` trait and `tauri::AppHandle::emit`.
+// Both went away in #431: the meeting module now consumes
+// `crate::events::EventEmitter` directly, and the production wrapper is
+// `crate::ipc::events::TauriEventEmitter` (constructed below in the
+// `SessionManager::new` call site).
 
 /// Parse the persisted [`crate::settings::keys::HUD_ENABLED`] row
 /// into a bool. Wire encoding lives in [`crate::settings::codec`];
@@ -1027,8 +989,8 @@ impl AppState {
         // write the dictation slot, and vice versa.
         let transcribe_shared = Arc::new(Mutex::new(transcribe_dictation));
         let transcribe_meeting_shared = Arc::new(Mutex::new(transcribe_meeting));
-        let event_emitter: Arc<dyn crate::meeting::MeetingEventEmitter> =
-            Arc::new(AppHandleMeetingEventEmitter { app: app.clone() });
+        let event_emitter: Arc<dyn crate::events::EventEmitter> =
+            Arc::new(crate::ipc::events::TauriEventEmitter::new(app.clone()));
         // Diarization wiring (#111, post-#310):
         //
         // 1. Read the persisted `diarization_enabled` flag and
