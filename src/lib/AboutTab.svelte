@@ -38,6 +38,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
 
+  import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
   import { openExternal } from "./openExternal";
   import { Events } from "./events";
   import { formatErrorMessage } from "./errors";
@@ -140,6 +141,15 @@
     long-running meeting capture, powered by whisper.cpp on
     your own hardware. No cloud, no telemetry.
   </p>
+
+  <!--
+    "How it works" diagram (#427 Item 3). A visual restatement of
+    the blurb above — the audio chain is a single page on the
+    user's device, ending in their clipboard. Embedded here as a
+    later-encounter explainer for users who skipped or forgot the
+    first-run welcome modal.
+  -->
+  <AudioPipelineDiagram />
 
   <!--
     Manual "Check for updates" probe (#223). Sits below the
