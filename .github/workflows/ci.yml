@@ -3,10 +3,32 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: &docs-only-paths
+      # Markdown-only changes (README, CHANGELOG, learnings.md,
+      # docs/**, .audit/**) can't break Rust, the frontend, or any
+      # CI-policed surface, so skip the whole workflow rather than
+      # burning ~5 minutes of macOS Rust compilation per typo fix.
+      # `paths-ignore` only skips when *every* changed file matches,
+      # so a mixed code+docs PR still runs the full suite.
+      #
+      # Branch protection on `main` does not require any specific
+      # status check (verified 2026-05-02 via
+      # `gh api repos/.../branches/main/protection`), so the
+      # absence of a CI run on a docs-only PR doesn't block the
+      # merge. If required checks are added later, this list will
+      # need to coordinate with them or the doc-skipped job has
+      # to be replaced with a status-noop.
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.editorconfig'
+      - 'docs/**'
+      - '.audit/**'
   # Run on every pull request, regardless of base branch. Stacked PRs
   # (e.g. feat/* targeting another feat/*) need CI feedback too — a
   # `branches: [main]` filter would silently skip them.
   pull_request:
+    paths-ignore: *docs-only-paths
 
 # Cancel superseded runs on the same branch to avoid burning CI minutes on
 # obsolete commits during a rapid push sequence.
