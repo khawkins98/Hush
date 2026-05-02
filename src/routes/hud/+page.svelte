@@ -54,6 +54,17 @@
   let recordingStartedAt = $state<number | null>(null);
   let elapsedLabel = $state("0:00");
 
+  // Waveform ring buffer (#362). One entry per visible bar, in
+  // chronological order — index 0 is oldest, the last is the
+  // freshest. Each entry is a smoothed `displayLevel` snapshot in
+  // [0, 1]. The renderer turns each value into a bar height.
+  // Bar count + sample rate are component constants — see the
+  // BAR_COUNT / WAVEFORM_INTERVAL_MS constants below — so the
+  // density / speed of the visualiser can be re-dialled without
+  // touching the tick logic.
+  const BAR_COUNT = 14;
+  let waveform = $state<number[]>(new Array(BAR_COUNT).fill(0));
+
   // Pre-#330 these were closure-locals inside `onMount`'s synchronous
   // teardown, populated by `.then()`. Hoisted to module scope and
   // assigned via `await listen(...)` inside an async `onMount` so the
@@ -84,6 +95,15 @@
   onMount(async () => {
     const ATTACK = 0.6;
     const RELEASE = 0.12;
+    // Push a fresh waveform sample every ~80 ms (#362). At ~12 Hz
+    // and 14 bars the visible window covers ~1.2 s — fast enough
+    // to capture the rhythm of speech, slow enough that the bars
+    // actually move across the strip rather than blurring. The
+    // rAF loop runs at 60 Hz; this throttle keeps the buffer's
+    // visual scroll rate roughly fixed regardless of display
+    // refresh rate.
+    const WAVEFORM_INTERVAL_MS = 80;
+    let lastWaveformPush = 0;
 
     const tick = () => {
       const target = rms;
@@ -94,8 +114,18 @@
       // formatted string ~30 times per second is fine for a label
       // that changes once per second and Svelte's diffing skips
       // re-renders when the string is unchanged.
+      const now = Date.now();
       if (recordingStartedAt !== null) {
-        elapsedLabel = formatElapsed(Date.now() - recordingStartedAt);
+        elapsedLabel = formatElapsed(now - recordingStartedAt);
+      }
+      // Sample the smoothed level into the waveform buffer at
+      // the throttled cadence. We snapshot `displayLevel` rather
+      // than raw `rms` so each bar reflects the same envelope-
+      // smoothed value the old single bar showed — keeps the
+      // visual rhythm continuous with what users were used to.
+      if (now - lastWaveformPush >= WAVEFORM_INTERVAL_MS) {
+        waveform = [...waveform.slice(1), displayLevel];
+        lastWaveformPush = now;
       }
       raf = requestAnimationFrame(tick);
     };
@@ -115,6 +145,12 @@
         if (next === "processing") {
           rms = 0;
           displayLevel = 0;
+          // Reset the waveform to flat so the post-stop processing
+          // strip doesn't show a stale recording trace. The bars
+          // are hidden anyway during processing (the shimmer takes
+          // their place), but a same-tick `recording` flip back
+          // would otherwise paint a few stale samples first.
+          waveform = new Array(BAR_COUNT).fill(0);
           // Freeze the timer (don't reset) — the user still sees
           // the final duration of the just-finished capture during
           // the post-stop transcription window. A back-to-back
@@ -151,11 +187,6 @@
       raf = undefined;
     }
   });
-
-  // Map RMS roughly into a visual bar fill. RMS for normal speech
-  // sits in 0.05–0.2; we boost ×4 so casual talking lights the bar
-  // about half-way and shouting saturates it. Capped at 100 %.
-  let barWidth = $derived(Math.min(100, Math.max(0, displayLevel * 400)));
 
   // Dismiss the HUD without affecting the in-flight recording. The
   // backend's `hud::show` is the only thing that re-shows it, so
@@ -224,8 +255,21 @@
     </span>
   {/if}
   {#if hudState === "recording"}
-    <div class="hud-meter" role="presentation">
-      <div class="hud-meter-fill" style="width: {barWidth}%"></div>
+    <!--
+      Waveform visualiser (#362). Replaces the single-bar level
+      meter with N bars driven by a small ring buffer of recent
+      smoothed RMS samples. Each bar is mirrored centre-out (the
+      filled span is centred on the strip's vertical midline)
+      because that reads as "voice activity" more cleanly than a
+      bottom-anchored bar. Heights are derived from the buffer
+      via the same ×4 amplification the old `barWidth` derived
+      used, so the visual gain matches what users were used to.
+    -->
+    <div class="hud-waveform" role="presentation">
+      {#each waveform as level, i (i)}
+        {@const heightPct = Math.min(100, Math.max(6, level * 400))}
+        <span class="hud-waveform-bar" style="height: {heightPct}%"></span>
+      {/each}
     </div>
   {:else}
     <!--
@@ -369,34 +413,41 @@
     letter-spacing: 0.01em;
   }
 
-  /* Level meter. A short bar to the right of the label. The pill is
-     small, so the meter is small too — its job is to convey "Hush
-     is hearing you", not give a precise readout. The track is faint
-     and the fill is a soft red gradient that matches the dot. */
-  .hud-meter {
+  /* Waveform visualiser (#362). N bars in a horizontal strip, each
+     centred on the vertical midline so the filled span grows
+     centre-out — reads as "voice activity" more naturally than
+     bottom-anchored bars. Same overall footprint as the old
+     single bar (60×16-ish px) so the pill geometry doesn't shift.
+     Bar fill matches the recording-dot palette so the visual idiom
+     stays "red = capturing". */
+  .hud-waveform {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     width: 60px;
-    height: 6px;
-    background-color: rgba(255, 255, 255, 0.12);
-    border-radius: 3px;
-    overflow: hidden;
+    height: 16px;
+    gap: 1px;
+  }
+  .hud-waveform-bar {
+    flex: 1 1 0;
+    min-width: 2px;
+    background: linear-gradient(180deg, #ff8080 0%, #ff4040 100%);
+    border-radius: 1px;
+    /* The height value is set inline from the ring-buffer sample;
+       a short transition smooths the inter-sample step so the bar
+       glides between heights instead of snapping. JS already does
+       attack/release smoothing on the *value*; the CSS transition
+       just bridges the discrete time-step between waveform pushes
+       (~80 ms) so the eye sees motion. */
+    transition: height 60ms linear;
+    will-change: height;
   }
 
-  .hud-meter-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #ff8080 0%, #ff4040 100%);
-    border-radius: 3px;
-    /* Width is set inline by the rAF envelope; no CSS transition
-       so the smoothing stays in the JS attack/release loop and
-       isn't double-smoothed by the renderer. */
-    will-change: width;
-  }
-
-  /* Reduced-motion users still see the meter, but at the unsmoothed
-     RMS — same behaviour as the dot's animation: convey the signal,
-     skip the motion. The width still updates per `audio:level`
-     event, just without the per-frame envelope. */
+  /* Reduced-motion users get the same bars without the glide —
+     same policy as the dot's pulse + the old meter fill: convey
+     the signal, skip the motion. */
   @media (prefers-reduced-motion: reduce) {
-    .hud-meter-fill {
+    .hud-waveform-bar {
       transition: none;
     }
   }
