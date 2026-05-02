@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Progressive disclosure in Settings (#427 Item 2)
+
+- New `src/lib/AdvancedSection.svelte` — a reusable `<details>`-style disclosure wrapper that hides power-user controls behind a labeled toggle. First-time visitors see only the essentials; power users click once and see everything.
+- **Settings → General → Advanced** now wraps the *Performance* (transcription threads slider) and *First-run welcome* sections.
+- **Settings → Meeting → Advanced — app overrides** now wraps the `MeetingAppOverridesPanel` so a fresh Meeting tab leads with the auto-start mode and Speakers toggle, not a row of empty form fields.
+- Per-session expansion only — `open` is local component state. The audit's read was that settings are rarely deep-dived, so per-key persistence wasn't worth the complexity.
+
 #### Rich single-dictation export formats (#427 Item 4)
 
 - **Export-format picker** below the transcript in `ResultBlock.svelte`. The dictation transcript is still on the clipboard automatically as plain text; the picker re-writes the clipboard with the chosen format on click.
