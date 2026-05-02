@@ -14,8 +14,11 @@
   viewBox:
     1. The capsule (rounded rectangle, 6 × 11)
     2. The stand (a "U"-shape arc + a vertical post + a base)
-  Both stroked at 1.6 viewport-units so the strokes survive
-  the downscale to 22 px without going sub-pixel.
+  Stroked at 2 viewport-units. UX review on the original 1.6
+  noted that scaled to the 22 px render box the stroke lands at
+  ~1.47 CSS px on a standard-DPR screen, which fuzzes against
+  sub-pixel boundaries; 2 viewport-units rasters at ~1.83 CSS
+  px — crisp on 1× DPR, still optically light on hidpi.
 
   Colour `#2c3e8f` matches the rest of the Hush UI accent
   (button.ghost, link-like) rather than the legacy `#1877F2`
@@ -33,7 +36,7 @@
   viewBox="0 0 24 24"
   fill="none"
   stroke="#2c3e8f"
-  stroke-width="1.6"
+  stroke-width="2"
   stroke-linecap="round"
   stroke-linejoin="round"
   aria-hidden="true"
