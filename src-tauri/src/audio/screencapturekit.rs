@@ -327,6 +327,30 @@ pub fn prime_screen_recording_permission() -> Result<()> {
     Ok(())
 }
 
+/// Validate that ScreenCaptureKit is *actually* usable, not just
+/// preflight-true (#378 follow-up). Returns Ok(()) when the
+/// `SCShareableContent::get()` call succeeds — the strongest
+/// signal that the TCC entry is alive and the underlying
+/// capability works. Returns Err with the framework's error when
+/// the call fails (the cert / bundle-id rotation case where
+/// preflight lies-true on cached state but the real call hits a
+/// permission wall).
+///
+/// Distinct from `prime_screen_recording_permission` because that
+/// helper deliberately swallows errors (its job is to enroll the
+/// app in the System Settings list, not to verify capability).
+/// This one exists for the `get_permission_health` auto-stamp
+/// path, where we *need* the success/fail signal.
+///
+/// Blocking — call from `tauri::async_runtime::spawn_blocking`
+/// or its equivalent. SCK's content query is a Cocoa round-trip
+/// and isn't cheap on the cold path.
+pub fn validate_screen_recording_capability() -> Result<()> {
+    SCShareableContent::get()
+        .map(|_| ())
+        .map_err(|e| anyhow!("ScreenCaptureKit content query failed: {e}"))
+}
+
 impl ScreenCaptureKitSession {
     /// Start an SCK capture session against the system's first display
     /// (which is what the audio mixer is bound to). The first call on
