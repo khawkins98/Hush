@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Appearance / theme override (#411 phase A)
+
+- **Settings → General → Appearance** picker (System / Light / Dark) lets users override the OS dark-mode preference. System (default) follows `prefers-color-scheme`; explicit values force the chosen theme regardless.
+- **Persistence + cross-window sync** — preference stored in `localStorage["hush.theme"]`; root layout reads + applies synchronously at script-evaluation time so first paint already reflects the choice (no light-to-dark flash). A `hush:theme` Tauri event broadcasts changes so Settings → main → HUD all flip together.
+- `app.css` gains explicit `:root[data-theme="light"]` and `:root[data-theme="dark"]` blocks alongside the existing `@media (prefers-color-scheme: dark)` block; `settings-tab.css` rules are gated with `:not([data-theme="light"])` and mirrored under `[data-theme="dark"]` so the manual override beats the OS preference.
+
 #### Permission health: traffic-light staleness model (#378, #381, #382, #383, #384)
 
 Three-state per-permission verdict (`confirmed` / `stale` / `not-granted`) layered on top of the live OS grant state, persisted via `permissions_*_last_confirmed` settings keys.
