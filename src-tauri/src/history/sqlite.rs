@@ -429,6 +429,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_stats_word_count_overcounts_multi_space_runs() {
+        // Documented imprecision (#406): the TRIM-then-count-spaces
+        // formula counts every space as a separator, so a double-
+        // space run reads as N+1 words. We pin this so a future
+        // "fix" that collapses runs must update the test deliberately
+        // — and so a contributor reading `get_stats` knows the SQL
+        // has known edge-case behaviour rather than discovering it
+        // when their off-by-one count surprises them.
+        //
+        // Whisper's tokeniser doesn't typically emit double-spaced
+        // output, but pasted-in transcripts (manual edits, future
+        // import paths) might. If this becomes load-bearing the
+        // right move is a recursive CTE collapsing whitespace runs;
+        // the ~2× SQL cost is fine on a few-thousand-row history.
+        let repo = fresh_repo().await;
+        repo.create(sample("hello  world", None)).await.unwrap();
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats.word_count, 3);
+    }
+
+    #[tokio::test]
     async fn clear_drops_rows_from_fts_index() {
         // Same trigger discipline as `delete`: the AFTER DELETE
         // trigger from migration 0001 fires once per cleared row,
