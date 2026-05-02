@@ -35,6 +35,7 @@
 //!   these because they need a real Tauri app.
 
 pub mod commands;
+pub mod events;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -303,8 +304,13 @@ pub struct AppState {
     /// Cancel handles for in-flight downloads, keyed by model id.
     /// Inserted by `model_download` when it spawns a task; the cancel
     /// command flips the handle's flag; the spawned task removes its
-    /// own entry on completion.
-    pub downloads: Mutex<HashMap<String, CancelHandle>>,
+    /// own entry on completion. Wrapped in `Arc` so the spawned task
+    /// can hold a clone independently of the live `AppState` —
+    /// previously the cleanup code reached back through
+    /// `AppHandle::try_state` which forced the cancel-handle cleanup
+    /// onto a code path that requires a real Tauri runtime
+    /// (untestable, per #315).
+    pub downloads: Arc<Mutex<HashMap<String, CancelHandle>>>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
     /// User's chosen PTT key combo, hot-swappable via
     /// `ptt_set_combo`. The listener thread reads through this
@@ -718,7 +724,7 @@ impl AppStateBuilder {
                 ))
                 .build()
                 .expect("reqwest client should always build with default config"),
-            downloads: Mutex::new(HashMap::new()),
+            downloads: Arc::new(Mutex::new(HashMap::new())),
             pending_foreground: Mutex::new(None),
             last_update_check: Mutex::new(None),
             ptt_combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(

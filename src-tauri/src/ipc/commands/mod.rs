@@ -1279,22 +1279,76 @@ pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> 
 ///
 /// `id` is always `"wespeaker-resnet34-lm"` for the diarizer
 /// (matches `catalog::WESPEAKER_RESNET34_LM_ID`).
+///
+/// Implementation delegates to [`download_diarizer_model_inner`] —
+/// the inner takes an [`crate::ipc::events::EventEmitter`] trait
+/// instead of an `AppHandle` so tests can drive both the rejection
+/// path and the failure-cleanup path without spinning up a real
+/// Tauri runtime (#315).
 #[tauri::command]
 pub async fn download_diarizer_model(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> IpcResult<()> {
     let model = crate::diarization::catalog::default_diarizer_model();
+    let emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter> =
+        std::sync::Arc::new(crate::ipc::events::TauriEventEmitter::new(app));
+    download_diarizer_model_inner(
+        DiarizerDownloadDeps {
+            emitter,
+            downloads: std::sync::Arc::clone(&state.downloads),
+            http: state.http.clone(),
+            diarize_slot: std::sync::Arc::clone(&state.diarize_slot),
+            models_dir: state.models_dir.clone(),
+        },
+        model,
+    )
+    .await
+}
+
+/// Bundled dependencies the diarizer download needs at runtime.
+/// Pulled out of [`AppState`] so [`download_diarizer_model_inner`]
+/// can run from a `#[tokio::test]` without a real `AppHandle` /
+/// `tauri::State` (#315).
+pub(crate) struct DiarizerDownloadDeps {
+    pub emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter>,
+    pub downloads: std::sync::Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<String, crate::transcription::download::CancelHandle>,
+        >,
+    >,
+    pub http: reqwest::Client,
+    pub diarize_slot: crate::diarization::DiarizeSlot,
+    pub models_dir: std::path::PathBuf,
+}
+
+/// Inner implementation of [`download_diarizer_model`]. Same
+/// behaviour as the `#[tauri::command]` wrapper, but takes the
+/// dependencies as plain values so tests can drive both:
+///
+/// - the duplicate-rejection guard inside the
+///   `state.downloads.lock()` critical section (audit-2 fix); and
+/// - the cancel-handle cleanup on the spawned task's failure
+///   branch (mirrors the Whisper-download cleanup pattern).
+///
+/// `model` is the catalog entry to download. Production passes
+/// `crate::diarization::catalog::default_diarizer_model()`; tests
+/// can pass a custom entry with a deliberately bad URL to drive
+/// the failure path without standing up a fake server.
+pub(crate) async fn download_diarizer_model_inner(
+    deps: DiarizerDownloadDeps,
+    model: crate::diarization::catalog::DiarizerModelMetadata,
+) -> IpcResult<()> {
     let id = model.id.clone();
-    let dest = state.models_dir.join(&model.filename);
+    let dest = deps.models_dir.join(&model.filename);
 
     // Register a cancel handle + re-check on-disk presence inside
-    // the same critical section. Reuses `AppState::downloads` —
-    // same store the Whisper download path uses, keyed by id, so
+    // the same critical section. Reuses the `downloads` store —
+    // same map the Whisper download path uses, keyed by id, so
     // the existing `model_cancel_download` IPC works for the
     // diarizer model with no extra wiring.
     //
-    // The exists-check moved inside the lock to close a TOCTOU
+    // The exists-check sits inside the lock to close a TOCTOU
     // race (audit-2): two rapid clicks could both pass the
     // exists-check before either took the lock. Holding the lock
     // for the existence test means a concurrent download that
@@ -1304,7 +1358,7 @@ pub async fn download_diarizer_model(
     // of a freshly-finalized file.
     let cancel = crate::transcription::download::CancelHandle::new();
     {
-        let mut guard = state.downloads.lock().map_err(poisoned)?;
+        let mut guard = deps.downloads.lock().map_err(poisoned)?;
         if dest.exists() {
             return Err(IpcError::Settings(format!(
                 "{} is already downloaded",
@@ -1320,25 +1374,23 @@ pub async fn download_diarizer_model(
         guard.insert(id.clone(), cancel.clone());
     }
 
-    let app_for_task = app.clone();
+    let emitter_for_task = std::sync::Arc::clone(&deps.emitter);
+    let downloads_for_task = std::sync::Arc::clone(&deps.downloads);
     let id_for_task = id.clone();
     let url = model.download_url.clone();
     let sha = model.sha256.clone();
-    let http = state.http.clone();
+    let http = deps.http.clone();
     let dest_for_task = dest.clone();
-    // Hold an Arc-clone of the slot for post-download swap.
-    let diarize_slot = std::sync::Arc::clone(&state.diarize_slot);
-    let downloads_app = app.clone();
+    let diarize_slot = std::sync::Arc::clone(&deps.diarize_slot);
 
     tauri::async_runtime::spawn(async move {
-        use tauri::{Emitter, Manager};
-        let app_for_progress = app_for_task.clone();
+        let emitter_for_progress = std::sync::Arc::clone(&emitter_for_task);
         let id_for_progress = id_for_task.clone();
         let progress: Box<crate::transcription::download::ProgressCallback> =
             Box::new(move |update| {
-                let _ = app_for_progress.emit(
+                emitter_for_progress.emit(
                     "model:download-progress",
-                    crate::ipc::commands::models::DownloadProgress {
+                    &crate::ipc::commands::models::DownloadProgress {
                         id: id_for_progress.clone(),
                         bytes_received: update.bytes_received,
                         bytes_total: update.bytes_total,
@@ -1357,11 +1409,12 @@ pub async fn download_diarizer_model(
         .await;
 
         // Drop the cancel handle on the way out, success or
-        // failure. Same pattern the Whisper download uses.
-        if let Some(state) = downloads_app.try_state::<AppState>() {
-            if let Ok(mut guard) = state.downloads.lock() {
-                guard.remove(&id_for_task);
-            }
+        // failure. Same pattern the Whisper download uses; the
+        // shared `downloads` map is the rejection-guard so
+        // forgetting to clean up here would silently block
+        // subsequent download attempts (audit-2 R-2).
+        if let Ok(mut guard) = downloads_for_task.lock() {
+            guard.remove(&id_for_task);
         }
 
         match result {
@@ -1379,16 +1432,15 @@ pub async fn download_diarizer_model(
                 // diarizer was still Noop, leaving the user with
                 // a feature that quietly didn't work. Now we
                 // delete the bad file (so retry isn't blocked by
-                // the `dest.exists()` guard at the top of
-                // `download_diarizer_model`) and emit
-                // `model:download-failed` with the load error,
-                // so the UI surfaces it the same way as a
-                // network or SHA-mismatch failure.
+                // the `dest.exists()` guard at the top of the
+                // function) and emit `model:download-failed` with
+                // the load error, so the UI surfaces it the same
+                // way as a network or SHA-mismatch failure.
                 match swap_diarizer_after_download(&diarize_slot, &dest_for_task) {
                     Ok(()) => {
-                        let _ = app_for_task.emit(
+                        emitter_for_task.emit(
                             "model:download-done",
-                            crate::ipc::commands::models::DownloadStatus {
+                            &crate::ipc::commands::models::DownloadStatus {
                                 id: id_for_task,
                                 message: None,
                             },
@@ -1403,9 +1455,9 @@ pub async fn download_diarizer_model(
                              retry isn't blocked"
                         );
                         let _ = std::fs::remove_file(&dest_for_task);
-                        let _ = app_for_task.emit(
+                        emitter_for_task.emit(
                             "model:download-failed",
-                            crate::ipc::commands::models::DownloadStatus {
+                            &crate::ipc::commands::models::DownloadStatus {
                                 id: id_for_task,
                                 message: Some(format!("model load failed: {e:#}")),
                             },
@@ -1419,9 +1471,9 @@ pub async fn download_diarizer_model(
                     model_id = %id_for_task,
                     "diarizer download failed"
                 );
-                let _ = app_for_task.emit(
+                emitter_for_task.emit(
                     "model:download-failed",
-                    crate::ipc::commands::models::DownloadStatus {
+                    &crate::ipc::commands::models::DownloadStatus {
                         id: id_for_task,
                         message: Some(format!("{e:#}")),
                     },
@@ -2874,5 +2926,167 @@ mod tests {
             .await
             .map_err(|e| IpcError::Settings(e.to_string()))?;
         Ok(())
+    }
+
+    // ---- #315: download_diarizer_model_inner via EventEmitter ----
+
+    /// Build a synthetic diarizer-model entry pointing at a URL the
+    /// test wants the http path to hit. Used by the failure-cleanup
+    /// test to drive the download into the failure branch via an
+    /// unbindable port; SHA + filename are arbitrary because the
+    /// test asserts on cancel-handle cleanup, not on payload
+    /// content.
+    fn make_test_diarizer_model(url: &str) -> crate::diarization::catalog::DiarizerModelMetadata {
+        crate::diarization::catalog::DiarizerModelMetadata {
+            id: "wespeaker-test".into(),
+            display_name: "Wespeaker (test)".into(),
+            filename: "test_diarizer.onnx".into(),
+            size_mb: 1,
+            description: "test entry".into(),
+            download_url: url.into(),
+            sha256: "0".repeat(64),
+        }
+    }
+
+    fn build_download_deps(
+        emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter>,
+        downloads: std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<String, crate::transcription::download::CancelHandle>,
+            >,
+        >,
+        models_dir: std::path::PathBuf,
+    ) -> DiarizerDownloadDeps {
+        DiarizerDownloadDeps {
+            emitter,
+            downloads,
+            http: reqwest::Client::new(),
+            // Tests don't exercise the swap path; a NoopDiarizer
+            // slot is enough to satisfy the type. Even the
+            // failure-cleanup test bails before the
+            // swap_diarizer_after_download call.
+            diarize_slot: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
+                crate::diarization::NoopDiarizer,
+            ))),
+            models_dir,
+        }
+    }
+
+    #[tokio::test]
+    async fn download_diarizer_model_rejects_duplicate_concurrent_clicks() {
+        // Pre-seed the downloads map with the diarizer id (as if a
+        // prior click had spawned a task). The second call must
+        // bail with `IpcError::Settings` and emit no events.
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            crate::transcription::download::CancelHandle,
+        >::new()));
+        let model = make_test_diarizer_model("http://127.0.0.1:1/never-fetched");
+        downloads.lock().unwrap().insert(
+            model.id.clone(),
+            crate::transcription::download::CancelHandle::new(),
+        );
+
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter> =
+            std::sync::Arc::new(recorder.clone());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = build_download_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        let result = download_diarizer_model_inner(deps, model.clone()).await;
+        match result {
+            Err(IpcError::Settings(msg)) => {
+                assert!(
+                    msg.contains("already downloading"),
+                    "expected duplicate-rejection message, got: {msg}"
+                );
+            }
+            other => panic!("expected IpcError::Settings, got: {other:?}"),
+        }
+
+        assert!(
+            recorder.events().is_empty(),
+            "duplicate rejection should not emit any events; got {:?}",
+            recorder.events()
+        );
+
+        // The pre-existing handle must still be in place; the
+        // rejection path should not have touched it (regression
+        // guard for "rejection accidentally clears the slot").
+        let still_present = downloads.lock().unwrap().contains_key(&model.id);
+        assert!(still_present, "pre-existing cancel handle was clobbered");
+    }
+
+    #[tokio::test]
+    async fn download_diarizer_model_clears_cancel_handle_on_failure() {
+        // Drive the download into the failure branch by pointing
+        // it at an unbindable port (127.0.0.1:1). reqwest will
+        // surface a connect error and the spawned task takes the
+        // `Err(e)` arm of the match, which must:
+        //   - remove its cancel-handle entry from `downloads`, AND
+        //   - emit `model:download-failed` with the chained error.
+        // Pre-#315 there was no test for this; the `try_state`
+        // hop in the cleanup made the path reachable only from a
+        // live Tauri runtime.
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            crate::transcription::download::CancelHandle,
+        >::new()));
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn crate::ipc::events::EventEmitter> =
+            std::sync::Arc::new(recorder.clone());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let model = make_test_diarizer_model("http://127.0.0.1:1/will-fail");
+        let deps = build_download_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        download_diarizer_model_inner(deps, model.clone())
+            .await
+            .expect("inner returns Ok before the spawn — the failure happens inside the task");
+
+        // Wait for the spawned task to finish. The connect error
+        // surfaces in single-digit ms locally; bound the wait at
+        // 5s with a polling loop so a CI hiccup doesn't hang.
+        let cleared = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let still_in_flight = downloads.lock().unwrap().contains_key(&model.id);
+                if !still_in_flight {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        assert!(
+            cleared,
+            "cancel handle should have been removed by the failure branch"
+        );
+
+        // Failure event must have fired with a non-empty message
+        // — the actual reqwest text varies by platform so we
+        // assert on the shape rather than the exact wording.
+        let failures = recorder.payloads_for("model:download-failed");
+        assert_eq!(
+            failures.len(),
+            1,
+            "exactly one failure event expected; got {failures:?}"
+        );
+        let payload = &failures[0];
+        assert_eq!(payload["id"], serde_json::Value::String(model.id.clone()));
+        let msg = payload["message"]
+            .as_str()
+            .expect("failure event should carry a message string");
+        assert!(!msg.is_empty(), "failure event message should be populated");
     }
 }

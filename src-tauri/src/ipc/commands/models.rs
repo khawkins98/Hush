@@ -21,7 +21,7 @@
 //! `DownloadStatus`) and helpers, all moved together.
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::ipc::AppState;
 use crate::settings::keys as settings_keys;
@@ -262,10 +262,11 @@ pub async fn model_download(
     let url = model.download_url.clone();
     let sha = model.sha256.clone();
     let http = state.http.clone();
-    // The downloads HashMap is shared across the task and the IPC
-    // commands that touch it. We hold an `Arc<Mutex<…>>` view via the
-    // AppHandle's managed state at task-completion time.
-    let downloads_app = app.clone();
+    // Hold an Arc-clone of the downloads map directly so the
+    // spawned task can clean up its own entry without reaching
+    // back through `AppHandle::try_state` (#315 — that path is
+    // hard to test).
+    let downloads_for_task = std::sync::Arc::clone(&state.downloads);
 
     tauri::async_runtime::spawn(async move {
         // Progress callback emits a Tauri event with the latest
@@ -288,13 +289,9 @@ pub async fn model_download(
             download::download_with_progress(&http, &url, &dest, &sha, &cancel, &progress).await;
 
         // Drop the cancel handle from the registry on the way out,
-        // success or failure. Use the AppHandle's managed state so
-        // the task doesn't need to hold a long-lived reference to
-        // `state`.
-        if let Some(state) = downloads_app.try_state::<AppState>() {
-            if let Ok(mut guard) = state.downloads.lock() {
-                guard.remove(&id_for_task);
-            }
+        // success or failure.
+        if let Ok(mut guard) = downloads_for_task.lock() {
+            guard.remove(&id_for_task);
         }
 
         match result {
