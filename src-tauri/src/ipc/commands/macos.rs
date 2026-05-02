@@ -304,24 +304,72 @@ pub async fn get_permission_health(
     // than "never asked". Restricting the write to the
     // first-seen-Granted case keeps the row stable instead of
     // re-stamping on every read.
+    // `effective_screen_lc` is only mutated inside the macOS-gated
+    // SCK-validation block below; declaring it `mut` unconditionally
+    // trips clippy's `unused_mut` lint on Linux / Windows. Split the
+    // binding by cfg to match the cfg-gated re-export of
+    // `validate_screen_recording_capability` itself.
+    #[cfg(target_os = "macos")]
     let mut effective_screen_lc = screen_recording_last_confirmed.clone();
+    #[cfg(not(target_os = "macos"))]
+    let effective_screen_lc = screen_recording_last_confirmed.clone();
     let mut effective_mic_lc = microphone_last_confirmed.clone();
+    // Strongest-signal validation (#378 follow-up review). The
+    // `validate_screen_recording_capability` helper is a macOS-only
+    // re-export — Screen Recording is a macOS-only TCC concept, so
+    // the whole stamp-on-validation block is cfg-gated. On Linux /
+    // Windows `statuses.screen_recording` is always NotApplicable
+    // and this branch wouldn't fire anyway; the gate just keeps
+    // the symbol resolution clean.
+    #[cfg(target_os = "macos")]
     if matches!(
         statuses.screen_recording,
         crate::macos_perms::PermissionStatus::Granted
     ) && screen_recording_last_confirmed.is_none()
     {
-        match stamp_last_confirmed(
-            &state,
-            crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
+        // A stale TCC row (cert / bundle-id rotation) can return
+        // preflight=true while the real `SCShareableContent::get()`
+        // call still fails — exactly the case the staleness model
+        // is built to detect. Run the real probe via
+        // spawn_blocking and only stamp when it succeeds. If the
+        // probe fails, leave `last_confirmed` unset; the next
+        // false-preflight tick reads NotGranted (honest — no
+        // evidence the capability works in this install yet).
+        let probe = tauri::async_runtime::spawn_blocking(
+            crate::audio::validate_screen_recording_capability,
         )
-        .await
-        {
-            Ok(stamped) => {
-                effective_screen_lc = Some(stamped);
+        .await;
+        match probe {
+            Ok(Ok(())) => {
+                match stamp_last_confirmed(
+                    &state,
+                    crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
+                )
+                .await
+                {
+                    Ok(stamped) => {
+                        effective_screen_lc = Some(stamped);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "permission health: stamp screen-recording confirmed failed"
+                        );
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::info!(
+                    error = %e,
+                    "permission health: SCK probe failed despite preflight=true; \
+                     leaving last_confirmed unset"
+                );
             }
             Err(e) => {
-                tracing::warn!(error = %e, "permission health: stamp screen-recording confirmed failed");
+                tracing::warn!(
+                    error = %e,
+                    "permission health: SCK probe task panicked; treating as unconfirmed"
+                );
             }
         }
     }

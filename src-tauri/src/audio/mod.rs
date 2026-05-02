@@ -41,7 +41,9 @@ mod screencapturekit;
 
 pub use format::downmix_to_mono;
 #[cfg(target_os = "macos")]
-pub use screencapturekit::prime_screen_recording_permission;
+pub use screencapturekit::{
+    prime_screen_recording_permission, validate_screen_recording_capability,
+};
 
 /// Defensive ceiling on the number of `f32` samples a single capture
 /// buffer may hold. Beyond this, the callback drops the oldest
