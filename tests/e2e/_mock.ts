@@ -73,13 +73,19 @@ export async function installMocks(
       // keep them in sync per the four-place IPC sync rule.
       get_diarizer_model_status: () => ({
         downloaded: true,
+        displayName: "wespeaker ResNet34-LM",
         sizeMb: 26,
         sha256:
           "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
         expectedPath:
           "/Users/test/Library/Application Support/com.hush.dev/models/voxceleb_resnet34_LM.onnx",
+        sourceUrl:
+          "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM",
       }),
       download_diarizer_model: () => undefined,
+      // Remove the installed model (#351). No-op default; specs
+      // that exercise the click override per-test.
+      remove_diarizer_model: () => undefined,
       // Manual update probe (#223). Default to "up to date" so
       // specs that don't override get a stable result if the
       // user clicks the button.

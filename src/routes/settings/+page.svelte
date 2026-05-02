@@ -215,6 +215,16 @@
   let unlistenDiarizerDone: (() => void) | null = null;
   let unlistenDiarizerFailed: (() => void) | null = null;
 
+  // Remove-model affordance (#351). Two-state click-to-confirm
+  // pattern matching `clearConfirming` over in History — first
+  // click reveals the danger-styled confirm button, second click
+  // fires. No timeout reset here because the dialog is small and
+  // the user has explicitly opened the details panel; a stale arm
+  // is unlikely.
+  let diarizerRemoveConfirming = $state(false);
+  let diarizerRemoveBusy = $state(false);
+  let diarizerRemoveError = $state<string | null>(null);
+
   // ---- Vocabulary state --------------------------------------------------
   let vocabulary = $state<VocabularyTerm[]>([]);
   let vocabularyLoaded = $state(false);
@@ -1073,6 +1083,28 @@
     }
   }
 
+  async function onDiarizerRemoveConfirm() {
+    if (diarizerRemoveBusy) return;
+    diarizerRemoveBusy = true;
+    diarizerRemoveError = null;
+    try {
+      await invoke("remove_diarizer_model");
+      // Reset the local toggle state in lockstep with the
+      // backend's `diarization_enabled` flip — the Speakers
+      // toggle's `checked` prop reads from `diarizationEnabled`,
+      // so the next render shows it off.
+      diarizationEnabled = false;
+      // Refresh the model status so the UI flips back to the
+      // "not installed" branch, exposing the Download button.
+      await loadDiarizerModelStatus();
+      diarizerRemoveConfirming = false;
+    } catch (err) {
+      diarizerRemoveError = formatErrorMessage(err);
+    } finally {
+      diarizerRemoveBusy = false;
+    }
+  }
+
   async function onResetFirstRun() {
     firstRunResetBusy = true;
     try {
@@ -1471,9 +1503,87 @@
             </details>
           </div>
         {:else if diarizerModelStatus?.downloaded}
-          <p class="settings-row-desc" data-testid="diarizer-model-ready">
-            Speaker model installed.
-          </p>
+          <!--
+            Installed-model details (#351). Replaces the old
+            single-line "Speaker model installed." with the
+            catalog metadata + a one-line description of how the
+            labelling works + a Remove affordance. Collapsed
+            details so the panel stays calm; user expands when
+            they want to verify or copy a value out.
+          -->
+          <div class="diarizer-model-status" data-testid="diarizer-model-ready">
+            <p class="settings-row-name">
+              {diarizerModelStatus.displayName} — installed
+            </p>
+            <details class="diarizer-installed-details">
+              <summary>Model details</summary>
+              <dl class="diarizer-details">
+                <dt>Size</dt>
+                <dd>{diarizerModelStatus.sizeMb} MB</dd>
+                <dt>Path</dt>
+                <dd><code class="path-code">{diarizerModelStatus.expectedPath}</code></dd>
+                <dt>SHA-256</dt>
+                <dd><code class="path-code">{diarizerModelStatus.sha256}</code></dd>
+                <dt>Source</dt>
+                <dd>
+                  <button
+                    type="button"
+                    class="link-like"
+                    onclick={() =>
+                      diarizerModelStatus &&
+                      openExternal(diarizerModelStatus.sourceUrl)}
+                    data-testid="diarizer-source-link"
+                  >
+                    {diarizerModelStatus.sourceUrl}
+                  </button>
+                </dd>
+              </dl>
+              <p class="settings-row-desc diarizer-explainer">
+                Each utterance gets a 256-dim speaker embedding;
+                embeddings are clustered live (1-NN with threshold)
+                so utterances from the same voice get the same
+                Speaker N label across the session. Labels reset
+                between sessions.
+              </p>
+            </details>
+            <div class="diarizer-installed-actions">
+              {#if diarizerRemoveConfirming}
+                <span class="settings-row-desc">
+                  Delete the speaker model? You can re-download anytime.
+                </span>
+                <button
+                  type="button"
+                  class="ghost danger"
+                  data-testid="diarizer-remove-confirm"
+                  disabled={diarizerRemoveBusy}
+                  onclick={onDiarizerRemoveConfirm}
+                >
+                  {diarizerRemoveBusy ? "Removing…" : "Yes, remove"}
+                </button>
+                <button
+                  type="button"
+                  class="ghost"
+                  data-testid="diarizer-remove-cancel"
+                  disabled={diarizerRemoveBusy}
+                  onclick={() => (diarizerRemoveConfirming = false)}
+                >
+                  Cancel
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class="ghost danger"
+                  data-testid="diarizer-remove-button"
+                  onclick={() => (diarizerRemoveConfirming = true)}
+                >
+                  Remove model
+                </button>
+              {/if}
+            </div>
+            {#if diarizerRemoveError}
+              <p class="settings-error">{diarizerRemoveError}</p>
+            {/if}
+          </div>
         {/if}
 
         <label class="toggle-row">
@@ -2193,6 +2303,68 @@
     margin: 0.4rem 0 0;
     color: #8a1f1f;
     font-size: 0.85rem;
+  }
+
+  /* Speakers panel installed-model details (#351). */
+  .diarizer-installed-details {
+    margin-top: 0.5rem;
+  }
+  .diarizer-installed-details summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: #2c3e8f;
+    user-select: none;
+  }
+  .diarizer-details {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 0.85rem;
+    margin: 0.6rem 0 0.4rem;
+    font-size: 0.85rem;
+  }
+  .diarizer-details dt {
+    color: #555;
+    font-weight: 500;
+  }
+  .diarizer-details dd {
+    margin: 0;
+    color: #1a1a1a;
+    user-select: text;
+    word-break: break-all;
+  }
+  .path-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    font-size: 0.78rem;
+    color: #2a2a2a;
+    background-color: rgba(0, 0, 0, 0.04);
+    padding: 0.1em 0.3em;
+    border-radius: 4px;
+  }
+  button.link-like {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #2c3e8f;
+    text-decoration: underline;
+    cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    font-size: 0.78rem;
+    word-break: break-all;
+    text-align: left;
+  }
+  button.link-like:hover {
+    color: #1a2a6c;
+  }
+  .diarizer-explainer {
+    margin: 0.5rem 0 0;
+    line-height: 1.5;
+  }
+  .diarizer-installed-actions {
+    margin-top: 0.65rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
   }
   button.ghost {
     padding: 0.4em 0.85em;

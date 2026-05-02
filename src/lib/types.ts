@@ -269,9 +269,15 @@ export type AppSection = "dictation" | "history";
 // in sync per the four-place IPC sync rule (CLAUDE.md).
 export type DiarizerModelStatus = {
   downloaded: boolean;
+  /// Catalog display name ("wespeaker ResNet34-LM"). Added in
+  /// #351 for the Speakers panel's installed-model details.
+  displayName: string;
   sizeMb: number;
   sha256: string;
   expectedPath: string;
+  /// Upstream URL the model was downloaded from. Linked from the
+  /// Speakers panel so the user can read the model card (#351).
+  sourceUrl: string;
 };
 
 // Format selectors for the per-row meeting export popover (#357
