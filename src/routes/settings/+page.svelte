@@ -44,7 +44,7 @@
   import PermissionsTab from "$lib/PermissionsTab.svelte";
   import ModelPickerPanel from "$lib/ModelPickerPanel.svelte";
   import PttHotkeyEditor from "$lib/PttHotkeyEditor.svelte";
-  import ReplacementsPanel from "$lib/ReplacementsPanel.svelte";
+  import ReplacementsTab from "$lib/ReplacementsTab.svelte";
   import VocabularyTab from "$lib/VocabularyTab.svelte";
   import {
     formatErrorDisplay,
@@ -62,7 +62,6 @@
     MeetingAppOverride,
     ModelCard,
     ModelSelectNotice,
-    ReplacementRule,
   } from "$lib/types";
 
   type SettingsTab =
@@ -223,13 +222,8 @@
   /* (Vocabulary state + handlers moved to VocabularyTab.svelte
      in #332 phase 1.) */
 
-  // ---- Replacements state -----------------------------------------------
-  let replacements = $state<ReplacementRule[]>([]);
-  let replacementsLoaded = $state(false);
-  let replacementsError = $state<ErrorDisplay | null>(null);
-  let newFind = $state("");
-  let newReplace = $state("");
-  let findInputEl = $state<HTMLInputElement | null>(null);
+  /* (Replacements state + handlers moved to ReplacementsTab.svelte
+     in #332 phase 1.) */
 
   // ---- Meeting app classification overrides (Phase E, #112) -------------
   let appOverrides = $state<MeetingAppOverride[]>([]);
@@ -296,16 +290,6 @@
     }
   }
 
-  async function loadReplacements(): Promise<void> {
-    try {
-      replacements = await invoke<ReplacementRule[]>("replacements_list");
-      replacementsError = null;
-    } catch (e) {
-      replacementsError = formatErrorDisplay(e);
-    } finally {
-      replacementsLoaded = true;
-    }
-  }
 
   async function loadAppOverrides(): Promise<void> {
     try {
@@ -464,38 +448,6 @@
 
   // ---- Mutators ----------------------------------------------------------
 
-  async function addReplacement(e: Event) {
-    e.preventDefault();
-    const find = newFind.trim();
-    const replace = newReplace;
-    if (!find) return;
-    try {
-      const created = await invoke<ReplacementRule>("replacement_create", {
-        findText: find,
-        replaceText: replace,
-        sortOrder: replacements.length,
-      });
-      replacements = [...replacements, created];
-      newFind = "";
-      newReplace = "";
-      replacementsError = null;
-      await tick();
-      findInputEl?.focus();
-    } catch (err) {
-      replacementsError = formatErrorDisplay(err);
-    }
-  }
-
-  async function deleteReplacement(rule: ReplacementRule) {
-    try {
-      await invoke("replacement_delete", { id: rule.id });
-      replacements = replacements.filter((r) => r.id !== rule.id);
-      replacementsError = null;
-    } catch (e) {
-      replacementsError = formatErrorDisplay(e);
-    }
-  }
-
   async function selectModel(card: ModelCard) {
     try {
       const result = await invoke<{ loaded: boolean }>("model_select", { id: card.id });
@@ -624,7 +576,6 @@
 
     await Promise.all([
       loadModels(),
-      loadReplacements(),
       loadAutostartState(),
       loadAutostartPathStatus(),
       loadHudEnabled(),
@@ -1248,16 +1199,7 @@
     {:else if active === "vocabulary"}
       <VocabularyTab />
     {:else if active === "replacements"}
-      <ReplacementsPanel
-        {replacements}
-        {replacementsLoaded}
-        {replacementsError}
-        bind:newFind
-        bind:newReplace
-        bind:inputEl={findInputEl}
-        onSubmit={addReplacement}
-        onDelete={deleteReplacement}
-      />
+      <ReplacementsTab />
     {:else if active === "meeting"}
       <h2 class="tab-title">Meeting</h2>
 
