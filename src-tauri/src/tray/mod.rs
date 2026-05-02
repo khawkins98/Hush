@@ -48,6 +48,19 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // Menu items keyed by stable string ids so the event handler
     // dispatches on the id rather than label copy.
     let show = MenuItem::with_id(app, "tray:show", "Show Hush", true, None::<&str>)?;
+    let popover = MenuItem::with_id(
+        app,
+        "tray:popover",
+        // Hush's design-inspired distillation (#427 Item 1) calls
+        // for a Panic-style menu-bar popover as the primary quick-
+        // access surface. This menu item summons it. Phase 1
+        // leaves the existing left-click-opens-menu behaviour
+        // intact; replacing the click is a follow-up once the
+        // popover has had hands-on testing on macOS.
+        "Quick popover",
+        true,
+        None::<&str>,
+    )?;
     let toggle = MenuItem::with_id(
         app,
         "tray:toggle",
@@ -92,7 +105,15 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let separator2 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&show, &toggle, &separator, &settings, &separator2, &quit],
+        &[
+            &show,
+            &popover,
+            &toggle,
+            &separator,
+            &settings,
+            &separator2,
+            &quit,
+        ],
     )?;
 
     let _tray = TrayIconBuilder::with_id("hush-tray")
@@ -172,6 +193,7 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEvent) {
     match event.id.as_ref() {
         "tray:show" => show_main_window(app),
+        "tray:popover" => show_menu_bar_popover(app),
         "tray:toggle" => emit_toggle(app),
         "tray:settings" => {
             if let Err(e) = crate::settings_window::show(app) {
@@ -180,6 +202,26 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
         }
         "tray:quit" => crate::request_user_quit(app),
         _ => {}
+    }
+}
+
+/// Show + focus the menu-bar quick popover (#427 Item 1). The
+/// window is created with `visible: false` in `tauri.conf.json`
+/// so it stays hidden until the user invokes it from the tray
+/// menu. Best-effort — a missing window or failed `show()` is
+/// logged and swallowed; the user can still reach the main
+/// window via the "Show Hush" menu item.
+fn show_menu_bar_popover<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window("menu-bar") else {
+        tracing::warn!("tray: menu-bar popover window not found");
+        return;
+    };
+    if let Err(e) = window.show() {
+        tracing::warn!(error = ?e, "tray: failed to show menu-bar popover");
+        return;
+    }
+    if let Err(e) = window.set_focus() {
+        tracing::warn!(error = ?e, "tray: failed to focus menu-bar popover");
     }
 }
 

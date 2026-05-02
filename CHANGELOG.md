@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Menu-bar quick-access popover (#427 Item 1, scaffolding)
+
+- New `menu-bar` Tauri window in `tauri.conf.json` (320×220, transparent, always-on-top, decorations off, hidden by default). Capability file `src-tauri/capabilities/menu-bar.json` grants the minimum permission set: `core:event:default` for the `ui:recording-state` listener, `core:window:allow-show`/`-hide` for the "Open Hush" + Escape-dismiss flows.
+- New `src/routes/menu-bar/+page.svelte` — compact popover with a state indicator dot (idle / recording), a start/stop button that drives the existing `start_dictation` / `stop_dictation` IPCs (no source-arg → falls through to `AudioSource::default_microphone()`), an "Open Hush" link, and Escape to dismiss.
+- New tray menu item **"Quick popover"** (in `src-tauri/src/tray/mod.rs`) shows + focuses the window. Existing left-click-opens-menu and double-click-shows-main behaviour is preserved — switching the click idiom to popover-as-primary is a follow-up that needs hands-on macOS validation first.
+
+Deliberately deferred to follow-ups: tray-anchored positioning (currently shows at the OS-picked default location), recent-transcript snippet, source picker.
+
 #### Audio pipeline diagram in welcome + About surfaces (#427 Item 3)
 
 - New `src/lib/AudioPipelineDiagram.svelte` — inline-SVG left-to-right diagram of the active capture path: Microphone (and System audio when a meeting is active) → Whisper engine → Transcript. Source / engine / output nodes pick up CSS tokens (`--accent`, `--bg-surface`, `--text-on-accent`) so dark-mode and the manual `data-theme` override flow through without per-theme variants.
