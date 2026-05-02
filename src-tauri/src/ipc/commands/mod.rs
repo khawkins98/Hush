@@ -311,10 +311,32 @@ fn start_dictation_inner(state: &AppState, source: AudioSource) -> IpcResult<()>
 
     let foreground = capture_foreground();
 
-    state
-        .audio
-        .start_with_source(source)
-        .map_err(|e| IpcError::Audio(e.to_string()))?;
+    state.audio.start_with_source(source).map_err(|e| {
+        // Promote permission-shaped chains to the typed
+        // `PermissionDenied` variant (#386 / #416 close-out).
+        // Mirrors the meeting_start_manual pattern so the
+        // dictation start path goes through the same
+        // discriminant the frontend can switch on, retiring
+        // the substring fallback in `errors.ts` for this
+        // call site.
+        //
+        // Caveat (#417): cpal's actual macOS-mic-denial chain
+        // typically reads "Audio Unit: kAudioUnitErr_…" or
+        // similar — neither contains the substring
+        // "microphone", so this classification rarely fires
+        // in practice. The branch is defensive: if a future
+        // .context() somewhere in the audio stack adds the
+        // canonical "microphone … not authorized" wording
+        // (or if cpal upstream's text changes), the typed
+        // variant kicks in automatically. Until then the SCK
+        // arm still fires correctly for the system-audio
+        // dictation source.
+        if let Some(perm) = classify_permission_error(&e) {
+            IpcError::PermissionDenied(perm.to_owned())
+        } else {
+            IpcError::Audio(e.to_string())
+        }
+    })?;
 
     *state.pending_foreground.lock().map_err(poisoned)? = foreground;
 
@@ -2028,6 +2050,29 @@ mod tests {
         }
     }
 
+    /// Audio mock that surfaces a permission-shaped chain. Used to
+    /// pin the classifier promotion in `start_dictation_inner`
+    /// (#386 / #416 close-out): a chain containing
+    /// "Screen Recording permission" should land as the typed
+    /// `IpcError::PermissionDenied("screen-recording")` variant
+    /// rather than a generic `IpcError::Audio(...)`.
+    struct AudioThatFailsWithScreenRecordingDenial;
+
+    impl AudioCapture for AudioThatFailsWithScreenRecordingDenial {
+        fn list_input_devices(&self) -> anyhow::Result<Vec<AudioDevice>> {
+            Ok(vec![])
+        }
+        fn start(&self, _: Option<&str>) -> anyhow::Result<()> {
+            Err(anyhow!("query shareable content").context("Screen Recording permission required"))
+        }
+        fn stop(&self) -> anyhow::Result<CapturedAudio> {
+            unreachable!("stop should not be called when start fails")
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+    }
+
     struct AudioThatStarts {
         recording: AtomicBool,
     }
@@ -2101,6 +2146,58 @@ mod tests {
             Some("sentinel"),
             "pending_foreground was overwritten despite failed start"
         );
+    }
+
+    #[test]
+    fn start_dictation_promotes_permission_shaped_error_to_typed_variant() {
+        // #386 / #416 close-out: the classifier was added to the
+        // meeting_start_manual boundary first; this pins the same
+        // promotion at start_dictation. A permission-shaped chain
+        // from the audio layer (today: SCK rejection when the user
+        // picks the system-audio source as their dictation input)
+        // must surface as `IpcError::PermissionDenied(...)` so the
+        // frontend's PermissionsDialog launch heuristic can match
+        // on `kind` instead of substring-scraping.
+        let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatFailsWithScreenRecordingDenial);
+        let transcribe: Arc<dyn Transcribe> = Arc::new(OkTranscribe);
+        let state = crate::ipc::AppStateBuilder::new()
+            .audio(audio)
+            .transcribe(Some(transcribe))
+            .history(Arc::new(crate::ipc::tests::NoopHistory))
+            .replacements(Arc::new(crate::ipc::tests::NoopReplacements))
+            .vocabulary(Arc::new(crate::ipc::tests::NoopVocabulary))
+            .settings(Arc::new(crate::ipc::tests::MemSettings {
+                map: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }))
+            .meetings({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })
+            .meeting_app_overrides({
+                let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetingAppOverrides);
+                o
+            })
+            .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
+                let m: Arc<dyn crate::meeting::MeetingSessionRepository> =
+                    Arc::new(crate::ipc::tests::NoopMeetings);
+                m
+            })))
+            .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+            .build()
+            .expect("test state: builder fields complete");
+
+        let err = start_dictation_inner(&state, AudioSource::default_microphone())
+            .expect_err("audio.start fails with permission-shaped chain");
+        match err {
+            IpcError::PermissionDenied(perm) => {
+                assert_eq!(perm, "screen-recording");
+            }
+            other => {
+                panic!("expected IpcError::PermissionDenied(\"screen-recording\"), got: {other:?}")
+            }
+        }
     }
 
     #[test]
