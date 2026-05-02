@@ -276,23 +276,6 @@
       void refreshModels();
     });
 
-    // Pump-side per-source failures during a meeting. The backend
-    // emits `meeting:source-failed` when a TCC revoke, device
-    // unplug, or inference panic forces it to drop a source for
-    // the rest of the session. We accumulate the kinds in
-    // `meetingDroppedSources`; the panel reads that set to render
-    // a struck-through "this side stopped capturing" affordance
-    // in the active-session source line.
-    unlistenMeetingSourceFailed = await listen<{
-      sessionId: number;
-      sourceKind: string;
-      reason: string;
-    }>(Events.MeetingSourceFailed, (e) => {
-      const next = new Set(meetingDroppedSources);
-      next.add(e.payload.sourceKind);
-      meetingDroppedSources = next;
-    });
-
     // Push-to-talk: the rdev listener in `hotkey::ptt` emits these
     // events on key-down and key-up of the configured PTT key.
     unlistenPttPress = await listen(Events.HotkeyPttPress, () => {
@@ -333,7 +316,6 @@
     unlistenPttPress?.();
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
-    unlistenMeetingSourceFailed?.();
     window.removeEventListener("focus", refreshPermissionHealthDebounced);
     if (refreshPermissionHealthTimer !== null) {
       clearTimeout(refreshPermissionHealthTimer);
@@ -976,15 +958,6 @@
   // populated.
   let meetingActiveDetail = $state<MeetingSessionDetail | null>(null);
   let meetingActivePollHandle: ReturnType<typeof setInterval> | null = null;
-  // Source kinds that have failed mid-session. Populated by the
-  // `meeting:source-failed` Tauri event the pump emits when a
-  // per-source path drops out (TCC revoke, device unplug,
-  // inference panic). The panel renders these as struck-through
-  // entries in the active-session source line so the user knows
-  // capture is no longer working from that side. Cleared on each
-  // session start so a fresh meeting starts with a clean slate.
-  let meetingDroppedSources = $state<Set<string>>(new Set());
-  let unlistenMeetingSourceFailed: UnlistenFn | null = null;
   // Disables the Start/Stop buttons during in-flight IPC calls so
   // a stale double-click can't race against itself. Same rationale
   // as the dictation flow's `busy` flag.
@@ -1212,10 +1185,6 @@
         };
         return;
       }
-      // Reset the dropped-sources set: each fresh meeting starts
-      // with both sides assumed live; the listener re-populates on
-      // any failures the new pump emits.
-      meetingDroppedSources = new Set();
       // Without a per-platform foreground-app fetch wired up yet,
       // passing `null` falls through to the manager's "manual"
       // label. A future iteration captures the active foreground
