@@ -41,6 +41,7 @@
   import { openExternal } from "./openExternal";
   import { Events } from "./events";
   import { formatErrorMessage } from "./errors";
+  import "./settings-tab.css";
 
   // Tauri runtime version + the app's productName / version, all
   // fetched at runtime so they track the actual build rather than
@@ -262,31 +263,9 @@
 </section>
 
 <style>
-  /* Per-tab style block (#332 phase 1). Shared classes hoist
-     to a CSS module once #392 lands. */
-  .tab-title {
-    margin: 0 0 0.75rem;
-    font-size: 1.4rem;
-    letter-spacing: -0.01em;
-  }
-  button.ghost {
-    padding: 0.4em 0.85em;
-    font-size: 0.85rem;
-    font-weight: 500;
-    background-color: white;
-    border: 1px solid #d1d1d8;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #2c3e8f;
-  }
-  button.ghost:hover:not(:disabled) {
-    background-color: #f4f5fa;
-    border-color: #b8c1d8;
-  }
-  button.ghost:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
+  /* `.tab-title` + `button.ghost` (light + dark) imported from
+     `settings-tab.css` (#392). The .about-* classes below are
+     genuinely About-tab-specific. */
   .about-tab {
     max-width: 36rem;
     line-height: 1.5;
@@ -398,15 +377,6 @@
       background-color: rgba(255, 193, 7, 0.12);
       border-color: #6b5300;
       color: #ffd591;
-    }
-    button.ghost {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-      color: #b8c8ff;
-    }
-    button.ghost:hover:not(:disabled) {
-      background-color: #38383b;
-      border-color: #4a4a4d;
     }
   }
 </style>
