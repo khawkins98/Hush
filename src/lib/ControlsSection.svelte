@@ -35,6 +35,15 @@
     // `not-applicable` (Linux/Windows) also hides the badge.
     screenRecordingHealth?: PermissionHealth | null;
     onOpenPermissions?: () => void;
+    /// Active recording mode (#409). The unified Record flow auto-
+    /// upgrades click-driven recording to the meeting pump when
+    /// Screen Recording is confirmed; before #409 there was no
+    /// in-flight indication of which mode was active, so the user
+    /// only learned at Stop time when a History meeting row
+    /// appeared instead of a dictation row. `null` while not
+    /// recording; `"dictation"` for PTT or mic-only click; `"meeting"`
+    /// for click-driven multi-source.
+    recordMode?: "dictation" | "meeting" | null;
   };
 
   let {
@@ -52,6 +61,7 @@
     activeModelName,
     screenRecordingHealth = null,
     onOpenPermissions,
+    recordMode = null,
   }: Props = $props();
 
   // Show the badge when the user has a mic selected (so the upgrade
@@ -293,12 +303,26 @@
 
   <!--
     aria-live so screen readers announce the recording state change
-    when the hotkey toggles it from elsewhere on the desktop.
+    when the hotkey toggles it from elsewhere on the desktop. The
+    mode label after the dot ("mic only" / "mic + system audio")
+    is the in-flight signal for #409 — without it, users in click-
+    driven meeting mode get no indication mid-record that they're
+    on the multi-source path until a History meeting row appears
+    after Stop.
   -->
   <p class="status" aria-live="polite">
     {#if recording}
-      <span class="recording-dot" aria-hidden="true"></span> Recording…
-      release the hotkey or press Stop to transcribe.
+      <span class="recording-dot" aria-hidden="true"></span> Recording
+      {#if recordMode === "meeting"}
+        <span class="status-mode" data-record-mode="meeting"
+          >· mic + system audio</span
+        >
+      {:else if recordMode === "dictation"}
+        <span class="status-mode" data-record-mode="dictation"
+          >· mic only</span
+        >
+      {/if}
+      — release the hotkey or press Stop to transcribe.
     {:else if transcribing}
       Transcribing — this can take a few seconds for short clips,
       longer for big models.
@@ -619,6 +643,21 @@ button.primary:hover:not(:disabled) {
   background-color: var(--danger);
   display: inline-block;
   animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* Mode label embedded in the recording status line (#409). Reads
+   as a quieter inline qualifier next to "Recording", with the
+   meeting variant tinted toward the accent so users notice the
+   upgraded path. The leading "·" sits in the markup; padding
+   is symmetrical so it lands cleanly between the verb and the
+   en-dash hint. */
+.status-mode {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.status-mode[data-record-mode="meeting"] {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 @keyframes pulse {

@@ -1337,6 +1337,7 @@
       activeModelName={activeModel?.displayName ?? null}
       screenRecordingHealth={permissionHealth?.screenRecording ?? null}
       onOpenPermissions={() => openSettingsTab("permissions")}
+      {recordMode}
     />
 
     {#if result}
