@@ -31,6 +31,7 @@
 
   import MeetingAppOverridesPanel from "./MeetingAppOverridesPanel.svelte";
   import { openExternal } from "./openExternal";
+  import { Events } from "./events";
   import { formatErrorDisplay, formatErrorMessage, type ErrorDisplay } from "./errors";
   import "./settings-tab.css";
   import type {
@@ -322,7 +323,7 @@
     // get confused with a Whisper download in flight.
     const isDiarizerEvent = (id: string) => id === "wespeaker-resnet34-lm";
     unlistenDiarizerProgress = await listen<DownloadProgressEvent>(
-      "model:download-progress",
+      Events.ModelDownloadProgress,
       (event) => {
         if (!isDiarizerEvent(event.payload.id)) return;
         diarizerDownloadProgress = {
@@ -332,7 +333,7 @@
       },
     );
     unlistenDiarizerDone = await listen<{ id: string }>(
-      "model:download-done",
+      Events.ModelDownloadDone,
       async (event) => {
         if (!isDiarizerEvent(event.payload.id)) return;
         diarizerDownloadBusy = false;
@@ -342,7 +343,7 @@
       },
     );
     unlistenDiarizerFailed = await listen<{ id: string; message: string | null }>(
-      "model:download-failed",
+      Events.ModelDownloadFailed,
       async (event) => {
         if (!isDiarizerEvent(event.payload.id)) return;
         diarizerDownloadBusy = false;
