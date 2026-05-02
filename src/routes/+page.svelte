@@ -1087,10 +1087,13 @@
   /// Auto-copy parity for click-driven Record (#385). Fetches the
   /// just-finished meeting session, joins finalised utterances
   /// (with speaker prefixes when the diarizer labelled them), and
-  /// writes the result to the clipboard. Best-effort: the user's
-  /// transcript is the load-bearing thing, and a copy hiccup is
-  /// recoverable via the History meeting row's own copy
-  /// affordance, so any failure is swallowed with a console.warn.
+  /// writes the result to the clipboard. Surfaces the outcome via
+  /// `meetingCopyNotice` (#408) so the user gets an in-app
+  /// confirmation on success — without it the auto-copy is
+  /// invisible — and a discoverable recovery path on failure
+  /// pointing at the History row's manual-copy affordance. A
+  /// silent `console.warn` (the pre-#408 shape) was indistinguishable
+  /// from success.
   async function copyMeetingSessionToClipboard(id: number): Promise<void> {
     try {
       const detail = await invoke<MeetingSessionDetail>(
@@ -1100,6 +1103,9 @@
       const finals = detail.utterances.filter((u) => u.isFinal);
       if (finals.length === 0) {
         // Silence / capture failure — leave the clipboard alone.
+        // No notice either: the user pressed Stop on a session
+        // with no detected speech; an "auto-copy didn't happen"
+        // toast would be confusing without context.
         return;
       }
       // Format: speaker prefix when the diarizer set a label,
@@ -1114,12 +1120,53 @@
         )
         .join("\n\n");
       await navigator.clipboard.writeText(joined);
+      setMeetingCopyNotice({
+        kind: "success",
+        message:
+          "Copied to clipboard — full transcript also saved to History below.",
+      });
     } catch (err) {
       console.warn(
         "[hush] auto-copy of meeting transcript failed; user can recopy from History",
         err,
       );
+      setMeetingCopyNotice({
+        kind: "failure",
+        message:
+          "Couldn't auto-copy the transcript — open the History meeting row below to copy it manually.",
+      });
     }
+  }
+
+  // Inline notice for the meeting-mode auto-copy outcome (#408).
+  // Surfaced just above the History section so the "open History
+  // below" recovery copy on the failure variant is visually
+  // contextual. Success auto-dismisses after 4 s; failure after
+  // 10 s — a longer dwell because the message carries an action
+  // the user has to discover, not just an acknowledgement.
+  type MeetingCopyNotice = {
+    kind: "success" | "failure";
+    message: string;
+  };
+  let meetingCopyNotice = $state<MeetingCopyNotice | null>(null);
+  let meetingCopyNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  function setMeetingCopyNotice(notice: MeetingCopyNotice) {
+    if (meetingCopyNoticeTimer !== null) {
+      clearTimeout(meetingCopyNoticeTimer);
+    }
+    meetingCopyNotice = notice;
+    const dwellMs = notice.kind === "success" ? 4000 : 10000;
+    meetingCopyNoticeTimer = setTimeout(() => {
+      meetingCopyNotice = null;
+      meetingCopyNoticeTimer = null;
+    }, dwellMs);
+  }
+  function dismissMeetingCopyNotice() {
+    if (meetingCopyNoticeTimer !== null) {
+      clearTimeout(meetingCopyNoticeTimer);
+      meetingCopyNoticeTimer = null;
+    }
+    meetingCopyNotice = null;
   }
 
   async function startMeetingSession() {
@@ -1357,6 +1404,39 @@
       <h1>History</h1>
       <p class="tagline">Every transcript Hush has captured, searchable.</p>
     </header>
+
+    {#if meetingCopyNotice}
+      <!--
+        Auto-copy outcome notice (#408). Sits above the History
+        list so the failure variant's "open History below" copy
+        points at exactly what the user sees next. role="status"
+        for SR announcement; the dismiss button is a manual
+        escape hatch in case the auto-clear timer (4 s success /
+        10 s failure) feels too long mid-session.
+      -->
+      <div
+        class="meeting-copy-notice"
+        data-kind={meetingCopyNotice.kind}
+        role="status"
+        data-testid="meeting-copy-notice"
+      >
+        <span class="meeting-copy-notice-icon" aria-hidden="true">
+          {meetingCopyNotice.kind === "success" ? "✓" : "⚠"}
+        </span>
+        <span class="meeting-copy-notice-message">
+          {meetingCopyNotice.message}
+        </span>
+        <button
+          type="button"
+          class="meeting-copy-notice-dismiss"
+          onclick={dismissMeetingCopyNotice}
+          aria-label="Dismiss notice"
+        >
+          ×
+        </button>
+      </div>
+    {/if}
+
     <HistoryPanel
       {historyEntries}
       {historyLoaded}
@@ -1530,6 +1610,69 @@
 .tagline {
   color: var(--text-muted);
   margin: 0 0 1.25rem;
+}
+
+/* Meeting auto-copy outcome notice (#408). Sits between the
+   History section header and the panel, gated on
+   meetingCopyNotice being set. Two visual variants drive off
+   data-kind: success (green-tinted) auto-clears after 4 s,
+   failure (amber-tinted) after 10 s. Dismiss button is a
+   manual escape hatch in case the dwell feels long. */
+.meeting-copy-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.6rem 0.85rem;
+  margin: 0 0 1rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  border: 1px solid;
+}
+.meeting-copy-notice[data-kind="success"] {
+  background-color: #e7f8ec;
+  border-color: #b6e5c5;
+  color: #2a6b3c;
+}
+.meeting-copy-notice[data-kind="failure"] {
+  background-color: #fff7e6;
+  border-color: #ffd591;
+  color: #8a5a00;
+}
+.meeting-copy-notice-icon {
+  font-weight: 700;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+.meeting-copy-notice-message {
+  flex: 1;
+  min-width: 0;
+}
+.meeting-copy-notice-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: 0;
+  padding: 0 0.25rem;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+}
+.meeting-copy-notice-dismiss:hover {
+  opacity: 1;
+}
+@media (prefers-color-scheme: dark) {
+  .meeting-copy-notice[data-kind="success"] {
+    background-color: rgba(46, 170, 83, 0.15);
+    border-color: #2a6b3c;
+    color: #b6e5c5;
+  }
+  .meeting-copy-notice[data-kind="failure"] {
+    background-color: rgba(255, 193, 7, 0.12);
+    border-color: #6b5300;
+    color: #ffd591;
+  }
 }
 
 .hint {
