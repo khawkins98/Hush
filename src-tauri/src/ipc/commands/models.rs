@@ -140,7 +140,7 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
     // disk, so the marginal cost of the second load is small.
     let models_dir = state.models_dir.clone();
     let id_for_load = id.clone();
-    let inference_threads = std::sync::Arc::clone(&state.inference_threads);
+    let inference_threads = std::sync::Arc::clone(&state.runtime_flags.inference_threads);
     let load_result = tauri::async_runtime::spawn_blocking(move || {
         let dictation =
             crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir, &inference_threads)?;

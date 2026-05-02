@@ -120,7 +120,7 @@ pub type DiarizeSlot = std::sync::Arc<std::sync::RwLock<std::sync::Arc<dyn Diari
 /// FlagGatedDiarizer.
 ///
 /// Constructed in `AppStateBuilder::build_default`:
-/// - `enabled` → `Arc::clone(&app_state.diarization_enabled)`
+/// - `enabled` → `Arc::clone(&app_state.runtime_flags.diarization_enabled)`
 /// - `inner` → `Arc::clone(&app_state.diarize_slot)`. Initial
 ///   value is `OnnxDiarizer` if the wespeaker model is on disk +
 ///   the `diarization-onnx` feature is built in, else

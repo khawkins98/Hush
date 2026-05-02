@@ -260,7 +260,11 @@ pub fn start_dictation(
 ) -> IpcResult<()> {
     let source = source.unwrap_or_else(AudioSource::default_microphone);
     start_dictation_inner(&state, source)?;
-    if state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+    if state
+        .runtime_flags
+        .hud_enabled
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
         if let Err(e) = crate::hud::show(&app) {
             tracing::error!(error = ?e, "failed to show recording HUD");
         }
@@ -279,6 +283,7 @@ pub fn start_dictation(
     // fired only when the user has opted in.
     crate::audio_cues::play_if_enabled(
         state
+            .runtime_flags
             .sound_cues_enabled
             .load(std::sync::atomic::Ordering::Relaxed),
         crate::audio_cues::CUE_RECORDING_START,
@@ -595,6 +600,7 @@ pub async fn stop_dictation(
     // "safe to paste"; never fired on the error paths above.
     crate::audio_cues::play_if_enabled(
         state
+            .runtime_flags
             .sound_cues_enabled
             .load(std::sync::atomic::Ordering::Relaxed),
         crate::audio_cues::CUE_TRANSCRIPTION_READY,
@@ -1103,7 +1109,10 @@ pub async fn mark_first_run_completed(state: State<'_, AppState>) -> IpcResult<(
 /// floating pill that confirms the mic is hot.
 #[tauri::command]
 pub fn get_hud_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
-    Ok(state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed))
+    Ok(state
+        .runtime_flags
+        .hud_enabled
+        .load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Persist the recording-HUD-enabled flag and update the in-memory
@@ -1121,6 +1130,7 @@ pub async fn set_hud_enabled(state: State<'_, AppState>, enabled: bool) -> IpcRe
 /// real Tauri runtime.
 pub(crate) async fn set_hud_enabled_inner(state: &AppState, enabled: bool) -> IpcResult<()> {
     state
+        .runtime_flags
         .hud_enabled
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
     state
@@ -1139,6 +1149,7 @@ pub(crate) async fn set_hud_enabled_inner(state: &AppState, enabled: bool) -> Ip
 #[tauri::command]
 pub fn get_sound_cues_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
     Ok(state
+        .runtime_flags
         .sound_cues_enabled
         .load(std::sync::atomic::Ordering::Relaxed))
 }
@@ -1152,6 +1163,7 @@ pub async fn set_sound_cues_enabled(state: State<'_, AppState>, enabled: bool) -
 
 pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool) -> IpcResult<()> {
     state
+        .runtime_flags
         .sound_cues_enabled
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
     state
@@ -1171,6 +1183,7 @@ pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool
 #[tauri::command]
 pub fn get_diarization_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
     Ok(state
+        .runtime_flags
         .diarization_enabled
         .load(std::sync::atomic::Ordering::Relaxed))
 }
@@ -1189,6 +1202,7 @@ pub(crate) async fn set_diarization_enabled_inner(
     enabled: bool,
 ) -> IpcResult<()> {
     state
+        .runtime_flags
         .diarization_enabled
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
     state
@@ -1207,6 +1221,7 @@ pub(crate) async fn set_diarization_enabled_inner(
 #[tauri::command]
 pub fn get_inference_threads(state: State<'_, AppState>) -> IpcResult<i32> {
     Ok(state
+        .runtime_flags
         .inference_threads
         .load(std::sync::atomic::Ordering::Relaxed))
 }
@@ -1226,6 +1241,7 @@ pub async fn set_inference_threads(state: State<'_, AppState>, threads: i32) -> 
 pub(crate) async fn set_inference_threads_inner(state: &AppState, threads: i32) -> IpcResult<()> {
     let clamped = threads.clamp(1, 16);
     state
+        .runtime_flags
         .inference_threads
         .store(clamped, std::sync::atomic::Ordering::Relaxed);
     state
@@ -1342,6 +1358,7 @@ pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> 
     // and a misaligned toggle setting is a UX papercut, not a
     // broken state.
     state
+        .runtime_flags
         .diarization_enabled
         .store(false, std::sync::atomic::Ordering::Relaxed);
     if let Err(e) = state
@@ -1612,6 +1629,7 @@ pub fn get_meeting_autostart_mode(
 ) -> IpcResult<crate::meeting::MeetingAutostartMode> {
     Ok(crate::ipc::decode_autostart_mode(
         state
+            .runtime_flags
             .meeting_autostart_mode
             .load(std::sync::atomic::Ordering::Relaxed),
     ))
@@ -1626,7 +1644,7 @@ pub async fn set_meeting_autostart_mode(
     state: State<'_, AppState>,
     mode: crate::meeting::MeetingAutostartMode,
 ) -> IpcResult<()> {
-    state.meeting_autostart_mode.store(
+    state.runtime_flags.meeting_autostart_mode.store(
         crate::ipc::encode_autostart_mode(mode),
         std::sync::atomic::Ordering::Relaxed,
     );
@@ -1672,6 +1690,7 @@ pub struct AutostartPathStatus {
 pub fn get_autostart_path_status(state: State<'_, AppState>) -> IpcResult<AutostartPathStatus> {
     Ok(AutostartPathStatus {
         stale: state
+            .runtime_flags
             .autostart_path_stale
             .load(std::sync::atomic::Ordering::Relaxed),
     })
@@ -1696,6 +1715,7 @@ pub fn retry_autostart_registration(
         match mgr.enable() {
             Ok(()) => {
                 state
+                    .runtime_flags
                     .autostart_path_stale
                     .store(false, std::sync::atomic::Ordering::Relaxed);
                 tracing::info!(
@@ -2694,6 +2714,7 @@ mod tests {
         // Default at construction is `true`; flip to false and verify
         // both the in-memory atomic and the persisted settings row.
         state
+            .runtime_flags
             .hud_enabled
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -2702,7 +2723,10 @@ mod tests {
             .expect("set_hud_enabled_inner ok");
 
         assert!(
-            !state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed),
+            !state
+                .runtime_flags
+                .hud_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
             "atomic should reflect the new false value"
         );
         let persisted = state
@@ -2731,7 +2755,10 @@ mod tests {
             .await
             .expect("set true ok");
 
-        assert!(state.hud_enabled.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(state
+            .runtime_flags
+            .hud_enabled
+            .load(std::sync::atomic::Ordering::Relaxed));
         let persisted = state
             .settings
             .get(crate::settings::keys::HUD_ENABLED)
@@ -2750,6 +2777,7 @@ mod tests {
             .expect("set ok");
         assert_eq!(
             state
+                .runtime_flags
                 .inference_threads
                 .load(std::sync::atomic::Ordering::Relaxed),
             8,
@@ -2774,6 +2802,7 @@ mod tests {
             .expect("set ok");
         assert_eq!(
             state
+                .runtime_flags
                 .inference_threads
                 .load(std::sync::atomic::Ordering::Relaxed),
             16
@@ -2794,6 +2823,7 @@ mod tests {
             .expect("set ok");
         assert_eq!(
             state
+                .runtime_flags
                 .inference_threads
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
@@ -2809,6 +2839,7 @@ mod tests {
         let state = crate::ipc::tests::mock_state();
         assert!(
             !state
+                .runtime_flags
                 .diarization_enabled
                 .load(std::sync::atomic::Ordering::Relaxed),
             "default should be off"
@@ -2819,6 +2850,7 @@ mod tests {
             .expect("set true ok");
         assert!(
             state
+                .runtime_flags
                 .diarization_enabled
                 .load(std::sync::atomic::Ordering::Relaxed),
             "atomic should reflect true"
@@ -2838,6 +2870,7 @@ mod tests {
             .expect("set false ok");
         assert!(
             !state
+                .runtime_flags
                 .diarization_enabled
                 .load(std::sync::atomic::Ordering::Relaxed),
             "atomic should reflect false"
@@ -3091,6 +3124,7 @@ mod tests {
         let state = crate::ipc::tests::mock_state();
         // Set the toggle on first so the `remove` flip is observable.
         state
+            .runtime_flags
             .diarization_enabled
             .store(true, std::sync::atomic::Ordering::Relaxed);
         state
@@ -3105,6 +3139,7 @@ mod tests {
 
         assert!(
             !state
+                .runtime_flags
                 .diarization_enabled
                 .load(std::sync::atomic::Ordering::Relaxed),
             "atomic should flip to false"
@@ -3141,6 +3176,7 @@ mod tests {
             *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
         }
         state
+            .runtime_flags
             .diarization_enabled
             .store(false, std::sync::atomic::Ordering::Relaxed);
         state

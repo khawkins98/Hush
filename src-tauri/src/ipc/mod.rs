@@ -357,6 +357,37 @@ pub struct AppState {
     /// for the first time, so first-time opt-in doesn't require an
     /// app restart.
     pub ptt_listener_spawned: Arc<std::sync::atomic::AtomicBool>,
+    /// Hot-swappable diarizer slot (#301). The `FlagGatedDiarizer`
+    /// constructed in `build_default` holds an `Arc::clone` of
+    /// this slot; the IPC `download_diarizer_model` path replaces
+    /// the inner Arc after a successful wespeaker download so the
+    /// new `OnnxDiarizer` takes effect on the next meeting tick
+    /// — no app restart required.
+    pub diarize_slot: crate::diarization::DiarizeSlot,
+    /// User-facing flags that mirror Settings rows — see
+    /// [`RuntimeFlags`] for the full per-field rationale. Grouped
+    /// into a substruct (#431) so `AppState` stays readable.
+    pub runtime_flags: RuntimeFlags,
+}
+
+/// User-facing runtime flags that mirror Settings rows (#431).
+///
+/// Each entry is an `Arc<Atomic*>` so the read-side hot paths
+/// (dictation start, meeting pump tick, foreground poller, etc.)
+/// can do lock-free reads, and the IPC `set_*` commands flip the
+/// flag in place — the loaded `WhisperTranscription` and the
+/// active `SessionManager` clone the same `Arc` at construction
+/// time, so a Settings change is observable on the next inference
+/// call / pump tick / poller tick without any reload.
+///
+/// Grouped into a substruct so [`AppState`]'s field count stays
+/// readable. Pre-#431 these six atomics sat alongside the IPC
+/// concerns (downloads map, http client, model slots, etc.) and
+/// the audit flagged the resulting 22-field flat struct as harder
+/// to navigate than its lock-typology warranted. The grouping is
+/// purely organisational; the field types and Arc-sharing
+/// semantics are unchanged from the pre-refactor shape.
+pub struct RuntimeFlags {
     /// Whether the recording HUD overlay should appear during
     /// dictation / meeting capture. Read by `start_dictation` /
     /// meeting-pump start paths to decide whether to call
@@ -375,10 +406,7 @@ pub struct AppState {
     /// User-chosen Meeting-Mode auto-start mode (Off / Always).
     /// Read by the foreground poller every tick; flipped by the
     /// `set_meeting_autostart_mode` IPC. Encoded as an
-    /// `AtomicU8` (`0 = Off`, `1 = Always`) for lock-free reads
-    /// — the poller ticks every 3 s so even a `Mutex` would be
-    /// cheap, but matching the existing pattern (`hud_enabled`,
-    /// `ptt_active`) is consistent.
+    /// `AtomicU8` (`0 = Off`, `1 = Always`) for lock-free reads.
     pub meeting_autostart_mode: Arc<std::sync::atomic::AtomicU8>,
     /// Whether speaker diarization should label utterances during
     /// meeting capture. Read by the meeting pump's dispatch path so
@@ -386,20 +414,7 @@ pub struct AppState {
     /// the session. Stored as an `AtomicBool` so the read is lock-
     /// free; flipped by `set_diarization_enabled`, which also writes
     /// the `diarization_enabled` settings row.
-    ///
-    /// Foundation-PR scope (#111): the flag is plumbed end-to-end
-    /// (settings row → AppState → IPC → frontend toggle) but the
-    /// production diarizer is still `NoopDiarizer`. PR-B swaps in
-    /// `OnnxDiarizer` and reads this flag at dispatch to decide
-    /// whether to run inference.
     pub diarization_enabled: Arc<std::sync::atomic::AtomicBool>,
-    /// Hot-swappable diarizer slot (#301). The `FlagGatedDiarizer`
-    /// constructed in `build_default` holds an `Arc::clone` of
-    /// this slot; the IPC `download_diarizer_model` path replaces
-    /// the inner Arc after a successful wespeaker download so the
-    /// new `OnnxDiarizer` takes effect on the next meeting tick
-    /// — no app restart required.
-    pub diarize_slot: crate::diarization::DiarizeSlot,
     /// Whisper inference thread count (#255). Settings → General
     /// slider writes through the `set_inference_threads` IPC; the
     /// loaded `WhisperTranscription` shares this same Arc via
@@ -751,33 +766,35 @@ impl AppStateBuilder {
                 self.ptt_active.unwrap_or(false),
             )),
             ptt_listener_spawned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
-                self.hud_enabled.unwrap_or(true),
-            )),
-            sound_cues_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
-                self.sound_cues_enabled.unwrap_or(false),
-            )),
-            meeting_autostart_mode: Arc::new(std::sync::atomic::AtomicU8::new(
-                encode_autostart_mode(
-                    self.meeting_autostart_mode
-                        .unwrap_or(crate::meeting::MeetingAutostartMode::Off),
-                ),
-            )),
-            diarization_enabled: self.diarization_enabled_arc.unwrap_or_else(|| {
-                Arc::new(std::sync::atomic::AtomicBool::new(
-                    self.diarization_enabled.unwrap_or(false),
-                ))
-            }),
             diarize_slot: self.diarize_slot.unwrap_or_else(|| {
                 Arc::new(std::sync::RwLock::new(
                     Arc::new(crate::diarization::NoopDiarizer)
                         as Arc<dyn crate::diarization::Diarize>,
                 ))
             }),
-            inference_threads: self
-                .inference_threads_arc
-                .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicI32::new(4))),
-            autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            runtime_flags: RuntimeFlags {
+                hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                    self.hud_enabled.unwrap_or(true),
+                )),
+                sound_cues_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                    self.sound_cues_enabled.unwrap_or(false),
+                )),
+                meeting_autostart_mode: Arc::new(std::sync::atomic::AtomicU8::new(
+                    encode_autostart_mode(
+                        self.meeting_autostart_mode
+                            .unwrap_or(crate::meeting::MeetingAutostartMode::Off),
+                    ),
+                )),
+                diarization_enabled: self.diarization_enabled_arc.unwrap_or_else(|| {
+                    Arc::new(std::sync::atomic::AtomicBool::new(
+                        self.diarization_enabled.unwrap_or(false),
+                    ))
+                }),
+                inference_threads: self
+                    .inference_threads_arc
+                    .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicI32::new(4))),
+                autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
         })
     }
 }
