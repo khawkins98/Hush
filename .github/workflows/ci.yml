@@ -234,24 +234,27 @@ jobs:
       #
       # Adding a new entry requires updating both the config and
       # this allowlist in the same PR, which puts the addition
-      # under code review. The bash-only shape mirrors the
-      # supply-chain-pins job — one less tool dep to track.
+      # under code review.
+      #
+      # Parser is Python `tomllib` (stdlib on 3.11+) rather than
+      # the awk shape #413 originally shipped (#418). The awk
+      # parser was vulnerable to:
+      #
+      #   - quoted bare keys (`"RUSTFLAGS" = "x"`)
+      #   - indented keys (`  RUSTFLAGS = "x"`)
+      #   - dotted-table form (`[env.RUSTFLAGS]`)
+      #
+      # All three are valid TOML but slip through the line-shape
+      # regex. tomllib normalises them into the same flat key dict
+      # so the allowlist diff catches every shape regardless of
+      # how a contributor writes the key. The runner ships
+      # Python 3.12 by default; explicit `python3` invocation so
+      # a future runner image change to a different default is
+      # caught at lint time.
       - name: Lint .cargo/config.toml [env] keys
         run: |
           set -euo pipefail
           config=src-tauri/.cargo/config.toml
-          # Extract the `[env]` section's keys. Read the file from
-          # the `[env]` line until the next `[section]` (or EOF),
-          # filter to lines that look like `KEY = ...`, and pluck
-          # the key. Comment lines (`# ...`) are skipped.
-          keys=$(awk '
-            /^\[env\]/ { in_env = 1; next }
-            /^\[/ { in_env = 0; next }
-            in_env && /^[A-Z_][A-Z0-9_]*[[:space:]]*=/ {
-              sub(/[[:space:]]*=.*/, "")
-              print
-            }
-          ' "$config")
 
           # Allowlisted env-var names. New entries require an
           # explicit PR that updates both `$config` and this list.
@@ -259,6 +262,18 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET
           CMAKE_OSX_DEPLOYMENT_TARGET
           EOF
+          )
+
+          # Extract every key under [env] regardless of TOML
+          # syntax — quoted, indented, dotted-table all collapse
+          # to the same flat dict.
+          keys=$(python3 - "$config" <<'PY'
+          import sys, tomllib
+          with open(sys.argv[1], "rb") as f:
+              cfg = tomllib.load(f)
+          for k in cfg.get("env", {}):
+              print(k)
+          PY
           )
 
           unexpected=$(echo "$keys" | while IFS= read -r key; do
