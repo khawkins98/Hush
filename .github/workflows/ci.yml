@@ -155,20 +155,33 @@ jobs:
             echo "::warning::Swift runtime path not found at $SWIFT_PATH; SCK-linked test binaries may fail to load"
           fi
 
-      # Clean stale incremental compile data left in the cached
-      # `src-tauri/target/` from prior runs. After deleting a `pub
-      # mod` (#479 slice 3 dropped `settings_window`), cargo's
-      # incremental metadata can keep stale references to the gone
-      # module and reject otherwise-valid source on the next build
-      # — surfaces as `error[E0433]: cannot find … in 'crate'`
-      # against a line whose source content no longer matches the
-      # cached `.rmeta`. Wiping `incremental/` only — full `target`
-      # is too expensive — keeps deps cached but forces fresh local
-      # codegen.
-      - name: Clear stale incremental compile data
+      # Disable cargo incremental compilation in CI. Incremental is
+      # designed for fast iterative local rebuilds and stores per-
+      # file rmeta keyed on source byte ranges — when files are
+      # deleted (e.g. #479 slice 3 dropped the `settings_window`
+      # module), the cached metadata still references the gone
+      # symbol and the next build fails with
+      # `error[E0433]: cannot find … in 'crate'` at a line whose
+      # source no longer matches the cached state. CI builds are
+      # one-shot, so the incremental win was already negligible
+      # against its risk profile. Off-by-default in CI is the
+      # documented Rust-team recommendation for caching workflows.
+      - name: Disable cargo incremental compilation
+        run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+
+      # Wipe stale local-crate artefacts so deletions like
+      # #479 slice 3's `settings_window` module don't leave
+      # cached rmetas pointing at gone symbols. `cargo clean -p
+      # hush` only touches our crate; the heavy dep build cache
+      # (whisper-rs-sys, ort, tauri, …) stays intact. The
+      # explicit `incremental/` rm catches any incremental data
+      # the cache restored before this step runs.
+      - name: Wipe stale local-crate artefacts
         working-directory: src-tauri
         shell: bash
-        run: rm -rf target/debug/incremental target/release/incremental || true
+        run: |
+          rm -rf target/debug/incremental target/release/incremental || true
+          cargo clean -p hush || true
 
       # Clippy on the default feature set first — fast and covers the bulk of
       # the code. The `whisper` feature is exercised separately below; both
