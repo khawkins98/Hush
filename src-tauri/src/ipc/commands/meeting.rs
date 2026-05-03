@@ -461,6 +461,36 @@ pub fn meeting_app_classifier_defaults() -> IpcResult<Vec<BuiltinAppEntry>> {
         .collect())
 }
 
+/// Set or clear the per-app audio profile fields (#427 Item 5).
+/// Pass `None` (frontend `null`) to reset a field to "use the
+/// global default", or `Some(value)` to pin a value. Both fields
+/// are written every call so the panel sends the full intended
+/// state — no merge.
+///
+/// The row must exist (typically via a prior
+/// `meeting_app_override_upsert`); a missing row surfaces as an
+/// error so the panel can re-list and re-render. Returns the
+/// updated row so the frontend can patch its local list without a
+/// follow-up `list` round-trip.
+#[tauri::command]
+pub async fn meeting_app_override_set_profile(
+    state: State<'_, AppState>,
+    app_name: String,
+    preferred_audio_source: Option<String>,
+    preferred_model_id: Option<String>,
+) -> IpcResult<crate::meeting::MeetingAppOverride> {
+    state
+        .data
+        .meeting_app_overrides
+        .set_profile(
+            &app_name,
+            preferred_audio_source.as_deref(),
+            preferred_model_id.as_deref(),
+        )
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("app overrides set_profile: {e:#}")))
+}
+
 /// Delete the override for the given app. No-op if no row exists.
 #[tauri::command]
 pub async fn meeting_app_override_delete(
