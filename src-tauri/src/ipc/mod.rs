@@ -396,10 +396,10 @@ pub struct RuntimeFlags {
     /// `set_hud_enabled` IPC command, which also persists to the
     /// `hud_enabled` settings row.
     pub hud_enabled: Arc<std::sync::atomic::AtomicBool>,
-    /// Whether to play short macOS system sounds at the
-    /// recording-start ("Tink") and transcription-complete
-    /// ("Glass") transitions (#292). Default off; opt-in via
-    /// Settings → General → Audio cues. Stored as an
+    /// Whether to play short audio cues at the recording-start
+    /// and transcription-complete transitions (#292; cross-
+    /// platform synthesis added in #446). Default off; opt-in
+    /// via Settings → General → Audio cues. Stored as an
     /// `AtomicBool` so the dictation hot path reads without
     /// locking. Mirrored on the `sound_cues_enabled` settings row.
     pub sound_cues_enabled: Arc<std::sync::atomic::AtomicBool>,
