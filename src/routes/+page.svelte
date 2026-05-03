@@ -1553,7 +1553,6 @@
   <section id="history-section" class="page-section">
     <header class="section-header">
       <h1>History</h1>
-      <p class="tagline">Every transcript Hush has captured, searchable.</p>
     </header>
 
     {#if appProfileNotice}
@@ -1772,11 +1771,6 @@
   margin: 0 0 0.25rem;
   font-size: 1.75rem;
   letter-spacing: -0.02em;
-}
-
-.tagline {
-  color: var(--text-muted);
-  margin: 0 0 1.25rem;
 }
 
 /* Meeting auto-copy outcome notice (#408). Sits between the
