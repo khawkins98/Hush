@@ -496,10 +496,10 @@
     <span class="toggle-label">
       <span class="toggle-name">Audio cues</span>
       <span class="toggle-desc">
-        Plays a short macOS system sound when recording
-        starts (Tink) and when transcription completes
-        (Glass — "safe to paste"). Honours your system
-        volume and Do Not Disturb. Off keeps Hush silent.
+        Plays a short chime when recording starts and a
+        second chime when the transcript is on the
+        clipboard. Honours your system volume and Do Not
+        Disturb. Off keeps Hush silent.
       </span>
     </span>
   </label>
@@ -530,7 +530,7 @@
       <span class="toggle-label">
         <span class="toggle-name">Recording-start cue</span>
         <span class="toggle-desc">
-          Plays the Tink chime the moment the mic goes hot.
+          Plays a chime the moment the mic goes hot.
         </span>
       </span>
     </label>
@@ -545,8 +545,8 @@
       <span class="toggle-label">
         <span class="toggle-name">Transcription-complete cue</span>
         <span class="toggle-desc">
-          Plays the Glass chime once the transcript is on the
-          clipboard — the "safe to paste" signal.
+          Plays a chime once the transcript is on the clipboard
+          — the "safe to paste" signal.
         </span>
       </span>
     </label>
