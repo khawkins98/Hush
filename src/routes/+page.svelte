@@ -13,6 +13,9 @@
   import { motionDuration } from "$lib/motion";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
+  import MeetingSection, {
+    type MeetingCopyNotice,
+  } from "$lib/MeetingSection.svelte";
   import PermissionHealthSection from "$lib/PermissionHealthSection.svelte";
   import MacosPermsPill from "$lib/MacosPermsPill.svelte";
   import {
@@ -457,16 +460,9 @@
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
     window.removeEventListener("keydown", handleGlobalKeydown);
-    // Clear the auto-copy notice's auto-dismiss timer too —
-    // page is the only Svelte tree this component lives in
-    // today, but HMR or any future routing would otherwise
-    // leave the timer firing after teardown and writing to a
-    // stale `meetingCopyNotice` cell. Caught in the security
-    // review on #415 (the cluster review on #412–#416).
-    if (meetingCopyNoticeTimer !== null) {
-      clearTimeout(meetingCopyNoticeTimer);
-      meetingCopyNoticeTimer = null;
-    }
+    // The auto-copy notice timer used to be cleaned up here;
+    // moved into MeetingSection's onDestroy alongside the rest
+    // of the auto-clear lifecycle (#432 slice 2/3).
     if (appProfileNoticeTimer !== null) {
       clearTimeout(appProfileNoticeTimer);
       appProfileNoticeTimer = null;
@@ -1302,38 +1298,22 @@
   // contextual. Success auto-dismisses after 4 s; failure after
   // 10 s — a longer dwell because the message carries an action
   // the user has to discover, not just an acknowledgement.
-  type MeetingCopyNotice = {
-    kind: "success" | "failure";
-    message: string;
-  };
-  let meetingCopyNotice = $state<MeetingCopyNotice | null>(null);
-  let meetingCopyNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   // The notice copy ("open the History meeting row below to copy
   // it manually") assumes the source was a meeting recording and
   // points at HistoryPanel's meeting-row affordance. Today only
-  // `copyMeetingSessionToClipboard` calls this; if a future caller
-  // (PTT auto-copy, dictation auto-copy retrofit) needs the same
-  // surface, the failure-message text will need to vary by source.
-  // Keeping the helper meeting-shaped until that demand actually
-  // lands rather than premature-generalising. UX review caught
-  // the meeting-only assumption on #415.
+  // `copyMeetingSessionToClipboard` writes here; if a future
+  // caller (PTT auto-copy, dictation auto-copy retrofit) needs
+  // the same surface, the failure-message text will need to vary
+  // by source. UX review caught the meeting-only assumption on
+  // #415.
+  //
+  // Auto-clear timer + render moved into MeetingSection (#432
+  // slice 2/3); the orchestrator now just sets `meetingCopyNotice
+  // = {kind, message}` and the section handles dwell + dismiss.
+  let meetingCopyNotice = $state<MeetingCopyNotice | null>(null);
+
   function setMeetingCopyNotice(notice: MeetingCopyNotice) {
-    if (meetingCopyNoticeTimer !== null) {
-      clearTimeout(meetingCopyNoticeTimer);
-    }
     meetingCopyNotice = notice;
-    const dwellMs = notice.kind === "success" ? 4000 : 10000;
-    meetingCopyNoticeTimer = setTimeout(() => {
-      meetingCopyNotice = null;
-      meetingCopyNoticeTimer = null;
-    }, dwellMs);
-  }
-  function dismissMeetingCopyNotice() {
-    if (meetingCopyNoticeTimer !== null) {
-      clearTimeout(meetingCopyNoticeTimer);
-      meetingCopyNoticeTimer = null;
-    }
-    meetingCopyNotice = null;
   }
 
   async function startMeetingSession() {
@@ -1623,46 +1603,8 @@
       </div>
     {/if}
 
-    {#if meetingCopyNotice}
-      <!--
-        Auto-copy outcome notice (#408). Sits above the History
-        list so the failure variant's "open History below" copy
-        points at exactly what the user sees next. role="status"
-        for SR announcement; the dismiss button is a manual
-        escape hatch in case the auto-clear timer (4 s success /
-        10 s failure) feels too long mid-session.
-
-        The warning glyph carries an explicit `︎` variation
-        selector so macOS doesn't render it as a colour emoji
-        (yellow triangle), which would fight the amber-tinted
-        container. UX review on the original #415 caught that
-        bare U+26A0 picks up emoji presentation by default on
-        Apple platforms; the VS-15 selector forces text style.
-      -->
-      <div
-        class="meeting-copy-notice"
-        data-kind={meetingCopyNotice.kind}
-        role="status"
-        data-testid="meeting-copy-notice"
-        in:fly={{ y: -6, duration: motionDuration(200), easing: backOut }}
-        out:fade={{ duration: motionDuration(150), easing: cubicIn }}
-      >
-        <span class="meeting-copy-notice-icon" aria-hidden="true">
-          {meetingCopyNotice.kind === "success" ? "✓" : "⚠︎"}
-        </span>
-        <span class="meeting-copy-notice-message">
-          {meetingCopyNotice.message}
-        </span>
-        <button
-          type="button"
-          class="meeting-copy-notice-dismiss"
-          onclick={dismissMeetingCopyNotice}
-          aria-label="Dismiss notice"
-        >
-          ×
-        </button>
-      </div>
-    {/if}
+    <!-- Auto-copy outcome notice (#408 / #432 slice 2/3). -->
+    <MeetingSection bind:notice={meetingCopyNotice} />
 
     <HistoryPanel
       {historyEntries}
@@ -1862,17 +1804,8 @@
    data-kind: success (green-tinted) auto-clears after 4 s,
    failure (amber-tinted) after 10 s. Dismiss button is a
    manual escape hatch in case the dwell feels long. */
-.meeting-copy-notice {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.55rem;
-  padding: 0.6rem 0.85rem;
-  margin: 0 0 1rem;
-  border-radius: 8px;
-  font-size: 0.88rem;
-  line-height: 1.4;
-  border: 1px solid;
-}
+/* The .meeting-copy-notice rules moved into MeetingSection.svelte
+   (#432 slice 2/3) along with the markup. */
 
 /* Per-app audio profile auto-apply notice (#427 Item 5 / #457).
    Subtle accent-tinted, matches the meeting-copy-notice's row
@@ -1913,55 +1846,6 @@
 }
 .app-profile-notice-dismiss:hover {
   opacity: 1;
-}
-.meeting-copy-notice[data-kind="success"] {
-  background-color: #e7f8ec;
-  border-color: #b6e5c5;
-  color: #2a6b3c;
-}
-.meeting-copy-notice[data-kind="failure"] {
-  background-color: #fff7e6;
-  border-color: #ffd591;
-  color: #8a5a00;
-}
-.meeting-copy-notice-icon {
-  font-weight: 700;
-  flex-shrink: 0;
-  line-height: 1.4;
-}
-.meeting-copy-notice-message {
-  flex: 1;
-  min-width: 0;
-}
-.meeting-copy-notice-dismiss {
-  flex-shrink: 0;
-  background: none;
-  border: 0;
-  padding: 0 0.25rem;
-  font-size: 1.05rem;
-  line-height: 1;
-  cursor: pointer;
-  color: inherit;
-  /* Bumped from 0.6 → 0.75 (UX review on #415). The original
-     was visually quiet enough that the dismiss path read as
-     decoration; 0.75 reads as actionable without dominating the
-     row. */
-  opacity: 0.75;
-}
-.meeting-copy-notice-dismiss:hover {
-  opacity: 1;
-}
-@media (prefers-color-scheme: dark) {
-  .meeting-copy-notice[data-kind="success"] {
-    background-color: rgba(46, 170, 83, 0.15);
-    border-color: #2a6b3c;
-    color: #b6e5c5;
-  }
-  .meeting-copy-notice[data-kind="failure"] {
-    background-color: rgba(255, 193, 7, 0.12);
-    border-color: #6b5300;
-    color: #ffd591;
-  }
 }
 
 .hint {
