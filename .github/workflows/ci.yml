@@ -155,6 +155,21 @@ jobs:
             echo "::warning::Swift runtime path not found at $SWIFT_PATH; SCK-linked test binaries may fail to load"
           fi
 
+      # Clean stale incremental compile data left in the cached
+      # `src-tauri/target/` from prior runs. After deleting a `pub
+      # mod` (#479 slice 3 dropped `settings_window`), cargo's
+      # incremental metadata can keep stale references to the gone
+      # module and reject otherwise-valid source on the next build
+      # — surfaces as `error[E0433]: cannot find … in 'crate'`
+      # against a line whose source content no longer matches the
+      # cached `.rmeta`. Wiping `incremental/` only — full `target`
+      # is too expensive — keeps deps cached but forces fresh local
+      # codegen.
+      - name: Clear stale incremental compile data
+        working-directory: src-tauri
+        shell: bash
+        run: rm -rf target/debug/incremental target/release/incremental || true
+
       # Clippy on the default feature set first — fast and covers the bulk of
       # the code. The `whisper` feature is exercised separately below; both
       # invocations run with the macOS arch flags set above so whisper.cpp's
