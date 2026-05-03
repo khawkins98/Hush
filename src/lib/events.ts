@@ -76,4 +76,16 @@ export const Events = {
   /// the `data-theme` attribute on `<html>`. Canonical helpers
   /// live in `lib/theme.ts`.
   Theme: "hush:theme",
+  /// Backend (autostart poller) → main window: a per-app audio
+  /// profile (#427 Item 5) just activated because focus moved to
+  /// an app with a populated profile. Fires only on transitions
+  /// (the just-focused-app's profile differs from the last
+  /// activation). Payload: `{ appName, preferredAudioSource,
+  /// preferredModelId }`. Main window listener swaps the active
+  /// source selector + invokes `model_select` for the model
+  /// swap, then surfaces a transient "Switched to <app> profile."
+  /// notice. Auto-apply is gated on `recording === false` so a
+  /// mid-dictation focus change doesn't interrupt the active
+  /// stream.
+  AppProfileActivated: "app:profile-activated",
 } as const;
