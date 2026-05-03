@@ -13,9 +13,7 @@
 //! - **Background auto-update (#10)** — the heavier half. Wraps
 //!   `tauri-plugin-updater`, signs releases with a maintainer-held
 //!   keypair, polls a manifest on launch, downloads + verifies +
-//!   installs. Gated on a pubkey decision and on the release pipeline
-//!   (#222) producing artefacts the manifest can point at. Not in
-//!   this module yet.
+//!   installs on the user's confirmation. Implementation plan below.
 //!
 //! ## Why a manual check ships first
 //!
@@ -26,6 +24,132 @@
 //! tag name. Shipping it now gives users a "am I current?"
 //! affordance for the entire window between today and #10
 //! landing.
+//!
+//! ## Implementation plan for #10 (auto-update)
+//!
+//! ### Step 1 — Generate signing keypair (one-time, maintainer action)
+//!
+//! ```sh
+//! tauri signer generate -w ~/.tauri/hush.key
+//! ```
+//!
+//! Outputs two things:
+//! - A private key file (keep locally + store as GitHub Actions secret
+//!   `TAURI_SIGNING_PRIVATE_KEY`; optional passphrase →
+//!   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`)
+//! - A public key string (`dW50cnVzdGVkIGNvbW1lbnQ6...` format) →
+//!   paste into `tauri.conf.json` under `plugins.updater.pubkey`
+//!
+//! ### Step 2 — Add `plugins.updater` block to `tauri.conf.json`
+//!
+//! This is what currently prevents the plugin from being registered
+//! (it panics on startup without the block). Add at the top level:
+//!
+//! ```json
+//! "plugins": {
+//!   "updater": {
+//!     "pubkey": "<TAURI_SIGNING_PUBLIC_KEY>",
+//!     "endpoints": [
+//!       "https://github.com/khawkins98/Hush/releases/latest/download/latest.json"
+//!     ]
+//!   }
+//! }
+//! ```
+//!
+//! The endpoint is a static JSON file uploaded to each GitHub Release.
+//! `tauri build` generates it automatically when the signing env vars
+//! are present in CI (see Step 3).
+//!
+//! ### Step 3 — Update release CI (`release.yml`)
+//!
+//! Add env vars to the build job:
+//! ```yaml
+//! env:
+//!   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+//!   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+//! ```
+//!
+//! `tauri build` auto-generates `latest.json` and `.sig` sidecar files
+//! when those env vars are present. Upload `latest.json` (and the
+//! per-platform `.sig` files) alongside the `.dmg` / `.AppImage` /
+//! `.msi` artifacts in the `gh release upload` step.
+//!
+//! ### Step 4 — Wire the plugin in `lib.rs`
+//!
+//! Uncomment `.plugin(tauri_plugin_updater::Builder::new().build())`
+//! in `src-tauri/src/lib.rs`. The comment there explains why it's
+//! currently gated — it will become safe once Step 2 is done.
+//!
+//! ### Step 5 — Add `install_pending_update` IPC command
+//!
+//! New file: `src-tauri/src/ipc/commands/updater.rs`
+//! Register it in `tauri::generate_handler![]` as
+//! `ipc::commands::updater::install_pending_update`.
+//!
+//! Skeleton:
+//! ```rust
+//! #[tauri::command]
+//! pub async fn install_pending_update(app: AppHandle) -> IpcResult<()> {
+//!     use tauri_plugin_updater::UpdaterExt;
+//!     let update = app.updater()
+//!         .map_err(|e| IpcError::Internal(e.to_string()))?
+//!         .check()
+//!         .await
+//!         .map_err(|e| IpcError::Internal(e.to_string()))?;
+//!
+//!     if let Some(update) = update {
+//!         // Emit progress events as download proceeds. Frontend
+//!         // renders a progress bar while bytes flow in.
+//!         update.download_and_install(
+//!             |chunk_len, total| {
+//!                 // TODO(#10): emit `updater:download-progress`
+//!                 // event: { downloaded: u64, total: Option<u64> }
+//!                 let _ = (chunk_len, total);
+//!             },
+//!             || {
+//!                 // TODO(#10): emit `updater:install-pending` event
+//!                 // so the UI can show "Installing…" before the
+//!                 // app relaunches.
+//!             },
+//!         )
+//!         .await
+//!         .map_err(|e| IpcError::Internal(e.to_string()))?;
+//!         // App relaunches automatically after install returns.
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### Step 6 — UI changes in `src/lib/AboutTab.svelte`
+//!
+//! When `updateCheck.kind === "updateAvailable"`, replace the bare
+//! "Open release notes" link with:
+//!
+//! 1. An **"Install update"** button that calls `invoke("install_pending_update")`.
+//! 2. A download progress indicator (listen on `updater:download-progress`).
+//! 3. **macOS Gatekeeper warning**: because Hush ships without Apple
+//!    notarisation, the downloaded update archive is quarantine-flagged.
+//!    After the install completes and the app relaunches, macOS may
+//!    block the relaunch with a Gatekeeper dialog. Show a note beneath
+//!    the Install button:
+//!    > "After installing, macOS may ask you to confirm it's safe to
+//!    > open Hush. Click **Open** when prompted."
+//!    See TODO(#10) in `AboutTab.svelte` for the exact insertion point.
+//! 4. Keep the "Open release notes" link as a fallback for users who
+//!    prefer to update manually.
+//!
+//! ### macOS Gatekeeper note (no Apple Developer account)
+//!
+//! `tauri-plugin-updater`'s signing keypair (Step 1) is independent of
+//! Apple code signing — it only verifies the download hasn't been
+//! tampered with. Without an Apple Developer ID certificate + notarisation,
+//! macOS Gatekeeper quarantines the downloaded update archive. In practice
+//! this surfaces as a "can't be opened because Apple cannot check it for
+//! malicious software" dialog after the app relaunches post-install.
+//! The user can dismiss it with right-click → Open. The UI warning
+//! (Step 6 item 3) sets this expectation before the install begins.
+//! When / if a Developer ID cert is obtained, remove the warning — no
+//! other code changes required.
 
 use std::time::Duration;
 
