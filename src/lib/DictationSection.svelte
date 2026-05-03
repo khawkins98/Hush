@@ -227,6 +227,11 @@
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
+    /* Children may have intrinsic widths wider than the 200 px
+       column (long device names etc). min-width: 0 lets them
+       shrink + ellipsis within the column rather than overflow
+       into the content column. */
+    min-width: 0;
     /* Rogue Amoeba-style frozen-while-active treatment: when the
        parent flips `recording=true` the sidebar dims + locks so
        the eye reads "the configuration is committed for this
