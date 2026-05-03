@@ -59,7 +59,6 @@
         "resizable": false,
         "shadow": true,
         "visible": false,
-        "focus": false,
         "acceptFirstMouse": true
       }
     ],

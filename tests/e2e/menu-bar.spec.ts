@@ -33,28 +33,57 @@ test.describe("menu-bar popover", () => {
     ).toBeVisible();
   });
 
-  test("clicking start invokes start_dictation IPC", async ({ page }) => {
-    let startCalls = 0;
-    await page.exposeFunction("__hush_record_start_dictation", () => {
-      startCalls += 1;
-    });
-    await installMocks(page, {
-      start_dictation: () => {
-        (
+  test("clicking start emits the hotkey:toggle event", async ({ page }) => {
+    // The popover delegates to the main window's listener via
+    // the `hotkey:toggle` event (same path the tray uses), rather
+    // than invoking `start_dictation` directly. The main window
+    // owns the recording state machine; going through the event
+    // keeps `ui:recording-state` as the single source of truth.
+    //
+    // The bus initialises lazily on first `listen()` / `emit()`,
+    // so we install via `addInitScript` and poll for the bus to
+    // come up before wrapping `fire()` to count emissions —
+    // mirroring the same pattern audio-source-picker.spec.ts uses
+    // for ui:recording-state.
+    await page.addInitScript(() => {
+      (
+        window as unknown as { __hush_toggle_emit_count: number }
+      ).__hush_toggle_emit_count = 0;
+      const interval = window.setInterval(() => {
+        const bus = (
           window as unknown as {
-            __hush_record_start_dictation: () => void;
+            __hush_e2e_event_bus?: {
+              fire: (n: string, p: unknown) => void;
+            };
           }
-        ).__hush_record_start_dictation();
-        return undefined;
-      },
+        ).__hush_e2e_event_bus;
+        if (!bus) return;
+        const original = bus.fire.bind(bus);
+        bus.fire = (name: string, payload: unknown) => {
+          if (name === "hotkey:toggle") {
+            (
+              window as unknown as { __hush_toggle_emit_count: number }
+            ).__hush_toggle_emit_count += 1;
+          }
+          original(name, payload);
+        };
+        window.clearInterval(interval);
+      }, 5);
     });
+
+    await installMocks(page);
     await page.goto("/menu-bar");
 
     await page.locator('[data-testid="popover-toggle"]').click();
-    // The popover doesn't optimistically flip its `recording`
-    // state — it waits for the `ui:recording-state` broadcast
-    // from elsewhere. So we assert on the IPC call, not the
-    // visible-state change.
-    await expect.poll(() => startCalls).toBe(1);
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __hush_toggle_emit_count: number })
+              .__hush_toggle_emit_count,
+        ),
+      )
+      .toBe(1);
   });
 });

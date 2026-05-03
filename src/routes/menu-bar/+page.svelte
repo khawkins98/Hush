@@ -9,16 +9,21 @@
   posture: the killer action is one click away from anywhere.
 
   ## What's here
-  - State indicator dot (idle / recording / processing).
-  - Recording-mode label that mirrors the main window's
-    inline status (mic only / mic + system audio).
-  - Start / Stop button that invokes the existing
-    `start_dictation` / `stop_dictation` IPCs. The IPC's
-    `source` arg is left absent — `start_dictation_inner`
-    falls through to `AudioSource::default_microphone()` so
-    the popover doesn't have to host its own source picker.
-  - "Open Hush" link that shows the main window and hides
-    the popover.
+  - State indicator dot (idle / recording).
+  - Start / Stop button that emits `hotkey:toggle` — the same
+    event the tray's "Start/Stop Recording" menu item uses.
+    The main window's listener handles the actual start/stop
+    so its `recording` rune (and the `ui:recording-state`
+    broadcast feeding the dot) stays the single source of
+    truth. Direct `start_dictation` / `stop_dictation` invokes
+    from the popover would create a second start path that
+    bypasses the main window's state machine — visible as the
+    "HUD says Recording but main window doesn't" desync seen
+    in the first-cut smoke test.
+  - "Open Hush" link calling the `show_main_window` IPC,
+    which surfaces the main window from Rust without needing
+    the broader `core:window:allow-get-all-windows` permission
+    on this capability.
 
   ## What's NOT here (deliberate)
   - Source picker. Most popover invocations are quick "I want
@@ -49,8 +54,8 @@
 -->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+  import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { onDestroy, onMount } from "svelte";
   import { Events } from "$lib/events";
 
@@ -95,15 +100,16 @@
     busy = true;
     error = null;
     try {
-      if (recording) {
-        // Stop returns the transcript; the main window's path
-        // surfaces it in ResultBlock. The popover doesn't render
-        // it (would crowd 320 px); the user can switch to the
-        // main window to see the result.
-        await invoke("stop_dictation");
-      } else {
-        await invoke("start_dictation");
-      }
+      // Emit the same event the tray's "Start/Stop Recording"
+      // menu item uses (`hotkey:toggle`). The main window's
+      // listener owns the start/stop state machine + the
+      // `ui:recording-state` broadcast that drives this
+      // popover's indicator. Going through that single path
+      // avoids the desync seen in the first-cut smoke test
+      // where direct `start_dictation` from the popover left
+      // the main window's `recording` rune at false while the
+      // backend pump was already running.
+      await emit(Events.HotkeyToggle);
     } catch (e) {
       error = formatError(e);
     } finally {
@@ -114,12 +120,13 @@
   async function openMain() {
     error = null;
     try {
-      const main = await WebviewWindow.getByLabel("main");
-      if (main) {
-        await main.show();
-        await main.unminimize();
-        await main.setFocus();
-      }
+      // `show_main_window` is the Rust-side equivalent of
+      // `WebviewWindow.getByLabel("main").show()` — same
+      // best-effort show + unminimize + focus chain, but
+      // doesn't require the popover's capability to grant
+      // `core:window:allow-get-all-windows` (a broader JS
+      // permission than this capability needs).
+      await invoke("show_main_window");
       await getCurrentWebviewWindow().hide();
     } catch (e) {
       error = formatError(e);
