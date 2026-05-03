@@ -19,9 +19,12 @@ test.describe("IPC error copy", () => {
     // we exercise the post-click-error path, not the never-let-the-
     // user-click-Start path. (The banner path is covered below.)
     await installMocks(page, {
+      // Click-record now goes through `meeting_start_manual`
+      // (#468 r3); same error path, just a different IPC.
+      meeting_start_manual: () => {
+        throw { kind: "transcription-unavailable" };
+      },
       start_dictation: () => {
-        // Tauri's invoke rejects with the serialised IpcError shape.
-        // The frontend's catch block reads `err.kind`.
         throw { kind: "transcription-unavailable" };
       },
     });
@@ -56,6 +59,12 @@ test.describe("IPC error copy", () => {
     // context, so closure variables don't survive — every literal
     // is inlined.
     await installMocks(page, {
+      meeting_start_manual: () => {
+        throw {
+          kind: "audio",
+          message: "deeply: nested: context: chain: with low-level error",
+        };
+      },
       start_dictation: () => {
         throw {
           kind: "audio",
