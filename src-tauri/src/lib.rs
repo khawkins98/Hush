@@ -672,9 +672,17 @@ impl meeting::ForegroundAppProbe for ActiveWinProbe {
 }
 
 async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
+    use meeting::ForegroundAppProbe;
+    use tauri::Emitter;
     use tauri::Manager;
     let mut ticker = tokio::time::interval(MEETING_AUTOSTART_POLL_INTERVAL);
     let mut last_kind: Option<meeting::MeetingAppKind> = None;
+    // Per-app profile auto-apply (#427 Item 5 / #457). Tracks the
+    // last app whose profile we activated so we emit
+    // `app:profile-activated` only on transitions, not every tick.
+    // Reset to `None` when the user focuses an app without a
+    // profile, so re-focusing the original app retriggers.
+    let mut last_profile_app: Option<String> = None;
 
     // Classifier table is constant for the life of the process
     // (default rules don't pick up runtime overrides — that's a
@@ -692,6 +700,66 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
             // setup. Try again on the next tick.
             continue;
         };
+
+        // Per-app profile auto-apply (#427 Item 5). Independent of
+        // the autostart-mode gate below — profile auto-apply is its
+        // own opt-in (the user added the override + populated the
+        // dropdowns), shouldn't require autostart mode = Always.
+        // Skipped while a session is active so a mid-dictation
+        // focus change doesn't trip the source/model swap; the
+        // event will fire on the next tick after the user stops.
+        if state.meeting_manager.active_session_id().is_none() {
+            if let Some(focused) = probe.current_app_name() {
+                if last_profile_app.as_ref() != Some(&focused) {
+                    // Look up the override row. List is small
+                    // (~handful of entries) and the read is
+                    // cheap; refreshing per-tick keeps the
+                    // poller stateless about the override
+                    // table, so a panel edit is observable on
+                    // the next tick without a refresh hook.
+                    if let Ok(rows) = state.data.meeting_app_overrides.list().await {
+                        if let Some(row) = rows.iter().find(|r| r.app_name == focused) {
+                            let has_profile = row.preferred_audio_source.is_some()
+                                || row.preferred_model_id.is_some();
+                            if has_profile {
+                                #[derive(Clone, serde::Serialize)]
+                                #[serde(rename_all = "camelCase")]
+                                struct ProfileActivatedPayload<'a> {
+                                    app_name: &'a str,
+                                    preferred_audio_source: Option<&'a str>,
+                                    preferred_model_id: Option<&'a str>,
+                                }
+                                if let Err(e) = app.emit(
+                                    "app:profile-activated",
+                                    ProfileActivatedPayload {
+                                        app_name: &row.app_name,
+                                        preferred_audio_source: row
+                                            .preferred_audio_source
+                                            .as_deref(),
+                                        preferred_model_id: row.preferred_model_id.as_deref(),
+                                    },
+                                ) {
+                                    tracing::warn!(
+                                        error = ?e,
+                                        app_name = %focused,
+                                        "failed to emit app:profile-activated"
+                                    );
+                                }
+                                last_profile_app = Some(focused);
+                            } else {
+                                // No profile on this app —
+                                // reset memory so refocusing
+                                // the previous profile-app
+                                // re-emits.
+                                last_profile_app = None;
+                            }
+                        } else {
+                            last_profile_app = None;
+                        }
+                    }
+                }
+            }
+        }
 
         let mode = ipc::decode_autostart_mode(
             state
