@@ -1,5 +1,5 @@
 <!--
-  Live audio-level waveform (#411 phase B).
+  Live audio-level waveform (#411 phase B + phase F1 moods).
 
   Self-contained leaf that subscribes to the backend's `audio:level`
   pump (~30 Hz RMS samples in [0, 1]), runs an attack/release
@@ -9,10 +9,7 @@
 
   Two consumers today: the HUD pill (always rendered while
   `hudState === "recording"`) and the main window's recording
-  status row (rendered while `recording === true`). Both pass
-  `active` to gate the animation — when `active` flips false the
-  ring buffer is flushed to flat so the next recording starts at
-  baseline rather than picking up where the previous run ended.
+  status row.
 
   Lives in $lib so future surfaces (a future quick-settings dialog,
   a feedback toast, etc.) can drop it in without re-deriving the
@@ -25,42 +22,79 @@
   feel "instant on speech, slow to fall on silence between words";
   WAVEFORM_INTERVAL_MS 80 (~12 Hz pushes against a 60 Hz rAF) keeps
   the bars moving across the strip without blur.
+
+  ## Moods (#411 phase F1)
+
+  The waveform expresses app state, not just live audio level. The
+  `mode` prop selects one of four behaviours:
+
+  - `idle`        — bars track a slow, low-amplitude sine
+                    oscillation so an always-mounted waveform still
+                    feels alive while nothing's recording. Bars
+                    are dimmed.
+  - `recording`   — live RMS feed via attack/release envelope
+                    (the historical behaviour).
+  - `processing`  — the ring buffer freezes and the strip pulses
+                    opacity. Communicates "still working, not
+                    capturing" across the transcription gap
+                    without a layout shift.
+  - `error`       — bars flash red then settle to idle. Triggered
+                    once per mode → error transition; the parent
+                    can hold mode === "error" indefinitely while
+                    its surrounding error UI is visible.
+
+  Back-compat: the legacy `active` prop is honoured when `mode` is
+  not given. `active=true` ⇒ `recording`, `active=false` ⇒ `idle`,
+  matching the pre-F1 track-vs-flatten semantics for callers that
+  haven't migrated.
 -->
 <script lang="ts">
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
   import { Events } from "./events";
 
+  export type WaveformMode = "idle" | "recording" | "processing" | "error";
+
   type Props = {
-    /// When true, the waveform tracks the live RMS feed. When
-    /// false, the target collapses to 0 and the ring buffer
-    /// flattens — pre-#411 the HUD inlined this same flush on
-    /// the recording → processing transition to keep a stray
-    /// late-arriving level event from briefly relighting the
-    /// bar. Default true so the simplest consumer ("show me a
-    /// waveform whenever this is mounted") doesn't have to
-    /// thread a flag.
+    /// Explicit mood. When omitted, falls back to the legacy
+    /// `active` flag so existing call sites keep working.
+    mode?: WaveformMode;
+    /// Legacy gating flag (#411 phase B). `true` ⇒ recording mood,
+    /// `false` ⇒ idle. Ignored when `mode` is set.
     active?: boolean;
   };
 
-  let { active = true }: Props = $props();
+  let { mode, active = true }: Props = $props();
 
-  // 14 bars × 80 ms push interval = ~1.1 s visible window. Enough
-  // to capture the rhythm of speech, short enough that the bars
-  // visibly scroll. Locked as a constant rather than a prop —
-  // both consumers want the same density today and a one-off
-  // re-derivation isn't worth a public API surface.
+  let effectiveMode = $derived<WaveformMode>(
+    mode ?? (active ? "recording" : "idle"),
+  );
+
+  // 14 bars × 80 ms push interval = ~1.1 s visible window.
   const BAR_COUNT = 14;
   const ATTACK = 0.6;
   const RELEASE = 0.12;
   const WAVEFORM_INTERVAL_MS = 80;
 
+  // Idle breathing: low-amplitude sine wave. 2 s cycle is slower
+  // than typical UI motion so it reads as ambient rather than
+  // active.
+  const IDLE_BASELINE = 0.06;
+  const IDLE_AMPLITUDE = 0.04;
+  const IDLE_PERIOD_MS = 2000;
+
+  // Error flash: long enough to register, short enough that the
+  // surrounding error message becomes the focal point.
+  const ERROR_FLASH_MS = 600;
+
   let rms = $state(0);
   let displayLevel = $state(0);
   let waveform = $state<number[]>(new Array(BAR_COUNT).fill(0));
+  let flashing = $state(false);
 
   let unlistenLevel: UnlistenFn | null = null;
   let raf: number | undefined;
+  let flashTimer: ReturnType<typeof setTimeout> | null = null;
 
   onMount(async () => {
     unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
@@ -69,11 +103,23 @@
 
     let lastWaveformPush = 0;
     const tick = () => {
-      // When inactive, decay toward zero rather than tracking the
-      // (possibly still-arriving) live level. Same envelope so
-      // the visual settle on flip-off matches the settle on a
-      // genuine drop in mic level.
-      const target = active ? rms : 0;
+      // Processing: freeze the buffer entirely. The CSS pulse on
+      // the wrapper carries the "still alive" signal so the
+      // user gets continuous feedback across the transcription
+      // gap without a layout shift.
+      if (effectiveMode === "processing") {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+
+      let target: number;
+      if (effectiveMode === "idle" || effectiveMode === "error") {
+        const phase = (Date.now() % IDLE_PERIOD_MS) / IDLE_PERIOD_MS;
+        target = IDLE_BASELINE + Math.sin(phase * Math.PI * 2) * IDLE_AMPLITUDE;
+      } else {
+        target = rms;
+      }
+
       const coeff = target > displayLevel ? ATTACK : RELEASE;
       displayLevel += (target - displayLevel) * coeff;
 
@@ -87,15 +133,16 @@
     raf = requestAnimationFrame(tick);
   });
 
-  // Hard-flush on flip-off so a back-to-back re-arming starts the
-  // ring buffer at flat rather than wherever the decay envelope
-  // had landed. Matches the HUD's pre-#411 explicit reset on the
-  // recording → processing transition.
+  // Trigger the one-shot flash on each mode → error transition.
+  // The CSS class governs the visual; the timer just clears it so
+  // a long-held error state doesn't keep flashing the bars red.
   $effect(() => {
-    if (!active) {
-      waveform = new Array(BAR_COUNT).fill(0);
-      displayLevel = 0;
-      rms = 0;
+    if (effectiveMode === "error") {
+      flashing = true;
+      if (flashTimer !== null) clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => {
+        flashing = false;
+      }, ERROR_FLASH_MS);
     }
   });
 
@@ -106,12 +153,18 @@
       cancelAnimationFrame(raf);
       raf = undefined;
     }
+    if (flashTimer !== null) {
+      clearTimeout(flashTimer);
+      flashTimer = null;
+    }
   });
 </script>
 
 <div
   class="audio-waveform"
   data-testid="audio-waveform"
+  data-mode={effectiveMode}
+  class:flashing
   role="presentation"
 >
   {#each waveform as level, i (i)}
@@ -142,11 +195,57 @@
     will-change: height;
   }
 
+  /* Idle: dim the bars so the breathing oscillation reads as
+     ambient rather than as captured signal. Gives consumers a
+     clear "nothing's happening yet" idiom. */
+  .audio-waveform[data-mode="idle"] .audio-waveform-bar {
+    background: var(--text-muted, #888);
+    opacity: 0.45;
+  }
+
+  /* Processing: bars are JS-frozen; the wrapper opacity pulse is
+     the live signal. 1.4 s cycle matches a "I'm working" tempo
+     close to the existing meeting-pump shimmer. */
+  .audio-waveform[data-mode="processing"] {
+    animation: audio-waveform-processing 1.4s ease-in-out infinite;
+  }
+  .audio-waveform[data-mode="processing"] .audio-waveform-bar {
+    background: var(--text-muted, #888);
+    opacity: 0.85;
+    transition: none;
+  }
+
+  /* Error: settled (post-flash) the bars look like idle so the
+     surrounding error UI does the talking. While `flashing` is
+     set the danger token paints over the bars. */
+  .audio-waveform[data-mode="error"] .audio-waveform-bar {
+    background: var(--text-muted, #888);
+    opacity: 0.45;
+  }
+  .audio-waveform.flashing .audio-waveform-bar {
+    background: var(--danger, #d92626);
+    opacity: 1;
+    transition: background 80ms linear, opacity 80ms linear;
+  }
+
+  @keyframes audio-waveform-processing {
+    0%, 100% { opacity: 0.85; }
+    50% { opacity: 0.45; }
+  }
+
   /* Reduced-motion: keep the bars but drop the inter-sample
      glide. Same policy as the HUD's pre-#411 inline rule and the
-     dot pulse — convey the signal, skip the motion. */
+     dot pulse — convey the signal, skip the motion. The
+     processing pulse and error flash also collapse. */
   @media (prefers-reduced-motion: reduce) {
     .audio-waveform-bar {
+      transition: none;
+    }
+    .audio-waveform[data-mode="processing"] {
+      animation: none;
+      opacity: 0.7;
+    }
+    .audio-waveform.flashing .audio-waveform-bar {
       transition: none;
     }
   }
