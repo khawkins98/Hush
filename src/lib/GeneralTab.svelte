@@ -30,6 +30,7 @@
   import { platform } from "@tauri-apps/plugin-os";
 
   import AdvancedSection from "./AdvancedSection.svelte";
+  import DictationStatsBar from "./DictationStatsBar.svelte";
   import PttHotkeyEditor from "./PttHotkeyEditor.svelte";
   import { formatErrorMessage } from "./errors";
   import {
@@ -37,6 +38,7 @@
     setStatusLineEnabled,
   } from "./status-line";
   import { readStoredTheme, setTheme, type ThemePref } from "./theme";
+  import type { DictationStats } from "./types";
   import "./settings-tab.css";
 
   let autostartEnabled = $state(false);
@@ -71,6 +73,22 @@
   let inferenceThreadsError = $state<string | null>(null);
 
   let isMacOS = $state(false);
+
+  // Dictation stats for the at-a-glance summary at the top of the
+  // tab. Pre-r3 this rendered above the History panel on the main
+  // window, but stats are reflective info that doesn't compete with
+  // active-session controls — moved here so the main page reads as
+  // dictation-now and the Settings General tab reads as dictation-
+  // overall.
+  let dictationStats = $state<DictationStats | null>(null);
+
+  async function loadDictationStats() {
+    try {
+      dictationStats = await invoke<DictationStats>("get_dictation_stats");
+    } catch (e) {
+      console.warn("[hush] get_dictation_stats failed", e);
+    }
+  }
 
   // F5 technical status line — opt-in display under the main
   // window's waveform that surfaces "🎤 device · model". No IPC;
@@ -295,6 +313,7 @@
       loadHudEnabled(),
       loadSoundCuesEnabled(),
       loadInferenceThreads(),
+      loadDictationStats(),
     ]);
     try {
       isMacOS = (await platform()) === "macos";
@@ -307,6 +326,12 @@
 </script>
 
 <h2 class="tab-title">General</h2>
+
+{#if dictationStats}
+  <section class="settings-group" aria-label="Dictation activity">
+    <DictationStatsBar stats={dictationStats} />
+  </section>
+{/if}
 
 <section class="settings-group" aria-labelledby="settings-startup-heading">
   <h2 id="settings-startup-heading" class="group-heading">Startup</h2>

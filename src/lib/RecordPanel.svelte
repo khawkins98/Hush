@@ -1,18 +1,18 @@
 <!--
-  Content-column session controls: record button (with mic-only
-  badge), aria-live recording status text, mood-driven waveform,
-  and the F5 status line. Pulled out of `ControlsSection` in
-  #468 slice B so the two-column layout (slice C) can place this
-  in the content column while `AudioSourcePicker` lives in the
-  sidebar.
+  Centerpiece dictation controls: full-width waveform on top, a
+  three-column row beneath with `leftAdjunct` (audio source) on
+  the left, the circular Record / Stop button in the centre, and
+  `rightAdjunct` (model chip) on the right. Status copy + mic-
+  only badge + F5 status line render below the row.
 
   Several derived values (badge visibility, will-record-meeting
   hint, has-usable-source guard) live upstream — the parent owns
   the cross-component selection state and computes them once
-  rather than each leaf re-deriving from `selected` + `sources`.
+  rather than each leaf re-deriving.
 -->
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import type { Snippet } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
   import AudioWaveform from "./AudioWaveform.svelte";
@@ -22,43 +22,38 @@
     listenForStatusLineChanges,
     readStatusLineEnabled,
   } from "./status-line";
+  import type { MeetingSessionDetail } from "./types";
 
   type Props = {
     recording: boolean;
     busy: boolean;
     transcribing: boolean;
-    /// True iff at least one selectable, supported source exists
-    /// — drives the Start button's disabled state. Computed
-    /// upstream from `sources` + the system-audio capability
-    /// flag.
     hasUsableSource: boolean;
     noModelInstalled: boolean;
-    /// True iff a click on Record would upgrade to the meeting
-    /// pump (mic + system audio) — shows the "Record meeting"
-    /// label variant. Upstream derives this from the picker
-    /// selection + Screen Recording health.
     willRecordMeeting: boolean;
-    /// Mic-only badge: surfaces when SCK is `stale` /
-    /// `not-granted` and a mic is selected. Two visual variants
-    /// driven by `badgeIsStale`.
     badgeVisible: boolean;
     badgeIsStale: boolean;
-    /// Active recording mode (#409) — drives the inline mode
-    /// label on the recording status pill. `null` when not
-    /// recording.
     recordMode: "dictation" | "meeting" | null;
-    /// Display name of the active source, used by the F5 status
-    /// line. Resolved upstream from `sources` + selected id so
-    /// this component doesn't need either.
     selectedSourceLabel: string | null;
     activeModelName: string | null;
-    /// Last error to surface. The waveform's mood derives off
-    /// this — non-null flips the bars to error-flash; the parent
-    /// renders the actual `<ErrorDisplay>` separately.
     error: ErrorDisplayShape | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onOpenPermissions?: () => void;
+    /// Live meeting-session detail polled by the orchestrator
+    /// while a meeting-pump session is in flight. The streaming
+    /// pump writes finalized utterances to `utterances` and
+    /// in-flight ones to `currentPartials`; we join + render
+    /// them as a live transcript while recording. `null` when no
+    /// meeting session is active (dictation-only PTT or click-
+    /// recording without SCK).
+    meetingActiveDetail?: MeetingSessionDetail | null;
+    /// Left adjunct slot — audio source picker. Optional so the
+    /// component still renders standalone in the test harness or
+    /// any future minimal surface.
+    leftAdjunct?: Snippet;
+    /// Right adjunct slot — model chip.
+    rightAdjunct?: Snippet;
   };
 
   let {
@@ -77,7 +72,34 @@
     onStart,
     onStop,
     onOpenPermissions,
+    meetingActiveDetail = null,
+    leftAdjunct,
+    rightAdjunct,
   }: Props = $props();
+
+  // Live transcript text — joined from finalized utterances +
+  // in-flight partials in the active meeting session. Speaker
+  // labels are prefixed when present (multi-source meetings get
+  // "Speaker A: …"). Mirrors the join in
+  // `copyMeetingSessionToClipboard` so live and clipboard text
+  // come out identical. Empty when no active session or no
+  // utterances yet.
+  let liveTranscriptText = $derived.by(() => {
+    if (!meetingActiveDetail) return "";
+    const finals = meetingActiveDetail.utterances ?? [];
+    const partials = meetingActiveDetail.currentPartials ?? [];
+    const all = [
+      ...finals.map((u) => ({ text: u.text, label: u.speakerLabel })),
+      ...partials.map((u) => ({ text: u.text, label: u.speakerLabel })),
+    ];
+    if (all.length === 0) return "";
+    return all
+      .map((u) => (u.label ? `${u.label}: ${u.text}` : u.text))
+      .join("\n");
+  });
+  let showLiveTranscript = $derived(
+    recording && liveTranscriptText.trim().length > 0,
+  );
 
   // F5 status line — opt-in display gated by a localStorage flag,
   // re-applied via Tauri event when the Settings toggle flips so
@@ -85,16 +107,56 @@
   let statusLineEnabled = $state(false);
   let unlistenStatusLine: UnlistenFn | null = null;
 
+  // Recording-duration timer. Mirrors the HUD's pattern (#360):
+  // wall-clock start stamp when `recording` flips true, rAF
+  // refresh of the label, reset to `0:00` on stop. Lets the user
+  // see how long they've been recording without checking the HUD.
+  let recordingStartedAt: number | null = null;
+  let elapsedLabel = $state("0:00");
+  let raf: number | undefined;
+
+  function formatElapsed(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const mm = minutes.toString().padStart(2, "0");
+    const ss = seconds.toString().padStart(2, "0");
+    if (hours > 0) return `${hours}:${mm}:${ss}`;
+    return `${mm}:${ss}`;
+  }
+
+  $effect(() => {
+    if (recording) {
+      recordingStartedAt = Date.now();
+      elapsedLabel = "00:00";
+    } else {
+      recordingStartedAt = null;
+      elapsedLabel = "00:00";
+    }
+  });
+
   onMount(async () => {
     statusLineEnabled = readStatusLineEnabled();
     unlistenStatusLine = await listenForStatusLineChanges((next) => {
       statusLineEnabled = next;
     });
+    const tick = () => {
+      if (recordingStartedAt !== null) {
+        elapsedLabel = formatElapsed(Date.now() - recordingStartedAt);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
   });
 
   onDestroy(() => {
     unlistenStatusLine?.();
     unlistenStatusLine = null;
+    if (raf !== undefined) {
+      cancelAnimationFrame(raf);
+      raf = undefined;
+    }
   });
 
   // Waveform mood priority: error > recording > processing > idle.
@@ -111,39 +173,145 @@
   );
 </script>
 
-{#if !recording}
-  <button
-    class="start-btn"
-    onclick={onStart}
-    disabled={busy || !hasUsableSource || noModelInstalled}
-    aria-label={busy
-      ? "Working"
-      : noModelInstalled
-        ? "Choose a model first"
-        : willRecordMeeting
-          ? "Record meeting (mic plus system audio)"
-          : "Start recording"}
-    title={noModelInstalled ? "Choose a model first" : undefined}
-    data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
+<div class="record-stage" data-recording={recording ? "true" : "false"}>
+  <!--
+    Big expressive waveform as the visual centerpiece (#411
+    mockup target). Width is 100 % of the content column,
+    height bumps to 88 px, and the bars get a purple→cyan
+    gradient while recording. Idle / processing / error moods
+    keep the muted bar treatment from F1.
+  -->
+  <div class="record-waveform">
+    <AudioWaveform mode={waveformMode} metering />
+  </div>
+
+  <!--
+    Three-column row: source picker on the left, the circular
+    Record / Stop button in the centre, model chip on the right.
+    The adjunct slots are filled by `DictationSection` via the
+    `leftAdjunct` / `rightAdjunct` snippet props; this component
+    has no knowledge of source or model state.
+  -->
+  <div class="record-row">
+    <div class="record-row-adjunct record-row-adjunct--left">
+      {@render leftAdjunct?.()}
+    </div>
+
+    <div class="record-btn-cell">
+      <!--
+        Visible "RECORD" label above the button gives the centre
+        column the same vertical rhythm as the source / model
+        adjuncts (label above, control below). Without it the
+        button floats with empty space above where the field
+        labels sit on the flanking columns. aria-hidden because
+        the button itself carries an aria-label.
+      -->
+      <span class="record-btn-label" aria-hidden="true">Record</span>
+      {#if !recording}
+        <button
+          class="record-btn"
+          onclick={onStart}
+          disabled={busy || !hasUsableSource || noModelInstalled}
+          aria-label={busy
+            ? "Working"
+            : noModelInstalled
+              ? "Choose a model first"
+              : willRecordMeeting
+                ? "Record meeting (mic plus system audio)"
+                : "Start recording"}
+          title={noModelInstalled ? "Choose a model first" : undefined}
+          data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
+        >
+          {#if transcribing}
+            <span class="spinner" aria-hidden="true"></span>
+          {:else}
+            <span class="record-icon record-icon-idle" aria-hidden="true"></span>
+          {/if}
+        </button>
+      {:else}
+        <button
+          class="record-btn recording"
+          onclick={onStop}
+          disabled={busy}
+          aria-label="Stop recording and transcribe"
+        >
+          <span class="record-icon record-icon-stop" aria-hidden="true"></span>
+        </button>
+      {/if}
+    </div>
+
+    <div class="record-row-adjunct record-row-adjunct--right">
+      {@render rightAdjunct?.()}
+    </div>
+  </div>
+
+  <!--
+    Recording-duration readout. Tabular-nums so the digits don't
+    jitter horizontally as they tick up. Always visible (shows
+    "00:00" while idle) so the column header rhythm stays
+    constant across recording / not-recording states.
+  -->
+  <p
+    class="record-time"
+    class:live={recording}
+    aria-label={recording ? `Recording duration ${elapsedLabel}` : undefined}
   >
-    {#if transcribing}
-      <span class="spinner" aria-hidden="true"></span> Transcribing…
+    {elapsedLabel}
+  </p>
+
+  <!--
+    Status label sits under the time readout — the verb the user
+    is primed to do. aria-live so screen readers announce the
+    state change when a hotkey toggles recording from another
+    app. Stays empty in idle so the focal weight goes to the
+    button.
+  -->
+  <p class="record-label" aria-live="polite">
+    {#if recording}
+      Recording
+      {#if recordMode === "meeting"}
+        <span class="status-mode" data-record-mode="meeting"
+          >· mic + system audio</span
+        >
+      {:else if recordMode === "dictation"}
+        <span class="status-mode" data-record-mode="dictation"
+          >· mic only</span
+        >
+      {/if}
+      — release hotkey or press Stop
+    {:else if transcribing}
+      Transcribing…
     {:else if willRecordMeeting}
-      <span class="rec-dot idle" aria-hidden="true"></span> Record meeting
-      <span class="record-mode-hint">mic + system audio</span>
-    {:else}
-      <span class="rec-dot idle" aria-hidden="true"></span> Start recording
+      Record meeting <span class="record-mode-hint">mic + system audio</span>
+    {:else if !noModelInstalled && hasUsableSource}
+      Press to record
     {/if}
-  </button>
-{:else}
-  <button
-    class="start-btn stop"
-    onclick={onStop}
-    disabled={busy}
-    aria-label="Stop recording and transcribe"
+  </p>
+</div>
+
+{#if showLiveTranscript}
+  <!--
+    Live transcript pane during meeting-pump recording. The
+    streaming pump produces partials every few seconds and
+    finalises them once the language model resolves a chunk —
+    text appears with a 3–5 s delay against speech but updates
+    continuously so the user sees what's been captured. Empty
+    while no utterances have landed yet (silence, very short
+    sessions). Idle / non-meeting recording paths skip this
+    surface entirely (no streaming source).
+  -->
+  <section
+    class="live-transcript"
+    aria-label="Live transcript"
+    aria-live="polite"
+    data-testid="live-transcript"
   >
-    <span class="rec-dot stop" aria-hidden="true"></span> Stop and transcribe
-  </button>
+    <header class="live-transcript-header">
+      <span class="live-transcript-dot" aria-hidden="true"></span>
+      Live transcript
+    </header>
+    <p class="live-transcript-body">{liveTranscriptText}</p>
+  </section>
 {/if}
 
 {#if badgeVisible}
@@ -166,29 +334,6 @@
   </button>
 {/if}
 
-<p class="status" aria-live="polite">
-  {#if recording}
-    <span class="recording-dot" aria-hidden="true"></span> Recording
-    {#if recordMode === "meeting"}
-      <span class="status-mode" data-record-mode="meeting"
-        >· mic + system audio</span
-      >
-    {:else if recordMode === "dictation"}
-      <span class="status-mode" data-record-mode="dictation"
-        >· mic only</span
-      >
-    {/if}
-    — release the hotkey or press Stop to transcribe.
-  {:else if transcribing}
-    Transcribing — this can take a few seconds for short clips,
-    longer for big models.
-  {/if}
-</p>
-
-<div class="status-waveform">
-  <AudioWaveform mode={waveformMode} metering />
-</div>
-
 {#if statusLineEnabled}
   <StatusLine
     audioSourceLabel={selectedSourceLabel}
@@ -197,71 +342,260 @@
 {/if}
 
 <style>
-  /* Record button — Panic spring on hover; Rogue Amoeba live-
-     indicator pulse while recording. */
-  .start-btn {
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border-input);
-    height: var(--control-height);
-    padding: 0 1.2em;
-    font-size: 1em;
-    font-family: inherit;
-    color: var(--text-primary);
-    background-color: var(--bg-surface);
-    cursor: pointer;
+  /* The content column's centerpiece: big expressive waveform
+     above a circular Record / Stop button, with status copy
+     below. Sits inside a flex-column stage so the three pieces
+     stack with even spacing regardless of which states are
+     showing. */
+  .record-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0 0.25rem;
+  }
+
+  /* Three-column row: audio source (left) | Record button (centre)
+     | model chip (right). Adjuncts share equal flex weight so the
+     button stays centred regardless of which adjunct is wider.
+     `align-items: end` aligns the bottoms of the controls so the
+     dropdown trigger and the button are on the same baseline. */
+  .record-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: end;
+    gap: 1.25rem;
+    width: 100%;
+  }
+
+  /* Centre-column wrapper that gives the Record button a label
+     above (matching the source/model field-label rhythm) so the
+     three columns share the same visual structure: caption +
+     control. */
+  .record-btn-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+  .record-btn-label {
+    font-size: 0.68rem;
     font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .record-row-adjunct {
+    display: flex;
+    min-width: 0;
+  }
+  .record-row-adjunct--left {
+    justify-content: flex-end;
+  }
+  .record-row-adjunct--right {
+    justify-content: flex-start;
+  }
+  .record-row-adjunct > :global(*) {
+    width: 100%;
+    max-width: 16rem;
+  }
+
+  /* Below ~520 px the three-column row would crowd the centerpiece.
+     Stack instead, button on top so the visual hierarchy still
+     reads, source then model below. */
+  @media (max-width: 520px) {
+    .record-row {
+      grid-template-columns: 1fr;
+      gap: 0.85rem;
+      justify-items: center;
+    }
+    .record-row-adjunct {
+      justify-content: stretch;
+      width: 100%;
+    }
+    .record-row-adjunct > :global(*) {
+      max-width: 100%;
+    }
+  }
+
+  /* Big waveform — overrides AudioWaveform's default 60 × 16 px
+     compact strip with a content-column-filling 88 px stage so
+     the bars become the visual anchor. While recording the bars
+     pick up the purple → cyan gradient from the spec; idle /
+     processing / error keep their muted treatments owned by
+     AudioWaveform itself. */
+  .record-waveform {
+    width: 100%;
+    --audio-waveform-width: 100%;
+    --audio-waveform-height: 88px;
+    --audio-waveform-bar-color: linear-gradient(
+      to top,
+      #8b5cf6 0%,
+      #06b6d4 100%
+    );
+  }
+  /* Bars feel taller / chunkier in the centerpiece role. */
+  .record-waveform :global(.audio-waveform) {
+    gap: 4px;
+  }
+  .record-waveform :global(.audio-waveform-bar) {
+    border-radius: 3px;
+  }
+
+  /* Circular record button — fixed-size icon button, replaces
+     the pre-r2 wide-pill `.start-btn`. Reads as a hardware-style
+     control rather than a form button. Spring hover + press
+     damping carry over from the prior treatment. */
+  .record-btn {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    border: 1px solid var(--border-input);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
-    /* Panic-flavoured overshoot easing on the transform — tiny
-       "pop" at the top of the hover scale, physical not linear.
-       Other property transitions stay ease-y. */
+    /* Resting shadow gives the idle button presence per the
+       #468 spec ("Idle: Confident, filled. Not ghosted"). */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
     transition:
       transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
       border-color 150ms ease,
       background-color 150ms ease,
       box-shadow 150ms ease;
-    width: 100%;
   }
-  .start-btn:hover:not(:disabled) {
-    transform: scale(1.02);
-    border-color: var(--accent-hover);
+  .record-btn:hover:not(:disabled) {
+    transform: scale(1.04);
+    border-color: var(--accent);
     box-shadow:
-      0 2px 6px rgba(0, 0, 0, 0.18),
+      0 6px 14px rgba(0, 0, 0, 0.12),
       0 0 0 3px var(--accent-subtle);
   }
-  .start-btn:active:not(:disabled) {
-    /* Press damping — lands the spring on click rather than
-       leaving the button in its hover-scaled state mid-press. */
-    transform: scale(0.99);
+  .record-btn:active:not(:disabled) {
+    transform: scale(0.97);
     transition: transform 80ms ease-out;
   }
-  .start-btn:focus-visible {
+  .record-btn:focus-visible {
     outline: none;
     border-color: var(--border-focus);
     box-shadow: 0 0 0 3px var(--accent-subtle);
   }
-  .start-btn:disabled {
+  .record-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
     transform: none;
   }
-  .start-btn.stop {
-    background-color: var(--danger);
-    color: white;
+  /* Recording state: red fill + heartbeat pulse, square stop
+     glyph inside. The pulse owns the box-shadow during this
+     state so hover only changes the fill colour — overriding
+     the shadow would freeze the keyframe. */
+  .record-btn.recording {
+    background: var(--danger);
     border-color: var(--danger);
-    /* Rogue Amoeba live-indicator pulse — Stop IS the live
-       recording marker. One slow heartbeat / 2 s reads as
-       "active" without strobing. */
+    color: white;
     animation: recording-pulse 2s ease-out infinite;
   }
-  .start-btn.stop:hover:not(:disabled) {
-    background-color: #c02e2e;
+  .record-btn.recording:hover:not(:disabled) {
+    background: #c02e2e;
     border-color: #c02e2e;
-    /* Recording-state hover keeps the pulse — overriding
-       box-shadow would freeze the keyframe. Only the colours
-       shift on hover here. */
+  }
+
+  /* Idle state glyph: a small filled dot — Audio Hijack-style
+     "press to record" indicator. */
+  .record-icon-idle {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--danger);
+    display: inline-block;
+  }
+  /* Recording state glyph: a small white square (universal
+     "stop" affordance). */
+  .record-icon-stop {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    background: white;
+    display: inline-block;
+  }
+
+  /* Recording-duration readout. tabular-nums prevents the digits
+     from jittering horizontally as they tick up. Idle "00:00"
+     reads as a quiet placeholder; the `.live` variant tints
+     accent-red so the eye knows time is advancing. */
+  .record-time {
+    margin: 0.3rem 0 0;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .record-time.live {
+    color: var(--danger);
+  }
+
+  /* Live transcript pane — surfaced during meeting-pump
+     recording so the user sees what the streaming whisper has
+     resolved as text accumulates. Looks like a quiet card
+     framed by `--bg-sidebar` so it sits below the centerpiece
+     without competing for visual weight. */
+  .live-transcript {
+    background: var(--bg-sidebar);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  .live-transcript-header {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.45rem;
+  }
+  .live-transcript-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background-color: var(--danger);
+    animation: live-transcript-pulse 1.2s ease-in-out infinite;
+  }
+  .live-transcript-body {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+  }
+  @keyframes live-transcript-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .live-transcript-dot {
+      animation: none;
+    }
+  }
+
+  /* Status label below the time — the verb / state copy. */
+  .record-label {
+    margin: 0;
+    min-height: 1.2em;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.35;
+    max-width: 30rem;
   }
 
   @keyframes recording-pulse {
@@ -269,7 +603,7 @@
       box-shadow: 0 0 0 0 rgba(216, 58, 58, 0.45);
     }
     70% {
-      box-shadow: 0 0 0 8px rgba(216, 58, 58, 0);
+      box-shadow: 0 0 0 14px rgba(216, 58, 58, 0);
     }
     100% {
       box-shadow: 0 0 0 0 rgba(216, 58, 58, 0);
@@ -277,13 +611,13 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .start-btn,
-    .start-btn:hover:not(:disabled),
-    .start-btn:active:not(:disabled) {
+    .record-btn,
+    .record-btn:hover:not(:disabled),
+    .record-btn:active:not(:disabled) {
       transform: none;
       transition: border-color 100ms ease, background-color 100ms ease;
     }
-    .start-btn.stop {
+    .record-btn.recording {
       animation: none;
     }
   }
@@ -292,41 +626,33 @@
     font-size: 0.78rem;
     font-weight: 500;
     padding: 0.1rem 0.5rem;
-    margin-left: 0.45rem;
+    margin-left: 0.35rem;
     background-color: var(--accent-subtle);
     color: var(--accent);
     border-radius: 999px;
     white-space: nowrap;
   }
 
-  .rec-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
-  }
-  .rec-dot.idle {
-    background-color: var(--text-secondary);
-    opacity: 0.6;
-  }
-  .rec-dot.stop {
-    background-color: white;
-  }
-
   .record-mode-badge {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    align-items: flex-start;
     gap: 0.45rem;
-    align-self: center;
-    padding: 0.4rem 0.75rem;
+    /* Use the full content-column width and align text left so the
+       pre-r2 "centre an inline-flex pill" trick stops squishing the
+       multi-line copy past the column boundary. */
+    align-self: stretch;
+    padding: 0.55rem 0.85rem;
     font-size: 0.82rem;
-    line-height: 1.35;
+    line-height: 1.4;
     font-family: inherit;
-    border-radius: 999px;
+    /* `--radius-md` (8 px) reads cleanly when the copy wraps;
+       the pre-r2 999 px pill stretched into an oblong on
+       multi-line text. */
+    border-radius: var(--radius-md);
     border: 1px solid #d1d1d8;
     background-color: var(--bg-surface);
     color: var(--text-secondary);
+    text-align: left;
     cursor: pointer;
     text-align: left;
     max-width: 100%;
@@ -378,25 +704,6 @@
     }
   }
 
-  .status {
-    margin: 0;
-    min-height: 1.4em;
-    font-size: 0.88rem;
-    color: var(--text-muted);
-    text-align: center;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.45rem;
-  }
-  .recording-dot {
-    width: 0.65rem;
-    height: 0.65rem;
-    border-radius: 50%;
-    background-color: var(--danger);
-    display: inline-block;
-    animation: pulse 1.2s ease-in-out infinite;
-  }
   .status-mode {
     font-weight: 500;
     color: var(--text-secondary);
@@ -406,27 +713,10 @@
     font-weight: 600;
   }
 
-  .status-waveform {
-    display: flex;
-    justify-content: center;
-    margin-top: 0.5rem;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.55; transform: scale(0.85); }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .recording-dot,
-    .spinner {
-      animation: none;
-    }
-  }
-
+  /* Spinner inside the circular button while transcribing. */
   .spinner {
-    width: 0.85rem;
-    height: 0.85rem;
+    width: 22px;
+    height: 22px;
     border: 2px solid currentColor;
     border-right-color: transparent;
     border-radius: 50%;
@@ -435,5 +725,11 @@
   }
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+    }
   }
 </style>
