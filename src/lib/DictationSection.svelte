@@ -142,7 +142,11 @@
   {/if}
 
   <div class="main-layout">
-    <aside class="sidebar" aria-label="Session configuration">
+    <aside
+      class="sidebar"
+      class:locked={recording}
+      aria-label="Session configuration"
+    >
       <AudioSourcePicker
         {sources}
         {sourcesLoaded}
@@ -223,6 +227,21 @@
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
+    /* Rogue Amoeba-style frozen-while-active treatment: when the
+       parent flips `recording=true` the sidebar dims + locks so
+       the eye reads "the configuration is committed for this
+       session". Underlying inputs are also `disabled` for keyboard
+       a11y; this is the visual reinforcement. */
+    transition: opacity 250ms ease;
+  }
+  .sidebar.locked {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar {
+      transition: none;
+    }
   }
 
   @media (prefers-color-scheme: dark) {
