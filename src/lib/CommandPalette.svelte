@@ -1,9 +1,10 @@
 <!--
   ⌘K command palette (#411 phase F3).
 
-  Floating overlay that fuzzy-searches every app action: start
-  dictation, switch audio source, change model, jump to a Settings
-  tab, scroll to History. Pure-frontend component — every entry is
+  Floating overlay with substring-search over every app action:
+  start dictation, switch audio source, change model, jump to a
+  Settings tab, scroll to History. (A fuzzy ranker is a future
+  iteration once we see what queries users actually type.) Pure-frontend component — every entry is
   an `Action` whose `run` callback is supplied by the parent (the
   main page), so this leaf has no IPC reach of its own.
 
@@ -96,6 +97,24 @@
     filtered.map((a, i) => ({ a, i })).filter(({ a }) => a.enabled !== false),
   );
 
+  // Pre-compute the group-header dedup so the template doesn't
+  // mutate a Set during iteration. The original implementation
+  // worked but read fragile — Svelte's keyed-list patches don't
+  // guarantee left-to-right re-evaluation of `{@const}` blocks.
+  // Computing the {action, showGroup} pairs here gives us a pure
+  // derived view that the each loop can render straight.
+  let rows = $derived.by(() => {
+    const out: { action: CommandAction; showGroup: boolean }[] = [];
+    let lastGroup: string | undefined;
+    for (const action of filtered) {
+      const group = action.group;
+      const showGroup = group !== undefined && group !== lastGroup;
+      out.push({ action, showGroup });
+      if (group !== undefined) lastGroup = group;
+    }
+    return out;
+  });
+
   // Reset highlight + query whenever the palette opens fresh so a
   // re-trigger doesn't surface the previous session's stale state.
   $effect(() => {
@@ -154,17 +173,34 @@
     });
   }
 
+  // Run an action and close. We close BEFORE awaiting so the
+  // palette dismisses immediately on Enter / click without waiting
+  // for an async IPC. The trade-off is that a rejection from
+  // `run()` happens after the palette is gone — we log instead of
+  // surfacing in-UI because every caller in the page already
+  // routes its own errors (start/stop write to `error` state,
+  // openSettingsTab swallows non-fatal failures). Pre-#post-review
+  // the rejections were unhandled because `runHighlighted` was
+  // dispatched as `void runHighlighted()`.
+  async function safelyRun(run: () => void | Promise<void>) {
+    try {
+      await Promise.resolve(run());
+    } catch (err) {
+      console.error("[hush] command palette action failed", err);
+    }
+  }
+
   async function runHighlighted() {
     const target = selectable[highlight]?.a;
     if (!target) return;
     onClose();
-    await Promise.resolve(target.run());
+    await safelyRun(target.run);
   }
 
   async function runAction(action: CommandAction) {
     if (action.enabled === false) return;
     onClose();
-    await Promise.resolve(action.run());
+    await safelyRun(action.run);
   }
 
   function handleBackdrop(event: MouseEvent) {
@@ -231,13 +267,9 @@
             No matching commands.
           </p>
         {:else}
-          {@const seenGroups = new Set<string>()}
-          {#each filtered as action, i (action.id)}
-            {@const groupLabel = action.group}
-            {@const showGroup = groupLabel !== undefined && !seenGroups.has(groupLabel)}
-            {#if showGroup && groupLabel !== undefined}
-              {void seenGroups.add(groupLabel)}
-              <p class="cmdpal-group">{groupLabel}</p>
+          {#each rows as { action, showGroup }, i (action.id)}
+            {#if showGroup && action.group !== undefined}
+              <p class="cmdpal-group">{action.group}</p>
             {/if}
             {@const selectableIndex = selectable.findIndex(
               ({ i: idx }) => idx === i,
