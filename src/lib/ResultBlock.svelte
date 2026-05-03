@@ -206,23 +206,23 @@
   gap: 0.25rem;
 }
 .export-option:hover:not(:disabled) {
-  border-color: var(--accent, #6a8cf0);
+  border-color: var(--accent, #7c6ff7);
   color: var(--text-primary, #111);
 }
 .export-option.active {
-  border-color: var(--accent, #6a8cf0);
-  color: var(--accent, #6a8cf0);
+  border-color: var(--accent, #7c6ff7);
+  color: var(--accent, #7c6ff7);
 }
 .export-option.confirmed {
-  background-color: var(--accent-subtle, rgba(106, 140, 240, 0.18));
-  color: var(--accent-hover, #396cd8);
-  border-color: var(--accent, #6a8cf0);
+  background-color: var(--accent-subtle, rgba(124, 111, 247, 0.18));
+  color: var(--accent-hover, #5c4fd4);
+  border-color: var(--accent, #7c6ff7);
 }
 .export-option .check {
   font-weight: 700;
 }
 .export-option:focus-visible {
-  outline: 2px solid var(--accent, #6a8cf0);
+  outline: 2px solid var(--accent, #7c6ff7);
   outline-offset: 2px;
 }
 
