@@ -51,6 +51,13 @@ export async function installMocks(
       set_hud_enabled: () => undefined,
       get_sound_cues_enabled: () => false,
       set_sound_cues_enabled: () => undefined,
+      // Per-event sound-cue sub-toggles (#463). Default true to
+      // mirror the backend's "fire everything the master allows"
+      // behaviour for installs without an explicit row.
+      get_sound_cue_start_enabled: () => true,
+      set_sound_cue_start_enabled: () => undefined,
+      get_sound_cue_complete_enabled: () => true,
+      set_sound_cue_complete_enabled: () => undefined,
       // Whisper inference threads (Settings → General → Performance,
       // #255). Default 4 mirrors the backend default.
       get_inference_threads: () => 4,

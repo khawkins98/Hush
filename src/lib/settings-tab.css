@@ -81,6 +81,25 @@
   line-height: 1.4;
 }
 
+/* ── Per-event sound-cue sub-toggles (#463) ──────────────
+ * Visually nest the two sub-checkboxes beneath the master
+ * "Audio cues" row: indent + thinner padding + dim/disable
+ * when the master is off.
+ */
+.sound-cue-subtoggles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0 1.5rem;
+}
+.toggle-row.toggle-row-sub {
+  padding: 0.45rem 0.75rem;
+}
+.sound-cue-subtoggles.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* ── Select (dropdown) row ──────────────────────────────── */
 .select-row {
   display: flex;
