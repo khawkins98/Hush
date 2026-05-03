@@ -1,16 +1,19 @@
 <!--
-  Dictation page-section render. Now lays out the section as a
-  two-column grid (#468 slice C / #411 Phase A.2): a sidebar
-  column for `AudioSourcePicker` (source + model chip) and a
-  content column for `RecordPanel` (record button, status,
-  waveform, F5 status line) plus the result block and the macOS
-  permissions banner.
+  Dictation page-section render. Top-to-bottom layout: setup
+  banner (when no model installed) → centerpiece RecordPanel
+  (waveform on top + button + adjuncts row + status) → shortcut
+  hint → result block → macOS perms pill.
+
+  The pre-r3 sidebar/content two-column grid is gone — the
+  source picker and model chip are now adjunct snippets passed
+  into RecordPanel so they render flanking the centerpiece
+  button on a single row. The page reads top-to-bottom rather
+  than fighting between columns.
 
   Render-only by design: the orchestrator owns dictation IPC and
   hotkey listeners. This section composes the leaves and computes
   the cross-leaf deriveds (`hasUsableSource`, `badgeVisible`,
-  `willRecordMeeting`, `selectedSourceLabel`) that pre-#468 lived
-  on `ControlsSection`.
+  `willRecordMeeting`, `selectedSourceLabel`).
 -->
 <script lang="ts">
   import { backOut, cubicIn } from "svelte/easing";
@@ -19,6 +22,7 @@
   import AudioSourcePicker from "./AudioSourcePicker.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import MacosPermsPill from "./MacosPermsPill.svelte";
+  import ModelChip from "./ModelChip.svelte";
   import RecordPanel from "./RecordPanel.svelte";
   import ResultBlock from "./ResultBlock.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
@@ -26,6 +30,7 @@
   import type {
     AudioSourceListing,
     DictationResult,
+    MeetingSessionDetail,
     PermissionsHealth,
   } from "./types";
 
@@ -46,6 +51,11 @@
     macosCapable: boolean;
     allPermsGranted: boolean;
     anyPermsDenied: boolean;
+    /// Live meeting-pump session detail — finalized utterances +
+    /// in-flight partials. Threaded through to RecordPanel which
+    /// renders it as a live transcript while recording. `null`
+    /// when no meeting session is active.
+    meetingActiveDetail?: MeetingSessionDetail | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onScrollToModelPicker: () => void;
@@ -69,6 +79,7 @@
     macosCapable,
     allPermsGranted,
     anyPermsDenied,
+    meetingActiveDetail = null,
     onStart,
     onStop,
     onScrollToModelPicker,
@@ -118,14 +129,6 @@
     <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
   </header>
 
-  <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
-    <strong>Shortcuts:</strong>
-    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
-    or hold
-    {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
-    to push-to-talk.
-  </aside>
-
   {#if noModelInstalled}
     <aside class="setup-banner" role="status" aria-label="First-time setup">
       <div class="setup-banner-text">
@@ -141,59 +144,72 @@
     </aside>
   {/if}
 
-  <div class="main-layout">
-    <aside
-      class="sidebar"
-      class:locked={recording}
-      aria-label="Session configuration"
-    >
+  <!--
+    Centerpiece dictation area. RecordPanel renders the waveform
+    and the circular Record button; the source dropdown +
+    model chip are passed in as adjunct snippets so they render
+    flanking the button on a single row. No sidebar, no two-
+    column grid — the page now reads top-to-bottom.
+  -->
+  <RecordPanel
+    {recording}
+    {busy}
+    {transcribing}
+    {hasUsableSource}
+    {noModelInstalled}
+    {willRecordMeeting}
+    {badgeVisible}
+    {badgeIsStale}
+    {recordMode}
+    {selectedSourceLabel}
+    {activeModelName}
+    {error}
+    {meetingActiveDetail}
+    {onStart}
+    {onStop}
+    onOpenPermissions={onOpenPermissionsTab}
+  >
+    {#snippet leftAdjunct()}
       <AudioSourcePicker
         {sources}
         {sourcesLoaded}
         bind:selected
         {recording}
         {busy}
-        {activeModelName}
-        {onScrollToModelPicker}
       />
-    </aside>
+    {/snippet}
+    {#snippet rightAdjunct()}
+      <ModelChip {activeModelName} {onScrollToModelPicker} />
+    {/snippet}
+  </RecordPanel>
 
-    <div class="content">
-      <RecordPanel
-        {recording}
-        {busy}
-        {transcribing}
-        {hasUsableSource}
-        {noModelInstalled}
-        {willRecordMeeting}
-        {badgeVisible}
-        {badgeIsStale}
-        {recordMode}
-        {selectedSourceLabel}
-        {activeModelName}
-        {error}
-        {onStart}
-        {onStop}
-        onOpenPermissions={onOpenPermissionsTab}
-      />
+  <!--
+    Keyboard-shortcut hint sits under the recording area as a
+    contextual reminder. Quieter visual treatment so it doesn't
+    compete with the centerpiece waveform + button above.
+  -->
+  <p class="shortcut-hint" aria-label="Keyboard shortcuts">
+    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
+    or hold
+    {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
+    to push-to-talk.
+  </p>
 
-      {#if result}
-        <div
-          in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
-          out:fade={{ duration: motionDuration(150), easing: cubicIn }}
-        >
-          <ResultBlock {result} />
-        </div>
-      {/if}
-
-      <MacosPermsPill
-        capable={macosCapable}
-        allGranted={allPermsGranted}
-        anyDenied={anyPermsDenied}
-        onOpenPermissions={onOpenPermissionsTab}
-      />
+  {#if result}
+    <div
+      in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
+      out:fade={{ duration: motionDuration(150), easing: cubicIn }}
+    >
+      <ResultBlock {result} />
     </div>
-  </div>
+  {/if}
+
+  <MacosPermsPill
+    capable={macosCapable}
+    allGranted={allPermsGranted}
+    anyDenied={anyPermsDenied}
+    onOpenPermissions={onOpenPermissionsTab}
+  />
 
   {#if error}
     <ErrorDisplay {error} />
@@ -201,85 +217,15 @@
 </section>
 
 <style>
-  /* Widen the dictation section beyond the default 36rem so the
-     two-column grid (200 px sidebar + 1fr content) has room to
-     breathe. History stays at 36rem because it's a single column.
-     `:global()` because the .page-section selector is owned by
-     +page.svelte and its scoping hash differs from this leaf. */
+  /* Widen the dictation section to 52 rem so the centerpiece +
+     adjuncts row reads. History stays at 36 rem (single column).
+     `:global()` because the `.page-section` selector is owned by
+     `+page.svelte` and its scoping hash differs from this leaf. */
   :global(#dictation-section) {
     max-width: 52rem;
-  }
-
-  .main-layout {
-    display: grid;
-    grid-template-columns: 200px 1fr;
-    gap: 1.5rem;
-    align-items: start;
-  }
-
-  /* Sidebar column hosts the session config (audio source +
-     model chip). Nova-inspired hairline divider — barely visible
-     in dark, slightly more present in light. The eye reads the
-     boundary without a heavy rule. */
-  .sidebar {
-    padding-right: 1.5rem;
-    border-right: 1px solid var(--border-subtle);
     display: flex;
     flex-direction: column;
-    gap: 0.85rem;
-    /* Rogue Amoeba-style frozen-while-active treatment: when the
-       parent flips `recording=true` the sidebar dims + locks so
-       the eye reads "the configuration is committed for this
-       session". Underlying inputs are also `disabled` for keyboard
-       a11y; this is the visual reinforcement. */
-    transition: opacity 250ms ease;
-  }
-  .sidebar.locked {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .sidebar {
-      transition: none;
-    }
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .sidebar {
-      border-right-color: rgba(255, 255, 255, 0.06);
-    }
-  }
-  :root[data-theme="dark"] .sidebar {
-    border-right-color: rgba(255, 255, 255, 0.06);
-  }
-
-  .content {
-    display: flex;
-    flex-direction: column;
-    gap: 0.85rem;
-    min-width: 0;
-  }
-
-  /* Below ~520px the sidebar's 200 px would crowd the content
-     column. Stack instead, with the boundary moving to a
-     bottom-divider so the visual hierarchy still reads. */
-  @media (max-width: 520px) {
-    .main-layout {
-      grid-template-columns: 1fr;
-      gap: 1rem;
-    }
-    .sidebar {
-      padding-right: 0;
-      padding-bottom: 1rem;
-      border-right: none;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    @media (prefers-color-scheme: dark) {
-      .sidebar {
-        border-right-color: transparent;
-        border-bottom-color: rgba(255, 255, 255, 0.06);
-      }
-    }
+    gap: 1rem;
   }
 
   .setup-banner {
@@ -333,32 +279,27 @@
     border-color: var(--accent-hover);
   }
 
-  .hint {
-    margin: 0 0 2rem;
-    padding: 0.75rem 1rem;
-    background-color: var(--info-bg);
-    border: 1px solid var(--info-border);
-    border-radius: var(--radius-md);
-    color: var(--info-text);
-    font-size: 0.9rem;
-    text-align: left;
-    line-height: 1.5;
+  /* Inline keyboard-shortcut hint, contextually placed below the
+     record area. Pre-r2 this was an info-box-styled `.hint
+     hint-sticky` strip pinned above the section; visually heavy
+     for a contextual reminder. The new treatment is text-only —
+     muted body copy with kbd chips that match the hint's
+     quieter weight. */
+  .shortcut-hint {
+    margin: 0;
+    text-align: center;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    color: var(--text-muted);
   }
-
-  .hint-sticky {
-    position: sticky;
-    top: 0.75rem;
-    z-index: 5;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  }
-
-  .hint kbd {
+  .shortcut-hint kbd {
     display: inline-block;
     padding: 0.05rem 0.4rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.85em;
+    color: var(--text-secondary);
     background-color: var(--bg-surface);
-    border: 1px solid var(--info-border);
+    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     margin: 0 0.1rem;
   }
