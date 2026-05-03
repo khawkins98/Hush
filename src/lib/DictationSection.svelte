@@ -30,6 +30,7 @@
   import type {
     AudioSourceListing,
     DictationResult,
+    MeetingSessionDetail,
     PermissionsHealth,
   } from "./types";
 
@@ -50,6 +51,11 @@
     macosCapable: boolean;
     allPermsGranted: boolean;
     anyPermsDenied: boolean;
+    /// Live meeting-pump session detail — finalized utterances +
+    /// in-flight partials. Threaded through to RecordPanel which
+    /// renders it as a live transcript while recording. `null`
+    /// when no meeting session is active.
+    meetingActiveDetail?: MeetingSessionDetail | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onScrollToModelPicker: () => void;
@@ -73,6 +79,7 @@
     macosCapable,
     allPermsGranted,
     anyPermsDenied,
+    meetingActiveDetail = null,
     onStart,
     onStop,
     onScrollToModelPicker,
@@ -157,6 +164,7 @@
     {selectedSourceLabel}
     {activeModelName}
     {error}
+    {meetingActiveDetail}
     {onStart}
     {onStop}
     onOpenPermissions={onOpenPermissionsTab}

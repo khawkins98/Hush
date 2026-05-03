@@ -22,6 +22,7 @@
     listenForStatusLineChanges,
     readStatusLineEnabled,
   } from "./status-line";
+  import type { MeetingSessionDetail } from "./types";
 
   type Props = {
     recording: boolean;
@@ -39,6 +40,14 @@
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onOpenPermissions?: () => void;
+    /// Live meeting-session detail polled by the orchestrator
+    /// while a meeting-pump session is in flight. The streaming
+    /// pump writes finalized utterances to `utterances` and
+    /// in-flight ones to `currentPartials`; we join + render
+    /// them as a live transcript while recording. `null` when no
+    /// meeting session is active (dictation-only PTT or click-
+    /// recording without SCK).
+    meetingActiveDetail?: MeetingSessionDetail | null;
     /// Left adjunct slot — audio source picker. Optional so the
     /// component still renders standalone in the test harness or
     /// any future minimal surface.
@@ -63,9 +72,34 @@
     onStart,
     onStop,
     onOpenPermissions,
+    meetingActiveDetail = null,
     leftAdjunct,
     rightAdjunct,
   }: Props = $props();
+
+  // Live transcript text — joined from finalized utterances +
+  // in-flight partials in the active meeting session. Speaker
+  // labels are prefixed when present (multi-source meetings get
+  // "Speaker A: …"). Mirrors the join in
+  // `copyMeetingSessionToClipboard` so live and clipboard text
+  // come out identical. Empty when no active session or no
+  // utterances yet.
+  let liveTranscriptText = $derived.by(() => {
+    if (!meetingActiveDetail) return "";
+    const finals = meetingActiveDetail.utterances ?? [];
+    const partials = meetingActiveDetail.currentPartials ?? [];
+    const all = [
+      ...finals.map((u) => ({ text: u.text, label: u.speakerLabel })),
+      ...partials.map((u) => ({ text: u.text, label: u.speakerLabel })),
+    ];
+    if (all.length === 0) return "";
+    return all
+      .map((u) => (u.label ? `${u.label}: ${u.text}` : u.text))
+      .join("\n");
+  });
+  let showLiveTranscript = $derived(
+    recording && liveTranscriptText.trim().length > 0,
+  );
 
   // F5 status line — opt-in display gated by a localStorage flag,
   // re-applied via Tauri event when the Settings toggle flips so
@@ -254,6 +288,31 @@
     {/if}
   </p>
 </div>
+
+{#if showLiveTranscript}
+  <!--
+    Live transcript pane during meeting-pump recording. The
+    streaming pump produces partials every few seconds and
+    finalises them once the language model resolves a chunk —
+    text appears with a 3–5 s delay against speech but updates
+    continuously so the user sees what's been captured. Empty
+    while no utterances have landed yet (silence, very short
+    sessions). Idle / non-meeting recording paths skip this
+    surface entirely (no streaming source).
+  -->
+  <section
+    class="live-transcript"
+    aria-label="Live transcript"
+    aria-live="polite"
+    data-testid="live-transcript"
+  >
+    <header class="live-transcript-header">
+      <span class="live-transcript-dot" aria-hidden="true"></span>
+      Live transcript
+    </header>
+    <p class="live-transcript-body">{liveTranscriptText}</p>
+  </section>
+{/if}
 
 {#if badgeVisible}
   <button
@@ -479,6 +538,53 @@
   }
   .record-time.live {
     color: var(--danger);
+  }
+
+  /* Live transcript pane — surfaced during meeting-pump
+     recording so the user sees what the streaming whisper has
+     resolved as text accumulates. Looks like a quiet card
+     framed by `--bg-sidebar` so it sits below the centerpiece
+     without competing for visual weight. */
+  .live-transcript {
+    background: var(--bg-sidebar);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  .live-transcript-header {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.45rem;
+  }
+  .live-transcript-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background-color: var(--danger);
+    animation: live-transcript-pulse 1.2s ease-in-out infinite;
+  }
+  .live-transcript-body {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+  }
+  @keyframes live-transcript-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .live-transcript-dot {
+      animation: none;
+    }
   }
 
   /* Status label below the time — the verb / state copy. */

@@ -1488,6 +1488,7 @@
     {macosCapable}
     {allPermsGranted}
     {anyPermsDenied}
+    meetingActiveDetail={meetingActiveDetail}
     onStart={startRecord}
     onStop={stop}
     onScrollToModelPicker={openModelSettings}
