@@ -32,6 +32,10 @@
   import AdvancedSection from "./AdvancedSection.svelte";
   import PttHotkeyEditor from "./PttHotkeyEditor.svelte";
   import { formatErrorMessage } from "./errors";
+  import {
+    readStatusLineEnabled,
+    setStatusLineEnabled,
+  } from "./status-line";
   import { readStoredTheme, setTheme, type ThemePref } from "./theme";
   import "./settings-tab.css";
 
@@ -67,6 +71,26 @@
   let inferenceThreadsError = $state<string | null>(null);
 
   let isMacOS = $state(false);
+
+  // F5 technical status line — opt-in display under the main
+  // window's waveform that surfaces "🎤 device · model". No IPC;
+  // localStorage-backed via `lib/status-line.ts`. Sits inside the
+  // Advanced section because casual users don't need to think
+  // about which model is loaded — they just want it to work.
+  let statusLineEnabled = $state(false);
+  let statusLineBusy = $state(false);
+
+  async function onStatusLineToggle(event: Event) {
+    if (statusLineBusy) return;
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    statusLineBusy = true;
+    try {
+      await setStatusLineEnabled(checked);
+      statusLineEnabled = checked;
+    } finally {
+      statusLineBusy = false;
+    }
+  }
 
   // Appearance / theme override (#411 phase A). Default "system"
   // means follow `prefers-color-scheme`; explicit values force
@@ -278,6 +302,7 @@
       console.warn("[hush] platform() failed in GeneralTab", e);
     }
     themePref = readStoredTheme();
+    statusLineEnabled = readStatusLineEnabled();
   });
 </script>
 
@@ -501,6 +526,37 @@
     {#if inferenceThreadsError}
       <p class="settings-error">{inferenceThreadsError}</p>
     {/if}
+  </section>
+
+  <!--
+    F5 technical status line — opt-in display of "🎤 device ·
+    model" under the main-window waveform. Useful for power users
+    who want to confirm device + model at a glance; off-putting
+    for first-time users. No IPC needed; localStorage-backed via
+    `lib/status-line.ts` with cross-window sync via Tauri event so
+    the toggle takes effect on the open main window without a
+    reload.
+  -->
+  <section class="settings-group" aria-labelledby="settings-statusline-heading">
+    <h2 id="settings-statusline-heading" class="group-heading">Display</h2>
+    <label class="toggle-row">
+      <input
+        type="checkbox"
+        data-testid="settings-status-line-toggle"
+        disabled={statusLineBusy}
+        checked={statusLineEnabled}
+        onchange={onStatusLineToggle}
+      />
+      <span class="toggle-label">
+        <span class="toggle-name">Show device + model status line</span>
+        <span class="toggle-desc">
+          Adds a small line under the main-window waveform reading
+          "🎤 Built-in Microphone · whisper-medium" so you can
+          confirm the active device and Whisper model at a glance.
+          Off by default.
+        </span>
+      </span>
+    </label>
   </section>
 
   <section class="settings-group" aria-labelledby="settings-firstrun-heading">

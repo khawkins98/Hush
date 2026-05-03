@@ -88,4 +88,12 @@ export const Events = {
   /// mid-dictation focus change doesn't interrupt the active
   /// stream.
   AppProfileActivated: "app:profile-activated",
+  /// Frontend → all windows (broadcast): user toggled the F5
+  /// technical status line under the waveform (Settings → General
+  /// → Advanced). Payload is `boolean`. The main window's
+  /// ControlsSection listens and re-renders. Persistence is
+  /// localStorage; this event only propagates *changes* across
+  /// already-open windows. Canonical helpers live in
+  /// `lib/status-line.ts`.
+  StatusLine: "hush:status-line",
 } as const;
