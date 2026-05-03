@@ -158,6 +158,17 @@
   }}
 />
 
+<!--
+  `data-tauri-drag-region` ONLY on the root, mirroring the HUD pill's
+  pattern. Tauri treats every descendant as drag-able unless it
+  carries `data-tauri-drag-region="false"`, so interactive controls
+  (the Start/Stop button, the Open Hush button, the error text)
+  opt out explicitly. Earlier passes had the attribute on root +
+  header + footer simultaneously, which on macOS produced the
+  reported symptom: grippy cursor visible but mousedown didn't
+  initiate a window drag — multiple drag regions appear to compete
+  for the mousedown event.
+-->
 <div
   class="popover-root"
   role="dialog"
@@ -165,7 +176,7 @@
   data-tauri-drag-region
   data-testid="menu-bar-root"
 >
-  <header class="popover-header" data-tauri-drag-region>
+  <header class="popover-header">
     <span
       class="state-dot"
       class:recording
@@ -181,6 +192,7 @@
       type="button"
       class="primary-action"
       data-testid="popover-toggle"
+      data-tauri-drag-region="false"
       disabled={busy}
       onclick={toggleRecording}
     >
@@ -209,11 +221,12 @@
     {/if}
   </div>
 
-  <footer class="popover-footer" data-tauri-drag-region>
+  <footer class="popover-footer">
     <button
       type="button"
       class="secondary-action"
       data-testid="popover-open-main"
+      data-tauri-drag-region="false"
       onclick={openMain}
     >
       Open Hush
