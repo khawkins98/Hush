@@ -403,6 +403,14 @@ pub struct RuntimeFlags {
     /// `AtomicBool` so the dictation hot path reads without
     /// locking. Mirrored on the `sound_cues_enabled` settings row.
     pub sound_cues_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Per-event sub-toggles (#463) read at the two cue callsites in
+    /// `start_dictation_inner` and `stop_dictation`. The hot path
+    /// fires the cue only when `master && sub` is true. Both default
+    /// to `true` so users who already opted into the master toggle
+    /// keep hearing both events; turning the master off short-
+    /// circuits both regardless of these.
+    pub sound_cue_start_enabled: Arc<std::sync::atomic::AtomicBool>,
+    pub sound_cue_complete_enabled: Arc<std::sync::atomic::AtomicBool>,
     /// User-chosen Meeting-Mode auto-start mode (Off / Always).
     /// Read by the foreground poller every tick; flipped by the
     /// `set_meeting_autostart_mode` IPC. Encoded as an
@@ -496,6 +504,8 @@ pub struct AppStateBuilder {
     ptt_active: Option<bool>,
     hud_enabled: Option<bool>,
     sound_cues_enabled: Option<bool>,
+    sound_cue_start_enabled: Option<bool>,
+    sound_cue_complete_enabled: Option<bool>,
     meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
     diarization_enabled: Option<bool>,
     /// Pre-built `Arc<AtomicBool>` for the diarization-enabled
@@ -629,6 +639,16 @@ impl AppStateBuilder {
 
     pub fn sound_cues_enabled(mut self, enabled: bool) -> Self {
         self.sound_cues_enabled = Some(enabled);
+        self
+    }
+
+    pub fn sound_cue_start_enabled(mut self, enabled: bool) -> Self {
+        self.sound_cue_start_enabled = Some(enabled);
+        self
+    }
+
+    pub fn sound_cue_complete_enabled(mut self, enabled: bool) -> Self {
+        self.sound_cue_complete_enabled = Some(enabled);
         self
     }
 
@@ -779,6 +799,12 @@ impl AppStateBuilder {
                 sound_cues_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
                     self.sound_cues_enabled.unwrap_or(false),
                 )),
+                sound_cue_start_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                    self.sound_cue_start_enabled.unwrap_or(true),
+                )),
+                sound_cue_complete_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                    self.sound_cue_complete_enabled.unwrap_or(true),
+                )),
                 meeting_autostart_mode: Arc::new(std::sync::atomic::AtomicU8::new(
                     encode_autostart_mode(
                         self.meeting_autostart_mode
@@ -823,6 +849,15 @@ pub(crate) fn parse_hud_enabled_setting(raw: Option<String>) -> bool {
 /// the right shape).
 pub(crate) fn parse_sound_cues_setting(raw: Option<String>) -> bool {
     crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(false)
+}
+
+/// Parse a per-event sound-cue sub-toggle row (#463). Absent /
+/// unparseable rows fall back to `true` — the per-event toggles
+/// are scoped beneath the master row, so the safe default is
+/// "fire everything the master allows" rather than silently
+/// dropping a cue the user opted into via the master switch.
+pub(crate) fn parse_sound_cue_sub_setting(raw: Option<String>) -> bool {
+    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(true)
 }
 
 /// Parse the persisted [`crate::settings::keys::DIARIZATION_ENABLED`]
@@ -1097,6 +1132,23 @@ impl AppState {
                 .flatten(),
         );
 
+        // Per-event sub-toggles (#463). Default true — see
+        // `parse_sound_cue_sub_setting` for the reasoning.
+        let sound_cue_start_enabled = parse_sound_cue_sub_setting(
+            settings
+                .get(crate::settings::keys::SOUND_CUE_START_ENABLED)
+                .await
+                .ok()
+                .flatten(),
+        );
+        let sound_cue_complete_enabled = parse_sound_cue_sub_setting(
+            settings
+                .get(crate::settings::keys::SOUND_CUE_COMPLETE_ENABLED)
+                .await
+                .ok()
+                .flatten(),
+        );
+
         // Meeting auto-start mode. Off by default; absent or
         // garbage rows fall through to Off (the safer default —
         // a corrupted row should not silently make the mic
@@ -1127,6 +1179,8 @@ impl AppState {
             .ptt_active(ptt_active)
             .hud_enabled(hud_enabled)
             .sound_cues_enabled(sound_cues_enabled)
+            .sound_cue_start_enabled(sound_cue_start_enabled)
+            .sound_cue_complete_enabled(sound_cue_complete_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
             .diarization_enabled_arc(diarization_enabled_arc)
             .diarize_slot(diarize_slot)

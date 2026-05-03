@@ -299,12 +299,19 @@ pub fn start_dictation(
     }
     // Audio cue: short "Tink" so the user knows the mic is hot
     // without having to glance at the HUD (#292). Off by default;
-    // fired only when the user has opted in.
+    // fired only when both the master toggle AND the per-event
+    // start sub-toggle are on (#463). The sub-toggle defaults
+    // to true so existing master-on users keep hearing this cue.
+    let cues_master = state
+        .runtime_flags
+        .sound_cues_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let cue_start = state
+        .runtime_flags
+        .sound_cue_start_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
     crate::audio_cues::play_if_enabled(
-        state
-            .runtime_flags
-            .sound_cues_enabled
-            .load(std::sync::atomic::Ordering::Relaxed),
+        cues_master && cue_start,
         crate::audio_cues::CUE_RECORDING_START,
     );
     Ok(())
@@ -611,11 +618,17 @@ pub async fn stop_dictation(
     // clipboard is ready without glancing at the HUD (#292).
     // Fired AFTER the clipboard write so the cue truly means
     // "safe to paste"; never fired on the error paths above.
+    // Gated by master AND per-event complete sub-toggle (#463).
+    let cues_master_done = state
+        .runtime_flags
+        .sound_cues_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let cue_complete = state
+        .runtime_flags
+        .sound_cue_complete_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
     crate::audio_cues::play_if_enabled(
-        state
-            .runtime_flags
-            .sound_cues_enabled
-            .load(std::sync::atomic::Ordering::Relaxed),
+        cues_master_done && cue_complete,
         crate::audio_cues::CUE_TRANSCRIPTION_READY,
     );
 
@@ -1066,6 +1079,64 @@ pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool
         .settings
         .set(
             crate::settings::keys::SOUND_CUES_ENABLED,
+            crate::settings::codec::encode_bool(enabled),
+        )
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
+/// Read the per-event recording-start cue toggle (#463). Sub-
+/// toggle beneath the master `sound_cues_enabled`; defaults to
+/// `true` so first-time master-on users hear the start cue.
+#[tauri::command]
+pub fn get_sound_cue_start_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
+    Ok(state
+        .runtime_flags
+        .sound_cue_start_enabled
+        .load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[tauri::command]
+pub async fn set_sound_cue_start_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> IpcResult<()> {
+    state
+        .runtime_flags
+        .sound_cue_start_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    state
+        .settings
+        .set(
+            crate::settings::keys::SOUND_CUE_START_ENABLED,
+            crate::settings::codec::encode_bool(enabled),
+        )
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
+/// Read the per-event transcription-complete cue toggle (#463).
+#[tauri::command]
+pub fn get_sound_cue_complete_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
+    Ok(state
+        .runtime_flags
+        .sound_cue_complete_enabled
+        .load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[tauri::command]
+pub async fn set_sound_cue_complete_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> IpcResult<()> {
+    state
+        .runtime_flags
+        .sound_cue_complete_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    state
+        .settings
+        .set(
+            crate::settings::keys::SOUND_CUE_COMPLETE_ENABLED,
             crate::settings::codec::encode_bool(enabled),
         )
         .await
