@@ -1477,14 +1477,6 @@
     />
     <span class="brand-name">Hush</span>
   </div>
-  <button
-    type="button"
-    class="settings-btn"
-    onclick={() => openSettingsTab("general")}
-    title="Settings (⌘,)"
-  >
-    Settings <kbd>⌘,</kbd>
-  </button>
 </header>
 
 <div class="app-shell">
@@ -1682,36 +1674,6 @@
   letter-spacing: -0.01em;
 }
 
-.settings-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.75rem;
-  background: none;
-  border: 1px solid var(--border-input, #d1d1d6);
-  border-radius: var(--radius-md, 8px);
-  font-family: inherit;
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--text-secondary, #555);
-  cursor: pointer;
-  transition: background-color 0.12s, border-color 0.12s;
-}
-.settings-btn:hover {
-  background-color: rgba(44, 62, 143, 0.07);
-  border-color: var(--accent, #5b7ee5);
-  color: var(--text-primary, #111);
-}
-.settings-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.settings-btn kbd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78em;
-  color: var(--text-muted, #888);
-}
-
 /* #479 slice 1: flex shell hosts the left icon sidebar + the
    active panel. Subtracts the sticky app-bar's height so the
    shell fills the remaining viewport — same total height the
@@ -1722,12 +1684,17 @@
   overflow: hidden;
 }
 
+/* Padding-left tightened from 1.5rem → 1rem because the sidebar's
+   right border already provides visual separation; pre-sidebar
+   padding had to do the visual work the sidebar now does. Right
+   padding stays 1.5rem so scrollbar gutter has breathing room. */
 .app-main {
   flex: 1;
-  padding: 0 1.5rem 4rem;
+  padding: 0 1.5rem 4rem 1rem;
   text-align: left;
   overflow-y: auto;
   box-sizing: border-box;
+  min-width: 0;
 }
 
 .page-section {
