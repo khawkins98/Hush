@@ -28,7 +28,7 @@
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "resizable": true,
+        "resizable": false,
         "shadow": false,
         "visible": false,
         "focus": false,
@@ -56,7 +56,7 @@
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "resizable": true,
+        "resizable": false,
         "shadow": true,
         "visible": false,
         "acceptFirstMouse": true

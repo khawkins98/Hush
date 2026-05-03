@@ -75,6 +75,56 @@ fn is_background_launch(mut args: impl Iterator<Item = String>) -> bool {
     args.any(|a| a == "--background")
 }
 
+/// Make a borderless macOS window draggable from any non-
+/// interactive area (#427 Item 1).
+///
+/// `decorations: false` windows in Tauri 2 have their NSWindow
+/// movable styleMask bit stripped, which silently breaks
+/// `data-tauri-drag-region`, `startDragging()`, and even
+/// programmatic `setPosition` calls during a JS-tracked drag.
+/// `setMovable: YES` + `setMovableByWindowBackground: YES`
+/// restore the AppKit-level drag handling, after which Tauri's
+/// drag-region attribute starts working as documented.
+///
+/// Called once per window from the `setup` hook. Best-effort:
+/// a missing handle or failed cast is logged at warn and
+/// swallowed — the worst case is a non-draggable window, which
+/// matches the pre-fix behaviour.
+#[cfg(target_os = "macos")]
+fn unlock_macos_window_drag<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let label = window.label().to_owned();
+    let ns_window_ptr = match window.ns_window() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                window = %label,
+                "unlock_macos_window_drag: ns_window() failed"
+            );
+            return;
+        }
+    };
+    let ns_window = ns_window_ptr as *mut AnyObject;
+    if ns_window.is_null() {
+        tracing::warn!(
+            window = %label,
+            "unlock_macos_window_drag: ns_window pointer is null"
+        );
+        return;
+    }
+    // Safety: Tauri owns the NSWindow for the window's full
+    // lifetime; `setMovable` / `setMovableByWindowBackground`
+    // are setter selectors that don't take or transfer
+    // ownership and don't mutate runtime state visible to Rust.
+    unsafe {
+        let _: () = msg_send![ns_window, setMovable: true];
+        let _: () = msg_send![ns_window, setMovableByWindowBackground: true];
+    }
+}
+
 /// Filename for the app's SQLite database, stored in the platform's
 /// per-app data directory (e.g. `~/Library/Application Support/Hush/`
 /// on macOS).
@@ -311,6 +361,21 @@ pub fn run() {
                         label,
                         "hide-on-close: window not found at setup time; close defaults to destroy"
                     );
+                }
+            }
+
+            // Borderless-window drag enablement (#427 Item 1).
+            // On macOS, `decorations: false` windows have their
+            // NSWindow movable styleMask bit stripped — Tauri's
+            // `data-tauri-drag-region` and `startDragging()` then
+            // become silent no-ops. Restore movability via
+            // explicit AppKit calls so users can drag the popover
+            // and HUD pill from any non-interactive area. See
+            // `learnings.md` 2026-05-03 for the chase.
+            #[cfg(target_os = "macos")]
+            for label in ["menu-bar", "hud"] {
+                if let Some(window) = app.get_webview_window(label) {
+                    unlock_macos_window_drag(&window);
                 }
             }
 

@@ -4,57 +4,65 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
-## 2026-05-03 — `resizable: true` is required for window drag on macOS borderless windows (#427 Item 1)
+## 2026-05-03 — Drag on macOS borderless windows needs explicit `setMovable: YES` via objc2 (#427 Item 1)
 
-**TL;DR:** A Tauri 2 window declared with `decorations: false` + `resizable: false` on macOS gets its NSWindow's movable styleMask bit stripped, which silently breaks `data-tauri-drag-region`, `getCurrentWebviewWindow().startDragging()`, and even programmatic `setPosition`. **Set `resizable: true`** — even when you don't actually want the user to resize. With `decorations: false` there are no resize handles in the chrome anyway, so the window stays effectively fixed-size while drag works correctly.
+**TL;DR:** Tauri 2's `data-tauri-drag-region` + `startDragging()` don't work on a `decorations: false` + `transparent: true` + `alwaysOnTop: true` window on macOS. `resizable: true` doesn't fix drag — it just makes the window user-resizable, which is a separate (unwanted) regression. The actually-working path is to call `[NSWindow setMovable: YES]` + `[NSWindow setMovableByWindowBackground: YES]` via objc2 from the `setup` hook. After that, `data-tauri-drag-region` starts working as documented.
 
 ### The chase
 
-The menu-bar quick-popover (#427 Item 1) is borderless + transparent + always-on-top. Drag wouldn't work via any of:
+Three approaches to make the menu-bar popover (and the HUD pill, which has the same window flags) draggable all silently failed in practice:
 
-1. `data-tauri-drag-region` on the root (the pattern the HUD uses).
+1. `data-tauri-drag-region` on the root (the pattern the HUD's docstring claims works).
 2. `getCurrentWebviewWindow().startDragging()` from a JS `mousedown` handler.
 3. Hand-rolled drag tracking cursor delta + calling `setPosition` from window-level `mousemove`.
 
-In every case the cursor-grab CSS fired and clicks registered, but the window stayed put. Direct programmatic `setPosition` calls during drag did nothing.
+In every case cursor-grab CSS fired, clicks registered, but the window stayed put. Even direct programmatic `setPosition` from JS during drag did nothing — though `setPosition` *from Rust* (e.g. for tray-anchored positioning of the popover) did work, suggesting the AppKit-level drag handling, not a Tauri IPC issue, was the blocker.
 
 ### Cause
 
-The `decorations: false` + `resizable: false` combination on macOS strips the movable styleMask bits from the underlying NSWindow. AppKit then ignores Tauri's drag-region, `startDragging`, **and** programmatic `setFrame:` from a non-trusted path. `transparent: true` and `alwaysOnTop: true` are not the trigger on their own; `resizable: false` is the load-bearing one.
+`decorations: false` strips the NSWindow's movable styleMask bits. AppKit then ignores Tauri's drag-region (which calls `[NSWindow performWindowDragWithEvent:]` under the hood, requiring movable bits) and any JS `mousemove` events likely never propagate cleanly because AppKit doesn't recognise the click as a drag candidate.
 
-Documented in Tauri GitHub issues — discussion [#4362](https://github.com/tauri-apps/tauri/discussions/4362) and the macOS-specific drag-region issues #11605 / #9503 / #12042.
+`transparent: true` and `alwaysOnTop: true` aren't the trigger on their own. The discussion at [tauri-apps/tauri#4362](https://github.com/tauri-apps/tauri/discussions/4362) and the macOS-specific drag-region issues [#11605](https://github.com/tauri-apps/tauri/issues/11605) / [#9503](https://github.com/tauri-apps/tauri/issues/9503) / [#12042](https://github.com/tauri-apps/tauri/issues/12042) cover variations on the same theme.
 
-### Fix
+### What didn't fix it
 
-```jsonc
-{
-  "label": "menu-bar",
-  "width": 320, "height": 220,
-  "decorations": false,
-  "transparent": true,
-  "alwaysOnTop": true,
-  "resizable": true,   // load-bearing: unlocks NSWindow movable bits
-  ...
+- **`resizable: true` (no min/max clamps)** — this is the most-cited workaround in Tauri discussions. Empirically it makes the window user-resizable but doesn't unlock drag. Worse: with `decorations: false` the user can resize via mouse-drag at the edges (no visible handles, but the OS hit-tests drag zones), introducing a UX regression.
+- **`resizable: true` with matched `minWidth`/`maxWidth`/`minHeight`/`maxHeight` clamps** — supposed to lock the size while keeping drag, but on this transparent always-on-top window it produced a *sizing* regression where the window rendered at a fraction of its declared height. Reverted.
+- **JS `mousedown` → `startDragging()`** — silently fails. Tauri's API call returns Ok but no drag begins.
+- **JS-rolled mousedown/mousemove/`setPosition` chain** — `setPosition` calls during drag don't move the window (though they work fine outside the drag scenario).
+
+### What worked: explicit objc2 setMovable
+
+A small Rust helper called from the `setup` hook for both the popover and the HUD:
+
+```rust
+#[cfg(target_os = "macos")]
+fn unlock_macos_window_drag<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let Ok(ptr) = window.ns_window() else { return; };
+    let ns_window = ptr as *mut AnyObject;
+    if ns_window.is_null() { return; }
+    unsafe {
+        let _: () = msg_send![ns_window, setMovable: true];
+        let _: () = msg_send![ns_window, setMovableByWindowBackground: true];
+    }
 }
 ```
 
-That single flip is enough. With `decorations: false` there are no resize handles, so users can't actually resize through the UI; the window is effectively fixed-size while drag works.
+Plus `data-tauri-drag-region` on the popover root + `data-tauri-drag-region="false"` opt-outs on the buttons. After `setMovable: true` is called, AppKit accepts the drag-region's `performWindowDragWithEvent:` calls and the window moves smoothly.
 
-### Don't add `minWidth`/`maxWidth`/`minHeight`/`maxHeight` clamps with the fix
+`setMovableByWindowBackground: true` makes the entire window background act as a drag handle. This is what enables the "drag from anywhere non-interactive" UX without forcing the user to find a specific drag region. Buttons still get their click events because NSView hit-testing places interactive controls above the background drag.
 
-The [most-cited workaround in Tauri discussions](https://github.com/tauri-apps/tauri/discussions/4362) recommends pairing `resizable: true` with matched min/max constraints to lock the window to its initial size. That trick works on simpler windows but **caused a sizing regression** on the menu-bar popover with `transparent: true` + `alwaysOnTop: true` — the window rendered at a fraction of its declared height. Setting only `resizable: true` (no clamps) gave the correct size and working drag together.
+### Window-config recommendations
 
-### Ladder for future popover surfaces
+- Keep `resizable: false` for popover/HUD-style windows — users shouldn't be able to resize them, and `setMovable: YES` doesn't depend on it.
+- `decorations: false` + `transparent: true` + `alwaysOnTop: true` are all fine alongside `setMovable: YES`.
+- Call the objc2 helper once per window in `setup`. Tauri doesn't expose a JSON config flag for `setMovable` and adding one upstream is the correct long-term fix; tracking that as a future contribution.
 
-If a future iteration needs drag on a popover that *also* shouldn't steal focus from the active app on click (typical menu-bar app UX):
+### `objc2` already in tree
 
-1. **Resizable: true alone** — what's documented above. Try this first.
-2. **[`tauri-nspanel`](https://github.com/ahkohd/tauri-nspanel)** with `to_panel()` + `NSWindowStyleMaskNonactivatingPanel`. Reference: [ahkohd/tauri-macos-menubar-app-example](https://github.com/ahkohd/tauri-macos-menubar-app-example).
-3. **Last resort: objc2/cocoa from `setup`** — call `[ns_window setMovable: YES]` + `[ns_window setMovableByWindowBackground: YES]` directly.
-
-### Applies to all borderless windows
-
-This unlocked drag on the HUD pill too — same `decorations: false` + `resizable: false` combination, same silent failure. Both windows now have `resizable: true` in `tauri.conf.json`.
+Hush already pulls `objc2 = "0.6"` and `objc2-foundation = "0.3"` for the audio-cues + macos-perms paths. No new dependency for this fix.
 
 ### What does NOT help (verified during the chase)
 
