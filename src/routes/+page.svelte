@@ -8,8 +8,7 @@
 
   import CommandPalette from "$lib/CommandPalette.svelte";
   import type { CommandAction } from "$lib/CommandPalette.svelte";
-  import ControlsSection from "$lib/ControlsSection.svelte";
-  import ResultBlock from "$lib/ResultBlock.svelte";
+  import DictationSection from "$lib/DictationSection.svelte";
   import { motionDuration } from "$lib/motion";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
@@ -17,7 +16,6 @@
     type MeetingCopyNotice,
   } from "$lib/MeetingSection.svelte";
   import PermissionHealthSection from "$lib/PermissionHealthSection.svelte";
-  import MacosPermsPill from "$lib/MacosPermsPill.svelte";
   import {
     formatErrorDisplay,
     isPermissionShapedError,
@@ -1508,62 +1506,35 @@
 </header>
 
 <main class="app-main">
-  <section id="dictation-section" class="page-section">
-    <header class="section-header">
-      <h1>Dictation</h1>
-      <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
-    </header>
-
-    <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
-      <strong>Shortcuts:</strong>
-      <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
-      or hold
-      {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
-      to push-to-talk.
-    </aside>
-
-    <ControlsSection
-      {sources}
-      {sourcesLoaded}
-      bind:selected
-      {recording}
-      {busy}
-      {transcribing}
-      {noModelInstalled}
-      {error}
-      onStart={startRecord}
-      onStop={stop}
-      onScrollToModelPicker={openModelSettings}
-      activeModelName={activeModel?.displayName ?? null}
-      screenRecordingHealth={permissionHealth?.screenRecording ?? null}
-      onOpenPermissions={() => openSettingsTab("permissions")}
-      {recordMode}
-    />
-
-    {#if result}
-      <!--
-        F6: spring-out fly + fade on appear, plain fade on dismiss.
-        The transcript rising up from below mirrors the speech-to-
-        text "result emerges" mental model; the exit just dissolves
-        so the user doesn't see it slide off-screen mid-cleanup.
-        `motionDuration` honours prefers-reduced-motion (collapses
-        to 0 ms there).
-      -->
-      <div
-        in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
-        out:fade={{ duration: motionDuration(150), easing: cubicIn }}
-      >
-        <ResultBlock {result} />
-      </div>
-    {/if}
-
-    <MacosPermsPill
-      capable={macosCapable}
-      allGranted={allPermsGranted}
-      anyDenied={anyPermsDenied}
-      onOpenPermissions={() => openSettingsTab("permissions")}
-    />
-  </section>
+  <!--
+    Dictation section markup extracted into a leaf (#432 slice
+    3/3). Action functions + hotkey listeners stay in this
+    orchestrator because they touch a sprawl of cross-section
+    state — the section component is the render boundary, the
+    page is the controller.
+  -->
+  <DictationSection
+    {isMacOS}
+    {sources}
+    {sourcesLoaded}
+    bind:selected
+    {recording}
+    {busy}
+    {transcribing}
+    {noModelInstalled}
+    {error}
+    {result}
+    {recordMode}
+    activeModelName={activeModel?.displayName ?? null}
+    {permissionHealth}
+    {macosCapable}
+    {allPermsGranted}
+    {anyPermsDenied}
+    onStart={startRecord}
+    onStop={stop}
+    onScrollToModelPicker={openModelSettings}
+    onOpenPermissionsTab={() => openSettingsTab("permissions")}
+  />
 
   <section id="history-section" class="page-section">
     <header class="section-header">
@@ -1759,7 +1730,11 @@
   padding-top: 2.5rem;
 }
 
-.page-section + .page-section {
+/* :global() so the selector still matches when the dictation
+   `<section>` is rendered from DictationSection — Svelte's
+   scoped CSS hashes are per-component and the adjacent-sibling
+   selector would otherwise see one hash on each side. */
+:global(.page-section + .page-section) {
   border-top: 1px solid var(--border, #e1e1e1);
   margin-top: 2rem;
   padding-top: 2.5rem;
@@ -1779,7 +1754,7 @@
     border-color: var(--accent);
     color: #e8e8e8;
   }
-  .page-section + .page-section {
+  :global(.page-section + .page-section) {
     border-top-color: #2f2f33;
   }
 }
@@ -1848,38 +1823,8 @@
   opacity: 1;
 }
 
-.hint {
-  margin: 0 0 2rem;
-  padding: 0.75rem 1rem;
-  background-color: var(--info-bg);
-  border: 1px solid var(--info-border);
-  border-radius: var(--radius-md);
-  color: var(--info-text);
-  font-size: 0.9rem;
-  text-align: left;
-  line-height: 1.5;
-}
-
-.hint-sticky {
-  /* Sticky so the hotkey hint stays visible as the page grows. The
-     UX review flagged that the original (non-sticky) card scrolls
-     off once the user has built up some history / replacements /
-     vocabulary. */
-  position: sticky;
-  top: 0.75rem;
-  z-index: 5;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-}
-
-.hint kbd {
-  display: inline-block;
-  padding: 0.05rem 0.4rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.85em;
-  background-color: var(--bg-surface);
-  border: 1px solid var(--info-border);
-  border-radius: var(--radius-sm);
-  margin: 0 0.1rem;
-}
+/* `.hint`, `.hint-sticky`, and `.hint kbd` rules moved into
+   DictationSection.svelte (#432 slice 3/3) along with the markup
+   that uses them. */
 
 </style>
