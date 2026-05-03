@@ -326,6 +326,27 @@ export async function installMocks(
           preferredModelId: null,
         };
       },
+      meeting_app_override_set_profile: (args) => {
+        const {
+          appName,
+          preferredAudioSource = null,
+          preferredModelId = null,
+        } = (args ?? {}) as {
+          appName: string;
+          preferredAudioSource?: string | null;
+          preferredModelId?: string | null;
+        };
+        return {
+          appName,
+          // Default-mock returns "meeting" since the existing
+          // `meeting_app_override_upsert` mock does the same;
+          // specs that need a different kind override per-test.
+          kind: "meeting",
+          createdAt: "2026-04-28T00:00:00Z",
+          preferredAudioSource,
+          preferredModelId,
+        };
+      },
       meeting_app_override_delete: () => undefined,
       // Built-in classification table (#320). Default mock returns
       // a small representative subset — full table is ~70 entries

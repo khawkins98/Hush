@@ -1616,6 +1616,14 @@ mod tests {
         ) -> anyhow::Result<crate::meeting::MeetingAppOverride> {
             unreachable!("mock does not exercise upsert")
         }
+        async fn set_profile(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> anyhow::Result<crate::meeting::MeetingAppOverride> {
+            unreachable!("mock does not exercise set_profile")
+        }
         async fn delete(&self, _: &str) -> anyhow::Result<()> {
             Ok(())
         }

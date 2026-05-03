@@ -97,6 +97,19 @@ pub trait MeetingAppOverrideRepository: Send + Sync {
 
     /// Delete the override for the given app. No-op if no row
     /// exists — the panel's delete button is fire-and-forget.
+    /// Set or clear the per-app audio profile fields (#427 Item 5).
+    /// `None` for either argument writes NULL to that column,
+    /// resetting the field to "use the global default". Both args
+    /// are written every call — no merge — so callers send the
+    /// full intended state. Errors if the row doesn't exist; the
+    /// panel UI calls `upsert` first to materialise the row.
+    async fn set_profile(
+        &self,
+        app_name: &str,
+        preferred_audio_source: Option<&str>,
+        preferred_model_id: Option<&str>,
+    ) -> Result<MeetingAppOverride>;
+
     async fn delete(&self, app_name: &str) -> Result<()>;
 }
 
@@ -151,6 +164,42 @@ impl MeetingAppOverrideRepository for SqliteMeetingAppOverrideRepository {
         .await
         .context("meeting_app_overrides upsert")?;
         row.try_into()
+    }
+
+    async fn set_profile(
+        &self,
+        app_name: &str,
+        preferred_audio_source: Option<&str>,
+        preferred_model_id: Option<&str>,
+    ) -> Result<MeetingAppOverride> {
+        // UPDATE-only — distinct from upsert because the panel UI
+        // calls this on a row the user has already added (so the
+        // row exists). Both columns are written every call so the
+        // caller controls full state: pass `None` to clear, `Some`
+        // to set. RETURNING surfaces the resulting row including
+        // `kind` + `created_at` so the frontend can patch its
+        // local list without a follow-up `list` round-trip.
+        let row = sqlx::query_as::<_, OverrideRow>(
+            "UPDATE meeting_app_overrides \
+             SET preferred_audio_source = ?2, \
+                 preferred_model_id = ?3 \
+             WHERE app_name = ?1 \
+             RETURNING app_name, kind, created_at, \
+                       preferred_audio_source, preferred_model_id",
+        )
+        .bind(app_name)
+        .bind(preferred_audio_source)
+        .bind(preferred_model_id)
+        .fetch_optional(self.db.pool())
+        .await
+        .context("meeting_app_overrides set_profile")?;
+        match row {
+            Some(r) => r.try_into(),
+            None => Err(anyhow::anyhow!(
+                "meeting_app_overrides set_profile: no row for app_name {app_name:?}; \
+                 caller must `upsert` first"
+            )),
+        }
     }
 
     async fn delete(&self, app_name: &str) -> Result<()> {
@@ -368,6 +417,74 @@ mod tests {
         assert_eq!(updated.kind, MeetingAppKind::Media);
         assert_eq!(updated.preferred_audio_source, Some("system".into()));
         assert_eq!(updated.preferred_model_id, Some("whisper-base".into()));
+    }
+
+    #[tokio::test]
+    async fn set_profile_sets_both_fields_then_clears_them() {
+        let repo = fresh_repo().await;
+        repo.upsert(NewMeetingAppOverride {
+            app_name: "com.example.tool".into(),
+            kind: MeetingAppKind::Meeting,
+        })
+        .await
+        .unwrap();
+
+        // Set both fields.
+        let row = repo
+            .set_profile("com.example.tool", Some("system"), Some("whisper-base"))
+            .await
+            .unwrap();
+        assert_eq!(row.preferred_audio_source, Some("system".into()));
+        assert_eq!(row.preferred_model_id, Some("whisper-base".into()));
+
+        // Clear both — None means NULL, the canonical "use the
+        // global default" sentinel.
+        let cleared = repo
+            .set_profile("com.example.tool", None, None)
+            .await
+            .unwrap();
+        assert_eq!(cleared.preferred_audio_source, None);
+        assert_eq!(cleared.preferred_model_id, None);
+    }
+
+    #[tokio::test]
+    async fn set_profile_writes_full_state_no_merge() {
+        // Caller controls full state on every call: setting
+        // `audio_source = Some` and `model_id = None` clears the
+        // model even if it was previously set. This is the panel
+        // UI's expected shape — the user toggles either dropdown
+        // and the form sends the full intended state.
+        let repo = fresh_repo().await;
+        repo.upsert(NewMeetingAppOverride {
+            app_name: "com.example.tool".into(),
+            kind: MeetingAppKind::Meeting,
+        })
+        .await
+        .unwrap();
+        repo.set_profile("com.example.tool", Some("system"), Some("whisper-base"))
+            .await
+            .unwrap();
+
+        // Now set audio_source only; model should be cleared.
+        let row = repo
+            .set_profile("com.example.tool", Some("Built-in mic"), None)
+            .await
+            .unwrap();
+        assert_eq!(row.preferred_audio_source, Some("Built-in mic".into()));
+        assert_eq!(row.preferred_model_id, None);
+    }
+
+    #[tokio::test]
+    async fn set_profile_errors_when_row_missing() {
+        // Panel UI is expected to upsert first; a missing row at
+        // set_profile time means client + server are out of sync
+        // (e.g. the user deleted the override in another tab).
+        // Surface as an error so the panel can re-list.
+        let repo = fresh_repo().await;
+        let result = repo
+            .set_profile("does-not-exist", Some("system"), None)
+            .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
