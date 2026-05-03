@@ -162,6 +162,8 @@ These are tagged as future work, with a brief note on what each will need when p
 
 **Distribution channels.** GitHub Releases as the source of truth. Secondary channels: Homebrew cask (macOS), winget and Chocolatey (Windows), Flathub (Linux). We will need a small landing page for download links.
 
+**Mac App Store: off the table (resolved 2026-05-03).** `macOSPrivateApi: true` in `tauri.conf.json` is required for HUD transparency and permanently disqualifies Hush from MAS distribution (#114). This is an accepted trade-off: Hush is a side project where direct image-download distribution is sufficient, and the transparent HUD is more valuable than the MAS channel. Future contributors: do not attempt MAS distribution without first redesigning the HUD to avoid Apple private APIs.
+
 **Project name. Resolved (2026-04-25).** Project name is **Hush**. Reflects the privacy-first, quiet-by-default design intent and avoids confusion with VoiceInk. Domain availability (.app, .dev, .com) and trademark search to be completed before public release.
 
 **Licensing posture and upstream attribution. Path resolved (2026-04-25).** Black-box reimplementation under our own licence (Path A in §13.8). Self-imposed discipline: no contributor reads VoiceInk's Swift source, ever. The specific licence (Apache-2.0, MIT, GPLv3, or other) remains open and will be settled before first public release. Default fallback: Apache-2.0.
