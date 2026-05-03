@@ -210,12 +210,12 @@ pub fn run() {
             // normally.
             Some(vec!["--background"]),
         ))
-        // Updater plugin is deferred until #10 — registering it without a
-        // `plugins.updater` block in tauri.conf.json (pubkey + endpoints)
-        // panics at startup with "Error deserializing 'plugins.updater'".
-        // We leave the dep + module stub in place so #10 can wire the
-        // signing key and endpoints in one focused PR; until then, no
-        // plugin is registered.
+        // TODO(#10): Uncomment once `plugins.updater` is present in
+        // tauri.conf.json (pubkey + endpoints). Registering without that
+        // block panics at startup: "Error deserializing 'plugins.updater'".
+        // See the implementation plan in `src-tauri/src/updater/mod.rs`
+        // for the full step-by-step — Steps 1–3 (keypair + conf + CI) are
+        // the prerequisite; this line is Step 4.
         //.plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         // External-URL opener (#322). Plain `<a target="_blank">`

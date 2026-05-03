@@ -176,6 +176,23 @@
           latest.
         </p>
       {:else if updateCheck.kind === "updateAvailable"}
+        <!--
+          TODO(#10): Replace this section with the full auto-update UI
+          once tauri-plugin-updater is wired. The new surface should:
+
+          1. Show an "Install update" button that calls
+             `invoke("install_pending_update")` (Step 5 in updater/mod.rs).
+          2. Show a download progress indicator while bytes flow in
+             (listen on `updater:download-progress` event).
+          3. Show a macOS Gatekeeper warning beneath the Install button —
+             because Hush ships without Apple notarisation, macOS may block
+             the relaunch after the update installs:
+               "After installing, macOS may ask you to confirm it's safe to
+               open Hush. Click Open when prompted."
+             Remove this note if/when a Developer ID cert is obtained.
+          4. Keep the "Open release notes" link below as a manual-install
+             fallback.
+        -->
         <p class="about-update-result about-update-available" role="status">
           <strong>Update available:</strong>
           {updateCheck.latest} (you're on
