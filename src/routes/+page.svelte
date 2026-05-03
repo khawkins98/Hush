@@ -9,6 +9,8 @@
   import CommandPalette from "$lib/CommandPalette.svelte";
   import type { CommandAction } from "$lib/CommandPalette.svelte";
   import DictationSection from "$lib/DictationSection.svelte";
+  import SettingsPanel from "$lib/SettingsPanel.svelte";
+  import type { SettingsTab } from "$lib/SettingsPanel.svelte";
   import SidebarNav from "$lib/SidebarNav.svelte";
   import type { SidebarSection } from "$lib/SidebarNav.svelte";
   import { motionDuration } from "$lib/motion";
@@ -165,20 +167,14 @@
     models.find((m) => m.isSelected && m.isDownloaded) ?? null,
   );
 
-  // #479 slice 1: which top-level section is visible. Three for
-  // now — Dictation, History, Settings. The Settings click still
-  // opens the standalone window in slice 1; slice 2 inlines its
-  // tabs into a third panel rendered here.
+  // #479 slice 2: three top-level panels. Settings is now an
+  // inline panel (`SettingsPanel.svelte`) rather than a separate
+  // window. The standalone Settings window route still exists in
+  // slice 2 for the tray menu; slice 3 deletes it.
   let activeSection = $state<SidebarSection>("dictation");
+  let settingsActiveTab = $state<SettingsTab>("general");
 
-  async function onSidebarSelect(id: SidebarSection) {
-    if (id === "settings") {
-      // Slice 1: Settings remains a separate window. Slice 2 will
-      // change this branch to just `activeSection = id` once the
-      // tabs are inlined.
-      await openSettingsTab("general");
-      return;
-    }
+  function onSidebarSelect(id: SidebarSection) {
     activeSection = id;
   }
 
@@ -1400,18 +1396,25 @@
   // open → small tick → emit. Tauri events are broadcast to every
   // window, so the settings window picks this up regardless of
   // whether it was already open.
-  async function openSettingsTab(tab: string) {
-    try {
-      await invoke("open_settings");
-      // Two animation frames: enough time for the settings window
-      // to mount + register its listener on the bus, well under
-      // human perception (~32 ms). Cheaper than polling for a
-      // ready signal and good enough for this UI affordance.
-      await new Promise((r) => setTimeout(r, 50));
-      await emit(Events.SettingsGotoTab, tab);
-    } catch (e) {
-      console.warn("[hush] open settings tab failed", e);
+  // #479 slice 2: Settings is now an inline panel, not a
+  // separate window. Deep links from menus / palette / banners
+  // flip the sidebar to the Settings panel + set the requested
+  // tab in one step. Pre-r2 this opened the standalone window
+  // and emitted `Events.SettingsGotoTab`; the in-app version
+  // sidesteps the window-mount + emit-race entirely.
+  function openSettingsTab(tab: string) {
+    if (
+      tab === "general"
+      || tab === "model"
+      || tab === "vocabulary"
+      || tab === "replacements"
+      || tab === "meeting"
+      || tab === "permissions"
+      || tab === "about"
+    ) {
+      settingsActiveTab = tab;
     }
+    activeSection = "settings";
   }
 
   // Error formatting moved to `lib/errors.ts` (#205): the
@@ -1587,6 +1590,10 @@
       onClearAll={clearAllHistory}
     />
   </section>
+  {/if}
+
+  {#if activeSection === "settings"}
+    <SettingsPanel bind:activeTab={settingsActiveTab} />
   {/if}
 </main>
 </div>

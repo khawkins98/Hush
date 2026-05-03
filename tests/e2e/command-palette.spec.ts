@@ -80,44 +80,34 @@ test.describe("CommandPalette — F3 ⌘K", () => {
     await expect(stopRow).toHaveAttribute("aria-disabled", "true");
   });
 
-  test("clicking a Settings row dispatches open_settings", async ({ page }) => {
-    let openCalls = 0;
-    await page.exposeFunction("__incrementOpenSettings", () => {
-      openCalls += 1;
-    });
-    await installMocks(page, {
-      // Override the mock for open_settings to bump the counter.
-      // The default mock's other settings IPCs still apply via the
-      // base mock; this one mirrors the open_settings shape.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      open_settings: () => {
-        // The mock function is serialized via toString(), so we
-        // call into the page-level exposed binding.
-        // @ts-expect-error — exposed function on window
-        return window.__incrementOpenSettings();
-      },
-    });
+  test("clicking a Settings row swaps to the Settings panel", async ({
+    page,
+  }) => {
+    // #479 slice 2 routed the palette's "Open Settings: …" rows
+    // through an in-app panel swap rather than the pre-r2
+    // `open_settings` IPC + cross-window goto-tab emit. Assert
+    // the panel actually shows up, and the active tab is the
+    // one the palette row pointed at.
+    await installMocks(page);
     await page.goto("/");
 
-    // Click the app-bar (non-interactive) so the page has focus,
-    // then send the keystroke. Clicking body.click() would hit
-    // the Record button at the centre of the dictation section
-    // and flip the page into recording state, skewing the
-    // palette's enabled-action set.
+    // Click the app-bar (non-interactive) to focus the page; then
+    // send the keystroke. Body click would hit the Record button.
     await page.locator("header.app-bar").click();
     await page.keyboard.press("ControlOrMeta+k");
     await page
       .locator(
-        '[data-testid="command-palette-row"][data-action-id="settings.general"]',
+        '[data-testid="command-palette-row"][data-action-id="settings.permissions"]',
       )
       .click();
 
-    // Palette closes after run, and open_settings was invoked.
+    // Palette closes after run; the Settings panel mounts
+    // inline; the requested tab (permissions) is active.
     await expect(
       page.locator('[data-testid="command-palette"]'),
     ).toHaveCount(0);
-    // Give the async run a tick.
-    await page.waitForFunction(() => true);
-    expect(openCalls).toBeGreaterThanOrEqual(1);
+    await expect(
+      page.locator('[data-testid="settings-tab-permissions"]'),
+    ).toHaveAttribute("aria-current", "page");
   });
 });
