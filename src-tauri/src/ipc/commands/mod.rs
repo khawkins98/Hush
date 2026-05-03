@@ -40,11 +40,16 @@
 // a hidden `__cmd__<name>` symbol as a sibling of each command, and
 // `pub use` re-exports do not carry that symbol with them. See the
 // 2026-04-25 entry in `learnings.md`.
+pub mod diarizer;
 pub mod dictionary;
 pub mod export;
+pub mod history;
 pub mod macos;
 pub mod meeting;
 pub mod models;
+pub mod ptt;
+pub mod settings;
+pub mod system;
 
 use std::sync::{Arc, PoisonError};
 
@@ -55,7 +60,7 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::{AudioSource, AudioSourceListing};
 use crate::dictionary::{apply_replacements, format_vocabulary_prompt, ReplacementRule};
-use crate::history::{HistoryEntry, NewHistoryEntry};
+use crate::history::NewHistoryEntry;
 
 use super::{AppState, ForegroundApp};
 
@@ -232,31 +237,8 @@ pub fn audio_list_sources(state: State<'_, AppState>) -> IpcResult<Vec<AudioSour
 // `settings:goto-tab` directly; the main window's listener flips
 // the active sidebar section + tab.
 
-/// Show + focus the main `"Hush"` window (#427 Item 1). Called by
-/// the menu-bar quick popover's "Open Hush" link so the popover
-/// can bring the main window forward without needing the broader
-/// `core:window:allow-get-all-windows` JS permission. Best-effort:
-/// a missing window or a `show()` / `set_focus()` failure logs a
-/// warning and returns Ok — the user can still reach the main
-/// window via the tray's "Show Hush" menu item.
-#[tauri::command]
-pub fn show_main_window(app: AppHandle) -> IpcResult<()> {
-    use tauri::Manager as _;
-    let Some(window) = app.get_webview_window("main") else {
-        tracing::warn!("show_main_window: main window not found");
-        return Ok(());
-    };
-    if let Err(e) = window.show() {
-        tracing::warn!(error = ?e, "show_main_window: show failed");
-    }
-    if let Err(e) = window.unminimize() {
-        tracing::warn!(error = ?e, "show_main_window: unminimize failed");
-    }
-    if let Err(e) = window.set_focus() {
-        tracing::warn!(error = ?e, "show_main_window: set_focus failed");
-    }
-    Ok(())
-}
+// `show_main_window` lives in `crate::ipc::commands::system` —
+// extracted under #431.
 
 /// Begin capturing from `source` (microphone or system audio).
 ///
@@ -807,164 +789,10 @@ fn spawn_history_create(
     });
 }
 
-/// Paginated list of history rows, newest first.
-///
-/// `limit` is hard-capped by the repository to a few hundred rows so a
-/// misbehaving frontend cannot pull the entire table at once. `offset`
-/// is clamped at 0.
-#[tauri::command]
-pub async fn history_list(
-    state: State<'_, AppState>,
-    limit: i64,
-    offset: i64,
-) -> IpcResult<Vec<HistoryEntry>> {
-    state
-        .data
-        .history
-        .list(limit, offset)
-        .await
-        .map_err(|e| IpcError::History(e.to_string()))
-}
-
-/// FTS5 search over transcript text. Empty / whitespace-only `query`
-/// falls through to the full list, mirroring the UI's "type to filter"
-/// pattern.
-#[tauri::command]
-pub async fn history_search(
-    state: State<'_, AppState>,
-    query: String,
-    limit: i64,
-    offset: i64,
-) -> IpcResult<Vec<HistoryEntry>> {
-    state
-        .data
-        .history
-        .search(&query, limit, offset)
-        .await
-        .map_err(|e| IpcError::History(e.to_string()))
-}
-
-/// Export a single dictation history row as RFC-4180 CSV.
-///
-/// Two-arg shape: the user picks `path` via
-/// `tauri-plugin-dialog`'s `save()` (which is a path picker only —
-/// it doesn't write bytes for us), and Rust writes the CSV body
-/// directly to that path. The capability for the main window grants
-/// `dialog:allow-save` only; the backend handles the actual write
-/// so we don't have to wire `tauri-plugin-fs` and broaden the
-/// filesystem surface.
-///
-/// Schema: `id,created_at,duration_ms,app_name,model,transcript`.
-/// Omitted: `window_title` (private; not in the export contract
-/// from #357 phase 3a).
-///
-/// Per-row export uses `id` to look up the entry; bulk export
-/// (pending) will reuse the same `history_csv_for_entries` helper.
-#[tauri::command]
-pub async fn history_export_row_csv(
-    state: State<'_, AppState>,
-    id: i64,
-    path: String,
-) -> IpcResult<()> {
-    let all = state
-        .data
-        .history
-        .list(i64::MAX, 0)
-        .await
-        .map_err(|e| IpcError::History(format!("history list: {e:#}")))?;
-    let entry = all
-        .into_iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| IpcError::History(format!("history row {id} not found")))?;
-    let body = history_csv_for_entries(std::slice::from_ref(&entry))
-        .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;
-    tokio::fs::write(&path, body)
-        .await
-        .map_err(|e| IpcError::Internal(format!("write {path}: {e}")))?;
-    Ok(())
-}
-
-/// Pure CSV-emit helper. Held outside the IPC entry point so unit
-/// tests can call it without an `AppState` around the corner. RFC
-/// 4180 escaping handled by the `csv` crate — embedded quotes /
-/// newlines / commas are quote-wrapped + double-quoted as needed.
-pub(super) fn history_csv_for_entries(entries: &[HistoryEntry]) -> anyhow::Result<String> {
-    let mut wtr = csv::Writer::from_writer(vec![]);
-    wtr.write_record([
-        "id",
-        "created_at",
-        "duration_ms",
-        "app_name",
-        "model",
-        "transcript",
-    ])?;
-    for e in entries {
-        wtr.write_record(&[
-            e.id.to_string(),
-            e.created_at.clone(),
-            e.duration_ms.map(|n| n.to_string()).unwrap_or_default(),
-            e.app_name.clone().unwrap_or_default(),
-            e.model.clone(),
-            e.transcript.clone(),
-        ])?;
-    }
-    let bytes = wtr.into_inner()?;
-    Ok(String::from_utf8(bytes)?)
-}
-
-/// Delete a single history row. No-op (returns Ok) if `id` does not
-/// exist — mirrors the trait contract.
-#[tauri::command]
-pub async fn history_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
-    state
-        .data
-        .history
-        .delete(id)
-        .await
-        .map_err(|e| IpcError::History(e.to_string()))
-}
-
-/// Total row count, for paginators that need "page X of Y".
-#[tauri::command]
-pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
-    state
-        .data
-        .history
-        .count()
-        .await
-        .map_err(|e| IpcError::History(e.to_string()))
-}
-
-/// Delete every history row. The frontend gates this behind a
-/// confirmation prompt — there is no recovery once it lands.
-/// Returns the number of rows that were removed so the UI can
-/// surface "Cleared N transcripts" feedback. Calling against an
-/// empty history is safe and returns `0`.
-#[tauri::command]
-pub async fn history_clear(state: State<'_, AppState>) -> IpcResult<i64> {
-    state
-        .data
-        .history
-        .clear()
-        .await
-        .map_err(|e| IpcError::History(e.to_string()))
-}
-
-/// Aggregate stats for the History stats bar (#293). Returns
-/// session count, total words, total recording time, and total
-/// transcript characters. Empty-history case returns all zeros so
-/// the frontend can render a consistent shape.
-#[tauri::command]
-pub async fn get_dictation_stats(
-    state: State<'_, AppState>,
-) -> IpcResult<crate::history::DictationStats> {
-    state
-        .data
-        .history
-        .get_stats()
-        .await
-        .map_err(|e| IpcError::History(e.to_string()))
-}
+// History-browse commands (history_list, history_search,
+// history_export_row_csv, history_delete, history_count,
+// history_clear, get_dictation_stats) live in
+// `crate::ipc::commands::history` — extracted under #431.
 
 // Vocabulary + replacement-rule CRUD commands live in
 // `crate::ipc::commands::dictionary` — extracted under #431. The
@@ -996,645 +824,19 @@ pub async fn get_dictation_stats(
 // happened (or what will happen on first record) and points them at
 // System Settings if they declined.
 
-/// Returns whether the macOS first-run welcome has been shown and
-/// dismissed for this install. The value is stored under
-/// [`crate::settings::keys::FIRST_RUN_COMPLETED`] as the literal
-/// string `"true"` once dismissed; any other state (including the
-/// settings row being absent) reads as `false`.
-#[tauri::command]
-pub async fn get_first_run_completed(state: State<'_, AppState>) -> IpcResult<bool> {
-    let value = state
-        .settings
-        .get(crate::settings::keys::FIRST_RUN_COMPLETED)
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))?;
-    Ok(value.as_deref() == Some("true"))
-}
+// First-run flag commands (get_first_run_completed,
+// mark_first_run_completed, reset_first_run) live in
+// `crate::ipc::commands::system` — extracted under #431.
 
-/// Persist that the user has dismissed the welcome modal. Idempotent;
-/// calling twice is the same as once.
-#[tauri::command]
-pub async fn mark_first_run_completed(state: State<'_, AppState>) -> IpcResult<()> {
-    state
-        .settings
-        .set(crate::settings::keys::FIRST_RUN_COMPLETED, "true")
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
+// HUD / sound-cues / diarization / inference-threads / meeting-
+// autostart-mode get/set commands live in
+// `crate::ipc::commands::settings` — extracted under #431.
 
-/// Read the recording-HUD-enabled flag. The Settings → General
-/// toggle reads this on mount so the checkbox renders the
-/// persisted value rather than always-checked. Defaults to `true`
-/// when the row is absent — first-time users benefit from the
-/// floating pill that confirms the mic is hot.
-#[tauri::command]
-pub fn get_hud_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
-    Ok(state
-        .runtime_flags
-        .hud_enabled
-        .load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Persist the recording-HUD-enabled flag and update the in-memory
-/// `AppState` flag the dictation / meeting start paths read.
-/// Stored as the literal `"true"` / `"false"` under
-/// [`crate::settings::keys::HUD_ENABLED`] so the next launch reads
-/// the same value back.
-#[tauri::command]
-pub async fn set_hud_enabled(state: State<'_, AppState>, enabled: bool) -> IpcResult<()> {
-    set_hud_enabled_inner(&state, enabled).await
-}
-
-/// Tauri-free orchestration for [`set_hud_enabled`]. Tests exercise
-/// this against a `MemSettings`-backed `AppState` rather than a
-/// real Tauri runtime.
-pub(crate) async fn set_hud_enabled_inner(state: &AppState, enabled: bool) -> IpcResult<()> {
-    state
-        .runtime_flags
-        .hud_enabled
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    state
-        .settings
-        .set(
-            crate::settings::keys::HUD_ENABLED,
-            crate::settings::codec::encode_bool(enabled),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
-
-/// Read the audio-cues toggle (#292). Settings → General reads
-/// this on mount. Default off — opt-in by design (intrusive in
-/// shared spaces).
-#[tauri::command]
-pub fn get_sound_cues_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
-    Ok(state
-        .runtime_flags
-        .sound_cues_enabled
-        .load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Persist the audio-cues flag + update the AtomicBool. Same
-/// shape as `set_hud_enabled`.
-#[tauri::command]
-pub async fn set_sound_cues_enabled(state: State<'_, AppState>, enabled: bool) -> IpcResult<()> {
-    set_sound_cues_enabled_inner(&state, enabled).await
-}
-
-pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool) -> IpcResult<()> {
-    state
-        .runtime_flags
-        .sound_cues_enabled
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    state
-        .settings
-        .set(
-            crate::settings::keys::SOUND_CUES_ENABLED,
-            crate::settings::codec::encode_bool(enabled),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
-
-/// Read the per-event recording-start cue toggle (#463). Sub-
-/// toggle beneath the master `sound_cues_enabled`; defaults to
-/// `true` so first-time master-on users hear the start cue.
-#[tauri::command]
-pub fn get_sound_cue_start_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
-    Ok(state
-        .runtime_flags
-        .sound_cue_start_enabled
-        .load(std::sync::atomic::Ordering::Relaxed))
-}
-
-#[tauri::command]
-pub async fn set_sound_cue_start_enabled(
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> IpcResult<()> {
-    state
-        .runtime_flags
-        .sound_cue_start_enabled
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    state
-        .settings
-        .set(
-            crate::settings::keys::SOUND_CUE_START_ENABLED,
-            crate::settings::codec::encode_bool(enabled),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
-
-/// Read the per-event transcription-complete cue toggle (#463).
-#[tauri::command]
-pub fn get_sound_cue_complete_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
-    Ok(state
-        .runtime_flags
-        .sound_cue_complete_enabled
-        .load(std::sync::atomic::Ordering::Relaxed))
-}
-
-#[tauri::command]
-pub async fn set_sound_cue_complete_enabled(
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> IpcResult<()> {
-    state
-        .runtime_flags
-        .sound_cue_complete_enabled
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    state
-        .settings
-        .set(
-            crate::settings::keys::SOUND_CUE_COMPLETE_ENABLED,
-            crate::settings::codec::encode_bool(enabled),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
-
-/// Read the diarization-enabled flag (#111). Settings → Meeting reads
-/// this on mount so the toggle renders the persisted value. Defaults
-/// to `false` when the row is absent — diarization is opt-in until
-/// the PR-B model-download path lands.
-#[tauri::command]
-pub fn get_diarization_enabled(state: State<'_, AppState>) -> IpcResult<bool> {
-    Ok(state
-        .runtime_flags
-        .diarization_enabled
-        .load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Persist the diarization-enabled flag + update the AtomicBool. Same
-/// shape as `set_hud_enabled`. Foundation PR (this one) only flips
-/// the flag; the meeting pump's dispatch path will read it once PR-B
-/// wires the `OnnxDiarizer` impl.
-#[tauri::command]
-pub async fn set_diarization_enabled(state: State<'_, AppState>, enabled: bool) -> IpcResult<()> {
-    set_diarization_enabled_inner(&state, enabled).await
-}
-
-pub(crate) async fn set_diarization_enabled_inner(
-    state: &AppState,
-    enabled: bool,
-) -> IpcResult<()> {
-    state
-        .runtime_flags
-        .diarization_enabled
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    state
-        .settings
-        .set(
-            crate::settings::keys::DIARIZATION_ENABLED,
-            crate::settings::codec::encode_bool(enabled),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
-
-/// Read the live inference thread count (#255). Settings →
-/// General reads this on mount so the slider renders the
-/// persisted value rather than the cross-platform default.
-#[tauri::command]
-pub fn get_inference_threads(state: State<'_, AppState>) -> IpcResult<i32> {
-    Ok(state
-        .runtime_flags
-        .inference_threads
-        .load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Persist the inference thread count + update the in-memory
-/// atomic the loaded `WhisperTranscription` reads on every
-/// inference call. Same pattern as `set_hud_enabled` —
-/// optimistically updates the atomic + persists to settings.
-/// Clamped to `[MIN_INFERENCE_THREADS, MAX_INFERENCE_THREADS]`
-/// (1–16) so a malformed input can't push past whisper.cpp's
-/// happy band.
-#[tauri::command]
-pub async fn set_inference_threads(state: State<'_, AppState>, threads: i32) -> IpcResult<()> {
-    set_inference_threads_inner(&state, threads).await
-}
-
-pub(crate) async fn set_inference_threads_inner(state: &AppState, threads: i32) -> IpcResult<()> {
-    let clamped = threads.clamp(1, 16);
-    state
-        .runtime_flags
-        .inference_threads
-        .store(clamped, std::sync::atomic::Ordering::Relaxed);
-    state
-        .settings
-        .set(
-            crate::settings::keys::INFERENCE_THREADS,
-            &clamped.to_string(),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
-
-/// Status of the diarizer model file (#301). The Settings →
-/// Speakers panel reads this on mount + after every download
-/// progress event so the UI can render "model not installed",
-/// "downloading", or "ready" states accurately.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiarizeModelStatus {
-    /// Whether the wespeaker `.onnx` file is present in
-    /// `models_dir`. Frontend uses this to grey out the toggle and
-    /// show the download affordance when `false`.
-    pub downloaded: bool,
-    /// Catalog display name ("wespeaker ResNet34-LM"). Lifted into
-    /// the status (#351) so the panel can show *which* model is
-    /// installed without duplicating the catalog on the frontend.
-    pub display_name: String,
-    /// Catalog-declared on-disk size (~26 MB). Surfaced in the UI
-    /// so the user knows what they're committing to before
-    /// clicking Download.
-    pub size_mb: u32,
-    /// Catalog-declared SHA-256 (hex). Returned alongside the
-    /// status so the UI can show a "verified file" indicator
-    /// post-download. Not user-facing per se, but useful for
-    /// support / troubleshooting.
-    pub sha256: String,
-    /// Absolute path the user can copy-and-cd-into to drop the
-    /// file manually if they prefer (or to verify the download
-    /// landed where expected). Mirrors the same affordance as the
-    /// Whisper picker.
-    pub expected_path: String,
-    /// Upstream URL the model was downloaded from. Linked from the
-    /// Speakers panel so a user who wants to read the model card
-    /// can click through (#351).
-    pub source_url: String,
-}
-
-/// Read the diarizer model's status (#301). Cheap — single
-/// filesystem stat. Called by Settings → Speakers on mount and
-/// after each `model:download-done` / `model:download-failed`
-/// Tauri event.
-#[tauri::command]
-pub fn get_diarizer_model_status(state: State<'_, AppState>) -> IpcResult<DiarizeModelStatus> {
-    let model = crate::diarization::catalog::default_diarizer_model();
-    let path = state.models_dir.join(&model.filename);
-    Ok(DiarizeModelStatus {
-        downloaded: path.exists(),
-        display_name: model.display_name,
-        size_mb: model.size_mb,
-        sha256: model.sha256,
-        expected_path: path.to_string_lossy().into_owned(),
-        source_url: model.download_url,
-    })
-}
-
-/// Remove the installed wespeaker model and revert the diarizer
-/// slot to NoopDiarizer (#351). The slot swap is the in-process
-/// inverse of `download_diarizer_model`'s `swap_diarizer_after_download`
-/// — the next meeting pump tick reads the new slot and stops
-/// labelling utterances. Persists `diarization_enabled = false` so
-/// the toggle in Settings reflects the new state and a future
-/// re-install lands in a clean configuration.
-///
-/// No-op if the file isn't present (the user already removed it
-/// out-of-band, or a parallel `remove` raced to completion). The
-/// slot swap still runs so the in-memory state stays consistent
-/// with the filesystem regardless of how the file disappeared.
-#[tauri::command]
-pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> {
-    let model = crate::diarization::catalog::default_diarizer_model();
-    let path = state.models_dir.join(&model.filename);
-
-    // Best-effort delete: a missing file is fine (idempotent), but
-    // any other error (permission, IO failure) surfaces so the
-    // user sees something rather than a silent partial state.
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            return Err(IpcError::Internal(format!(
-                "remove diarizer model {}: {e}",
-                path.display()
-            )));
-        }
-    }
-
-    // Revert the slot to a Noop. Mirror the recovery shape
-    // `swap_diarizer_after_download` uses for write lock acquisition
-    // — a transient panic shouldn't poison the slot for the rest
-    // of the session. The guard is scoped to a block so it's
-    // proven-dropped before the next await; otherwise the macro-
-    // generated future fails to satisfy `Send`.
-    {
-        let mut slot = state
-            .diarize_slot
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
-    }
-
-    // Turn the toggle off in the persisted settings so the panel's
-    // next read shows a consistent "no model + toggle off" state.
-    // Errors here are non-fatal: the in-memory slot already swapped,
-    // and a misaligned toggle setting is a UX papercut, not a
-    // broken state.
-    state
-        .runtime_flags
-        .diarization_enabled
-        .store(false, std::sync::atomic::Ordering::Relaxed);
-    if let Err(e) = state
-        .settings
-        .set(crate::settings::keys::DIARIZATION_ENABLED, "false")
-        .await
-    {
-        tracing::warn!(error = %e, "remove_diarizer_model: persist toggle=false failed");
-    }
-
-    Ok(())
-}
-
-/// Begin downloading the wespeaker speaker-embedding model (#301).
-/// Mirrors the `model_download` shape: returns immediately, the
-/// download runs on a tokio task, progress is reported via Tauri
-/// events. After a successful download we hot-swap the diarizer
-/// slot so the new `OnnxDiarizer` takes effect on the next meeting
-/// tick — no app restart needed.
-///
-/// Three Tauri events fan out the lifecycle, namespaced under the
-/// existing `model:` prefix the Whisper picker uses:
-/// - `model:download-progress` — `{ id, bytesReceived, bytesTotal }`
-/// - `model:download-done` — `{ id, message: null }`
-/// - `model:download-failed` — `{ id, message }`
-///
-/// `id` is always `"wespeaker-resnet34-lm"` for the diarizer
-/// (matches `catalog::WESPEAKER_RESNET34_LM_ID`).
-///
-/// Implementation delegates to [`download_diarizer_model_inner`] —
-/// the inner takes an [`crate::events::EventEmitter`] trait
-/// instead of an `AppHandle` so tests can drive both the rejection
-/// path and the failure-cleanup path without spinning up a real
-/// Tauri runtime (#315).
-#[tauri::command]
-pub async fn download_diarizer_model(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> IpcResult<()> {
-    let model = crate::diarization::catalog::default_diarizer_model();
-    let emitter: std::sync::Arc<dyn crate::events::EventEmitter> =
-        std::sync::Arc::new(crate::ipc::events::TauriEventEmitter::new(app));
-    download_diarizer_model_inner(
-        DiarizerDownloadDeps {
-            emitter,
-            downloads: std::sync::Arc::clone(&state.downloads),
-            http: state.http.clone(),
-            diarize_slot: std::sync::Arc::clone(&state.diarize_slot),
-            models_dir: state.models_dir.clone(),
-        },
-        model,
-    )
-    .await
-}
-
-/// Bundled dependencies the diarizer download needs at runtime.
-/// Pulled out of [`AppState`] so [`download_diarizer_model_inner`]
-/// can run from a `#[tokio::test]` without a real `AppHandle` /
-/// `tauri::State` (#315).
-pub(crate) struct DiarizerDownloadDeps {
-    pub emitter: std::sync::Arc<dyn crate::events::EventEmitter>,
-    pub downloads: std::sync::Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<String, crate::transcription::download::CancelHandle>,
-        >,
-    >,
-    pub http: reqwest::Client,
-    pub diarize_slot: crate::diarization::DiarizeSlot,
-    pub models_dir: std::path::PathBuf,
-}
-
-/// Inner implementation of [`download_diarizer_model`]. Same
-/// behaviour as the `#[tauri::command]` wrapper, but takes the
-/// dependencies as plain values so tests can drive both:
-///
-/// - the duplicate-rejection guard inside the
-///   `state.downloads.lock()` critical section (audit-2 fix); and
-/// - the cancel-handle cleanup on the spawned task's failure
-///   branch (mirrors the Whisper-download cleanup pattern).
-///
-/// `model` is the catalog entry to download. Production passes
-/// `crate::diarization::catalog::default_diarizer_model()`; tests
-/// can pass a custom entry with a deliberately bad URL to drive
-/// the failure path without standing up a fake server.
-pub(crate) async fn download_diarizer_model_inner(
-    deps: DiarizerDownloadDeps,
-    model: crate::diarization::catalog::DiarizerModelMetadata,
-) -> IpcResult<()> {
-    let id = model.id.clone();
-    let dest = deps.models_dir.join(&model.filename);
-
-    // Register a cancel handle + re-check on-disk presence inside
-    // the same critical section. Reuses the `downloads` store —
-    // same map the Whisper download path uses, keyed by id, so
-    // the existing `model_cancel_download` IPC works for the
-    // diarizer model with no extra wiring.
-    //
-    // The exists-check sits inside the lock to close a TOCTOU
-    // race (audit-2): two rapid clicks could both pass the
-    // exists-check before either took the lock. Holding the lock
-    // for the existence test means a concurrent download that
-    // just finished is observable as either "file exists now" or
-    // "cancel handle still in flight" — caller gets a clean error
-    // either way and we never start a duplicate download on top
-    // of a freshly-finalized file.
-    let cancel = crate::transcription::download::CancelHandle::new();
-    {
-        let mut guard = deps.downloads.lock().map_err(poisoned)?;
-        if dest.exists() {
-            return Err(IpcError::Settings(format!(
-                "{} is already downloaded",
-                model.display_name
-            )));
-        }
-        if guard.contains_key(&id) {
-            return Err(IpcError::Settings(format!(
-                "{} is already downloading",
-                model.display_name
-            )));
-        }
-        guard.insert(id.clone(), cancel.clone());
-    }
-
-    let emitter_for_task = std::sync::Arc::clone(&deps.emitter);
-    let downloads_for_task = std::sync::Arc::clone(&deps.downloads);
-    let id_for_task = id.clone();
-    let url = model.download_url.clone();
-    let sha = model.sha256.clone();
-    let http = deps.http.clone();
-    let dest_for_task = dest.clone();
-    let diarize_slot = std::sync::Arc::clone(&deps.diarize_slot);
-
-    tauri::async_runtime::spawn(async move {
-        let emitter_for_progress = std::sync::Arc::clone(&emitter_for_task);
-        let id_for_progress = id_for_task.clone();
-        let progress: Box<crate::transcription::download::ProgressCallback> =
-            Box::new(move |update| {
-                emitter_for_progress.emit(
-                    "model:download-progress",
-                    &crate::ipc::commands::models::DownloadProgress {
-                        id: id_for_progress.clone(),
-                        bytes_received: update.bytes_received,
-                        bytes_total: update.bytes_total,
-                    },
-                );
-            });
-
-        let result = crate::transcription::download::download_with_progress(
-            &http,
-            &url,
-            &dest_for_task,
-            &sha,
-            &cancel,
-            &progress,
-        )
-        .await;
-
-        // Drop the cancel handle on the way out, success or
-        // failure. Same pattern the Whisper download uses; the
-        // shared `downloads` map is the rejection-guard so
-        // forgetting to clean up here would silently block
-        // subsequent download attempts (audit-2 R-2).
-        if let Ok(mut guard) = downloads_for_task.lock() {
-            guard.remove(&id_for_task);
-        }
-
-        match result {
-            Ok(()) => {
-                // Hot-swap the diarizer. If OnnxDiarizer::new
-                // succeeds, write it into the slot — the next
-                // pump tick that runs with diarization_enabled=on
-                // will use it.
-                //
-                // If the load fails (corrupted ONNX, ort init
-                // error, feature compiled out), the file is on
-                // disk but useless. Pre-audit-2 we emitted
-                // `model:download-done` regardless — the UI then
-                // showed "installed and verified" while the
-                // diarizer was still Noop, leaving the user with
-                // a feature that quietly didn't work. Now we
-                // delete the bad file (so retry isn't blocked by
-                // the `dest.exists()` guard at the top of the
-                // function) and emit `model:download-failed` with
-                // the load error, so the UI surfaces it the same
-                // way as a network or SHA-mismatch failure.
-                match swap_diarizer_after_download(&diarize_slot, &dest_for_task) {
-                    Ok(()) => {
-                        emitter_for_task.emit(
-                            "model:download-done",
-                            &crate::ipc::commands::models::DownloadStatus {
-                                id: id_for_task,
-                                message: None,
-                            },
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            path = %dest_for_task.display(),
-                            "diarizer download succeeded but model load failed; \
-                             deleting bad file and emitting download-failed so \
-                             retry isn't blocked"
-                        );
-                        let _ = std::fs::remove_file(&dest_for_task);
-                        emitter_for_task.emit(
-                            "model:download-failed",
-                            &crate::ipc::commands::models::DownloadStatus {
-                                id: id_for_task,
-                                message: Some(format!("model load failed: {e:#}")),
-                            },
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!(
-                    error = ?e,
-                    model_id = %id_for_task,
-                    "diarizer download failed"
-                );
-                emitter_for_task.emit(
-                    "model:download-failed",
-                    &crate::ipc::commands::models::DownloadStatus {
-                        id: id_for_task,
-                        message: Some(format!("{e:#}")),
-                    },
-                );
-            }
-        }
-    });
-
-    Ok(())
-}
-
-/// Build a fresh `OnnxDiarizer` from the just-downloaded file and
-/// swap it into the slot. Pulled out as a helper so the inline
-/// download closure stays readable + so the cfg-gating around the
-/// `diarization-onnx` feature lives in one spot.
-fn swap_diarizer_after_download(
-    slot: &crate::diarization::DiarizeSlot,
-    model_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    #[cfg(feature = "diarization-onnx")]
-    {
-        let onnx = crate::diarization::onnx::OnnxDiarizer::new(model_path)?;
-        let mut guard = slot
-            .write()
-            .map_err(|e| anyhow::anyhow!("slot poisoned: {e}"))?;
-        *guard = std::sync::Arc::new(onnx);
-        Ok(())
-    }
-    #[cfg(not(feature = "diarization-onnx"))]
-    {
-        let _ = slot;
-        let _ = model_path;
-        Err(anyhow::anyhow!(
-            "diarization-onnx feature not enabled in this build"
-        ))
-    }
-}
-
-/// Read the current Meeting-Mode auto-start mode. The Settings
-/// → Meeting tab calls this on mount so the dropdown renders the
-/// persisted value.
-#[tauri::command]
-pub fn get_meeting_autostart_mode(
-    state: State<'_, AppState>,
-) -> IpcResult<crate::meeting::MeetingAutostartMode> {
-    Ok(crate::ipc::decode_autostart_mode(
-        state
-            .runtime_flags
-            .meeting_autostart_mode
-            .load(std::sync::atomic::Ordering::Relaxed),
-    ))
-}
-
-/// Persist the Meeting-Mode auto-start mode. Updates both the
-/// in-memory atomic the foreground poller reads and the settings
-/// row used at next-launch boot, so the value is observable to the
-/// poller within the next 3 s tick without an app restart.
-#[tauri::command]
-pub async fn set_meeting_autostart_mode(
-    state: State<'_, AppState>,
-    mode: crate::meeting::MeetingAutostartMode,
-) -> IpcResult<()> {
-    state.runtime_flags.meeting_autostart_mode.store(
-        crate::ipc::encode_autostart_mode(mode),
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    state
-        .settings
-        .set(
-            crate::settings::keys::MEETING_AUTOSTART_MODE,
-            mode.as_setting(),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
+// Diarizer model commands (DiarizeModelStatus,
+// get_diarizer_model_status, remove_diarizer_model,
+// download_diarizer_model, download_diarizer_model_inner,
+// swap_diarizer_after_download) live in
+// `crate::ipc::commands::diarizer` — extracted under #431.
 
 /// TTL for the [`check_for_updates`] cache (#333). 15 minutes is
 /// well below GitHub's 60-req/h unauthenticated rate-limit window
@@ -1645,266 +847,13 @@ pub async fn set_meeting_autostart_mode(
 /// quitting the app.
 pub const UPDATE_CHECK_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-/// LaunchAgent path-staleness flag (#317). #271's setup hook
-/// re-registers the autostart plist with the current binary
-/// path on every launch where autostart is enabled — but if
-/// `enable()` fails (read-only home, fs permission issue) the
-/// LaunchAgent still points at whatever path it had before, and
-/// the user gets no signal. This IPC + the retry below give
-/// Settings → General a way to surface the failure and let the
-/// user trigger another attempt.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AutostartPathStatus {
-    /// True if `lib.rs::run`'s post-#271 re-register hit an
-    /// error. False on every other path (autostart not enabled,
-    /// re-register succeeded, or non-macOS where the flag is
-    /// always false because the re-register block is gated to
-    /// macOS).
-    pub stale: bool,
-}
+// AutostartPathStatus, get_autostart_path_status,
+// retry_autostart_registration, check_for_updates,
+// check_for_updates_inner all live in
+// `crate::ipc::commands::system` — extracted under #431.
 
-#[tauri::command]
-pub fn get_autostart_path_status(state: State<'_, AppState>) -> IpcResult<AutostartPathStatus> {
-    Ok(AutostartPathStatus {
-        stale: state
-            .runtime_flags
-            .autostart_path_stale
-            .load(std::sync::atomic::Ordering::Relaxed),
-    })
-}
-
-/// Retry the LaunchAgent re-register that failed at boot (#317).
-/// Returns `true` if the retry succeeded (and clears the stale
-/// flag so subsequent `get_autostart_path_status` calls see the
-/// cleaner state); returns `false` if the retry also failed.
-///
-/// Settings → General's "Click to update" button calls this when
-/// the user wants to retry without restarting the app.
-#[tauri::command]
-pub fn retry_autostart_registration(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> IpcResult<bool> {
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_plugin_autostart::ManagerExt;
-        let mgr = app.autolaunch();
-        match mgr.enable() {
-            Ok(()) => {
-                state
-                    .runtime_flags
-                    .autostart_path_stale
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
-                tracing::info!(
-                    "autostart: retry_autostart_registration succeeded; LaunchAgent path is now current"
-                );
-                Ok(true)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "autostart: retry_autostart_registration failed; flag stays set"
-                );
-                Ok(false)
-            }
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        let _ = state;
-        Ok(true)
-    }
-}
-
-/// Manual "Check for updates" probe (#223). Calls
-/// [`crate::updater::check_for_updates`] against the app's shared
-/// HTTP client; the result drives an in-app dialog.
-///
-/// Caches the last successful result for [`UPDATE_CHECK_TTL`]
-/// (#333) so a spam-clicking user or a shared-IP environment
-/// (corporate NAT, family Wi-Fi with multiple installs) can't burn
-/// the unauthenticated-GitHub rate limit. Auto-update is the
-/// separate [#10] follow-up.
-///
-/// [#10]: https://github.com/khawkins98/Hush/issues/10
-#[tauri::command]
-pub async fn check_for_updates(
-    state: State<'_, AppState>,
-) -> IpcResult<crate::updater::UpdateCheckResult> {
-    check_for_updates_inner(&state, std::time::Instant::now()).await
-}
-
-/// Inner implementation that takes the current instant explicitly
-/// so unit tests can pin time without an actual sleep. The IPC
-/// command always passes `Instant::now()`.
-pub(crate) async fn check_for_updates_inner(
-    state: &AppState,
-    now: std::time::Instant,
-) -> IpcResult<crate::updater::UpdateCheckResult> {
-    {
-        let cached = state.last_update_check.lock().map_err(poisoned)?;
-        if let Some((at, result)) = cached.as_ref() {
-            if now.duration_since(*at) < UPDATE_CHECK_TTL {
-                return Ok(result.clone());
-            }
-        }
-    }
-    let fresh = crate::updater::check_for_updates(&state.http).await?;
-    *state.last_update_check.lock().map_err(poisoned)? = Some((now, fresh.clone()));
-    Ok(fresh)
-}
-
-/// Clear the first-run-completed flag so the welcome modal renders
-/// again on the next app launch. Used by the Settings → General
-/// "Show welcome on next launch" affordance — useful for users
-/// who dismissed the welcome too quickly and want to re-read the
-/// permissions explainer.
-#[tauri::command]
-pub async fn reset_first_run(state: State<'_, AppState>) -> IpcResult<()> {
-    state
-        .settings
-        .set(crate::settings::keys::FIRST_RUN_COMPLETED, "false")
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
-}
-
-/// Configuration the Settings UI reads + writes for push-to-talk.
-///
-/// `combo` is the canonical `+`-separated key list (`RightMeta`,
-/// `RightMeta+RightShift`, etc.). `enabled` mirrors the persisted
-/// `ptt_enabled` settings flag. `listenerRunning` is a runtime
-/// signal: true when the rdev thread is alive and gated by the
-/// `enabled` flag, false when it wasn't started at boot. The UI
-/// uses it to show "Restart Hush for Enable to take effect" when
-/// the user toggles ON in a session that started with PTT off.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PttConfig {
-    pub combo: Vec<String>,
-    pub enabled: bool,
-    pub listener_running: bool,
-}
-
-#[tauri::command]
-pub fn ptt_get_config(state: State<'_, AppState>) -> IpcResult<PttConfig> {
-    let combo = state
-        .ptt_combo
-        .read()
-        .map_err(|_| IpcError::Internal("ptt_combo lock poisoned".into()))?
-        .keys()
-        .iter()
-        .map(|k| k.as_str().to_string())
-        .collect();
-    let enabled = state.ptt_active.load(std::sync::atomic::Ordering::SeqCst);
-    let listener_running = state
-        .ptt_listener_spawned
-        .load(std::sync::atomic::Ordering::SeqCst);
-    Ok(PttConfig {
-        combo,
-        enabled,
-        // True once the rdev thread is actually up. `ptt_set_config`
-        // spawns it on demand the first time the user enables PTT,
-        // so this transitions from false → true on first opt-in
-        // without an app restart.
-        listener_running,
-    })
-}
-
-/// Update the user's PTT configuration. Combo is hot-swapped via
-/// the shared `RwLock` (next keystroke uses the new combo). Enabled
-/// is persisted + flipped on the runtime atomic; if the listener
-/// wasn't running at boot, a restart is required for the change to
-/// take effect (the listener can't be started mid-session because
-/// rdev::listen has no clean stop API and starting it now would
-/// trigger the OS permission prompt at a surprising moment).
-///
-/// Validates the combo before persisting — an empty combo or
-/// unparseable key name returns `IpcError::Settings` and the
-/// existing config is unchanged.
-///
-/// First-time opt-in: when `enabled` flips from false to true and
-/// the rdev listener wasn't spawned at boot, this command starts
-/// it on demand via `register_ptt_listener`. On macOS that's the
-/// moment the Input Monitoring permission prompt fires — the user
-/// has clicked Enable, so the prompt is no longer a surprise.
-#[tauri::command]
-pub async fn ptt_set_config(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    combo: Vec<String>,
-    enabled: bool,
-) -> IpcResult<()> {
-    // Build + validate the combo first, BEFORE touching state.
-    // A bad input shouldn't half-apply (combo persisted, atomic
-    // flipped) — validate up front and bail clean.
-    let parsed_keys: Result<Vec<crate::hotkey::ptt::PttKey>, _> = combo
-        .iter()
-        .map(|s| crate::hotkey::ptt::parse_ptt_key(s))
-        .collect();
-    let parsed_keys =
-        parsed_keys.map_err(|e| IpcError::Settings(format!("ptt_set_config: {e:#}")))?;
-    let new_combo = crate::hotkey::ptt::PttCombo::try_from_keys(parsed_keys)
-        .map_err(|e| IpcError::Settings(format!("ptt_set_config: {e:#}")))?;
-
-    // Persist combo first so a crash between steps leaves the user
-    // with their chosen combo on next launch even if the atomic /
-    // enabled flip didn't reach the DB.
-    state
-        .settings
-        .set(
-            crate::settings::keys::PTT_COMBO,
-            &new_combo.to_storage_string(),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))?;
-    state
-        .settings
-        .set(
-            crate::settings::keys::PTT_ENABLED,
-            crate::settings::codec::encode_bool(enabled),
-        )
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))?;
-
-    // Hot-swap the in-memory state — listener picks both up on the
-    // next OS event without restarting.
-    {
-        let mut guard = state
-            .ptt_combo
-            .write()
-            .map_err(|_| IpcError::Internal("ptt_combo lock poisoned".into()))?;
-        *guard = new_combo;
-    }
-    state
-        .ptt_active
-        .store(enabled, std::sync::atomic::Ordering::SeqCst);
-
-    // Spawn the rdev listener on demand if this is the first time
-    // PTT is being enabled this session. The call is idempotent —
-    // a second invocation with the spawned latch already true
-    // returns Ok without touching the thread. On macOS, this is
-    // the line that triggers the Input Monitoring permission
-    // prompt; on the success path the user clicks Enable, sees
-    // the prompt, grants, and PTT works without a restart.
-    if enabled {
-        if let Err(e) = crate::hotkey::ptt::register_ptt_listener(
-            &app,
-            std::sync::Arc::clone(&state.ptt_combo),
-            std::sync::Arc::clone(&state.ptt_active),
-            std::sync::Arc::clone(&state.ptt_listener_spawned),
-        ) {
-            // Best-effort: spawn failure is logged but shouldn't
-            // un-persist the user's preference. They can try again
-            // (or restart) and the listener will spin up on next
-            // launch via lib.rs::setup since `ptt_enabled=true` is
-            // already in the DB.
-            tracing::error!(error = ?e, "failed to spawn PTT listener on demand");
-        }
-    }
-    Ok(())
-}
+// PttConfig + ptt_get_config + ptt_set_config live in
+// `crate::ipc::commands::ptt` — extracted under #431.
 
 // macOS-only commands (privacy-pane open / diagnose /
 // reset) live in `crate::ipc::commands::macos` —
@@ -2696,7 +1645,7 @@ mod tests {
             .hud_enabled
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        set_hud_enabled_inner(&state, false)
+        super::settings::set_hud_enabled_inner(&state, false)
             .await
             .expect("set_hud_enabled_inner ok");
 
@@ -2726,10 +1675,10 @@ mod tests {
         // where `set_hud_enabled` only ever wrote "false".
         let state = crate::ipc::tests::mock_state();
 
-        set_hud_enabled_inner(&state, false)
+        super::settings::set_hud_enabled_inner(&state, false)
             .await
             .expect("set false ok");
-        set_hud_enabled_inner(&state, true)
+        super::settings::set_hud_enabled_inner(&state, true)
             .await
             .expect("set true ok");
 
@@ -2750,7 +1699,7 @@ mod tests {
     #[tokio::test]
     async fn set_inference_threads_persists_value_within_bounds() {
         let state = crate::ipc::tests::mock_state();
-        set_inference_threads_inner(&state, 8)
+        super::settings::set_inference_threads_inner(&state, 8)
             .await
             .expect("set ok");
         assert_eq!(
@@ -2775,7 +1724,7 @@ mod tests {
         // upper bound; the inner setter must clamp so a malformed
         // value can't reach `set_n_threads`.
         let state = crate::ipc::tests::mock_state();
-        set_inference_threads_inner(&state, 999)
+        super::settings::set_inference_threads_inner(&state, 999)
             .await
             .expect("set ok");
         assert_eq!(
@@ -2796,7 +1745,7 @@ mod tests {
     #[tokio::test]
     async fn set_inference_threads_clamps_below_min() {
         let state = crate::ipc::tests::mock_state();
-        set_inference_threads_inner(&state, 0)
+        super::settings::set_inference_threads_inner(&state, 0)
             .await
             .expect("set ok");
         assert_eq!(
@@ -2823,7 +1772,7 @@ mod tests {
             "default should be off"
         );
 
-        set_diarization_enabled_inner(&state, true)
+        super::settings::set_diarization_enabled_inner(&state, true)
             .await
             .expect("set true ok");
         assert!(
@@ -2843,7 +1792,7 @@ mod tests {
             Some("true"),
         );
 
-        set_diarization_enabled_inner(&state, false)
+        super::settings::set_diarization_enabled_inner(&state, false)
             .await
             .expect("set false ok");
         assert!(
@@ -2914,7 +1863,7 @@ mod tests {
         let slot: crate::diarization::DiarizeSlot =
             Arc::new(std::sync::RwLock::new(Arc::clone(&sentinel)));
 
-        let res = swap_diarizer_after_download(&slot, &path);
+        let res = super::diarizer::swap_diarizer_after_download(&slot, &path);
         assert!(res.is_err(), "swap should reject a non-wespeaker file");
 
         // The slot still holds the sentinel — same Arc identity,
@@ -2944,7 +1893,7 @@ mod tests {
 
         // Just inside the TTL → cache hit.
         let still_within = seed_at + UPDATE_CHECK_TTL - std::time::Duration::from_secs(1);
-        let result = check_for_updates_inner(&state, still_within)
+        let result = super::system::check_for_updates_inner(&state, still_within)
             .await
             .expect("cache hit ok");
         assert_eq!(result, seeded);
@@ -2971,7 +1920,7 @@ mod tests {
         // errors to the typed enum. Either way, we should not see
         // the seeded UpToDate value back.
         let past_ttl = seed_at + UPDATE_CHECK_TTL + std::time::Duration::from_secs(1);
-        let result = check_for_updates_inner(&state, past_ttl).await;
+        let result = super::system::check_for_updates_inner(&state, past_ttl).await;
         match result {
             Ok(crate::updater::UpdateCheckResult::CheckFailed { .. }) => {
                 // Network path was hit and failed — the cache was
@@ -2992,7 +1941,8 @@ mod tests {
         // through.
         let state = crate::ipc::tests::mock_state();
         assert!(state.last_update_check.lock().unwrap().is_none());
-        let result = check_for_updates_inner(&state, std::time::Instant::now()).await;
+        let result =
+            super::system::check_for_updates_inner(&state, std::time::Instant::now()).await;
         // Network failure expected (no wiremock); we just want to
         // pin that this path is reached, not blocked by an empty
         // cache.
@@ -3003,73 +1953,9 @@ mod tests {
         }
     }
 
-    // -- history CSV export (#357 phase 3a) ----------------------------
-
-    fn history_entry(
-        id: i64,
-        transcript: &str,
-        app: Option<&str>,
-        duration: Option<i64>,
-    ) -> HistoryEntry {
-        HistoryEntry {
-            id,
-            transcript: transcript.to_owned(),
-            app_name: app.map(str::to_owned),
-            window_title: None,
-            model: "ggml-base.bin".to_owned(),
-            duration_ms: duration,
-            created_at: "2026-05-01T10:00:00Z".to_owned(),
-        }
-    }
-
-    #[test]
-    fn history_csv_for_entries_emits_header_and_one_row_per_entry() {
-        let entries = vec![
-            history_entry(1, "Hello world", Some("iTerm2"), Some(2_500)),
-            history_entry(2, "Second line", None, None),
-        ];
-        let csv = history_csv_for_entries(&entries).expect("csv ok");
-        let lines: Vec<&str> = csv.lines().collect();
-        assert_eq!(lines.len(), 3, "header + 2 rows; got: {csv:?}");
-        assert_eq!(
-            lines[0],
-            "id,created_at,duration_ms,app_name,model,transcript"
-        );
-        assert!(lines[1].starts_with("1,2026-05-01T10:00:00Z,2500,iTerm2"));
-        // None app / duration render as empty fields, not "null" or "None".
-        assert_eq!(
-            lines[2], "2,2026-05-01T10:00:00Z,,,ggml-base.bin,Second line",
-            "got: {:?}",
-            lines[2]
-        );
-    }
-
-    #[test]
-    fn history_csv_escapes_quotes_commas_and_newlines() {
-        // RFC-4180 escape rules — embedded quotes get doubled,
-        // commas / newlines force quote-wrapping. The csv crate
-        // does the heavy lifting; this test pins that we route
-        // through it correctly and don't accidentally hand-roll
-        // an `escape` somewhere that would double-encode.
-        let entries = vec![history_entry(
-            7,
-            "She said \"hi\", then\nleft.",
-            Some("Notes,Inc"),
-            None,
-        )];
-        let csv = history_csv_for_entries(&entries).expect("csv ok");
-        // Transcript field: leading + trailing quote, embedded
-        // quote doubled, newline preserved inside the quoted field.
-        assert!(
-            csv.contains("\"She said \"\"hi\"\", then\nleft.\""),
-            "transcript should be quote-wrapped with doubled quotes\n{csv}"
-        );
-        // App-name field: comma triggers quoting too.
-        assert!(
-            csv.contains("\"Notes,Inc\""),
-            "comma in app name should force quoting\n{csv}"
-        );
-    }
+    // History CSV export (#357 phase 3a) tests live in
+    // `crate::ipc::commands::history` — moved alongside the helper
+    // under #431.
 
     // -- remove_diarizer_model (#351) ----------------------------------
 
@@ -3193,8 +2079,8 @@ mod tests {
             >,
         >,
         models_dir: std::path::PathBuf,
-    ) -> DiarizerDownloadDeps {
-        DiarizerDownloadDeps {
+    ) -> super::diarizer::DiarizerDownloadDeps {
+        super::diarizer::DiarizerDownloadDeps {
             emitter,
             downloads,
             http: reqwest::Client::new(),
@@ -3235,7 +2121,7 @@ mod tests {
             tmp.path().to_path_buf(),
         );
 
-        let result = download_diarizer_model_inner(deps, model.clone()).await;
+        let result = super::diarizer::download_diarizer_model_inner(deps, model.clone()).await;
         match result {
             Err(IpcError::Settings(msg)) => {
                 assert!(
@@ -3286,7 +2172,7 @@ mod tests {
             tmp.path().to_path_buf(),
         );
 
-        download_diarizer_model_inner(deps, model.clone())
+        super::diarizer::download_diarizer_model_inner(deps, model.clone())
             .await
             .expect("inner returns Ok before the spawn — the failure happens inside the task");
 

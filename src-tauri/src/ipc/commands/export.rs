@@ -2,7 +2,7 @@
 //! phase 3c).
 //!
 //! Per-row export already lives next to its domain commands —
-//! [`super::history_export_row_csv`] for dictation,
+//! [`super::history::history_export_row_csv`] for dictation,
 //! [`super::meeting::meeting_session_export`] for meetings. The
 //! bulk path needs both, plus the same FTS query the panel is
 //! showing, plus the user's chosen format/kind/dir options. It
@@ -25,10 +25,11 @@ use tauri::State;
 
 use crate::ipc::AppState;
 
+use super::history::history_csv_for_entries;
 use super::meeting::{
     meeting_session_csv, meeting_session_json, meeting_session_text, MeetingExportFormat,
 };
-use super::{history_csv_for_entries, IpcError, IpcResult};
+use super::{IpcError, IpcResult};
 
 /// Which kinds of rows the bulk export covers (#357 phase 3c).
 /// Tagged lowercase to match the frontend literal tokens.
