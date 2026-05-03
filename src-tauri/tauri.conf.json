@@ -45,6 +45,21 @@
         "resizable": true,
         "visible": false,
         "skipTaskbar": false
+      },
+      {
+        "label": "menu-bar",
+        "title": "Hush",
+        "url": "/menu-bar",
+        "width": 320,
+        "height": 220,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": true,
+        "visible": false,
+        "acceptFirstMouse": true
       }
     ],
     "security": {

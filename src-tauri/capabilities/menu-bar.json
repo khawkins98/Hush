@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "menu-bar",
+  "description": "Capability for the menu-bar quick-access popover (#427 Item 1). The popover is a small always-on-top window that surfaces start/stop dictation, a recent-transcript snippet, and an 'Open Hush' link without forcing the user to bring the main window forward. Permissions stay minimal: `core:event:default` for the `ui:recording-state`/`hush:dictation-result` listeners that drive the state indicator + transcript snippet; `core:window:allow-hide` so the popover can dismiss itself when the user clicks 'Open Hush' or hits Escape; the dictation IPCs (`start_dictation`, `stop_dictation`) so the start/stop button can drive the existing pipeline without going through the main window. Audio source listing is needed because `start_dictation` requires picking one — the popover defaults to the system mic. As with the HUD's tightened capability (#238), every grant widens this window's blast radius — keep the surface deliberate.",
+  "windows": ["menu-bar"],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:webview:allow-internal-toggle-devtools"
+  ]
+}
