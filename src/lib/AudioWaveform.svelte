@@ -96,12 +96,14 @@
   const RELEASE = 0.12;
   const WAVEFORM_INTERVAL_MS = 80;
 
-  // Idle breathing: low-amplitude sine wave. 2 s cycle is slower
-  // than typical UI motion so it reads as ambient rather than
-  // active.
+  // Idle: bars hold at a flat low baseline. The pre-r2 idle mood
+  // ran a 2-second sine breath ("feel alive while nothing's
+  // recording") but that misread as "the app is listening" —
+  // dishonest because no audio is being captured. A flat
+  // baseline still differentiates idle from processing (frozen
+  // last-shape) and recording (live levels) without implying
+  // capture.
   const IDLE_BASELINE = 0.06;
-  const IDLE_AMPLITUDE = 0.04;
-  const IDLE_PERIOD_MS = 2000;
 
   // Error flash: long enough to register, short enough that the
   // surrounding error message becomes the focal point.
@@ -162,8 +164,9 @@
 
       let target: number;
       if (effectiveMode === "idle" || effectiveMode === "error") {
-        const phase = (Date.now() % IDLE_PERIOD_MS) / IDLE_PERIOD_MS;
-        target = IDLE_BASELINE + Math.sin(phase * Math.PI * 2) * IDLE_AMPLITUDE;
+        // Static low baseline — see comment near IDLE_BASELINE
+        // for why we no longer animate at idle.
+        target = IDLE_BASELINE;
       } else {
         target = rms;
       }

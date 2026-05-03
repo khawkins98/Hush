@@ -118,14 +118,6 @@
     <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
   </header>
 
-  <aside class="hint hint-sticky" aria-label="Keyboard shortcuts">
-    <strong>Shortcuts:</strong>
-    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
-    or hold
-    {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
-    to push-to-talk.
-  </aside>
-
   {#if noModelInstalled}
     <aside class="setup-banner" role="status" aria-label="First-time setup">
       <div class="setup-banner-text">
@@ -176,6 +168,19 @@
         {onStop}
         onOpenPermissions={onOpenPermissionsTab}
       />
+
+      <!--
+        Keyboard-shortcut hint sits under the recording area as a
+        contextual reminder (rather than a sticky strip up top
+        per pre-r2). Quieter visual treatment so it doesn't
+        compete with the centerpiece waveform + button above.
+      -->
+      <p class="shortcut-hint" aria-label="Keyboard shortcuts">
+        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
+        or hold
+        {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
+        to push-to-talk.
+      </p>
 
       {#if result}
         <div
@@ -322,32 +327,27 @@
     border-color: var(--accent-hover);
   }
 
-  .hint {
-    margin: 0 0 2rem;
-    padding: 0.75rem 1rem;
-    background-color: var(--info-bg);
-    border: 1px solid var(--info-border);
-    border-radius: var(--radius-md);
-    color: var(--info-text);
-    font-size: 0.9rem;
-    text-align: left;
-    line-height: 1.5;
+  /* Inline keyboard-shortcut hint, contextually placed below the
+     record area. Pre-r2 this was an info-box-styled `.hint
+     hint-sticky` strip pinned above the section; visually heavy
+     for a contextual reminder. The new treatment is text-only —
+     muted body copy with kbd chips that match the hint's
+     quieter weight. */
+  .shortcut-hint {
+    margin: 0;
+    text-align: center;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    color: var(--text-muted);
   }
-
-  .hint-sticky {
-    position: sticky;
-    top: 0.75rem;
-    z-index: 5;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  }
-
-  .hint kbd {
+  .shortcut-hint kbd {
     display: inline-block;
     padding: 0.05rem 0.4rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.85em;
+    color: var(--text-secondary);
     background-color: var(--bg-surface);
-    border: 1px solid var(--info-border);
+    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     margin: 0 0.1rem;
   }
