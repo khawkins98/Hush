@@ -124,21 +124,32 @@
 </div>
 
 <style>
-  /* CSS cloned verbatim out of the pre-#468 ControlsSection so
-     slice B is visually byte-identical. Slice C's two-column
-     layout will likely retune some of these (sidebar grid drops
-     the `1fr auto` row layout). */
+  /* In the #468 two-column layout this picker lives in the
+     200 px sidebar, so source + model stack vertically rather
+     than side by side. Children are allowed to shrink below
+     their intrinsic content width so long device names
+     ("MacBook Air Microphone (default)") don't blow the sidebar
+     wider — the Select's existing ellipsis kicks in. */
   .config-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.6rem;
-    align-items: end;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    min-width: 0;
   }
 
   .config-field {
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
+    min-width: 0;
+  }
+
+  .config-field :global(.select-trigger) {
+    width: 100%;
+  }
+  .config-field .model-chip {
+    width: 100%;
+    justify-content: space-between;
   }
 
   /* Panic-flavoured all-caps section label — same idiom Nova

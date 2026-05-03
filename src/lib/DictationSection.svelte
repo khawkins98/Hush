@@ -217,21 +217,30 @@
     align-items: start;
   }
 
-  /* Sidebar column hosts the session config (audio source +
-     model chip). Nova-inspired hairline divider — barely visible
-     in dark, slightly more present in light. The eye reads the
-     boundary without a heavy rule. */
+  /* Sidebar column — Rogue Amoeba "panel carved out of the page
+     chrome" idiom. The tonal step from `--bg-app` to
+     `--bg-sidebar` does the visual delimiting on its own; the
+     pre-r2 hairline was barely visible in either theme so the
+     boundary now relies on the surface tone difference instead.
+     The padding gives the bg some room to read around the
+     controls. */
   .sidebar {
-    padding-right: 1.5rem;
-    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-sidebar);
+    padding: 0.85rem 1rem;
+    border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
+    /* Children may have intrinsic widths wider than the 200 px
+       column (long device names etc). `min-width: 0` lets them
+       shrink + ellipsis within the column rather than overflow
+       into the content column. */
+    min-width: 0;
     /* Rogue Amoeba-style frozen-while-active treatment: when the
        parent flips `recording=true` the sidebar dims + locks so
        the eye reads "the configuration is committed for this
-       session". Underlying inputs are also `disabled` for keyboard
-       a11y; this is the visual reinforcement. */
+       session". Underlying inputs are already `disabled` for
+       keyboard a11y; this is the visual reinforcement. */
     transition: opacity 250ms ease;
   }
   .sidebar.locked {
@@ -244,15 +253,6 @@
     }
   }
 
-  @media (prefers-color-scheme: dark) {
-    .sidebar {
-      border-right-color: rgba(255, 255, 255, 0.06);
-    }
-  }
-  :root[data-theme="dark"] .sidebar {
-    border-right-color: rgba(255, 255, 255, 0.06);
-  }
-
   .content {
     display: flex;
     flex-direction: column;
@@ -260,25 +260,14 @@
     min-width: 0;
   }
 
-  /* Below ~520px the sidebar's 200 px would crowd the content
-     column. Stack instead, with the boundary moving to a
-     bottom-divider so the visual hierarchy still reads. */
+  /* Below ~520 px the sidebar's 200 px would crowd the content
+     column. Stack instead — the tonal step from `--bg-sidebar`
+     still delimits the panel without needing a separate
+     boundary rule. */
   @media (max-width: 520px) {
     .main-layout {
       grid-template-columns: 1fr;
       gap: 1rem;
-    }
-    .sidebar {
-      padding-right: 0;
-      padding-bottom: 1rem;
-      border-right: none;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    @media (prefers-color-scheme: dark) {
-      .sidebar {
-        border-right-color: transparent;
-        border-bottom-color: rgba(255, 255, 255, 0.06);
-      }
     }
   }
 

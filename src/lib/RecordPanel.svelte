@@ -214,6 +214,10 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
+    /* Resting shadow — gives the idle button presence so it
+       reads as "filled, confident" per the #468 spec rather
+       than a ghost outline. Hover (below) lifts it visibly. */
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     /* Panic-flavoured overshoot easing on the transform — tiny
        "pop" at the top of the hover scale, physical not linear.
        Other property transitions stay ease-y. */
@@ -228,7 +232,7 @@
     transform: scale(1.02);
     border-color: var(--accent-hover);
     box-shadow:
-      0 2px 6px rgba(0, 0, 0, 0.18),
+      0 4px 10px rgba(0, 0, 0, 0.10),
       0 0 0 3px var(--accent-subtle);
   }
   .start-btn:active:not(:disabled) {
@@ -315,18 +319,25 @@
   }
 
   .record-mode-badge {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    align-items: flex-start;
     gap: 0.45rem;
-    align-self: center;
-    padding: 0.4rem 0.75rem;
+    /* Use the full content-column width and align text left so the
+       pre-r2 "centre an inline-flex pill" trick stops squishing the
+       multi-line copy past the column boundary. */
+    align-self: stretch;
+    padding: 0.55rem 0.85rem;
     font-size: 0.82rem;
-    line-height: 1.35;
+    line-height: 1.4;
     font-family: inherit;
-    border-radius: 999px;
+    /* `--radius-md` (8 px) reads cleanly when the copy wraps;
+       the pre-r2 999 px pill stretched into an oblong on
+       multi-line text. */
+    border-radius: var(--radius-md);
     border: 1px solid #d1d1d8;
     background-color: var(--bg-surface);
     color: var(--text-secondary);
+    text-align: left;
     cursor: pointer;
     text-align: left;
     max-width: 100%;

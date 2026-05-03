@@ -21,8 +21,12 @@
   --accent-subtle: rgba(124, 111, 247, 0.12);
 
   /* ── Surfaces ───────────────────────────────────────────────── */
+  /* Light-mode `--bg-sidebar` bumped from #f0f0f3 → #ebebef in
+     #468 r2 so it reads as a distinct surface against `--bg-app`
+     rather than blending into it. The pre-r2 value was only 6
+     points off and barely perceptible against #f6f6f6. */
   --bg-app:      #f6f6f6;
-  --bg-sidebar:  #f0f0f3;
+  --bg-sidebar:  #ebebef;
   --bg-surface:  #ffffff;
   --bg-elevated: #ffffff;
   --bg-input:    #ffffff;
@@ -116,7 +120,7 @@
 
 :root[data-theme="light"] {
   --bg-app:      #f6f6f6;
-  --bg-sidebar:  #f0f0f3;
+  --bg-sidebar:  #ebebef;
   --bg-surface:  #ffffff;
   --bg-elevated: #ffffff;
   --bg-input:    #ffffff;
