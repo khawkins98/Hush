@@ -38,7 +38,10 @@ test.describe("audio source picker", () => {
 
     // Scope to the dictation controls section so we don't pick up the
     // meeting-panel picker added in #122 Phase 1.
-    const controls = page.locator("section.controls");
+    // Slice C of #468 split the dictation section into a two-column
+    // grid; the audio picker now lives in the sidebar column inside
+    // `#dictation-section .sidebar`.
+    const controls = page.locator("#dictation-section .sidebar");
 
     // Wait for the custom trigger to mount (loading placeholder is a <p>).
     const trigger = controls.locator('[data-testid="source-picker-trigger"]');
@@ -92,7 +95,10 @@ test.describe("audio source picker", () => {
     });
     await page.goto("/");
 
-    const controls = page.locator("section.controls");
+    // Slice C of #468 split the dictation section into a two-column
+    // grid; the audio picker now lives in the sidebar column inside
+    // `#dictation-section .sidebar`.
+    const controls = page.locator("#dictation-section .sidebar");
     const trigger = controls.locator('[data-testid="source-picker-trigger"]');
     await expect(trigger).toBeVisible();
     await trigger.click();
