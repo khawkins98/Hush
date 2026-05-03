@@ -1698,23 +1698,19 @@
   padding-top: 2.5rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  .app-bar {
-    border-bottom-color: #2f2f33;
-  }
-  .brand-name { color: #e8e8e8; }
-  .settings-btn {
-    color: #a0a0a0;
-    border-color: #3a3a3a;
-  }
-  .settings-btn:hover {
-    background-color: rgba(150, 170, 240, 0.1);
-    border-color: var(--accent);
-    color: #e8e8e8;
-  }
-  :global(.page-section + .page-section) {
-    border-top-color: #2f2f33;
-  }
+/* The pre-r2 dark `@media` overrides for `.app-bar`,
+   `.brand-name`, `.settings-btn`, and `.page-section + …` are
+   gone — every rule above already reads from
+   `var(--bg-…)` / `var(--text-…)` / `var(--accent)` /
+   `var(--border)`, which `app.css` swaps via the OS media query
+   OR the manual `:root[data-theme="dark"]` override. The
+   @media-only duplication just hid the manual-override path
+   when the OS preference disagreed. */
+.brand-name {
+  /* Explicit text token so the brand follows the theme cascade
+     without depending on inherited body colour (which the main
+     page doesn't set). */
+  color: var(--text-primary);
 }
 
 .section-header {

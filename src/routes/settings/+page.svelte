@@ -365,8 +365,8 @@
   :global(html), :global(body) {
     margin: 0;
     padding: 0;
-    background-color: #f3f3f5;
-    color: #0f0f0f;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
     font-family:
       -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
       Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif,
@@ -387,13 +387,16 @@
 
   /* Window header (sticky) — anchors the surface so the tab strip
      reads as "tabs inside Settings" rather than "navigation
-     somewhere else in the app." */
+     somewhere else in the app." Uses `--bg-sidebar` so the strip
+     reads as a slightly cooler/darker step from the page chrome
+     in both light + dark, and follows the manual theme override
+     automatically. */
   .settings-window-header {
     position: sticky;
     top: 0;
     z-index: 1;
-    background-color: #ececef;
-    border-bottom: 1px solid #d8d8dc;
+    background-color: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
   .settings-window-title {
@@ -405,7 +408,7 @@
        the whole point of adding the H1. */
     font-size: 1.55rem;
     font-weight: 700;
-    color: #1a1a1a;
+    color: var(--text-primary);
     letter-spacing: -0.015em;
   }
 
@@ -422,7 +425,7 @@
     padding: 0.4rem 0.85rem;
     border: 1px solid transparent;
     background-color: transparent;
-    color: #333;
+    color: var(--text-secondary);
     font-family: inherit;
     font-size: 0.85rem;
     font-weight: 500;
@@ -431,11 +434,14 @@
     white-space: nowrap;
     transition: background-color 0.12s, border-color 0.12s, color 0.12s;
   }
-  .tab-button:hover { background-color: rgba(0, 0, 0, 0.06); }
+  .tab-button:hover {
+    background-color: var(--accent-subtle);
+    color: var(--text-primary);
+  }
   .tab-button.active {
-    background-color: white;
-    border-color: #d1d1d8;
-    color: #2c3e8f;
+    background-color: var(--bg-surface);
+    border-color: var(--border);
+    color: var(--accent);
     font-weight: 600;
   }
   .tab-button:focus-visible {
@@ -480,24 +486,11 @@
      GeneralTab, MeetingTab, AboutTab). Shared card primitives
      hoist to a CSS module per #392 once that lands. */
 
-  @media (prefers-color-scheme: dark) {
-    :global(html), :global(body) {
-      background-color: #1d1d1f;
-      color: #e8e8e8;
-    }
-    .settings-window-header {
-      background-color: #2a2a2d;
-      border-bottom-color: #38383b;
-    }
-    .settings-window-title {
-      color: #f0f0f0;
-    }
-    .tab-button { color: #d8d8d8; }
-    .tab-button:hover { background-color: rgba(255, 255, 255, 0.06); }
-    .tab-button.active {
-      background-color: #1d1d1f;
-      border-color: #38383b;
-      color: #b8c8ff;
-    }
-  }
+  /* The pre-r2 dark `@media` block is gone — every wrapper rule
+     above now reads from `var(--bg-…)` / `var(--text-…)` /
+     `var(--accent)`, which `app.css` swaps via either the OS
+     media query OR the manual `:root[data-theme="dark"]`
+     override. Pre-r2 the wrapper was @media-only, so users on a
+     light OS who picked Dark in Settings → Appearance got dark
+     tab content but a light header strip. */
 </style>
