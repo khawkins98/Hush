@@ -293,7 +293,18 @@ pub fn start_dictation(
         // the HUD page hasn't subscribed to the event yet but
         // costs nothing; it's the symmetric counterpart to the
         // Processing transition in stop_dictation below.
-        if let Err(e) = crate::hud::set_state(&app, crate::hud::HudState::Recording) {
+        //
+        // Carries `started_at_ms` so the HUD's elapsed-time
+        // counter resets cleanly across back-to-back dictations
+        // (#481). The persistent HUD page would otherwise hold
+        // the previous session's `recordingStartedAt` whenever
+        // its listener race-missed the event.
+        if let Err(e) = crate::hud::set_state(
+            &app,
+            crate::hud::HudState::Recording {
+                started_at_ms: crate::hud::now_unix_ms(),
+            },
+        ) {
             tracing::warn!(error = ?e, "emit hud:state(recording) failed");
         }
     }

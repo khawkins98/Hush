@@ -1,0 +1,96 @@
+import { expect, test } from "@playwright/test";
+import { fireEvent, installMocks } from "./_mock";
+
+// Regressions for #481: the HUD pill is a persistent Tauri window
+// (hidden/shown, not torn down between sessions), so the elapsed-
+// time counter has to anchor to the backend's `startedAtMs` payload
+// to reset cleanly across back-to-back recordings. Pre-#481 the
+// frontend seeded `recordingStartedAt = Date.now()` at the moment
+// the listener saw the event, which (a) drifted by show/emit race
+// latency and (b) silently kept the previous session's start time
+// whenever the listener missed the new event.
+//
+// These specs drive the `hud:state` event directly through the
+// `__hush_e2e_event_bus` test seam (same path Tauri's `listen`
+// uses in the mocked runtime) and assert the rendered elapsed label.
+
+test.describe("HUD timer reset across sessions (#481)", () => {
+  test("recording event with startedAtMs anchors the elapsed label", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/hud");
+
+    const elapsed = page.locator('[data-testid="hud-elapsed"]');
+    await expect(elapsed).toBeVisible();
+
+    // Seed a recording that "started" exactly 65 seconds ago.
+    // The label should round to 1:05 on the very next animation
+    // frame regardless of how long the listener took to register.
+    const sixtyFiveSecondsAgo = Date.now() - 65_000;
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: sixtyFiveSecondsAgo,
+    });
+
+    await expect(elapsed).toHaveText(/^1:0[5-7]$/);
+  });
+
+  test("second recording event resets the timer to 0:00", async ({ page }) => {
+    await installMocks(page);
+    await page.goto("/hud");
+
+    // Wait for the HUD page's `listen` to register before firing.
+    // The e2e event bus is created lazily on the first `listen` call;
+    // firing before the page's onMount has run would `throw bus not
+    // initialised`.
+    const elapsed = page.locator('[data-testid="hud-elapsed"]');
+    await expect(elapsed).toBeVisible();
+
+    // First session: pretend it started 30s ago.
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: Date.now() - 30_000,
+    });
+    await expect(elapsed).toHaveText(/^0:[23]\d$/);
+
+    // First session ends → Processing freezes the readout.
+    await fireEvent(page, "hud:state", { state: "processing" });
+
+    // Second session begins NOW. Timer must reset to 0:00, not
+    // continue counting from the previous start. Pre-#481 this
+    // was the race-condition repro: the same persistent window
+    // kept its old `recordingStartedAt` and the timer drifted
+    // forward across sessions.
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: Date.now(),
+    });
+
+    await expect(elapsed).toHaveText(/^0:0\d$/);
+  });
+
+  test("processing event freezes (does not reset) the timer", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/hud");
+
+    const elapsed = page.locator('[data-testid="hud-elapsed"]');
+    await expect(elapsed).toBeVisible();
+
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: Date.now() - 12_000,
+    });
+    await expect(elapsed).toHaveText(/^0:1[2-4]$/);
+
+    // Processing transition: the elapsed counter is HIDDEN in
+    // processing mode (the markup gates it on hudState ===
+    // "recording"), so the assertion is on the absence of the
+    // testid — which is the user-visible behaviour: the digits
+    // disappear at the same moment the shimmer takes over.
+    await fireEvent(page, "hud:state", { state: "processing" });
+    await expect(elapsed).toHaveCount(0);
+  });
+});
