@@ -86,8 +86,10 @@
 //! Register it in `tauri::generate_handler![]` as
 //! `ipc::commands::updater::install_pending_update`.
 //!
-//! Skeleton:
-//! ```rust
+//! Skeleton (illustrative; doctests skip — `AppHandle` / `IpcResult`
+//! / `IpcError` aren't in scope from this module's doc-comment so
+//! the snippet wouldn't compile in isolation):
+//! ```rust,ignore
 //! #[tauri::command]
 //! pub async fn install_pending_update(app: AppHandle) -> IpcResult<()> {
 //!     use tauri_plugin_updater::UpdaterExt;
