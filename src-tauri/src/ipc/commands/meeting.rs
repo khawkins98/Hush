@@ -580,18 +580,21 @@ pub async fn meeting_start_manual(
         })?;
     // Show the recording HUD so the user has the same at-a-glance
     // "audio is being captured" cue meeting mode that the dictation
-    // hot path already provides — best-effort, a HUD-show failure
-    // shouldn't fail the start of an otherwise-running session.
-    // Suppressed entirely when the user has flipped HUD off in
-    // Settings → General.
+    // hot path already provides. Suppressed entirely when the user
+    // has flipped HUD off in Settings → General.
+    //
+    // `hud::show_async` dispatches onto the main thread because
+    // this command is `async fn` and runs on a tokio worker; the
+    // underlying `orderFront:` AppKit call is main-thread-only and
+    // macOS 26 enforces that strictly (#476). Sync `start_dictation`
+    // can call `hud::show` directly because Tauri lands its sync
+    // handlers on the main thread.
     if state
         .runtime_flags
         .hud_enabled
         .load(std::sync::atomic::Ordering::Relaxed)
     {
-        if let Err(e) = crate::hud::show(&app) {
-            tracing::error!(error = ?e, "failed to show recording HUD on meeting start");
-        }
+        crate::hud::show_async(&app);
     }
     Ok(session)
 }
@@ -690,11 +693,9 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
     // Hide the HUD up front — the user clicked Stop and expects the
     // overlay gone now, not after the pump's final-chunk drain
     // (which can take several seconds while whisper finishes the
-    // tail of the session). Hiding before the await also matches
-    // the dictation hot path's order of effects.
-    if let Err(e) = crate::hud::hide(&app) {
-        tracing::error!(error = ?e, "failed to hide recording HUD on meeting stop");
-    }
+    // tail of the session). `hide_async` dispatches onto the main
+    // thread; same rationale as the start path (#476).
+    crate::hud::hide_async(&app);
     state
         .meeting_manager
         .stop_manual()
