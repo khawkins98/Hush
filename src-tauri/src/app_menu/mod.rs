@@ -168,9 +168,9 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             }
             "app-quit" => crate::request_user_quit(app),
             "about-hush" => {
-                if let Err(e) = crate::settings_window::show(app) {
-                    tracing::error!(error = ?e, "menu: open settings (about)");
-                }
+                // #479 slice 3: emit goto-tab to the inline panel —
+                // the main window's listener flips its active
+                // section + tab.
                 if let Err(e) = app.emit("settings:goto-tab", "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
