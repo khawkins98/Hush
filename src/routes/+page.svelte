@@ -27,7 +27,6 @@
     AudioSource,
     AudioSourceListing,
     DictationResult,
-    DictationStats,
     HistoryEntry,
     ModelCard,
     MeetingExportFormat,
@@ -83,11 +82,6 @@
   // the "Clear all N" confirmation copy. Fetched via
   // `history_count` alongside every list/search refresh.
   let historyTotalCount = $state(0);
-  // Aggregate stats for the History stats bar (#293). Loaded
-  // once on mount and refreshed alongside the history list, so
-  // a successful stop_dictation / clear-all bumps the numbers
-  // without a manual refresh.
-  let dictationStats = $state<DictationStats | null>(null);
   // Sentinel that any history-touching command bumps so we can react
   // to an external invalidation (e.g. a successful stop_dictation
   // inserted a new row).
@@ -685,27 +679,19 @@
     historyError = null;
     historySearching = true;
     try {
-      // Fetch the current page, the unfiltered total, and the
-      // aggregate stats in parallel — the total drives the
-      // "Clear all N" confirmation copy and sidebar counter, and
-      // the stats power the bar above the list (#293). Stats
-      // failure is non-fatal: rendering them as null hides the
-      // bar without breaking the list itself.
-      const [entries, total, stats] = await Promise.all([
+      // Fetch the current page + the unfiltered total in parallel.
+      // Stats moved to Settings → General in #468 r3 (loaded
+      // there on tab mount); main page no longer needs them.
+      const [entries, total] = await Promise.all([
         invoke<HistoryEntry[]>("history_search", {
           query: historyQuery,
           limit: HISTORY_PAGE_SIZE,
           offset: 0,
         }),
         invoke<number>("history_count"),
-        invoke<DictationStats>("get_dictation_stats").catch((err) => {
-          console.warn("[hush] get_dictation_stats failed", err);
-          return null;
-        }),
       ]);
       historyEntries = entries;
       historyTotalCount = total;
-      dictationStats = stats;
       historyVersion += 1;
     } catch (e) {
       historyError = formatErrorDisplay(e);
@@ -1544,7 +1530,6 @@
       {historyError}
       {historyVersion}
       {historyTotalCount}
-      {dictationStats}
       meetingSessions={meetingSessions}
       meetingSessionsLoaded={meetingSessionsLoaded}
       {models}
