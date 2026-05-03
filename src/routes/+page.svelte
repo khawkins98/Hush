@@ -9,6 +9,10 @@
   import CommandPalette from "$lib/CommandPalette.svelte";
   import type { CommandAction } from "$lib/CommandPalette.svelte";
   import DictationSection from "$lib/DictationSection.svelte";
+  import SettingsPanel from "$lib/SettingsPanel.svelte";
+  import type { SettingsTab } from "$lib/SettingsPanel.svelte";
+  import SidebarNav from "$lib/SidebarNav.svelte";
+  import type { SidebarSection } from "$lib/SidebarNav.svelte";
   import { motionDuration } from "$lib/motion";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
@@ -163,6 +167,17 @@
     models.find((m) => m.isSelected && m.isDownloaded) ?? null,
   );
 
+  // #479 slice 2: three top-level panels. Settings is now an
+  // inline panel (`SettingsPanel.svelte`) rather than a separate
+  // window. The standalone Settings window route still exists in
+  // slice 2 for the tray menu; slice 3 deletes it.
+  let activeSection = $state<SidebarSection>("dictation");
+  let settingsActiveTab = $state<SettingsTab>("general");
+
+  function onSidebarSelect(id: SidebarSection) {
+    activeSection = id;
+  }
+
   // ⌘K command palette (#411 phase F3). State + the action set
   // are colocated here because every action needs the page's
   // existing handlers (start / stop / openSettingsTab) and state
@@ -190,12 +205,20 @@
     {
       id: "navigate.history",
       label: "Show History",
-      subtitle: "Scroll to the History section below",
+      subtitle: "Switch to the History panel",
       group: "Navigate",
       run: () => {
-        document
-          .getElementById("history-section")
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        activeSection = "history";
+      },
+    },
+    {
+      id: "navigate.dictation",
+      label: "Show Dictation",
+      subtitle: "Switch back to the dictation panel",
+      group: "Navigate",
+      enabled: activeSection !== "dictation",
+      run: () => {
+        activeSection = "dictation";
       },
     },
     {
@@ -296,6 +319,7 @@
   let unlistenPttPress: UnlistenFn | null = null;
   let unlistenPttRelease: UnlistenFn | null = null;
   let unlistenMenuGoto: UnlistenFn | null = null;
+  let unlistenSettingsGoto: UnlistenFn | null = null;
 
   // Keep the document title in sync with recording state. Helps users who
   // have the window in the background — at-a-glance signal that the mic
@@ -369,16 +393,36 @@
     });
 
     // Native menu bar dispatches View → Section selections through
-    // this event (#164 Phase 2). Sections are now always rendered in
-    // one scrollable page, so we scroll to the anchor instead of
-    // switching a tab.
+    // this event. With the #479 sidebar shell, sections render one
+    // at a time — flip `activeSection` instead of scrolling.
     unlistenMenuGoto = await listen<string>(Events.MenuGotoSection, (e) => {
       const payload = e.payload;
-      const sectionId =
+      activeSection =
         payload === "meetings" || payload === "history"
-          ? "history-section"
-          : "dictation-section";
-      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
+          ? "history"
+          : "dictation";
+    });
+
+    // #479 slice 3: tray "Settings…" + native menu "Settings…" /
+    // ⌘, both emit `settings:goto-tab` instead of opening a
+    // standalone window. Listen here so the sidebar swaps to the
+    // Settings panel + the requested tab. SettingsPanel also
+    // listens (for the in-tab activeTab side); the bindable prop
+    // means the two reactive paths converge cleanly.
+    unlistenSettingsGoto = await listen<string>(Events.SettingsGotoTab, (e) => {
+      const tab = e.payload;
+      if (
+        tab === "general"
+        || tab === "model"
+        || tab === "vocabulary"
+        || tab === "replacements"
+        || tab === "meeting"
+        || tab === "permissions"
+        || tab === "about"
+      ) {
+        settingsActiveTab = tab;
+      }
+      activeSection = "settings";
     });
 
     // Model-download events from the backend. The progress event
@@ -423,6 +467,7 @@
   onDestroy(() => {
     unlistenToggle?.();
     unlistenMenuGoto?.();
+    unlistenSettingsGoto?.();
     unlistenPttPress?.();
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
@@ -1375,18 +1420,25 @@
   // open → small tick → emit. Tauri events are broadcast to every
   // window, so the settings window picks this up regardless of
   // whether it was already open.
-  async function openSettingsTab(tab: string) {
-    try {
-      await invoke("open_settings");
-      // Two animation frames: enough time for the settings window
-      // to mount + register its listener on the bus, well under
-      // human perception (~32 ms). Cheaper than polling for a
-      // ready signal and good enough for this UI affordance.
-      await new Promise((r) => setTimeout(r, 50));
-      await emit(Events.SettingsGotoTab, tab);
-    } catch (e) {
-      console.warn("[hush] open settings tab failed", e);
+  // #479 slice 2: Settings is now an inline panel, not a
+  // separate window. Deep links from menus / palette / banners
+  // flip the sidebar to the Settings panel + set the requested
+  // tab in one step. Pre-r2 this opened the standalone window
+  // and emitted `Events.SettingsGotoTab`; the in-app version
+  // sidesteps the window-mount + emit-race entirely.
+  function openSettingsTab(tab: string) {
+    if (
+      tab === "general"
+      || tab === "model"
+      || tab === "vocabulary"
+      || tab === "replacements"
+      || tab === "meeting"
+      || tab === "permissions"
+      || tab === "about"
+    ) {
+      settingsActiveTab = tab;
     }
+    activeSection = "settings";
   }
 
   // Error formatting moved to `lib/errors.ts` (#205): the
@@ -1452,24 +1504,26 @@
     />
     <span class="brand-name">Hush</span>
   </div>
-  <button
-    type="button"
-    class="settings-btn"
-    onclick={() => openSettingsTab("general")}
-    title="Settings (⌘,)"
-  >
-    Settings <kbd>⌘,</kbd>
-  </button>
 </header>
 
-<main class="app-main">
+<div class="app-shell">
+  <SidebarNav
+    bind:active={activeSection}
+    {recording}
+    onSelect={onSidebarSelect}
+  />
+
+<main class="app-main" data-active-section={activeSection}>
   <!--
     Dictation section markup extracted into a leaf (#432 slice
     3/3). Action functions + hotkey listeners stay in this
     orchestrator because they touch a sprawl of cross-section
     state — the section component is the render boundary, the
-    page is the controller.
+    page is the controller. With #479 slice 1 the Dictation +
+    History sections are mutually exclusive — the active
+    sidebar item drives which one mounts.
   -->
+  {#if activeSection === "dictation"}
   <DictationSection
     {isMacOS}
     {sources}
@@ -1493,7 +1547,9 @@
     onScrollToModelPicker={openModelSettings}
     onOpenPermissionsTab={() => openSettingsTab("permissions")}
   />
+  {/if}
 
+  {#if activeSection === "history"}
   <section id="history-section" class="page-section">
     <header class="section-header">
       <h1>History</h1>
@@ -1558,7 +1614,13 @@
       onClearAll={clearAllHistory}
     />
   </section>
+  {/if}
+
+  {#if activeSection === "settings"}
+    <SettingsPanel bind:activeTab={settingsActiveTab} />
+  {/if}
 </main>
+</div>
 
 <style>
 :root {
@@ -1643,47 +1705,38 @@
   letter-spacing: -0.01em;
 }
 
-.settings-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.75rem;
-  background: none;
-  border: 1px solid var(--border-input, #d1d1d6);
-  border-radius: var(--radius-md, 8px);
-  font-family: inherit;
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--text-secondary, #555);
-  cursor: pointer;
-  transition: background-color 0.12s, border-color 0.12s;
-}
-.settings-btn:hover {
-  background-color: rgba(44, 62, 143, 0.07);
-  border-color: var(--accent, #5b7ee5);
-  color: var(--text-primary, #111);
-}
-.settings-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.settings-btn kbd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78em;
-  color: var(--text-muted, #888);
+/* #479 slice 1: flex shell hosts the left icon sidebar + the
+   active panel. Subtracts the sticky app-bar's height so the
+   shell fills the remaining viewport — same total height the
+   pre-r3 single-column layout occupied, just split horizontally. */
+.app-shell {
+  display: flex;
+  height: calc(100vh - 45px);
+  overflow: hidden;
 }
 
+/* Padding-left tightened from 1.5rem → 1rem because the sidebar's
+   right border already provides visual separation; pre-sidebar
+   padding had to do the visual work the sidebar now does. Right
+   padding stays 1.5rem so scrollbar gutter has breathing room. */
 .app-main {
-  padding: 0 1.5rem 4rem;
+  flex: 1;
+  padding: 0 1.5rem 4rem 1rem;
   text-align: left;
   overflow-y: auto;
-  height: calc(100vh - 45px); /* subtract app-bar height */
   box-sizing: border-box;
+  min-width: 0;
 }
 
+/* Pre-sidebar `.page-section` had `max-width: 36rem` + `margin: 0
+   auto` so the single-column page didn't sprawl on wide windows.
+   With #479 slice 1 the sidebar shell already constrains the
+   layout horizontally, and history rows benefit from filling the
+   column. The Dictation section opts back into a `max-width:
+   52rem` cap via its own `:global(#dictation-section)` rule
+   (declared in `DictationSection.svelte`) so the centerpiece
+   composition stays bounded. */
 .page-section {
-  max-width: 36rem;
-  margin: 0 auto;
   padding-top: 2.5rem;
 }
 

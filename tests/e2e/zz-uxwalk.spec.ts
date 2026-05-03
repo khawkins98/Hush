@@ -196,7 +196,7 @@ test.describe("UX walkthrough — main window", () => {
   test("history: empty state", async ({ page }) => {
     await installMocks(page);
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     await shot(page, "08-history-empty");
   });
 
@@ -249,7 +249,7 @@ test.describe("UX walkthrough — main window", () => {
       ],
     });
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     await shot(page, "09-history-populated");
   });
 
@@ -268,7 +268,7 @@ test.describe("UX walkthrough — main window", () => {
       ],
     });
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     // Wait for the row to mount before targeting its delete btn.
     await expect(page.locator(".history-row").first()).toBeVisible();
     await page.locator('[data-testid="history-delete-1"]').click();
@@ -290,7 +290,7 @@ test.describe("UX walkthrough — main window", () => {
       ],
     });
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     await page.locator('[data-testid="history-clear-all"]').click();
     await shot(page, "11-history-clear-all-confirm");
   });
@@ -299,7 +299,8 @@ test.describe("UX walkthrough — main window", () => {
 test.describe("UX walkthrough — settings window", () => {
   test("settings: General tab default", async ({ page }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
     await shot(page, "20-settings-general");
   });
@@ -361,7 +362,8 @@ test.describe("UX walkthrough — settings window", () => {
         },
       ],
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-model"]').click();
     await expect(
       page.locator('[data-testid="settings-tab-model"]'),
@@ -378,7 +380,8 @@ test.describe("UX walkthrough — settings window", () => {
         { id: 4, term: "Khawkins", createdAt: "2026-04-01T00:00:00Z" },
       ],
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-vocabulary"]').click();
     await shot(page, "22-settings-vocabulary");
   });
@@ -391,7 +394,8 @@ test.describe("UX walkthrough — settings window", () => {
         { id: 3, findText: "asap", replaceText: "as soon as possible", createdAt: "2026-04-01T00:00:00Z" },
       ],
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-replacements"]').click();
     await shot(page, "23-settings-replacements");
   });
@@ -404,7 +408,8 @@ test.describe("UX walkthrough — settings window", () => {
         { appName: "Notion", kind: "other", createdAt: "2026-04-01T00:00:00Z" },
       ],
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     await shot(page, "24-settings-meeting");
   });
@@ -424,14 +429,16 @@ test.describe("UX walkthrough — settings window", () => {
         },
       }),
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-permissions"]').click();
     await shot(page, "25-settings-permissions");
   });
 
   test("settings: About tab", async ({ page }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-about"]').click();
     await shot(page, "26-settings-about");
   });

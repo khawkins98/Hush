@@ -158,15 +158,19 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         let id = event.id.as_ref();
         match id {
             "settings" => {
-                if let Err(e) = crate::settings_window::show(app) {
-                    tracing::error!(error = ?e, "menu: open settings");
+                // #479 slice 3: Settings is an inline panel inside
+                // the main window now. Emit `settings:goto-tab` and
+                // let the main window's listener flip its active
+                // section + tab.
+                if let Err(e) = app.emit("settings:goto-tab", "general") {
+                    tracing::error!(error = ?e, "menu: emit goto-tab(general)");
                 }
             }
             "app-quit" => crate::request_user_quit(app),
             "about-hush" => {
-                if let Err(e) = crate::settings_window::show(app) {
-                    tracing::error!(error = ?e, "menu: open settings (about)");
-                }
+                // #479 slice 3: emit goto-tab to the inline panel —
+                // the main window's listener flips its active
+                // section + tab.
                 if let Err(e) = app.emit("settings:goto-tab", "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
@@ -185,9 +189,9 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 // gives the user a place to read the result; if
                 // they have Settings open already this is a no-op.
                 let app_handle = app.clone();
-                if let Err(e) = crate::settings_window::show(app) {
-                    tracing::error!(error = ?e, "menu: open settings (check-for-updates)");
-                }
+                // #479 slice 3: emit goto-tab to the inline panel —
+                // the main window's listener flips its active
+                // section + tab.
                 if let Err(e) = app.emit("settings:goto-tab", "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
