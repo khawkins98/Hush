@@ -128,6 +128,18 @@
   // disappears once a download completes in the other window.
   let unlistenDownloadDone: UnlistenFn | null = null;
 
+  // Listener for `app:profile-activated` (#427 Item 5 / #457). The
+  // autostart-poller fires this when focus moves to an app whose
+  // override has populated profile fields; the listener swaps the
+  // active source + invokes `model_select` for the model swap and
+  // surfaces a transient notice. Gated on `recording === false` —
+  // the backend skips the emit while a session is active, but the
+  // frontend double-checks because manual dictation is a separate
+  // state machine the backend doesn't know about.
+  let unlistenAppProfileActivated: UnlistenFn | null = null;
+  let appProfileNotice = $state<string | null>(null);
+  let appProfileNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+
   // `recording` is "audio is being captured", `busy` covers both the
   // start handshake AND the post-stop transcription window. Splitting
   // out `transcribing` lets the UI distinguish "starting up" (~ms) from
@@ -276,6 +288,17 @@
       void refreshModels();
     });
 
+    // Per-app audio profile activated (#427 Item 5 / #457). The
+    // backend's autostart poller fires this on focus transitions
+    // when the focused app has a populated profile.
+    unlistenAppProfileActivated = await listen<{
+      appName: string;
+      preferredAudioSource: string | null;
+      preferredModelId: string | null;
+    }>(Events.AppProfileActivated, (e) => {
+      void onAppProfileActivated(e.payload);
+    });
+
     // Push-to-talk: the rdev listener in `hotkey::ptt` emits these
     // events on key-down and key-up of the configured PTT key.
     unlistenPttPress = await listen(Events.HotkeyPttPress, () => {
@@ -316,6 +339,7 @@
     unlistenPttPress?.();
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
+    unlistenAppProfileActivated?.();
     window.removeEventListener("focus", refreshPermissionHealthDebounced);
     if (refreshPermissionHealthTimer !== null) {
       clearTimeout(refreshPermissionHealthTimer);
@@ -330,6 +354,10 @@
     if (meetingCopyNoticeTimer !== null) {
       clearTimeout(meetingCopyNoticeTimer);
       meetingCopyNoticeTimer = null;
+    }
+    if (appProfileNoticeTimer !== null) {
+      clearTimeout(appProfileNoticeTimer);
+      appProfileNoticeTimer = null;
     }
   });
 
@@ -1077,6 +1105,71 @@
   /// pointing at the History row's manual-copy affordance. A
   /// silent `console.warn` (the pre-#408 shape) was indistinguishable
   /// from success.
+  /// Handler for the backend `app:profile-activated` event
+  /// (#427 Item 5 / #457). The poller emits when focus moves to
+  /// an app with a populated per-app profile; this swaps the
+  /// active audio source + invokes the model-select IPC for a
+  /// model swap, then surfaces a transient notice.
+  ///
+  /// Skipped when `recording === true` — mid-dictation auto-swap
+  /// would interrupt the active stream. The poller side already
+  /// gates on `meeting_manager.active_session_id`, but a regular
+  /// (non-meeting) dictation flow has its own `recording` rune
+  /// the backend doesn't see, so this defensive check covers
+  /// both paths.
+  async function onAppProfileActivated(payload: {
+    appName: string;
+    preferredAudioSource: string | null;
+    preferredModelId: string | null;
+  }) {
+    if (recording) return;
+
+    // Audio source — swap the picker state if the requested
+    // source is in our current list. Missing source (e.g. mic
+    // unplugged since the profile was set) silently falls
+    // through to the user's existing selection; the global
+    // default already applies on the next dictation.
+    if (payload.preferredAudioSource !== null) {
+      const target = sources.find(
+        (s) => s.id === payload.preferredAudioSource,
+      );
+      if (target) {
+        selected = target.id;
+      } else {
+        console.warn(
+          `[hush] app:profile-activated for ${payload.appName}: source ${payload.preferredAudioSource} not in current list`,
+        );
+      }
+    }
+
+    // Model — invoke `model_select` to swap the loaded
+    // transcription engine. The IPC handles the hot-swap; the
+    // model picker UI in the Settings window will reflect it on
+    // its next refresh.
+    if (payload.preferredModelId !== null) {
+      try {
+        await invoke("model_select", { id: payload.preferredModelId });
+        await refreshModels();
+      } catch (e) {
+        console.warn(
+          `[hush] app:profile-activated model_select failed`,
+          e,
+        );
+      }
+    }
+
+    // Transient notice — auto-clears after ~3 s. Mirrors the
+    // existing meetingCopyNotice timer pattern.
+    appProfileNotice = `Switched to ${payload.appName} profile.`;
+    if (appProfileNoticeTimer !== null) {
+      clearTimeout(appProfileNoticeTimer);
+    }
+    appProfileNoticeTimer = setTimeout(() => {
+      appProfileNotice = null;
+      appProfileNoticeTimer = null;
+    }, 3000);
+  }
+
   async function copyMeetingSessionToClipboard(id: number): Promise<void> {
     try {
       const detail = await invoke<MeetingSessionDetail>(
@@ -1393,6 +1486,36 @@
       <p class="tagline">Every transcript Hush has captured, searchable.</p>
     </header>
 
+    {#if appProfileNotice}
+      <!--
+        Per-app audio profile auto-apply notice (#427 Item 5 /
+        #457). Auto-clears after ~3 s; the user can dismiss
+        sooner with the close button if it's in the way.
+        role="status" for SR announcement, data-testid for
+        Playwright coverage.
+      -->
+      <div
+        class="app-profile-notice"
+        role="status"
+        data-testid="app-profile-notice"
+      >
+        <span class="app-profile-notice-icon" aria-hidden="true">↻</span>
+        <span class="app-profile-notice-message">{appProfileNotice}</span>
+        <button
+          type="button"
+          class="app-profile-notice-dismiss"
+          aria-label="Dismiss profile-switched notice"
+          onclick={() => {
+            appProfileNotice = null;
+            if (appProfileNoticeTimer !== null) {
+              clearTimeout(appProfileNoticeTimer);
+              appProfileNoticeTimer = null;
+            }
+          }}
+        >×</button>
+      </div>
+    {/if}
+
     {#if meetingCopyNotice}
       <!--
         Auto-copy outcome notice (#408). Sits above the History
@@ -1640,6 +1763,47 @@
   font-size: 0.88rem;
   line-height: 1.4;
   border: 1px solid;
+}
+
+/* Per-app audio profile auto-apply notice (#427 Item 5 / #457).
+   Subtle accent-tinted, matches the meeting-copy-notice's row
+   geometry so the two notices line up cleanly when both fire
+   in quick succession. */
+.app-profile-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.6rem 0.85rem;
+  margin: 0 0 1rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  border: 1px solid var(--accent-subtle, rgba(106, 140, 240, 0.18));
+  background-color: var(--accent-subtle, rgba(106, 140, 240, 0.12));
+  color: var(--accent-hover, #396cd8);
+}
+.app-profile-notice-icon {
+  font-weight: 700;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+.app-profile-notice-message {
+  flex: 1;
+  min-width: 0;
+}
+.app-profile-notice-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: 0;
+  padding: 0 0.25rem;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.75;
+}
+.app-profile-notice-dismiss:hover {
+  opacity: 1;
 }
 .meeting-copy-notice[data-kind="success"] {
   background-color: #e7f8ec;
