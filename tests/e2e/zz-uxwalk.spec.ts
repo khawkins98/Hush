@@ -196,7 +196,7 @@ test.describe("UX walkthrough — main window", () => {
   test("history: empty state", async ({ page }) => {
     await installMocks(page);
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     await shot(page, "08-history-empty");
   });
 
@@ -249,7 +249,7 @@ test.describe("UX walkthrough — main window", () => {
       ],
     });
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     await shot(page, "09-history-populated");
   });
 
@@ -268,7 +268,7 @@ test.describe("UX walkthrough — main window", () => {
       ],
     });
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     // Wait for the row to mount before targeting its delete btn.
     await expect(page.locator(".history-row").first()).toBeVisible();
     await page.locator('[data-testid="history-delete-1"]').click();
@@ -290,7 +290,7 @@ test.describe("UX walkthrough — main window", () => {
       ],
     });
     await page.goto("/");
-    await page.locator("#history-section").scrollIntoViewIfNeeded();
+    await page.locator(`[data-testid="sidebar-nav-history"]`).click();
     await page.locator('[data-testid="history-clear-all"]').click();
     await shot(page, "11-history-clear-all-confirm");
   });

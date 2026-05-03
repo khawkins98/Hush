@@ -9,6 +9,8 @@
   import CommandPalette from "$lib/CommandPalette.svelte";
   import type { CommandAction } from "$lib/CommandPalette.svelte";
   import DictationSection from "$lib/DictationSection.svelte";
+  import SidebarNav from "$lib/SidebarNav.svelte";
+  import type { SidebarSection } from "$lib/SidebarNav.svelte";
   import { motionDuration } from "$lib/motion";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
@@ -163,6 +165,23 @@
     models.find((m) => m.isSelected && m.isDownloaded) ?? null,
   );
 
+  // #479 slice 1: which top-level section is visible. Three for
+  // now — Dictation, History, Settings. The Settings click still
+  // opens the standalone window in slice 1; slice 2 inlines its
+  // tabs into a third panel rendered here.
+  let activeSection = $state<SidebarSection>("dictation");
+
+  async function onSidebarSelect(id: SidebarSection) {
+    if (id === "settings") {
+      // Slice 1: Settings remains a separate window. Slice 2 will
+      // change this branch to just `activeSection = id` once the
+      // tabs are inlined.
+      await openSettingsTab("general");
+      return;
+    }
+    activeSection = id;
+  }
+
   // ⌘K command palette (#411 phase F3). State + the action set
   // are colocated here because every action needs the page's
   // existing handlers (start / stop / openSettingsTab) and state
@@ -190,12 +209,20 @@
     {
       id: "navigate.history",
       label: "Show History",
-      subtitle: "Scroll to the History section below",
+      subtitle: "Switch to the History panel",
       group: "Navigate",
       run: () => {
-        document
-          .getElementById("history-section")
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        activeSection = "history";
+      },
+    },
+    {
+      id: "navigate.dictation",
+      label: "Show Dictation",
+      subtitle: "Switch back to the dictation panel",
+      group: "Navigate",
+      enabled: activeSection !== "dictation",
+      run: () => {
+        activeSection = "dictation";
       },
     },
     {
@@ -369,16 +396,14 @@
     });
 
     // Native menu bar dispatches View → Section selections through
-    // this event (#164 Phase 2). Sections are now always rendered in
-    // one scrollable page, so we scroll to the anchor instead of
-    // switching a tab.
+    // this event. With the #479 sidebar shell, sections render one
+    // at a time — flip `activeSection` instead of scrolling.
     unlistenMenuGoto = await listen<string>(Events.MenuGotoSection, (e) => {
       const payload = e.payload;
-      const sectionId =
+      activeSection =
         payload === "meetings" || payload === "history"
-          ? "history-section"
-          : "dictation-section";
-      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
+          ? "history"
+          : "dictation";
     });
 
     // Model-download events from the backend. The progress event
@@ -1462,14 +1487,24 @@
   </button>
 </header>
 
-<main class="app-main">
+<div class="app-shell">
+  <SidebarNav
+    bind:active={activeSection}
+    {recording}
+    onSelect={onSidebarSelect}
+  />
+
+<main class="app-main" data-active-section={activeSection}>
   <!--
     Dictation section markup extracted into a leaf (#432 slice
     3/3). Action functions + hotkey listeners stay in this
     orchestrator because they touch a sprawl of cross-section
     state — the section component is the render boundary, the
-    page is the controller.
+    page is the controller. With #479 slice 1 the Dictation +
+    History sections are mutually exclusive — the active
+    sidebar item drives which one mounts.
   -->
+  {#if activeSection === "dictation"}
   <DictationSection
     {isMacOS}
     {sources}
@@ -1493,7 +1528,9 @@
     onScrollToModelPicker={openModelSettings}
     onOpenPermissionsTab={() => openSettingsTab("permissions")}
   />
+  {/if}
 
+  {#if activeSection === "history"}
   <section id="history-section" class="page-section">
     <header class="section-header">
       <h1>History</h1>
@@ -1558,7 +1595,9 @@
       onClearAll={clearAllHistory}
     />
   </section>
+  {/if}
 </main>
+</div>
 
 <style>
 :root {
@@ -1673,11 +1712,21 @@
   color: var(--text-muted, #888);
 }
 
+/* #479 slice 1: flex shell hosts the left icon sidebar + the
+   active panel. Subtracts the sticky app-bar's height so the
+   shell fills the remaining viewport — same total height the
+   pre-r3 single-column layout occupied, just split horizontally. */
+.app-shell {
+  display: flex;
+  height: calc(100vh - 45px);
+  overflow: hidden;
+}
+
 .app-main {
+  flex: 1;
   padding: 0 1.5rem 4rem;
   text-align: left;
   overflow-y: auto;
-  height: calc(100vh - 45px); /* subtract app-bar height */
   box-sizing: border-box;
 }
 
