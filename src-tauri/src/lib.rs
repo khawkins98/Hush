@@ -615,6 +615,7 @@ pub fn run() {
             ipc::commands::meeting::meeting_app_override_set_profile,
             ipc::commands::meeting::meeting_app_override_delete,
             ipc::commands::meeting::meeting_app_classifier_defaults,
+            ipc::commands::updater::install_pending_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Hush")

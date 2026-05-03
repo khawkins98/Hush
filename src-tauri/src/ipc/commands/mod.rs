@@ -50,6 +50,7 @@ pub mod models;
 pub mod ptt;
 pub mod settings;
 pub mod system;
+pub mod updater;
 
 use std::sync::{Arc, PoisonError};
 

@@ -100,6 +100,17 @@ export async function installMocks(
         kind: "upToDate",
         current: "0.1.0",
       }),
+      // Auto-update install (#10). Default to the "not configured"
+      // gate-error so specs that don't override see the friendly
+      // fallback copy + manual release-notes link rather than the
+      // download-progress UI. Specs that exercise the install
+      // success / failure branches override per-test.
+      install_pending_update: () => {
+        throw {
+          kind: "internal",
+          message: "auto-update is not configured for this build",
+        };
+      },
       ptt_get_config: () => ({
         combo: ["RightMeta"],
         enabled: false,
