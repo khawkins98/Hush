@@ -96,14 +96,14 @@
   const RELEASE = 0.12;
   const WAVEFORM_INTERVAL_MS = 80;
 
-  // Idle: bars hold at a flat low baseline. The pre-r2 idle mood
-  // ran a 2-second sine breath ("feel alive while nothing's
-  // recording") but that misread as "the app is listening" —
-  // dishonest because no audio is being captured. A flat
-  // baseline still differentiates idle from processing (frozen
-  // last-shape) and recording (live levels) without implying
-  // capture.
-  const IDLE_BASELINE = 0.06;
+  // Idle: bars sit at the minimum render height. Pre-r2 ran a
+  // 2-second sine breath; that misread as "the app is listening"
+  // since no audio is being captured. The next pass set a static
+  // 0.06 baseline — flat but still chunky on the 88 px stage,
+  // reading as "low signal" rather than "silent." Now zeroed so
+  // the bar heights fall to the 6 % floor in the render math —
+  // ~5 px on the centerpiece scale, an honest silence.
+  const IDLE_BASELINE = 0;
 
   // Error flash: long enough to register, short enough that the
   // surrounding error message becomes the focal point.
