@@ -1,25 +1,27 @@
-<script lang="ts">
-  import { onDestroy, onMount } from "svelte";
-  import type { UnlistenFn } from "@tauri-apps/api/event";
+<!--
+  Compatibility wrapper around `AudioSourcePicker` + `RecordPanel`
+  introduced in #468 slice B. Keeps the existing prop interface
+  for `DictationSection` so this slice is a pure refactor — slice
+  C will replace this wrapper with direct imports of the two
+  leaves laid out in a grid.
 
-  import AudioWaveform from "./AudioWaveform.svelte";
+  Owns:
+  - The first-time-setup banner (shown when no model installed)
+  - The cross-leaf derived values (badgeVisible, willRecordMeeting,
+    hasUsableSource, selectedSourceLabel) so each leaf receives
+    only concrete props
+  - The trailing `<ErrorDisplay>` block
+-->
+<script lang="ts">
+  import AudioSourcePicker from "./AudioSourcePicker.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
-  import Select from "./Select.svelte";
-  import StatusLine from "./StatusLine.svelte";
+  import RecordPanel from "./RecordPanel.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
-  import {
-    listenForStatusLineChanges,
-    readStatusLineEnabled,
-  } from "./status-line";
   import type { AudioSourceListing, PermissionHealth } from "./types";
 
   type Props = {
     sources: AudioSourceListing[];
     sourcesLoaded: boolean;
-    /// Selected source id. Mic devices use their device name; the
-    /// system-audio entry uses the literal string `"system"`. The
-    /// parent page maps this to an `AudioSource` argument when calling
-    /// `start_dictation`.
     selected: string | null;
     recording: boolean;
     busy: boolean;
@@ -28,30 +30,10 @@
     error: ErrorDisplayShape | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
-    // Shared callback used by both the setup-banner "Open Settings →
-    // Model" button and the inline model chip.
     onScrollToModelPicker: () => void;
-    // Active model display name; null when no model is loaded.
-    // Renders an inline model chip above the audio picker so the two
-    // session-config controls are visually co-located.
     activeModelName: string | null;
-    // Screen Recording permission health for the unified Record
-    // flow's mic-only badge (#369). `null` when the health probe
-    // hasn't returned yet — badge stays hidden until we have a
-    // signal. `confirmed` hides the badge (Record will upgrade to
-    // multi-source meeting mode); `stale` / `not-granted` show
-    // distinct copy + the deep-link to Settings → Permissions.
-    // `not-applicable` (Linux/Windows) also hides the badge.
     screenRecordingHealth?: PermissionHealth | null;
     onOpenPermissions?: () => void;
-    /// Active recording mode (#409). The unified Record flow auto-
-    /// upgrades click-driven recording to the meeting pump when
-    /// Screen Recording is confirmed; before #409 there was no
-    /// in-flight indication of which mode was active, so the user
-    /// only learned at Stop time when a History meeting row
-    /// appeared instead of a dictation row. `null` while not
-    /// recording; `"dictation"` for PTT or mic-only click; `"meeting"`
-    /// for click-driven multi-source.
     recordMode?: "dictation" | "meeting" | null;
   };
 
@@ -73,28 +55,25 @@
     recordMode = null,
   }: Props = $props();
 
-  // Show the badge when the user has a mic selected (so the upgrade
-  // would actually apply), is not already recording, and SCK is
-  // either stale or never granted. `confirmed` and `not-applicable`
-  // both hide. Picking system-audio explicitly also hides — that's
-  // a deliberate "just record the system" intent the badge
-  // shouldn't second-guess.
+  // Cross-leaf deriveds — computed once here so AudioSourcePicker
+  // and RecordPanel stay decoupled from each other's source lists
+  // and selection state.
+  let mics = $derived(sources.filter((s) => s.kind === "microphone"));
+  let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
+
+  let hasUsableSource = $derived(
+    mics.length > 0 || (systemAudio?.isSupported ?? false),
+  );
+
   let badgeVisible = $derived(
     !recording
       && selected !== null
       && selected !== "system"
-      && (screenRecordingHealth === "stale" || screenRecordingHealth === "not-granted"),
+      && (screenRecordingHealth === "stale"
+        || screenRecordingHealth === "not-granted"),
   );
   let badgeIsStale = $derived(screenRecordingHealth === "stale");
 
-  // True when a click on the Record button would upgrade to
-  // multi-source meeting capture (mic + system audio). Drives a
-  // distinct button label so the mode change is visible BEFORE
-  // the click — without this, the user only learns they were in
-  // meeting mode after Stop lands a History meeting row instead
-  // of writing to clipboard. UX review on #384 flagged this
-  // mode-invisibility on the happy path; the badge alone is
-  // absence-only.
   let willRecordMeeting = $derived(
     !recording
       && selected !== null
@@ -102,110 +81,16 @@
       && screenRecordingHealth === "confirmed",
   );
 
-  // Derived: separate the mic devices from the system-audio entry so
-  // the picker can group them (mics first, then system audio with a
-  // visual divider). Disabled mic-less platforms still get the
-  // system-audio entry — when it's not yet supported, the option is
-  // rendered disabled with a "coming soon" suffix.
-  let mics = $derived(sources.filter((s) => s.kind === "microphone"));
-  let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
-
-  // Total picker option count, including the disabled system-audio
-  // entry. Used to size the "no audio sources at all" empty state.
-  let pickableCount = $derived(mics.length + (systemAudio ? 1 : 0));
-
-  // Can the user actually start? At least one *supported* source must
-  // exist. Mics are always supported when present; the system-audio
-  // entry is supported only when the backend says so.
-  let hasUsableSource = $derived(
-    mics.length > 0 || (systemAudio?.isSupported ?? false),
-  );
-
-  // F5 status line: opt-in display of `🎤 device · model` below
-  // the waveform. Persistence is localStorage via the helper; we
-  // also listen for cross-window toggles so a Settings change
-  // updates this main-window view without a reload.
-  let statusLineEnabled = $state(false);
-  let unlistenStatusLine: UnlistenFn | null = null;
-
-  onMount(async () => {
-    statusLineEnabled = readStatusLineEnabled();
-    unlistenStatusLine = await listenForStatusLineChanges((next) => {
-      statusLineEnabled = next;
-    });
-  });
-
-  onDestroy(() => {
-    unlistenStatusLine?.();
-    unlistenStatusLine = null;
-  });
-
-  // Resolve the picker's selected id back to the source's display
-  // name so the F5 status line shows "Built-in Microphone" rather
-  // than the raw device id. Falls through to a friendly literal
-  // for the system-audio case where `id === "system"`.
+  // Resolve the picker's selected id to its display name for the
+  // F5 status line.
   let selectedSourceLabel = $derived.by(() => {
     if (selected === null) return null;
     if (selected === "system") return systemAudio?.name ?? "System Audio";
     return sources.find((s) => s.id === selected)?.name ?? null;
   });
-
-  // Waveform mood (#411 phase F1). The component is mounted whenever
-  // the controls section is visible so the breathing idle bars give
-  // the page a continuous live feel; the `mode` prop selects the
-  // visual mood from the section's own state.
-  // Priority: error > recording > processing (transcribing) > idle.
-  // Error wins so a stop-time failure flashes the bars even while
-  // `transcribing` is still true on its way down.
-  let waveformMode = $derived<"idle" | "recording" | "processing" | "error">(
-    error !== null
-      ? "error"
-      : recording
-        ? "recording"
-        : transcribing
-          ? "processing"
-          : "idle",
-  );
-
-  // Build the groups array for the custom Select component, mirroring
-  // the old <optgroup> structure. The system-audio entry renders as a
-  // disabled option when the backend reports it unsupported.
-  let sourceGroups = $derived([
-    {
-      label: "Microphone",
-      options: mics.map((m) => ({
-        value: m.id,
-        label: m.name + (m.isDefault ? " (default)" : ""),
-      })),
-    },
-    ...(systemAudio
-      ? [
-          {
-            label: "System audio",
-            options: [
-              {
-                value: systemAudio.id,
-                label:
-                  systemAudio.name +
-                  (systemAudio.isSupported
-                    ? ""
-                    : " (coming soon on this platform)"),
-                disabled: !systemAudio.isSupported,
-              },
-            ],
-          },
-        ]
-      : []),
-  ]);
 </script>
 
 {#if noModelInstalled}
-  <!--
-    No model is on disk yet. Banner replaces the bottom-of-page
-    hunt and the "transcription not set up" error-after-click flow.
-    Click → scroll to the picker; from there the user clicks
-    Download on a card and the auto-download path takes over.
-  -->
   <aside class="setup-banner" role="status" aria-label="First-time setup">
     <div class="setup-banner-text">
       <strong>Set up your first model</strong>
@@ -221,187 +106,33 @@
 {/if}
 
 <section class="controls">
-  <!--
-    Unified session-config row: model chip (left) + audio source
-    picker (right). Co-locating these two "what are you recording
-    with?" controls replaces the old pattern where the model chip
-    floated in the page header and the source lived below. Now they
-    read as a single setup strip above the action button.
-  -->
-  <div class="config-row">
-    <div class="config-field">
-      <label class="field-label" for="audio-source-select">Audio source</label>
-      {#if !sourcesLoaded}
-        <p class="empty-devices">Loading sources…</p>
-      {:else if pickableCount === 0}
-        <p class="empty-devices">
-          No audio sources detected. On macOS, grant microphone access in
-          System Settings → Privacy &amp; Security. On Linux, check that
-          PulseAudio / PipeWire is running.
-        </p>
-      {:else}
-        <Select
-          id="audio-source-select"
-          groups={sourceGroups}
-          value={selected}
-          onchange={(v) => (selected = v)}
-          disabled={recording || busy}
-        />
-      {/if}
-    </div>
+  <AudioSourcePicker
+    {sources}
+    {sourcesLoaded}
+    bind:selected
+    {recording}
+    {busy}
+    {activeModelName}
+    {onScrollToModelPicker}
+  />
 
-    {#if activeModelName}
-      <div class="config-field">
-        <span class="field-label">Model</span>
-        <button
-          type="button"
-          class="model-chip"
-          onclick={onScrollToModelPicker}
-          aria-label="Active model: {activeModelName}. Click to change."
-          title="Change transcription model"
-        >
-          <span class="model-name">{activeModelName}</span>
-          <svg
-            class="model-chevron"
-            width="10"
-            height="10"
-            viewBox="0 0 10 10"
-            aria-hidden="true"
-            fill="none"
-          >
-            <path
-              d="M3 4l2 2 2-2"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
-      </div>
-    {/if}
-  </div>
-
-  {#if !recording}
-    <button
-      class="start-btn"
-      onclick={onStart}
-      disabled={busy || !hasUsableSource || noModelInstalled}
-      aria-label={busy
-        ? "Working"
-        : noModelInstalled
-          ? "Choose a model first"
-          : willRecordMeeting
-            ? "Record meeting (mic plus system audio)"
-            : "Start recording"}
-      title={noModelInstalled ? "Choose a model first" : undefined}
-      data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
-    >
-      {#if transcribing}
-        <span class="spinner" aria-hidden="true"></span> Transcribing…
-      {:else if willRecordMeeting}
-        <!--
-          When SCK is confirmed the click upgrades to multi-source
-          capture; surface that on the button label so the user
-          can predict the destination (History meeting row, not
-          clipboard). UX review on #384 flagged that
-          mode-invisibility on the happy path was the worst part
-          of the auto-copy regression.
-        -->
-        <span class="rec-dot idle" aria-hidden="true"></span> Record meeting
-        <span class="record-mode-hint">mic + system audio</span>
-      {:else}
-        <span class="rec-dot idle" aria-hidden="true"></span> Start recording
-      {/if}
-    </button>
-  {:else}
-    <button
-      class="start-btn stop"
-      onclick={onStop}
-      disabled={busy}
-      aria-label="Stop recording and transcribe"
-    >
-      <span class="rec-dot stop" aria-hidden="true"></span> Stop and transcribe
-    </button>
-  {/if}
-
-  {#if badgeVisible}
-    <!--
-      Mic-only badge (#369). Surfaces alongside the Record button
-      to explain why a click won't capture system audio. Distinct
-      copy for `stale` (TCC entry rotated, was working) vs
-      `not-granted` (never asked) — both variants frame the
-      payoff in user-scenario terms ("other people's audio in
-      calls") rather than feature-name terms ("multi-speaker
-      capture"), per UX review on #384. Click routes to
-      Settings → Permissions, where the existing per-row deep-
-      link opens System Settings.
-    -->
-    <button
-      type="button"
-      class="record-mode-badge"
-      data-health={badgeIsStale ? "stale" : "not-granted"}
-      onclick={onOpenPermissions}
-      aria-label="Open Permissions in Settings"
-      data-testid="record-mode-badge"
-    >
-      <span class="record-mode-badge-dot" aria-hidden="true"></span>
-      {#if badgeIsStale}
-        Mic only · Screen Recording access expired — re-grant to
-        also capture other people's audio in calls.
-      {:else}
-        Mic only · grant Screen Recording to also capture other
-        people's audio in calls.
-      {/if}
-    </button>
-  {/if}
-
-  <!--
-    aria-live so screen readers announce the recording state change
-    when the hotkey toggles it from elsewhere on the desktop. The
-    mode label after the dot ("mic only" / "mic + system audio")
-    is the in-flight signal for #409 — without it, users in click-
-    driven meeting mode get no indication mid-record that they're
-    on the multi-source path until a History meeting row appears
-    after Stop.
-  -->
-  <p class="status" aria-live="polite">
-    {#if recording}
-      <span class="recording-dot" aria-hidden="true"></span> Recording
-      {#if recordMode === "meeting"}
-        <span class="status-mode" data-record-mode="meeting"
-          >· mic + system audio</span
-        >
-      {:else if recordMode === "dictation"}
-        <span class="status-mode" data-record-mode="dictation"
-          >· mic only</span
-        >
-      {/if}
-      — release the hotkey or press Stop to transcribe.
-    {:else if transcribing}
-      Transcribing — this can take a few seconds for short clips,
-      longer for big models.
-    {/if}
-  </p>
-
-  <!--
-    Mood-driven waveform (#411 phase B + F1). Always mounted while
-    the controls section is visible so the idle breathing keeps
-    the page alive. The mood selects between idle (dim breath),
-    recording (live RMS), processing (frozen + opacity pulse), and
-    error (one-shot flash). The component owns the audio:level
-    subscription itself; mounting it idle costs only the rAF tick.
-  -->
-  <div class="status-waveform">
-    <AudioWaveform mode={waveformMode} metering />
-  </div>
-
-  {#if statusLineEnabled}
-    <StatusLine
-      audioSourceLabel={selectedSourceLabel}
-      modelName={activeModelName}
-    />
-  {/if}
+  <RecordPanel
+    {recording}
+    {busy}
+    {transcribing}
+    {hasUsableSource}
+    {noModelInstalled}
+    {willRecordMeeting}
+    {badgeVisible}
+    {badgeIsStale}
+    {recordMode}
+    {selectedSourceLabel}
+    {activeModelName}
+    {error}
+    {onStart}
+    {onStop}
+    {onOpenPermissions}
+  />
 </section>
 
 {#if error}
@@ -409,365 +140,61 @@
 {/if}
 
 <style>
-/* ── First-time-setup banner ─────────────────────────────── */
-.setup-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.85rem 1rem;
-  margin: 0 0 1rem;
-  background-color: var(--info-bg);
-  border: 1px solid var(--info-border);
-  border-radius: var(--radius-md);
-}
-
-.setup-banner-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  flex: 1;
-  min-width: 0;
-}
-
-.setup-banner-text strong {
-  font-size: 0.95rem;
-  color: var(--info-text);
-}
-
-.setup-banner-text span {
-  font-size: 0.85rem;
-  color: var(--info-text);
-  opacity: 0.85;
-}
-
-.setup-banner button {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-/* ── Controls container ──────────────────────────────────── */
-.controls {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-  align-items: stretch;
-}
-
-/* ── Config row: audio source + model ───────────────────── */
-.config-row {
-  display: grid;
-  /* Model chip is narrower; audio source fills remaining space. */
-  grid-template-columns: 1fr auto;
-  gap: 0.6rem;
-  align-items: end;
-}
-
-.config-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.field-label {
-  font-size: 0.8rem;
-  font-weight: 500;
-  color: var(--text-muted);
-  letter-spacing: 0.01em;
-}
-
-/* ── Model chip ──────────────────────────────────────────── */
-.model-chip {
-  height: var(--control-height);
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0 0.85rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 0.88rem;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
-}
-
-.model-chip:hover {
-  background: var(--bg-elevated);
-  border-color: var(--accent-hover);
-  color: var(--text-primary);
-}
-
-.model-chip:focus-visible {
-  outline: none;
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-
-.model-name {
-  max-width: 9rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-chevron {
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-/* ── Empty devices notice ────────────────────────────────── */
-.empty-devices {
-  margin: 0;
-  padding: 0.65rem 0.85rem;
-  background-color: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius-md);
-  color: var(--warning-text);
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
-/* ── Start / Stop button ─────────────────────────────────── */
-.start-btn {
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-input);
-  height: var(--control-height);
-  padding: 0 1.2em;
-  font-size: 1em;
-  font-family: inherit;
-  color: var(--text-primary);
-  background-color: var(--bg-surface);
-  cursor: pointer;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
-  width: 100%;
-}
-
-.start-btn:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-
-.start-btn:focus-visible {
-  outline: none;
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-
-.start-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.start-btn.stop {
-  background-color: var(--danger);
-  color: white;
-  border-color: var(--danger);
-}
-
-/* Trailing-pill subtext on the Record button when SCK is
-   confirmed (#369). Reads "mic + system audio" so users see
-   the multi-source upgrade before they click. Quieter than
-   the main label so the button still reads as one click
-   target. */
-.record-mode-hint {
-  font-size: 0.78rem;
-  font-weight: 500;
-  padding: 0.1rem 0.5rem;
-  margin-left: 0.45rem;
-  background-color: var(--accent-subtle);
-  color: var(--accent);
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.start-btn.stop:hover:not(:disabled) {
-  background-color: #c02e2e;
-  border-color: #c02e2e;
-  box-shadow: 0 0 0 3px rgba(216, 58, 58, 0.18);
-}
-
-/* Separate primary button style used by the setup-banner. */
-button.primary {
-  background-color: var(--accent);
-  color: var(--text-on-accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  padding: 0.45rem 1rem;
-  font-size: 0.88rem;
-  font-family: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s;
-}
-
-button.primary:hover:not(:disabled) {
-  background-color: var(--accent-hover);
-  border-color: var(--accent-hover);
-}
-
-/* ── Recording dot / spinner ─────────────────────────────── */
-.rec-dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  display: inline-block;
-  flex-shrink: 0;
-}
-
-.rec-dot.idle {
-  background-color: var(--text-secondary);
-  opacity: 0.6;
-}
-
-.rec-dot.stop {
-  background-color: white;
-}
-
-/* ── Mic-only / stale Record badge (#369) ────────────────── */
-.record-mode-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  align-self: center;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.82rem;
-  line-height: 1.35;
-  font-family: inherit;
-  border-radius: 999px;
-  border: 1px solid #d1d1d8;
-  background-color: var(--bg-surface);
-  color: var(--text-secondary);
-  cursor: pointer;
-  text-align: left;
-  max-width: 100%;
-  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
-}
-.record-mode-badge:hover {
-  background-color: var(--bg-elevated);
-  border-color: var(--accent-hover);
-  color: var(--text-primary);
-}
-.record-mode-badge:focus-visible {
-  outline: none;
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-.record-mode-badge-dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background-color: #c0c0c5;
-  flex-shrink: 0;
-}
-.record-mode-badge[data-health="stale"] .record-mode-badge-dot {
-  background-color: #e0a020;
-}
-.record-mode-badge[data-health="not-granted"] .record-mode-badge-dot {
-  background-color: #d83a3a;
-}
-.record-mode-badge[data-health="stale"] {
-  background-color: #fdf6e3;
-  border-color: #e7c887;
-  color: #7a4e00;
-}
-.record-mode-badge[data-health="stale"]:hover {
-  background-color: #f9efce;
-  border-color: #d8b46a;
-  color: #5a3700;
-}
-@media (prefers-color-scheme: dark) {
-  .record-mode-badge[data-health="stale"] {
-    background-color: #3d2f12;
-    color: #f0c878;
-    border-color: #6c4e1a;
+  .setup-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.85rem 1rem;
+    margin: 0 0 1rem;
+    background-color: var(--info-bg);
+    border: 1px solid var(--info-border);
+    border-radius: var(--radius-md);
   }
-  .record-mode-badge[data-health="stale"]:hover {
-    background-color: #4a3a18;
-    color: #ffd790;
-    border-color: #8a6520;
+
+  .setup-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+    min-width: 0;
   }
-}
-
-/* ── Status line ─────────────────────────────────────────── */
-.status {
-  margin: 0;
-  min-height: 1.4em;
-  font-size: 0.88rem;
-  color: var(--text-muted);
-  text-align: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-}
-
-.recording-dot {
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 50%;
-  background-color: var(--danger);
-  display: inline-block;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-/* Mode label embedded in the recording status line (#409). Reads
-   as a quieter inline qualifier next to "Recording", with the
-   meeting variant tinted toward the accent so users notice the
-   upgraded path. The leading "·" sits in the markup; padding
-   is symmetrical so it lands cleanly between the verb and the
-   en-dash hint. */
-.status-mode {
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-.status-mode[data-record-mode="meeting"] {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-/* AudioWaveform sits below the status line during recording (#411
-   phase B). Centred to align with the rest of the controls
-   column. The 60×16 footprint is set inside the component; the
-   wrapper just gives it vertical breathing room so it doesn't
-   crowd the status text above. */
-.status-waveform {
-  display: flex;
-  justify-content: center;
-  margin-top: 0.5rem;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.85); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .recording-dot,
-  .spinner {
-    animation: none;
+  .setup-banner-text strong {
+    font-size: 0.95rem;
+    color: var(--info-text);
   }
-}
+  .setup-banner-text span {
+    font-size: 0.85rem;
+    color: var(--info-text);
+    opacity: 0.85;
+  }
+  .setup-banner button {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
 
-.spinner {
-  width: 0.85rem;
-  height: 0.85rem;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  display: inline-block;
-  animation: spin 0.8s linear infinite;
-}
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    align-items: stretch;
+  }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+  /* Primary button used by the setup-banner. */
+  button.primary {
+    background-color: var(--accent);
+    color: var(--text-on-accent);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    padding: 0.45rem 1rem;
+    font-size: 0.88rem;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.12s;
+  }
+  button.primary:hover:not(:disabled) {
+    background-color: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
 </style>
