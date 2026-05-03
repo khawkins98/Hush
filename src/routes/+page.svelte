@@ -13,7 +13,7 @@
   import { motionDuration } from "$lib/motion";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
-  import PermissionsDialog from "$lib/PermissionsDialog.svelte";
+  import PermissionHealthSection from "$lib/PermissionHealthSection.svelte";
   import MacosPermsPill from "$lib/MacosPermsPill.svelte";
   import {
     formatErrorDisplay,
@@ -28,14 +28,12 @@
     DictationResult,
     DictationStats,
     HistoryEntry,
-    MacosPermissionDiagnostic,
     ModelCard,
     MeetingExportFormat,
     MeetingSession,
     MeetingSessionDetail,
     PermissionStatuses,
     PermissionsHealth,
-    PermissionHealthResponse,
   } from "$lib/types";
 
   // Page size for the history view. Hard-cap on the Rust side is 500;
@@ -358,11 +356,14 @@
     // call instead of the sum. Each fetch handles its own loading
     // and error state so a slow one (history, in particular) doesn't
     // block the rest of the page.
+    // `loadMacosCapabilityFlag` + initial `get_permission_health`
+    // probe ran from this Promise.all pre-#432; both moved into
+    // PermissionHealthSection's onMount, which fires when the
+    // section mounts at the bottom of this page (same paint).
     await Promise.all([
       loadSources(),
       refreshHistory(),
       refreshModels(),
-      loadMacosCapabilityFlag(),
       refreshMeetingSessions(),
     ]);
 
@@ -440,8 +441,11 @@
     // spam the IPC. Each call is cheap (single-digit ms) and
     // side-effect-free after the first stamp, but politeness is
     // free at this point.
-    void refreshPermissionHealth();
-    window.addEventListener("focus", refreshPermissionHealthDebounced);
+    //
+    // Permission-health lifecycle (focus debounce + initial probe
+    // + diagnose_macos_permissions) moved into
+    // `PermissionHealthSection.svelte` (#432). Cross-section state
+    // still lives here, bound through to the section via `bind:`.
     window.addEventListener("keydown", handleGlobalKeydown);
   });
 
@@ -452,12 +456,7 @@
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
-    window.removeEventListener("focus", refreshPermissionHealthDebounced);
     window.removeEventListener("keydown", handleGlobalKeydown);
-    if (refreshPermissionHealthTimer !== null) {
-      clearTimeout(refreshPermissionHealthTimer);
-      refreshPermissionHealthTimer = null;
-    }
     // Clear the auto-copy notice's auto-dismiss timer too —
     // page is the only Svelte tree this component lives in
     // today, but HMR or any future routing would otherwise
@@ -473,35 +472,6 @@
       appProfileNoticeTimer = null;
     }
   });
-
-  // 250 ms debounce window for the focus-event refresh. Holds the
-  // outstanding setTimeout id so onDestroy can clear it; without
-  // the cancel a leftover firing after unmount would write to an
-  // unmounted reactive `permissionHealth` (Svelte tolerates this
-  // but the IPC call is wasted).
-  let refreshPermissionHealthTimer: ReturnType<typeof setTimeout> | null = null;
-  function refreshPermissionHealthDebounced() {
-    if (refreshPermissionHealthTimer !== null) {
-      clearTimeout(refreshPermissionHealthTimer);
-    }
-    refreshPermissionHealthTimer = setTimeout(() => {
-      refreshPermissionHealthTimer = null;
-      void refreshPermissionHealth();
-    }, 250);
-  }
-
-  async function refreshPermissionHealth() {
-    try {
-      const res = await invoke<PermissionHealthResponse>("get_permission_health");
-      permissionHealth = res.health;
-    } catch (e) {
-      // Non-fatal: the badge falls back to the raw permStatuses
-      // and the Record button still works (will pick mode based
-      // on whatever permissionHealth was last set to, including
-      // null which evaluates to mic-only).
-      console.warn("[hush] get_permission_health failed", e);
-    }
-  }
 
   // Active recording mode (#369). The Record button branches at
   // click time — mic + Screen Recording confirmed → meeting-pump
@@ -1006,10 +976,9 @@
     showPermissionsDialog = true;
   }
 
-  function dismissPermissionsDialog() {
-    showPermissionsDialog = false;
-    permissionsDialogIntro = undefined;
-  }
+  // dismissPermissionsDialog moved into PermissionHealthSection
+  // (#432). The orchestrator now just sets `showPermissionsDialog
+  // = true` to open; the section flips it back on dismiss.
 
   async function openPrivacyPane(
     target: "microphone" | "input-monitoring" | "screen-recording",
@@ -1456,20 +1425,10 @@
     }
   }
 
-  // Drives the Dictation-tab permissions hint:
-  //  - `macosCapable` decides whether to show the hint at all
-  //  - `permStatuses` decides green vs yellow rendering
-  // The full diagnostic (with reset action) renders in the
-  // Settings window's Permissions tab.
-  async function loadMacosCapabilityFlag() {
-    try {
-      const res = await invoke<MacosPermissionDiagnostic>("diagnose_macos_permissions");
-      macosCapable = res.canReset;
-      permStatuses = res.statuses;
-    } catch (e) {
-      console.error("diagnose_macos_permissions failed:", e);
-    }
-  }
+  // diagnose_macos_permissions probe + permStatuses lifecycle
+  // moved into PermissionHealthSection (#432). The orchestrator
+  // just reads the bound `permStatuses` + `macosCapable` for the
+  // welcome derivations and the MacosPermsPill props.
 
   /// Map a tagged IPC error to a user-facing string. Recovery hints are
   /// embedded here rather than in the Rust enum's Display because the
@@ -1509,11 +1468,20 @@
   onOpenPrivacyPane={openPrivacyPane}
 />
 
-<PermissionsDialog
-  show={showPermissionsDialog}
-  onDismiss={dismissPermissionsDialog}
+<!--
+  Permission-health lifecycle + recovery dialog (#432). The
+  section owns the focus-debounced probe and the
+  diagnose_macos_permissions one-shot; the orchestrator binds the
+  state so welcome derivations and the MacosPermsPill render as
+  before.
+-->
+<PermissionHealthSection
+  bind:permissionHealth
+  bind:permStatuses
+  bind:macosCapable
+  bind:showDialog={showPermissionsDialog}
+  bind:dialogIntro={permissionsDialogIntro}
   onOpenPrivacyPane={openPrivacyPane}
-  intro={permissionsDialogIntro}
 />
 
 <!--
