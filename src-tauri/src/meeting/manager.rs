@@ -81,20 +81,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
+#[cfg(test)]
 use anyhow::{anyhow, Result};
 
+use crate::audio::AudioCapture;
 #[cfg(test)]
 use crate::audio::CapturedAudio;
-use crate::audio::{AudioCapture, AudioSession, AudioSource};
+#[cfg(test)]
+use crate::audio::{AudioSession, AudioSource};
 #[cfg(test)]
 use crate::transcription::Transcribe;
-use crate::transcription::{StreamingTranscribeSession, Utterance};
+use crate::transcription::Utterance;
 
 use super::classifier::AppClassifier;
-use super::pump;
 #[cfg(test)]
 use super::MeetingAppKind;
-use super::{MeetingSession, MeetingSessionRepository, NewMeetingSession, NewPersistedUtterance};
+use super::MeetingSessionRepository;
 
 /// Test-only no-op audio backend used by `SessionManager::new_for_test`.
 /// Returns empty capture sessions instantly so the pump's spawn path
@@ -217,20 +219,25 @@ pub(super) struct MeetingSourceFailedPayload<'a> {
 pub(super) const MEETING_SOURCE_FAILED_EVENT: &str = "meeting:source-failed";
 
 pub struct SessionManager {
-    repo: Arc<dyn MeetingSessionRepository>,
+    // All fields are `pub(super)` so the lifecycle peer
+    // (`crate::meeting::lifecycle`) can drive `start_manual` /
+    // `stop_manual` / `append_if_active` without going through
+    // accessor noise. Visibility is scoped to `super` (= `meeting`)
+    // — outside the meeting module the fields stay private.
+    pub(super) repo: Arc<dyn MeetingSessionRepository>,
     /// User-overrides repo (#112). Read at every session start so
     /// edits in the Settings panel take effect without an app
     /// restart. The cached `classifier` field below is rebuilt from
     /// a fresh override snapshot inside `start_manual`.
-    app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
-    classifier: AppClassifier,
+    pub(super) app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
+    pub(super) classifier: AppClassifier,
     /// Audio backend the pump uses to open per-source capture
     /// sessions. Cloned from `AppState::audio` at construction.
-    audio: Arc<dyn AudioCapture>,
+    pub(super) audio: Arc<dyn AudioCapture>,
     /// Live transcribe handle. Same `Arc<Mutex<...>>` `AppState`
     /// holds so model hot-swap reaches in-flight pumps on the
     /// next chunk automatically.
-    transcribe: crate::ipc::TranscribeSlot,
+    pub(super) transcribe: crate::ipc::TranscribeSlot,
     /// Session state, see [`SessionState`]. The `Opening` sentinel
     /// is what makes concurrent `start_manual` calls safe: the
     /// first call flips Idle → Opening under the lock, drops the
@@ -238,7 +245,7 @@ pub struct SessionManager {
     /// to Active. A second concurrent call sees `Opening` and
     /// rejects, instead of slipping past the precondition check
     /// and creating an orphan session.
-    state: Mutex<SessionState>,
+    pub(super) state: Mutex<SessionState>,
     /// In-memory in-flight partial utterances, keyed by
     /// `session_id` then by `speaker_label` ("mic" / "system"). The
     /// streaming pump (#108 PR3) updates these on each inference
@@ -255,7 +262,7 @@ pub struct SessionManager {
     /// Inner key is `String` (the speaker label) rather than
     /// `&'static str` so a future per-speaker diarization (#111)
     /// can drop in without changing this map's shape.
-    partials: Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
+    pub(super) partials: Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
     /// Surface pump-side events (per-source failure mid-session) to
     /// the frontend. Production wires this to a
     /// [`crate::ipc::events::TauriEventEmitter`]; tests use
@@ -263,7 +270,7 @@ pub struct SessionManager {
     /// `RecordingEventEmitter` that captures emit calls for
     /// assertion. The pump fires `meeting:source-failed` through
     /// this seam (see [`MeetingSourceFailedPayload`]).
-    event_emitter: Arc<dyn crate::events::EventEmitter>,
+    pub(super) event_emitter: Arc<dyn crate::events::EventEmitter>,
     /// Speaker diarization. Production wires
     /// [`crate::diarization::FlagGatedDiarizer`] which routes to
     /// [`crate::diarization::onnx::OnnxDiarizer`] when the
@@ -272,7 +279,7 @@ pub struct SessionManager {
     /// diarizer abstains, `dispatch_utterances` falls back to
     /// the source-derived `"mic"` / `"system"` tag from
     /// `AudioSource::speaker_tag()`.
-    diarize: Arc<dyn crate::diarization::Diarize>,
+    pub(super) diarize: Arc<dyn crate::diarization::Diarize>,
 }
 
 /// Lifecycle state for the manager's session slot. Three-valued
@@ -282,7 +289,7 @@ pub struct SessionManager {
 /// concurrent `start_manual` IPC calls could both observe `None`
 /// before either commits, and end up creating two database rows /
 /// pump tasks for what the user expects to be one session.
-enum SessionState {
+pub(super) enum SessionState {
     Idle,
     Opening,
     Active(ActiveSession),
@@ -290,22 +297,22 @@ enum SessionState {
 
 /// In-memory state for an open meeting session. Held inside the
 /// manager's `active` mutex; `None` means no session in flight.
-struct ActiveSession {
-    id: i64,
+pub(super) struct ActiveSession {
+    pub(super) id: i64,
     /// Wall-clock start. Used by the pump to compute per-utterance
     /// `started_at_ms` / `ended_at_ms` offsets that don't drift
     /// across out-of-order chunk completions (chunk N+1 transcribes
     /// faster than chunk N).
-    started_at: Instant,
+    pub(super) started_at: Instant,
     /// Cancellation flag the pump task polls between sleeps. Set on
     /// `stop_manual`; the pump completes its in-flight chunk, drains
     /// + transcribes one final time, then exits.
-    cancel: Arc<AtomicBool>,
+    pub(super) cancel: Arc<AtomicBool>,
     /// Pump task. Joined on `stop_manual` so the final chunk's
     /// transcription + append are observed before the session row
     /// is closed. Wrapped in `Mutex<Option<...>>` so `stop_manual`
     /// can take it out without the borrow checker complaining.
-    pump_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub(super) pump_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Set to `true` when `stop_manual`'s `repo.close_session`
     /// call fails and the recovery path restores the session for
     /// a retry (#249). A subsequent `stop_manual` then skips the
@@ -315,7 +322,7 @@ struct ActiveSession {
     /// stop would store `true` into a fresh `AtomicBool` no
     /// task reads, and `take()` an already-empty `pump_handle`,
     /// burning the user's "let me retry" intent on no-op work.
-    close_attempted: bool,
+    pub(super) close_attempted: bool,
 }
 
 impl SessionManager {
@@ -430,435 +437,13 @@ impl SessionManager {
         Self::new(repo, audio, transcribe, emitter, diarize, app_overrides)
     }
 
-    /// Start a meeting session manually (button-driven).
-    ///
-    /// `sources` is the list of audio sources the pump should
-    /// capture from in parallel. The default in production is
-    /// `[selected_source]` until Phase 3 of #122 promotes mic + SCK
-    /// as the meeting default; passing multiple sources today
-    /// already works because [`AudioCapture::start_session`] supports
-    /// parallel handles (#124).
-    ///
-    /// `app_name` is what the user wants the session attributed to —
-    /// typically the foreground app's bundle id at the moment of click.
-    /// If `None`, the manager labels the session as "manual" with
-    /// `app_kind = Other`. The session row is opened with
-    /// `started_at = NOW`, `ended_at = NULL`.
-    ///
-    /// On success: opens the session row, starts an
-    /// [`AudioSession`] handle per source, spawns the chunking pump
-    /// task. Each chunk is transcribed and appended as an
-    /// [`super::PersistedUtterance`] under the active session.
-    ///
-    /// Errors if a session is already active — the user must close
-    /// the existing one first. Surfaces as `IpcError::MeetingSessions`
-    /// at the IPC layer.
-    pub async fn start_manual(
-        &self,
-        sources: Vec<AudioSource>,
-        app_name: Option<String>,
-        app_title: Option<String>,
-    ) -> Result<MeetingSession> {
-        // Claim the slot via the Opening sentinel. A concurrent
-        // start sees Opening and rejects rather than racing past
-        // the precondition check. The lock is released before the
-        // async DB / handle work — held across an .await would
-        // block all other manager methods, including stop_manual,
-        // for the duration of the open.
-        {
-            let mut guard = self
-                .state
-                .lock()
-                .map_err(|_| anyhow!("session manager mutex poisoned"))?;
-            match *guard {
-                SessionState::Idle => {
-                    *guard = SessionState::Opening;
-                }
-                SessionState::Opening => {
-                    return Err(anyhow!(
-                        "another start is already in flight; wait for it to finish"
-                    ));
-                }
-                SessionState::Active(_) => {
-                    return Err(anyhow!(
-                        "meeting session already active; stop the current one first"
-                    ));
-                }
-            }
-        }
-
-        // Anything below this line that returns Err MUST first
-        // revert the slot to Idle and roll back any opened audio
-        // handles. The `revert_to_idle` closure centralises the
-        // recovery so each early-return arm is a single call.
-        let revert_to_idle = |handles: Vec<Box<dyn AudioSession>>| -> Result<()> {
-            for opened in handles {
-                if let Err(roll_err) = opened.stop() {
-                    tracing::warn!(
-                        error = ?roll_err,
-                        "rollback: stop of already-opened audio session failed"
-                    );
-                }
-            }
-            let mut guard = self
-                .state
-                .lock()
-                .map_err(|_| anyhow!("session manager mutex poisoned"))?;
-            *guard = SessionState::Idle;
-            Ok(())
-        };
-
-        if sources.is_empty() {
-            let _ = revert_to_idle(Vec::new());
-            return Err(anyhow!("meeting session needs at least one audio source"));
-        }
-
-        // Open all the capture handles BEFORE the DB write. If any
-        // source fails (Screen Recording permission denied, mic
-        // already in use), we want to fail loud now rather than
-        // create an empty session row the user has to clean up.
-        let mut handles: Vec<Box<dyn AudioSession>> = Vec::with_capacity(sources.len());
-        for source in &sources {
-            match self.audio.start_session(source.clone()) {
-                Ok(h) => handles.push(h),
-                Err(e) => {
-                    let kind = source.kind_label();
-                    let _ = revert_to_idle(handles);
-                    return Err(e.context(format!("open audio session for {kind} source")));
-                }
-            }
-        }
-
-        let app_name = app_name.unwrap_or_else(|| "manual".to_owned());
-        // Load a fresh override snapshot at every session start (#112).
-        // The Settings panel writes here without notifying the manager,
-        // so reading per-session is the simplest invalidation strategy
-        // — the cost is one indexed lookup against a tiny table.
-        // Failures degrade to "no overrides" so a corrupt or
-        // unreachable database can't block session creation.
-        let overrides = match self.app_overrides.list().await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|r| (r.app_name, r.kind))
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!(
-                    error = ?e,
-                    "meeting: failed to load app overrides; falling back to defaults"
-                );
-                Vec::new()
-            }
-        };
-        let classifier = if overrides.is_empty() {
-            // Tiny fast-path: when there are no overrides, reuse the
-            // cached defaults instead of allocating a fresh classifier
-            // every time. Skips one Vec clone per session start.
-            None
-        } else {
-            Some(AppClassifier::with_overrides(overrides))
-        };
-        let app_kind = classifier
-            .as_ref()
-            .unwrap_or(&self.classifier)
-            .classify(&app_name);
-
-        // Snapshot the source-kind tags for persistence (#242).
-        // The panel reads these back to render "Mic + System audio"
-        // metadata even when the app classification is "Other"
-        // (browser tab, generic productivity app). Stored as a
-        // separate Vec rather than shadowing `sources` because the
-        // streaming-session loop below still iterates the original
-        // `Vec<AudioSource>`.
-        //
-        // Uses `speaker_tag()` (the persistence-layer short form)
-        // not `kind_label()` (the structured-logging long form) so
-        // the CSV in `meeting_sessions.sources` agrees with the
-        // per-utterance `speaker_label` set in the dispatch loop —
-        // see `AudioSource::speaker_tag` for the invariant.
-        let source_labels: Vec<String> = sources
-            .iter()
-            .map(|src| src.speaker_tag().to_owned())
-            .collect();
-        let session = match self
-            .repo
-            .create(NewMeetingSession {
-                app_name: app_name.clone(),
-                app_kind,
-                sources: source_labels,
-                app_title: app_title.clone(),
-            })
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = revert_to_idle(handles);
-                return Err(e);
-            }
-        };
-
-        // Open one streaming inference session per audio source.
-        // The transcribe slot may be empty (no model loaded yet) or
-        // may carry a backend that doesn't override `start_stream`
-        // — in either case the pump degrades gracefully (sources
-        // that fail to open a streaming session are dropped from the
-        // pump's per-tick loop and the session row stays open with
-        // no utterances, mirroring the pre-#108 "no transcriber"
-        // path).
-        //
-        // We snapshot the transcriber Arc once at start time. If the
-        // user hot-swaps models mid-session via the picker, the new
-        // model affects the *next* session, not this one — the
-        // sliding-window state machine carries inference history
-        // that wouldn't transfer cleanly across a model change. A
-        // future tightening could re-open streaming sessions on
-        // hot-swap; not the day-one shape.
-        let transcriber_snapshot = self.transcribe.lock().ok().and_then(|g| g.clone());
-        let mut streaming_sessions: Vec<Option<Box<dyn StreamingTranscribeSession>>> =
-            Vec::with_capacity(sources.len());
-        if let Some(transcriber) = &transcriber_snapshot {
-            // Source ordering matches `handles` and `sources`. The
-            // pump's per-tick loop iterates by index into all three.
-            for (i, source) in sources.iter().enumerate() {
-                // Per-handle format read: each AudioSession knows
-                // its capture format, but the trait surface today
-                // exposes it only through `stop()` / `drain_into()`
-                // returns. We pre-warm by issuing a no-op drain
-                // into a scratch buffer to learn the format. The
-                // drain itself is cheap (lock + mem::take of an
-                // empty Vec) and the streaming session needs the
-                // format to set up its internal resampler at
-                // construction.
-                //
-                // If the pre-warm fails (ScreenCaptureKit denied
-                // mid-start, mic device vanished), we skip opening
-                // a streaming session for that source — the audio
-                // handle is still valid for the legacy `stop()`
-                // path, but the streaming pump won't process its
-                // samples. Logged loudly so the user sees the
-                // diagnostic in the panel.
-                let mut scratch = Vec::new();
-                let format = match handles[i].drain_into(&mut scratch) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        tracing::warn!(
-                            error = ?e,
-                            source_kind = source.kind_label(),
-                            "meeting pump: drain_into pre-warm failed; streaming disabled for this source"
-                        );
-                        streaming_sessions.push(None);
-                        continue;
-                    }
-                };
-                match transcriber.start_stream(format, "") {
-                    Ok(sess) => streaming_sessions.push(Some(sess)),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = ?e,
-                            source_kind = source.kind_label(),
-                            "meeting pump: start_stream failed; streaming disabled for this source"
-                        );
-                        streaming_sessions.push(None);
-                    }
-                }
-            }
-        } else {
-            // No transcriber loaded — streaming sessions stay None
-            // for every source. The pump still runs (so cancellation
-            // works) but emits no utterances. Same end-state as
-            // pre-#108 with no model loaded.
-            tracing::warn!(
-                session_id = session.id,
-                "meeting pump: no transcriber loaded; pump will run idle until model is picked"
-            );
-            streaming_sessions.resize_with(sources.len(), || None);
-        }
-
-        let cancel = Arc::new(AtomicBool::new(false));
-        // `started_at` here populates `ActiveSession.started_at`
-        // (used by the pump to anchor utterance offsets and
-        // prevent drift across out-of-order chunk completions).
-        // This is *not* the same field that #253 removed from
-        // `PumpContext` — that one was unused; this one is
-        // load-bearing.
-        let started_at = Instant::now();
-        let pump_handle = tokio::spawn(pump::run_pump(pump::PumpContext {
-            session_id: session.id,
-            repo: Arc::clone(&self.repo),
-            sources: sources.clone(),
-            handles,
-            streaming_sessions,
-            partials: Arc::clone(&self.partials),
-            cancel: Arc::clone(&cancel),
-            event_emitter: Arc::clone(&self.event_emitter),
-            diarize: Arc::clone(&self.diarize),
-        }));
-
-        // Commit Active. The slot has been Opening since the start
-        // of this method, so no concurrent start_manual can have
-        // raced through — the swap below is unconditional.
-        let mut guard = self
-            .state
-            .lock()
-            .map_err(|_| anyhow!("session manager mutex poisoned"))?;
-        *guard = SessionState::Active(ActiveSession {
-            id: session.id,
-            started_at,
-            cancel,
-            pump_handle: Mutex::new(Some(pump_handle)),
-            close_attempted: false,
-        });
-        drop(guard);
-
-        Ok(session)
-    }
-
-    /// Close the active session.
-    ///
-    /// Signals the pump to cancel, awaits its completion (the pump
-    /// drains + transcribes one final chunk before exiting), then
-    /// writes `ended_at = NOW` on the session row. No-op-with-error
-    /// if no session is active — the panel disables the Stop button
-    /// when nothing's running, but a stale double-click shouldn't
-    /// crash anything either.
-    pub async fn stop_manual(&self) -> Result<()> {
-        // Take the active record out so a concurrent append_utterance
-        // can't race past us writing into a session we're about to
-        // close. The dropped-on-error case below restores it.
-        let active = {
-            let mut guard = self
-                .state
-                .lock()
-                .map_err(|_| anyhow!("session manager mutex poisoned"))?;
-            match std::mem::replace(&mut *guard, SessionState::Idle) {
-                SessionState::Active(a) => Some(a),
-                state @ (SessionState::Opening | SessionState::Idle) => {
-                    // Restore the original state — we didn't have an
-                    // Active to take.
-                    *guard = state;
-                    None
-                }
-            }
-        };
-
-        let active = match active {
-            Some(a) => a,
-            None => return Err(anyhow!("no meeting session active")),
-        };
-
-        // First-try path: signal the pump and join it. Subsequent
-        // retries (`close_attempted == true`) skip this — the pump
-        // is already gone, having drained on the original call —
-        // and go straight to retrying the DB close (#249).
-        if !active.close_attempted {
-            // Tell the pump to wind down, then wait for it to drain
-            // its final chunk + append the resulting utterance.
-            // Awaiting the join here matters: if we close the
-            // session row before the pump's last append, the panel
-            // briefly shows "ended" with a missing
-            // tail-of-conversation utterance.
-            active.cancel.store(true, Ordering::Release);
-            let pump_handle = active
-                .pump_handle
-                .lock()
-                .map_err(|_| anyhow!("active session pump_handle mutex poisoned"))?
-                .take();
-            if let Some(handle) = pump_handle {
-                // Best-effort: a panicked pump task shouldn't block
-                // session cleanup. Log and continue.
-                if let Err(e) = handle.await {
-                    tracing::error!(error = ?e, "meeting pump task panicked or was cancelled");
-                }
-            }
-
-            // The pump's finish() path already flushed any tail
-            // finals to the database and cleared the per-source
-            // partials. Belt-and-braces: clear our partials map
-            // for this session id so a stale partial can't leak
-            // into a subsequent IPC poll between this point and
-            // the pump's last write.
-            if let Ok(mut guard) = self.partials.write() {
-                guard.remove(&active.id);
-            }
-        } else {
-            tracing::info!(
-                session_id = active.id,
-                "meeting stop: retrying close_session after prior DB failure"
-            );
-        }
-
-        match self.repo.close_session(active.id).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // Restore the active record with `close_attempted`
-                // set so a retry skips the (already-completed)
-                // pump cancellation work and goes straight to
-                // re-attempting the DB write. The fresh AtomicBool
-                // and empty pump_handle reflect that reality —
-                // the original cancel/handle have already done
-                // their job and aren't reusable.
-                if let Ok(mut guard) = self.state.lock() {
-                    *guard = SessionState::Active(ActiveSession {
-                        id: active.id,
-                        started_at: active.started_at,
-                        cancel: Arc::new(AtomicBool::new(false)),
-                        pump_handle: Mutex::new(None),
-                        close_attempted: true,
-                    });
-                }
-                Err(e)
-            }
-        }
-    }
-
-    /// Append a final utterance to the active session, if any.
-    ///
-    /// Legacy path retained for the dictation hot path: when the
-    /// user holds the dictation hotkey *while* a meeting session is
-    /// active, the resulting transcript is also recorded as an
-    /// utterance under that session. The pump captures continuous
-    /// audio independently; the hotkey-driven dictation is a
-    /// separate utterance the user explicitly chose to capture.
-    ///
-    /// Returns `Ok(false)` if no session is active, `Ok(true)` if
-    /// the utterance was persisted.
-    pub async fn append_if_active(&self, text: &str, duration_ms: i64) -> Result<bool> {
-        let id = {
-            let guard = self
-                .state
-                .lock()
-                .map_err(|_| anyhow!("session manager mutex poisoned"))?;
-            match &*guard {
-                SessionState::Active(a) => Some(a.id),
-                SessionState::Idle | SessionState::Opening => None,
-            }
-        };
-
-        let id = match id {
-            Some(id) => id,
-            None => return Ok(false),
-        };
-
-        // Cumulative-end-of-last-utterance scheme (the original
-        // legacy behavior). The streaming pump uses offsets
-        // produced by each session's internal clock; this
-        // hotkey-dictation path doesn't have access to a
-        // comparable per-session wall-clock so it anchors at the
-        // previous utterance's end.
-        let utterances = self.repo.list_utterances(id).await?;
-        let next_start = utterances.last().map(|u| u.ended_at_ms).unwrap_or(0);
-
-        self.repo
-            .append_utterance(NewPersistedUtterance {
-                session_id: id,
-                started_at_ms: next_start,
-                ended_at_ms: next_start + duration_ms,
-                speaker_label: None,
-                text: text.to_owned(),
-            })
-            .await?;
-
-        Ok(true)
-    }
+    // `start_manual`, `stop_manual`, and `append_if_active` live in
+    // `crate::meeting::lifecycle` — extracted under #488. The state
+    // machine + struct definitions stay here; the methods that drive
+    // the state machine live in the peer module so each file has one
+    // job. See lifecycle.rs's module docs for the visibility
+    // rationale (every relevant field on `SessionManager`,
+    // `ActiveSession`, and `SessionState` is `pub(super)`).
 
     /// Read-only snapshot of the active session id, if any. The
     /// frontend polls this on mount + after every state change so
@@ -924,10 +509,10 @@ impl Drop for SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::pump::{diarize_and_dispatch_merged, dispatch_utterances, TickBucket};
     use super::*;
     use crate::audio::{AudioDevice, CaptureFormat, CapturedAudio};
     use crate::db::SqliteDatabase;
+    use crate::meeting::pump::{diarize_and_dispatch_merged, dispatch_utterances, TickBucket};
     use crate::meeting::SqliteMeetingSessionRepository;
 
     /// Test-only audio backend that produces empty capture sessions
