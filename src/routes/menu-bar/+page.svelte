@@ -160,23 +160,28 @@
 />
 
 <!--
-  `data-tauri-drag-region` on the root makes the entire popover a
-  window-drag handle — descendants inherit unless they carry
-  `data-tauri-drag-region="false"`, which the buttons below set
-  explicitly so click events route to their handlers instead.
-  This only works because the window declaration in
-  `tauri.conf.json` has `resizable: true` (clamped to a fixed
-  size via min/max). On macOS, `resizable: false` +
-  `decorations: false` strips the NSWindow's movable styleMask
-  bits — drag-region, `startDragging`, and even direct
-  `setPosition` are all no-ops in that combination. See
-  `learnings.md` 2026-05-03.
+  Menu-bar popovers on macOS are not user-draggable by
+  convention — Wi-Fi, Volume, Battery, and the rest of Apple's
+  menu-extras don't drag either; they snap to their tray-icon
+  anchor. Users summon, act, dismiss. We follow that pattern:
+  no drag affordance, position correctly via tray anchoring
+  (follow-up using `tauri-plugin-positioner`-style logic), keep
+  the surface tight.
+
+  Background: borderless `decorations: false` + `resizable: false`
+  on macOS strips the NSWindow's movable styleMask bits, so
+  Tauri's `data-tauri-drag-region`, `startDragging`, and
+  programmatic `setPosition` all become no-ops. Flipping
+  `resizable: true` with min == max would re-enable drag but
+  introduces sizing regressions in this transparent
+  always-on-top window. See `learnings.md` 2026-05-03 for the
+  full chase + escape-hatch ladder if a future iteration needs
+  drag on a different popover surface.
 -->
 <div
   class="popover-root"
   role="dialog"
   aria-label="Hush quick controls"
-  data-tauri-drag-region
   data-testid="menu-bar-root"
 >
   <header class="popover-header">
@@ -195,7 +200,6 @@
       type="button"
       class="primary-action"
       data-testid="popover-toggle"
-      data-tauri-drag-region="false"
       disabled={busy}
       onclick={toggleRecording}
     >
@@ -232,7 +236,6 @@
       type="button"
       class="secondary-action"
       data-testid="popover-open-main"
-      data-tauri-drag-region="false"
       onclick={openMain}
     >
       Open Hush
@@ -275,9 +278,7 @@
     align-items: center;
     gap: 0.55rem;
     padding: 0.7rem 1rem 0.45rem;
-    cursor: grab;
   }
-  .popover-header:active { cursor: grabbing; }
 
   .state-dot {
     width: 0.65rem;
@@ -375,9 +376,7 @@
     gap: 0.5rem;
     padding: 0.55rem 1rem 0.7rem;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
-    cursor: grab;
   }
-  .popover-footer:active { cursor: grabbing; }
 
   .secondary-action {
     appearance: none;
