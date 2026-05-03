@@ -1,8 +1,9 @@
 <!--
-  Sidebar-shaped session config: audio source picker + active
-  model chip. Pulled out of `ControlsSection` in #468 slice B so
-  the two-column layout (slice C) can place this in the sidebar
-  column while `RecordPanel` lives in the content column.
+  Audio source dropdown — the left-flank adjunct beside the
+  Record button. Pre-r3 this also rendered the active-model chip;
+  the chip moved to its own `ModelChip.svelte` when the layout
+  dropped the sidebar in favour of a single row with source + model
+  flanking the centerpiece button.
 -->
 <script lang="ts">
   import Select from "./Select.svelte";
@@ -16,11 +17,6 @@
     selected: string | null;
     recording: boolean;
     busy: boolean;
-    /// Active model display name; null when no model is loaded.
-    /// The chip is hidden in that case — the no-model setup
-    /// banner upstream takes over the affordance.
-    activeModelName: string | null;
-    onScrollToModelPicker: () => void;
   };
 
   let {
@@ -29,8 +25,6 @@
     selected = $bindable(),
     recording,
     busy,
-    activeModelName,
-    onScrollToModelPicker,
   }: Props = $props();
 
   let mics = $derived(sources.filter((s) => s.kind === "microphone"));
@@ -69,93 +63,38 @@
   ]);
 </script>
 
-<div class="config-row">
-  <div class="config-field">
-    <label class="field-label" for="audio-source-select">Audio source</label>
-    {#if !sourcesLoaded}
-      <p class="empty-devices">Loading sources…</p>
-    {:else if pickableCount === 0}
-      <p class="empty-devices">
-        No audio sources detected. On macOS, grant microphone access in
-        System Settings → Privacy &amp; Security. On Linux, check that
-        PulseAudio / PipeWire is running.
-      </p>
-    {:else}
-      <Select
-        id="audio-source-select"
-        groups={sourceGroups}
-        value={selected}
-        onchange={(v) => (selected = v)}
-        disabled={recording || busy}
-      />
-    {/if}
-  </div>
-
-  {#if activeModelName}
-    <div class="config-field">
-      <span class="field-label">Model</span>
-      <button
-        type="button"
-        class="model-chip"
-        onclick={onScrollToModelPicker}
-        aria-label="Active model: {activeModelName}. Click to change."
-        title="Change transcription model"
-      >
-        <span class="model-name">{activeModelName}</span>
-        <svg
-          class="model-chevron"
-          width="10"
-          height="10"
-          viewBox="0 0 10 10"
-          aria-hidden="true"
-          fill="none"
-        >
-          <path
-            d="M3 4l2 2 2-2"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </button>
-    </div>
+<div class="source-field">
+  <label class="field-label" for="audio-source-select">Audio source</label>
+  {#if !sourcesLoaded}
+    <p class="empty-devices">Loading sources…</p>
+  {:else if pickableCount === 0}
+    <p class="empty-devices">
+      No audio sources detected. On macOS, grant microphone access in
+      System Settings → Privacy &amp; Security. On Linux, check that
+      PulseAudio / PipeWire is running.
+    </p>
+  {:else}
+    <Select
+      id="audio-source-select"
+      groups={sourceGroups}
+      value={selected}
+      onchange={(v) => (selected = v)}
+      disabled={recording || busy}
+    />
   {/if}
 </div>
 
 <style>
-  /* In the #468 two-column layout this picker lives in the
-     200 px sidebar, so source + model stack vertically rather
-     than side by side. Children are allowed to shrink below
-     their intrinsic content width so long device names
-     ("MacBook Air Microphone (default)") don't blow the sidebar
-     wider — the Select's existing ellipsis kicks in. */
-  .config-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.85rem;
-    min-width: 0;
-  }
-
-  .config-field {
+  .source-field {
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
     min-width: 0;
   }
-
-  .config-field :global(.select-trigger) {
+  .source-field :global(.select-trigger) {
     width: 100%;
   }
-  .config-field .model-chip {
-    width: 100%;
-    justify-content: space-between;
-  }
 
-  /* Panic-flavoured all-caps section label — same idiom Nova
-     and Transmit use for sidebar group headers. Tight letter-
-     spacing reads as "section title" rather than "form label";
-     the muted colour keeps it from competing with the picker. */
   .field-label {
     font-size: 0.68rem;
     font-weight: 600;
@@ -173,43 +112,5 @@
     color: var(--warning-text);
     font-size: 0.9rem;
     line-height: 1.4;
-  }
-
-  .model-chip {
-    height: var(--control-height);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0 0.85rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-input);
-    border-radius: var(--radius-md);
-    color: var(--text-secondary);
-    font-family: inherit;
-    font-size: 0.88rem;
-    font-weight: 500;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background-color 0.12s, border-color 0.12s, color 0.12s;
-  }
-  .model-chip:hover {
-    background: var(--bg-elevated);
-    border-color: var(--accent-hover);
-    color: var(--text-primary);
-  }
-  .model-chip:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: 0 0 0 3px var(--accent-subtle);
-  }
-  .model-name {
-    max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .model-chevron {
-    color: var(--text-muted);
-    flex-shrink: 0;
   }
 </style>

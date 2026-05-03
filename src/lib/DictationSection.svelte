@@ -1,16 +1,19 @@
 <!--
-  Dictation page-section render. Now lays out the section as a
-  two-column grid (#468 slice C / #411 Phase A.2): a sidebar
-  column for `AudioSourcePicker` (source + model chip) and a
-  content column for `RecordPanel` (record button, status,
-  waveform, F5 status line) plus the result block and the macOS
-  permissions banner.
+  Dictation page-section render. Top-to-bottom layout: setup
+  banner (when no model installed) → centerpiece RecordPanel
+  (waveform on top + button + adjuncts row + status) → shortcut
+  hint → result block → macOS perms pill.
+
+  The pre-r3 sidebar/content two-column grid is gone — the
+  source picker and model chip are now adjunct snippets passed
+  into RecordPanel so they render flanking the centerpiece
+  button on a single row. The page reads top-to-bottom rather
+  than fighting between columns.
 
   Render-only by design: the orchestrator owns dictation IPC and
   hotkey listeners. This section composes the leaves and computes
   the cross-leaf deriveds (`hasUsableSource`, `badgeVisible`,
-  `willRecordMeeting`, `selectedSourceLabel`) that pre-#468 lived
-  on `ControlsSection`.
+  `willRecordMeeting`, `selectedSourceLabel`).
 -->
 <script lang="ts">
   import { backOut, cubicIn } from "svelte/easing";
@@ -19,6 +22,7 @@
   import AudioSourcePicker from "./AudioSourcePicker.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import MacosPermsPill from "./MacosPermsPill.svelte";
+  import ModelChip from "./ModelChip.svelte";
   import RecordPanel from "./RecordPanel.svelte";
   import ResultBlock from "./ResultBlock.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
@@ -133,72 +137,71 @@
     </aside>
   {/if}
 
-  <div class="main-layout">
-    <aside
-      class="sidebar"
-      class:locked={recording}
-      aria-label="Session configuration"
-    >
+  <!--
+    Centerpiece dictation area. RecordPanel renders the waveform
+    and the circular Record button; the source dropdown +
+    model chip are passed in as adjunct snippets so they render
+    flanking the button on a single row. No sidebar, no two-
+    column grid — the page now reads top-to-bottom.
+  -->
+  <RecordPanel
+    {recording}
+    {busy}
+    {transcribing}
+    {hasUsableSource}
+    {noModelInstalled}
+    {willRecordMeeting}
+    {badgeVisible}
+    {badgeIsStale}
+    {recordMode}
+    {selectedSourceLabel}
+    {activeModelName}
+    {error}
+    {onStart}
+    {onStop}
+    onOpenPermissions={onOpenPermissionsTab}
+  >
+    {#snippet leftAdjunct()}
       <AudioSourcePicker
         {sources}
         {sourcesLoaded}
         bind:selected
         {recording}
         {busy}
-        {activeModelName}
-        {onScrollToModelPicker}
       />
-    </aside>
+    {/snippet}
+    {#snippet rightAdjunct()}
+      <ModelChip {activeModelName} {onScrollToModelPicker} />
+    {/snippet}
+  </RecordPanel>
 
-    <div class="content">
-      <RecordPanel
-        {recording}
-        {busy}
-        {transcribing}
-        {hasUsableSource}
-        {noModelInstalled}
-        {willRecordMeeting}
-        {badgeVisible}
-        {badgeIsStale}
-        {recordMode}
-        {selectedSourceLabel}
-        {activeModelName}
-        {error}
-        {onStart}
-        {onStop}
-        onOpenPermissions={onOpenPermissionsTab}
-      />
+  <!--
+    Keyboard-shortcut hint sits under the recording area as a
+    contextual reminder. Quieter visual treatment so it doesn't
+    compete with the centerpiece waveform + button above.
+  -->
+  <p class="shortcut-hint" aria-label="Keyboard shortcuts">
+    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
+    or hold
+    {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
+    to push-to-talk.
+  </p>
 
-      <!--
-        Keyboard-shortcut hint sits under the recording area as a
-        contextual reminder (rather than a sticky strip up top
-        per pre-r2). Quieter visual treatment so it doesn't
-        compete with the centerpiece waveform + button above.
-      -->
-      <p class="shortcut-hint" aria-label="Keyboard shortcuts">
-        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
-        or hold
-        {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
-        to push-to-talk.
-      </p>
-
-      {#if result}
-        <div
-          in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
-          out:fade={{ duration: motionDuration(150), easing: cubicIn }}
-        >
-          <ResultBlock {result} />
-        </div>
-      {/if}
-
-      <MacosPermsPill
-        capable={macosCapable}
-        allGranted={allPermsGranted}
-        anyDenied={anyPermsDenied}
-        onOpenPermissions={onOpenPermissionsTab}
-      />
+  {#if result}
+    <div
+      in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
+      out:fade={{ duration: motionDuration(150), easing: cubicIn }}
+    >
+      <ResultBlock {result} />
     </div>
-  </div>
+  {/if}
+
+  <MacosPermsPill
+    capable={macosCapable}
+    allGranted={allPermsGranted}
+    anyDenied={anyPermsDenied}
+    onOpenPermissions={onOpenPermissionsTab}
+  />
 
   {#if error}
     <ErrorDisplay {error} />
@@ -206,74 +209,15 @@
 </section>
 
 <style>
-  /* Widen the dictation section beyond the default 36rem so the
-     two-column grid (200 px sidebar + 1fr content) has room to
-     breathe. History stays at 36rem because it's a single column.
-     `:global()` because the .page-section selector is owned by
-     +page.svelte and its scoping hash differs from this leaf. */
+  /* Widen the dictation section to 52 rem so the centerpiece +
+     adjuncts row reads. History stays at 36 rem (single column).
+     `:global()` because the `.page-section` selector is owned by
+     `+page.svelte` and its scoping hash differs from this leaf. */
   :global(#dictation-section) {
     max-width: 52rem;
-  }
-
-  .main-layout {
-    display: grid;
-    grid-template-columns: 200px 1fr;
-    gap: 1.5rem;
-    align-items: start;
-  }
-
-  /* Sidebar column — Rogue Amoeba "panel carved out of the page
-     chrome" idiom. The tonal step from `--bg-app` to
-     `--bg-sidebar` does the visual delimiting on its own; the
-     pre-r2 hairline was barely visible in either theme so the
-     boundary now relies on the surface tone difference instead.
-     The padding gives the bg some room to read around the
-     controls. */
-  .sidebar {
-    background: var(--bg-sidebar);
-    padding: 0.85rem 1rem;
-    border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
-    gap: 0.85rem;
-    /* Children may have intrinsic widths wider than the 200 px
-       column (long device names etc). `min-width: 0` lets them
-       shrink + ellipsis within the column rather than overflow
-       into the content column. */
-    min-width: 0;
-    /* Rogue Amoeba-style frozen-while-active treatment: when the
-       parent flips `recording=true` the sidebar dims + locks so
-       the eye reads "the configuration is committed for this
-       session". Underlying inputs are already `disabled` for
-       keyboard a11y; this is the visual reinforcement. */
-    transition: opacity 250ms ease;
-  }
-  .sidebar.locked {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .sidebar {
-      transition: none;
-    }
-  }
-
-  .content {
-    display: flex;
-    flex-direction: column;
-    gap: 0.85rem;
-    min-width: 0;
-  }
-
-  /* Below ~520 px the sidebar's 200 px would crowd the content
-     column. Stack instead — the tonal step from `--bg-sidebar`
-     still delimits the panel without needing a separate
-     boundary rule. */
-  @media (max-width: 520px) {
-    .main-layout {
-      grid-template-columns: 1fr;
-      gap: 1rem;
-    }
+    gap: 1rem;
   }
 
   .setup-banner {

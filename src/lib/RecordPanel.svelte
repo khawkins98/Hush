@@ -1,18 +1,18 @@
 <!--
-  Content-column session controls: record button (with mic-only
-  badge), aria-live recording status text, mood-driven waveform,
-  and the F5 status line. Pulled out of `ControlsSection` in
-  #468 slice B so the two-column layout (slice C) can place this
-  in the content column while `AudioSourcePicker` lives in the
-  sidebar.
+  Centerpiece dictation controls: full-width waveform on top, a
+  three-column row beneath with `leftAdjunct` (audio source) on
+  the left, the circular Record / Stop button in the centre, and
+  `rightAdjunct` (model chip) on the right. Status copy + mic-
+  only badge + F5 status line render below the row.
 
   Several derived values (badge visibility, will-record-meeting
   hint, has-usable-source guard) live upstream — the parent owns
   the cross-component selection state and computes them once
-  rather than each leaf re-deriving from `selected` + `sources`.
+  rather than each leaf re-deriving.
 -->
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import type { Snippet } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
   import AudioWaveform from "./AudioWaveform.svelte";
@@ -27,38 +27,24 @@
     recording: boolean;
     busy: boolean;
     transcribing: boolean;
-    /// True iff at least one selectable, supported source exists
-    /// — drives the Start button's disabled state. Computed
-    /// upstream from `sources` + the system-audio capability
-    /// flag.
     hasUsableSource: boolean;
     noModelInstalled: boolean;
-    /// True iff a click on Record would upgrade to the meeting
-    /// pump (mic + system audio) — shows the "Record meeting"
-    /// label variant. Upstream derives this from the picker
-    /// selection + Screen Recording health.
     willRecordMeeting: boolean;
-    /// Mic-only badge: surfaces when SCK is `stale` /
-    /// `not-granted` and a mic is selected. Two visual variants
-    /// driven by `badgeIsStale`.
     badgeVisible: boolean;
     badgeIsStale: boolean;
-    /// Active recording mode (#409) — drives the inline mode
-    /// label on the recording status pill. `null` when not
-    /// recording.
     recordMode: "dictation" | "meeting" | null;
-    /// Display name of the active source, used by the F5 status
-    /// line. Resolved upstream from `sources` + selected id so
-    /// this component doesn't need either.
     selectedSourceLabel: string | null;
     activeModelName: string | null;
-    /// Last error to surface. The waveform's mood derives off
-    /// this — non-null flips the bars to error-flash; the parent
-    /// renders the actual `<ErrorDisplay>` separately.
     error: ErrorDisplayShape | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onOpenPermissions?: () => void;
+    /// Left adjunct slot — audio source picker. Optional so the
+    /// component still renders standalone in the test harness or
+    /// any future minimal surface.
+    leftAdjunct?: Snippet;
+    /// Right adjunct slot — model chip.
+    rightAdjunct?: Snippet;
   };
 
   let {
@@ -77,6 +63,8 @@
     onStart,
     onStop,
     onOpenPermissions,
+    leftAdjunct,
+    rightAdjunct,
   }: Props = $props();
 
   // F5 status line — opt-in display gated by a localStorage flag,
@@ -124,44 +112,53 @@
   </div>
 
   <!--
-    Circular Record / Stop button — fixed-size icon button that
-    sits below the waveform. Single button instance toggling its
-    state class so the spring-on-hover transitions stay
-    consistent across start/stop. aria-label drives test
-    `getByRole("button", { name: "Start recording" })` and the
-    Settings-window dictation specs.
+    Three-column row: source picker on the left, the circular
+    Record / Stop button in the centre, model chip on the right.
+    The adjunct slots are filled by `DictationSection` via the
+    `leftAdjunct` / `rightAdjunct` snippet props; this component
+    has no knowledge of source or model state.
   -->
-  {#if !recording}
-    <button
-      class="record-btn"
-      onclick={onStart}
-      disabled={busy || !hasUsableSource || noModelInstalled}
-      aria-label={busy
-        ? "Working"
-        : noModelInstalled
-          ? "Choose a model first"
-          : willRecordMeeting
-            ? "Record meeting (mic plus system audio)"
-            : "Start recording"}
-      title={noModelInstalled ? "Choose a model first" : undefined}
-      data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
-    >
-      {#if transcribing}
-        <span class="spinner" aria-hidden="true"></span>
-      {:else}
-        <span class="record-icon record-icon-idle" aria-hidden="true"></span>
-      {/if}
-    </button>
-  {:else}
-    <button
-      class="record-btn recording"
-      onclick={onStop}
-      disabled={busy}
-      aria-label="Stop recording and transcribe"
-    >
-      <span class="record-icon record-icon-stop" aria-hidden="true"></span>
-    </button>
-  {/if}
+  <div class="record-row">
+    <div class="record-row-adjunct record-row-adjunct--left">
+      {@render leftAdjunct?.()}
+    </div>
+
+    {#if !recording}
+      <button
+        class="record-btn"
+        onclick={onStart}
+        disabled={busy || !hasUsableSource || noModelInstalled}
+        aria-label={busy
+          ? "Working"
+          : noModelInstalled
+            ? "Choose a model first"
+            : willRecordMeeting
+              ? "Record meeting (mic plus system audio)"
+              : "Start recording"}
+        title={noModelInstalled ? "Choose a model first" : undefined}
+        data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
+      >
+        {#if transcribing}
+          <span class="spinner" aria-hidden="true"></span>
+        {:else}
+          <span class="record-icon record-icon-idle" aria-hidden="true"></span>
+        {/if}
+      </button>
+    {:else}
+      <button
+        class="record-btn recording"
+        onclick={onStop}
+        disabled={busy}
+        aria-label="Stop recording and transcribe"
+      >
+        <span class="record-icon record-icon-stop" aria-hidden="true"></span>
+      </button>
+    {/if}
+
+    <div class="record-row-adjunct record-row-adjunct--right">
+      {@render rightAdjunct?.()}
+    </div>
+  </div>
 
   <!--
     Status label sits under the button — the verb the user is
@@ -232,6 +229,53 @@
     align-items: center;
     gap: 1rem;
     padding: 0.5rem 0 0.25rem;
+  }
+
+  /* Three-column row hosting the audio source picker (left), the
+     circular Record button (centre), and the model chip (right).
+     The adjunct columns share equal flex weight so the button
+     visually sits at the centre regardless of which adjunct is
+     wider. `align-items: end` so the source/model controls land
+     on the same baseline as the button (their .field-label
+     headers float above). */
+  .record-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: end;
+    gap: 1.25rem;
+    width: 100%;
+  }
+  .record-row-adjunct {
+    display: flex;
+    min-width: 0;
+  }
+  .record-row-adjunct--left {
+    justify-content: flex-end;
+  }
+  .record-row-adjunct--right {
+    justify-content: flex-start;
+  }
+  .record-row-adjunct > :global(*) {
+    width: 100%;
+    max-width: 16rem;
+  }
+
+  /* Below ~520 px the three-column row would crowd the centerpiece.
+     Stack instead, button on top so the visual hierarchy still
+     reads, source then model below. */
+  @media (max-width: 520px) {
+    .record-row {
+      grid-template-columns: 1fr;
+      gap: 0.85rem;
+      justify-items: center;
+    }
+    .record-row-adjunct {
+      justify-content: stretch;
+      width: 100%;
+    }
+    .record-row-adjunct > :global(*) {
+      max-width: 100%;
+    }
   }
 
   /* Big waveform — overrides AudioWaveform's default 60 × 16 px
