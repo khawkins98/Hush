@@ -290,8 +290,9 @@ pub fn start_dictation(
             tracing::warn!(error = ?e, "emit hud:state(recording) failed");
         }
     }
-    // Audio cue: short "Tink" so the user knows the mic is hot
-    // without having to glance at the HUD (#292). Off by default;
+    // Audio cue so the user knows the mic is hot without having
+    // to glance at the HUD (#292; cross-platform synthesis #446).
+    // Off by default;
     // fired only when both the master toggle AND the per-event
     // start sub-toggle are on (#463). The sub-toggle defaults
     // to true so existing master-on users keep hearing this cue.
@@ -607,8 +608,8 @@ pub async fn stop_dictation(
     // point on. Hide after the clipboard write so the HUD
     // doesn't flicker out before the user knows it's ready.
     crate::hud::hide_async(&app);
-    // Completion cue: short "Glass" chime so the user knows the
-    // clipboard is ready without glancing at the HUD (#292).
+    // Completion cue so the user knows the clipboard is ready
+    // without glancing at the HUD (#292; cross-platform #446).
     // Fired AFTER the clipboard write so the cue truly means
     // "safe to paste"; never fired on the error paths above.
     // Gated by master AND per-event complete sub-toggle (#463).
