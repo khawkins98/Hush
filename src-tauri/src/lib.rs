@@ -15,7 +15,6 @@ pub mod macos_perms;
 pub mod meeting;
 pub mod repository;
 pub mod settings;
-pub mod settings_window;
 pub mod transcription;
 pub mod tray;
 pub mod updater;
@@ -328,7 +327,7 @@ pub fn run() {
             // any user interaction can fire CloseRequested. The
             // closures clone the window handle so they outlive
             // setup; that's the standard pattern Tauri expects.
-            for label in ["main", "settings"] {
+            for label in ["main"] {
                 if let Some(window) = app.get_webview_window(label) {
                     let win_clone = window.clone();
                     window.on_window_event(move |event| {
@@ -547,7 +546,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ipc::commands::audio_list_sources,
-            ipc::commands::open_settings,
             ipc::commands::show_main_window,
             ipc::commands::start_dictation,
             ipc::commands::stop_dictation,

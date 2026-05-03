@@ -14,7 +14,8 @@ test.describe("settings window — toolbar nav", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // Toolbar tabs use stable testIds, so the spec is robust to
     // label copy changes — the test asserts the tabs exist + the
@@ -41,7 +42,8 @@ test.describe("settings window — toolbar nav", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     await page.locator('[data-testid="settings-tab-vocabulary"]').click();
     await expect(
@@ -63,7 +65,8 @@ test.describe("settings window — toolbar nav", () => {
     // sequences `invoke('open_settings')` then `emit('settings:goto-tab', 'permissions')`
     // — verify the listener side picks up the event and switches tabs.
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // Wait for onMount to register the `settings:goto-tab`
     // listener. The General tab being marked aria-current is a
@@ -96,7 +99,8 @@ test.describe("settings window — General tab", () => {
     // Default mock has the autostart plugin returning false; the
     // checkbox should mount unchecked.
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     const toggle = page.locator('[data-testid="settings-autostart-toggle"]');
     await expect(toggle).toBeVisible();
@@ -111,7 +115,8 @@ test.describe("settings window — General tab", () => {
     await installMocks(page, {
       "plugin:autostart|is_enabled": () => true,
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     const toggle = page.locator('[data-testid="settings-autostart-toggle"]');
     await expect(toggle).toBeChecked();
@@ -125,7 +130,8 @@ test.describe("settings window — General tab", () => {
     await installMocks(page, {
       get_hud_enabled: () => false,
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     const toggle = page.locator('[data-testid="settings-hud-toggle"]');
     await expect(toggle).toBeVisible();
@@ -146,7 +152,8 @@ test.describe("settings window — General tab", () => {
     await installMocks(page, {
       get_inference_threads: () => 8,
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // Performance lives behind the Advanced disclosure (#427 Item 2).
     await page
@@ -169,7 +176,8 @@ test.describe("settings window — General tab", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // First-run welcome lives behind the Advanced disclosure (#427 Item 2).
     await page
@@ -189,7 +197,8 @@ test.describe("settings window — General tab", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await expect(
       page.locator('[data-testid="autostart-path-stale-warning"]'),
     ).toHaveCount(0);
@@ -215,7 +224,8 @@ test.describe("settings window — General tab", () => {
         return true;
       },
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     const warning = page.locator(
       '[data-testid="autostart-path-stale-warning"]',
@@ -241,7 +251,8 @@ test.describe("settings window — General tab", () => {
       // and shows the retry-failed sub-error.
       retry_autostart_registration: () => false,
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     await page
       .locator('[data-testid="autostart-retry-button"]')
@@ -261,7 +272,8 @@ test.describe("settings window — PTT editor", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // The default mock returns `combo: ["RightMeta"], enabled: false`.
     const display = page.locator('[data-testid="ptt-combo-display"]');
@@ -283,7 +295,8 @@ test.describe("settings window — PTT editor", () => {
         listenerRunning: true,
       }),
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     const display = page.locator('[data-testid="ptt-combo-display"]');
     await expect(display.locator("kbd")).toHaveCount(2);
@@ -296,7 +309,8 @@ test.describe("settings window — PTT editor", () => {
 
   test("Record-new-combo button enters capture mode", async ({ page }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     const record = page.locator('[data-testid="ptt-record-button"]');
     await expect(record).toBeVisible();
@@ -315,7 +329,8 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     // Expand the Advanced section (#427 Item 2) — overrides live
     // behind the disclosure now.
@@ -336,7 +351,8 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await installMocks(page, {
       get_meeting_autostart_mode: () => "always",
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     // Expand the Advanced section (#427 Item 2) — overrides live
     // behind the disclosure now.
@@ -381,7 +397,8 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
         };
       },
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     // Expand the Advanced section (#427 Item 2) — overrides live
     // behind the disclosure now.
@@ -415,7 +432,8 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
         },
       ],
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     // Expand the Advanced section (#427 Item 2) — overrides live
     // behind the disclosure now.
@@ -433,7 +451,8 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     // Default mock returns a small representative subset so the
     // assertions are stable. Real production has ~70 entries.
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     // Expand the Advanced section (#427 Item 2) — overrides live
     // behind the disclosure now.
@@ -478,7 +497,8 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
         return { appName, kind, createdAt: "2026-05-01T00:00:00Z" };
       },
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     // Expand the Advanced section (#427 Item 2) — overrides live
     // behind the disclosure now.
@@ -517,7 +537,8 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     // Expand the Advanced section (#427 Item 2) — overrides live
     // behind the disclosure now.
@@ -550,7 +571,8 @@ test.describe("settings window — About tab", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     await page.locator('[data-testid="settings-tab-about"]').click();
     await expect(
@@ -587,7 +609,8 @@ test.describe("settings window — About tab", () => {
     await installMocks(page, {
       check_for_updates: () => ({ kind: "upToDate", current: "0.1.0" }),
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-about"]').click();
 
     await page.locator('[data-testid="settings-check-updates"]').click();
@@ -607,7 +630,8 @@ test.describe("settings window — About tab", () => {
         releaseUrl: "https://github.com/khawkins98/Hush/releases/tag/v0.2.0",
       }),
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-about"]').click();
 
     await page.locator('[data-testid="settings-check-updates"]').click();
@@ -630,7 +654,8 @@ test.describe("settings window — About tab", () => {
         reason: "GitHub is rate-limiting the request. Try again in a few minutes.",
       }),
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-about"]').click();
 
     await page.locator('[data-testid="settings-check-updates"]').click();
@@ -658,7 +683,8 @@ test.describe("settings window — About tab", () => {
         throw new Error("boom");
       },
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     await page.locator('[data-testid="settings-tab-about"]').click();
     await expect(page.locator(".about-name")).toHaveText("Hush");

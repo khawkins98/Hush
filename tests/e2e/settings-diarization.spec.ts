@@ -38,7 +38,8 @@ test.describe("settings window — Speakers (#302)", () => {
       },
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
 
     const toggle = page.locator('[data-testid="settings-diarization-toggle"]');
@@ -66,7 +67,8 @@ test.describe("settings window — Speakers (#302)", () => {
         new Promise((resolve) => setTimeout(resolve, 250)),
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
 
     const toggle = page.locator('[data-testid="settings-diarization-toggle"]');
@@ -93,7 +95,8 @@ test.describe("settings window — Speakers (#302)", () => {
       get_diarization_enabled: () => false,
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
 
     const toggle = page.locator('[data-testid="settings-diarization-toggle"]');
@@ -125,7 +128,8 @@ test.describe("settings window — Speakers (#302)", () => {
       }),
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
 
     // The "model not installed" panel renders.
@@ -168,7 +172,8 @@ test.describe("settings window — Speakers (#302)", () => {
       },
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
     await page
       .locator('[data-testid="diarizer-download-button"]')
@@ -185,7 +190,8 @@ test.describe("settings window — Speakers (#302)", () => {
     // assertion in a dedicated test keeps the success state
     // covered separately from the model-absent path above.
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
 
     await expect(
@@ -230,7 +236,8 @@ test.describe("settings window — Speakers (#302)", () => {
       },
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
 
     // Cancel button isn't visible until a download is running.
@@ -269,7 +276,8 @@ test.describe("settings window — Speakers (#302)", () => {
       }),
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
 
     const summary = page.getByText("Or install manually", { exact: false });

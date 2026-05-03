@@ -319,6 +319,7 @@
   let unlistenPttPress: UnlistenFn | null = null;
   let unlistenPttRelease: UnlistenFn | null = null;
   let unlistenMenuGoto: UnlistenFn | null = null;
+  let unlistenSettingsGoto: UnlistenFn | null = null;
 
   // Keep the document title in sync with recording state. Helps users who
   // have the window in the background — at-a-glance signal that the mic
@@ -402,6 +403,28 @@
           : "dictation";
     });
 
+    // #479 slice 3: tray "Settings…" + native menu "Settings…" /
+    // ⌘, both emit `settings:goto-tab` instead of opening a
+    // standalone window. Listen here so the sidebar swaps to the
+    // Settings panel + the requested tab. SettingsPanel also
+    // listens (for the in-tab activeTab side); the bindable prop
+    // means the two reactive paths converge cleanly.
+    unlistenSettingsGoto = await listen<string>(Events.SettingsGotoTab, (e) => {
+      const tab = e.payload;
+      if (
+        tab === "general"
+        || tab === "model"
+        || tab === "vocabulary"
+        || tab === "replacements"
+        || tab === "meeting"
+        || tab === "permissions"
+        || tab === "about"
+      ) {
+        settingsActiveTab = tab;
+      }
+      activeSection = "settings";
+    });
+
     // Model-download events from the backend. The progress event
     // The Settings window owns the per-card download UI; here we
     // only listen for `model:download-done` so the Dictation tab's
@@ -444,6 +467,7 @@
   onDestroy(() => {
     unlistenToggle?.();
     unlistenMenuGoto?.();
+    unlistenSettingsGoto?.();
     unlistenPttPress?.();
     unlistenPttRelease?.();
     unlistenDownloadDone?.();

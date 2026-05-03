@@ -37,18 +37,6 @@
         "acceptFirstMouse": true
       },
       {
-        "label": "settings",
-        "title": "Hush Settings",
-        "url": "/settings",
-        "width": 720,
-        "height": 520,
-        "minWidth": 560,
-        "minHeight": 400,
-        "resizable": true,
-        "visible": false,
-        "skipTaskbar": false
-      },
-      {
         "label": "menu-bar",
         "title": "Hush",
         "url": "/menu-bar",
