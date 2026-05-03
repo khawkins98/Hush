@@ -356,7 +356,7 @@
     subscription itself; mounting it idle costs only the rAF tick.
   -->
   <div class="status-waveform">
-    <AudioWaveform mode={waveformMode} />
+    <AudioWaveform mode={waveformMode} metering />
   </div>
 </section>
 
