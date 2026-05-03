@@ -141,6 +141,32 @@
     }
   }
 
+  // Hand-rolled drag using the `startDragging()` JS API rather
+  // than `data-tauri-drag-region`. The latter ought to work on a
+  // borderless transparent always-on-top window, but in practice
+  // didn't initiate the platform drag here — cursor changed but
+  // mousedown didn't move the window. Calling `startDragging()`
+  // on mousedown is the documented escape hatch and behaves
+  // identically to the data-attribute path on every other Tauri
+  // window. Targets that should remain interactive (buttons,
+  // links, form fields, anything carrying `data-no-drag`) bail
+  // out before requesting the drag.
+  async function handleMouseDown(event: MouseEvent) {
+    const target = event.target as Element | null;
+    if (
+      target?.closest(
+        "button, input, textarea, select, a, [contenteditable], [data-no-drag]",
+      )
+    ) {
+      return;
+    }
+    try {
+      await getCurrentWebviewWindow().startDragging();
+    } catch (e) {
+      console.warn("[hush] popover drag failed", e);
+    }
+  }
+
   function formatError(e: unknown): string {
     if (e instanceof Error) return e.message;
     if (typeof e === "string") return e;
@@ -159,21 +185,20 @@
 />
 
 <!--
-  `data-tauri-drag-region` ONLY on the root, mirroring the HUD pill's
-  pattern. Tauri treats every descendant as drag-able unless it
-  carries `data-tauri-drag-region="false"`, so interactive controls
-  (the Start/Stop button, the Open Hush button, the error text)
-  opt out explicitly. Earlier passes had the attribute on root +
-  header + footer simultaneously, which on macOS produced the
-  reported symptom: grippy cursor visible but mousedown didn't
-  initiate a window drag — multiple drag regions appear to compete
-  for the mousedown event.
+  Drag wired via `onmousedown → startDragging()` rather than
+  `data-tauri-drag-region`. The data-attribute path didn't
+  initiate the platform drag on this borderless transparent
+  always-on-top window in practice, even when reduced to a
+  single root attribute matching the HUD pattern. The JS API
+  is documented + reliable; `handleMouseDown` filters out
+  clicks on interactive descendants so buttons keep working.
 -->
 <div
   class="popover-root"
   role="dialog"
   aria-label="Hush quick controls"
-  data-tauri-drag-region
+  tabindex="-1"
+  onmousedown={handleMouseDown}
   data-testid="menu-bar-root"
 >
   <header class="popover-header">
@@ -192,7 +217,6 @@
       type="button"
       class="primary-action"
       data-testid="popover-toggle"
-      data-tauri-drag-region="false"
       disabled={busy}
       onclick={toggleRecording}
     >
@@ -207,10 +231,13 @@
 
     <p class="hint">
       {#if recording}
-        Click stop, or use your hotkey, when you're done.
+        Click stop, or press
+        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>,
+        when you're done.
       {:else}
         Default microphone. Pick a different source from the
-        main window.
+        main window. Toggle from anywhere with
+        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>.
       {/if}
     </p>
 
@@ -226,7 +253,6 @@
       type="button"
       class="secondary-action"
       data-testid="popover-open-main"
-      data-tauri-drag-region="false"
       onclick={openMain}
     >
       Open Hush
@@ -340,7 +366,20 @@
     margin: 0;
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.6);
-    line-height: 1.35;
+    line-height: 1.45;
+  }
+
+  .hint :global(kbd) {
+    display: inline-block;
+    padding: 0 0.3em;
+    margin: 0 0.05em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78em;
+    font-weight: 500;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 3px;
   }
 
   .error-line {
