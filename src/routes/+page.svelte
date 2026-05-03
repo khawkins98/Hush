@@ -6,6 +6,8 @@
   import { backOut, cubicIn } from "svelte/easing";
   import { fade, fly } from "svelte/transition";
 
+  import CommandPalette from "$lib/CommandPalette.svelte";
+  import type { CommandAction } from "$lib/CommandPalette.svelte";
   import ControlsSection from "$lib/ControlsSection.svelte";
   import ResultBlock from "$lib/ResultBlock.svelte";
   import { motionDuration } from "$lib/motion";
@@ -167,6 +169,112 @@
   let activeModel = $derived(
     models.find((m) => m.isSelected && m.isDownloaded) ?? null,
   );
+
+  // ⌘K command palette (#411 phase F3). State + the action set
+  // are colocated here because every action needs the page's
+  // existing handlers (start / stop / openSettingsTab) and state
+  // (recording / busy / noModelInstalled). The palette component
+  // itself is a presentational leaf — see lib/CommandPalette.svelte.
+  let paletteOpen = $state(false);
+
+  let paletteActions = $derived<CommandAction[]>([
+    {
+      id: "dictation.start",
+      label: "Start dictation",
+      subtitle: noModelInstalled ? "Choose a model first" : undefined,
+      group: "Dictation",
+      enabled: !recording && !busy && !noModelInstalled,
+      run: () => startRecord(),
+    },
+    {
+      id: "dictation.stop",
+      label: "Stop dictation",
+      subtitle: "Stop the current recording and transcribe",
+      group: "Dictation",
+      enabled: recording,
+      run: () => stop(),
+    },
+    {
+      id: "navigate.history",
+      label: "Show History",
+      subtitle: "Scroll to the History section below",
+      group: "Navigate",
+      run: () => {
+        document
+          .getElementById("history-section")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      },
+    },
+    {
+      id: "settings.general",
+      label: "Open Settings: General",
+      group: "Settings",
+      run: () => openSettingsTab("general"),
+    },
+    {
+      id: "settings.model",
+      label: "Open Settings: Models",
+      subtitle: activeModel?.displayName ?? "No model loaded",
+      group: "Settings",
+      run: () => openSettingsTab("model"),
+    },
+    {
+      id: "settings.vocabulary",
+      label: "Open Settings: Vocabulary",
+      group: "Settings",
+      run: () => openSettingsTab("vocabulary"),
+    },
+    {
+      id: "settings.replacements",
+      label: "Open Settings: Replacements",
+      group: "Settings",
+      run: () => openSettingsTab("replacements"),
+    },
+    {
+      id: "settings.meeting",
+      label: "Open Settings: Meeting",
+      group: "Settings",
+      run: () => openSettingsTab("meeting"),
+    },
+    {
+      id: "settings.permissions",
+      label: "Open Settings: Permissions",
+      group: "Settings",
+      run: () => openSettingsTab("permissions"),
+    },
+    {
+      id: "settings.about",
+      label: "Open Settings: About",
+      group: "Settings",
+      run: () => openSettingsTab("about"),
+    },
+  ]);
+
+  function handleGlobalKeydown(event: KeyboardEvent) {
+    // ⌘K opens the palette; ⌘K again closes (toggle). Cmd on
+    // macOS, Ctrl elsewhere — matches the platform muscle memory
+    // for "spotlight-style" pickers. Only fire when the user
+    // isn't typing into a textfield other than the palette's
+    // own input — otherwise ⌘K inside, e.g., the History search
+    // would steal the binding.
+    const isMod = event.metaKey || event.ctrlKey;
+    if (!isMod || event.key.toLowerCase() !== "k") return;
+    const target = event.target as HTMLElement | null;
+    if (
+      target &&
+      target.closest('[data-testid="command-palette"]') === null &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable)
+    ) {
+      // Inside another input; respect the field's own ⌘K (search
+      // clears, etc). The palette's own input is exempt by the
+      // closest() check above.
+      return;
+    }
+    event.preventDefault();
+    paletteOpen = !paletteOpen;
+  }
 
   // Platform check used to pick the right modifier glyph in the
   // shortcut hint (Right ⌘ on macOS, Right Ctrl elsewhere). PTT is
@@ -334,6 +442,7 @@
     // free at this point.
     void refreshPermissionHealth();
     window.addEventListener("focus", refreshPermissionHealthDebounced);
+    window.addEventListener("keydown", handleGlobalKeydown);
   });
 
   onDestroy(() => {
@@ -344,6 +453,7 @@
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
     window.removeEventListener("focus", refreshPermissionHealthDebounced);
+    window.removeEventListener("keydown", handleGlobalKeydown);
     if (refreshPermissionHealthTimer !== null) {
       clearTimeout(refreshPermissionHealthTimer);
       refreshPermissionHealthTimer = null;
@@ -1404,6 +1514,17 @@
   onDismiss={dismissPermissionsDialog}
   onOpenPrivacyPane={openPrivacyPane}
   intro={permissionsDialogIntro}
+/>
+
+<!--
+  ⌘K command palette (#411 phase F3). Mounts above the rest of the
+  page so the backdrop covers everything; the binding is wired in
+  the global keydown handler in onMount.
+-->
+<CommandPalette
+  open={paletteOpen}
+  actions={paletteActions}
+  onClose={() => (paletteOpen = false)}
 />
 
 <header class="app-bar">
