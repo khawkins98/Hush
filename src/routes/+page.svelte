@@ -1697,9 +1697,15 @@
   min-width: 0;
 }
 
+/* Pre-sidebar `.page-section` had `max-width: 36rem` + `margin: 0
+   auto` so the single-column page didn't sprawl on wide windows.
+   With #479 slice 1 the sidebar shell already constrains the
+   layout horizontally, and history rows benefit from filling the
+   column. The Dictation section opts back into a `max-width:
+   52rem` cap via its own `:global(#dictation-section)` rule
+   (declared in `DictationSection.svelte`) so the centerpiece
+   composition stays bounded. */
 .page-section {
-  max-width: 36rem;
-  margin: 0 auto;
   padding-top: 2.5rem;
 }
 
