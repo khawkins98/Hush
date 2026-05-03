@@ -379,7 +379,7 @@
       color: #b6e5c5;
     }
     .about-update-available {
-      background-color: rgba(106, 140, 240, 0.15);
+      background-color: rgba(124, 111, 247, 0.15);
       border-color: #3a4a7a;
       color: #d8e0ff;
     }

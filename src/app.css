@@ -1,27 +1,24 @@
-/* Global accent palette (#208).
+/* Global accent palette + theme tokens (#208 / #468).
  *
- * Pre-#208 every component hard-coded hex literals for the same
- * mid-saturation blue family — `#6a8cf0` for the primary accent,
- * `#396cd8` for the darker hover/border companion, plus a few
- * stragglers (`#2c3e8f`, `rgba(44, 62, 143, …)`) used by the sidebar
- * for active-row backgrounds. UX review flagged the drift across
- * surfaces; this file is the single source of truth.
+ * One source of truth for the accent and surface stack, then
+ * overridden per-mode in the blocks below. The accent shifted from
+ * a mid-saturation blue (#6a8cf0) to an indigo-violet (#7c6ff7) in
+ * #468 — the blue read as "Google web app", the violet reads as
+ * "Mac app" and lands closer to the Panic / Rogue Amoeba selection
+ * highlight range. Both old and new pass WCAG AA on light and dark
+ * backdrops for non-text uses (borders, focus rings, chips).
  *
- * The two named variables here cover ~90 % of accent uses across
- * the components.
- *
- * Light + dark both use the same accent values: `#6a8cf0` reads as
- * a "trustworthy blue" against either #ffffff or #1a1a1a backdrops,
- * with enough contrast on either to satisfy WCAG AA for non-text
- * uses (borders, focus rings, brand chips). When a component needs
- * a different value in dark mode (rare), it overrides locally.
+ * The dark surface tokens use 4 distinct depth levels so each step
+ * (chrome → sidebar → surface → elevated) reads as a clear
+ * hierarchy step rather than a flat charcoal slab. Calibrated
+ * against Nova 11 + Audio Hijack inspected values.
  */
 
 :root {
   /* ── Accent ─────────────────────────────────────────────────── */
-  --accent: #6a8cf0;
-  --accent-hover: #396cd8;
-  --accent-subtle: rgba(106, 140, 240, 0.12);
+  --accent: #7c6ff7;
+  --accent-hover: #5c4fd4;
+  --accent-subtle: rgba(124, 111, 247, 0.12);
 
   /* ── Surfaces ───────────────────────────────────────────────── */
   --bg-app:      #f6f6f6;
@@ -90,11 +87,11 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg-app:      #1a1a1a;
-    --bg-sidebar:  #1d1d1f;
-    --bg-surface:  #242428;
-    --bg-elevated: #2a2a2e;
-    --bg-input:    #2a2a2a;
+    --bg-app:      #131316;
+    --bg-sidebar:  #1c1c20;
+    --bg-surface:  #232328;
+    --bg-elevated: #2c2c32;
+    --bg-input:    #28282e;
 
     --text-primary:   #f0f0f0;
     --text-secondary: #c0c0c0;
@@ -104,7 +101,7 @@
     --border-subtle: #252528;
     --border-input:  #3a3a3e;
 
-    --accent-subtle: rgba(106, 140, 240, 0.18);
+    --accent-subtle: rgba(124, 111, 247, 0.20);
 
     --danger-bg:      #2a1010;
     --danger-border:  #5a2020;
@@ -132,7 +129,7 @@
   --border-subtle: #ebebef;
   --border-input:  #d1d1d8;
 
-  --accent-subtle: rgba(106, 140, 240, 0.12);
+  --accent-subtle: rgba(124, 111, 247, 0.12);
 
   --danger-bg:      #fff0f0;
   --danger-border:  #f5c0c0;
@@ -159,7 +156,7 @@
   --border-subtle: #252528;
   --border-input:  #3a3a3e;
 
-  --accent-subtle: rgba(106, 140, 240, 0.18);
+  --accent-subtle: rgba(124, 111, 247, 0.20);
 
   --danger-bg:      #2a1010;
   --danger-border:  #5a2020;

@@ -167,20 +167,20 @@
 .pipeline-diagram .source rect {
   /* Source nodes get a subtle accent tint so they read as inputs
      rather than blending with the engine. */
-  stroke: var(--accent, #6a8cf0);
+  stroke: var(--accent, #7c6ff7);
 }
 
 .pipeline-diagram .engine rect {
-  fill: var(--accent-subtle, rgba(106, 140, 240, 0.12));
-  stroke: var(--accent, #6a8cf0);
+  fill: var(--accent-subtle, rgba(124, 111, 247, 0.12));
+  stroke: var(--accent, #7c6ff7);
   stroke-width: 1.5;
 }
 
 .pipeline-diagram .output rect {
   /* Output node uses the brand accent fill as a deliberate "this
      is where it ends up" emphasis — the user's clipboard. */
-  fill: var(--accent, #6a8cf0);
-  stroke: var(--accent-hover, #396cd8);
+  fill: var(--accent, #7c6ff7);
+  stroke: var(--accent-hover, #5c4fd4);
 }
 
 .pipeline-diagram .node text {

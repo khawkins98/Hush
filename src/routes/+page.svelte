@@ -1750,9 +1750,9 @@
   border-radius: 8px;
   font-size: 0.88rem;
   line-height: 1.4;
-  border: 1px solid var(--accent-subtle, rgba(106, 140, 240, 0.18));
-  background-color: var(--accent-subtle, rgba(106, 140, 240, 0.12));
-  color: var(--accent-hover, #396cd8);
+  border: 1px solid var(--accent-subtle, rgba(124, 111, 247, 0.18));
+  background-color: var(--accent-subtle, rgba(124, 111, 247, 0.12));
+  color: var(--accent-hover, #5c4fd4);
 }
 .app-profile-notice-icon {
   font-weight: 700;
