@@ -198,7 +198,7 @@
       phase B so the main window's recording status row can render
       the same affordance.
     -->
-    <AudioWaveform active={hudState === "recording"} />
+    <AudioWaveform mode="recording" />
   {:else}
     <!--
       Processing state: replace the level meter with a slim

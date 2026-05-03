@@ -113,6 +113,23 @@
     mics.length > 0 || (systemAudio?.isSupported ?? false),
   );
 
+  // Waveform mood (#411 phase F1). The component is mounted whenever
+  // the controls section is visible so the breathing idle bars give
+  // the page a continuous live feel; the `mode` prop selects the
+  // visual mood from the section's own state.
+  // Priority: error > recording > processing (transcribing) > idle.
+  // Error wins so a stop-time failure flashes the bars even while
+  // `transcribing` is still true on its way down.
+  let waveformMode = $derived<"idle" | "recording" | "processing" | "error">(
+    error !== null
+      ? "error"
+      : recording
+        ? "recording"
+        : transcribing
+          ? "processing"
+          : "idle",
+  );
+
   // Build the groups array for the custom Select component, mirroring
   // the old <optgroup> structure. The system-audio entry renders as a
   // disabled option when the backend reports it unsupported.
@@ -331,21 +348,16 @@
   </p>
 
   <!--
-    Live waveform during active recording (#411 phase B). Mirrors
-    the HUD pill's affordance into the main window so the user
-    sees mic activity without needing the floating overlay visible
-    (or for users who dismissed it). Only mounted while
-    `recording === true` so the audio:level subscription doesn't
-    sit live during idle or transcription. `active` is redundant
-    given the conditional render but kept explicit so the prop's
-    semantic ("track or flatten") stays self-documenting at the
-    consumer call site.
+    Mood-driven waveform (#411 phase B + F1). Always mounted while
+    the controls section is visible so the idle breathing keeps
+    the page alive. The mood selects between idle (dim breath),
+    recording (live RMS), processing (frozen + opacity pulse), and
+    error (one-shot flash). The component owns the audio:level
+    subscription itself; mounting it idle costs only the rAF tick.
   -->
-  {#if recording}
-    <div class="status-waveform">
-      <AudioWaveform active={recording} />
-    </div>
-  {/if}
+  <div class="status-waveform">
+    <AudioWaveform mode={waveformMode} />
+  </div>
 </section>
 
 {#if error}
