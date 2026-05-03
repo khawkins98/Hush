@@ -27,7 +27,7 @@
 //! in tests without juggling closure types.
 
 use super::autostart::{AutostartDecision, MeetingAutostartMode};
-use super::manager::AppClassifier;
+use super::classifier::AppClassifier;
 use super::MeetingAppKind;
 
 /// Snapshot of the currently-focused app.
