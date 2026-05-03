@@ -1,36 +1,13 @@
 <!--
-  Dictation section render (#432 main-page decomp slice 3/3).
+  Dictation page-section render. Wraps the section header, the
+  keyboard-shortcut hint, ControlsSection, the conditional
+  ResultBlock (with F6 transitions), and the MacosPermsPill.
 
-  Wraps the dictation page-section markup that previously sat
-  inline on `+page.svelte`: section header, keyboard-shortcut
-  hint, the `ControlsSection` audio picker / Record button, the
-  conditional `ResultBlock` with F6 spring/fade transitions, and
-  the `MacosPermsPill` permissions banner.
-
-  ## What this section does NOT own
-
-  Pre-#432 the issue's vision was for this slice to also own
-  `start_dictation` / `stop_dictation` / `cancel_dictation`
-  handlers and the hotkey event listeners. In practice those
-  functions touch a sprawl of cross-section dependencies —
-  `refreshMeetingSessions`, `refreshHistory`,
-  `copyMeetingSessionToClipboard`, the meeting-pump upgrade path
-  via `meeting_start_manual`, the `permissionsDialogIntro` /
-  `showPermissionsDialog` recovery surface, `meetingActiveId`,
-  `lastMeetingId`, etc. Threading every dependency through props
-  would entangle the seam more than it unwinds it.
-
-  So this slice owns the **render** plus the prop-shaped boundary
-  that lets the orchestrator pass dictation state cleanly. The
-  hotkey listeners and the start/startRecord/stop functions stay
-  in `+page.svelte` for now; a future iteration can tease them
-  apart once #411 Stage 4 has settled the layout.
-
-  ## Props
-
-  Every reactive cell the inner leaves need is passed in
-  read-only — the section doesn't mutate anything except via
-  bindable `selected` (which `ControlsSection` already binds).
+  Render-only by design: every dictation IPC handler and hotkey
+  listener stays in the orchestrator because they touch state
+  that lives across multiple sections (refreshHistory, the
+  meeting-pump upgrade path, the permissions recovery surface).
+  Pulling them out would entangle the seam more than it unwinds.
 -->
 <script lang="ts">
   import { backOut, cubicIn } from "svelte/easing";
@@ -178,9 +155,6 @@
 </section>
 
 <style>
-  /* `.hint` + `.hint-sticky` styles moved here from +page.svelte
-     during #432 slice 3/3 along with the keyboard-shortcut hint
-     markup that uses them. Same selectors, same declarations. */
   .hint {
     margin: 0 0 2rem;
     padding: 0.75rem 1rem;

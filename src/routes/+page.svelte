@@ -352,15 +352,11 @@
       console.error("get_first_run_completed failed:", e);
     }
 
-    // Fire all five fetches concurrently rather than sequentially —
+    // Fire all four fetches concurrently rather than sequentially —
     // the user-visible time-to-paint is bounded by the slowest single
     // call instead of the sum. Each fetch handles its own loading
     // and error state so a slow one (history, in particular) doesn't
     // block the rest of the page.
-    // `loadMacosCapabilityFlag` + initial `get_permission_health`
-    // probe ran from this Promise.all pre-#432; both moved into
-    // PermissionHealthSection's onMount, which fires when the
-    // section mounts at the bottom of this page (same paint).
     await Promise.all([
       loadSources(),
       refreshHistory(),
@@ -427,26 +423,6 @@
       void stop();
     });
 
-    // Permission health probe (#378). Pre-#369 this was fire-and-
-    // forget — only seeded the `last_confirmed` row in settings so
-    // the Settings tab could later distinguish Stale from
-    // NotGranted. With the unified Record flow (#369), the result
-    // also drives the mode decision (mic-only dictation vs meeting-
-    // pump multi-source) AND the mic-only badge on the Record
-    // button, so we now hold it as reactive state. Refresh on focus
-    // so a user who flipped Screen Recording in System Settings
-    // sees the upgrade without restart.
-    //
-    // Wrapped in a 250 ms debounce (#386 security review) so a
-    // script that programmatically refocuses the window can't
-    // spam the IPC. Each call is cheap (single-digit ms) and
-    // side-effect-free after the first stamp, but politeness is
-    // free at this point.
-    //
-    // Permission-health lifecycle (focus debounce + initial probe
-    // + diagnose_macos_permissions) moved into
-    // `PermissionHealthSection.svelte` (#432). Cross-section state
-    // still lives here, bound through to the section via `bind:`.
     window.addEventListener("keydown", handleGlobalKeydown);
   });
 
@@ -458,9 +434,6 @@
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
     window.removeEventListener("keydown", handleGlobalKeydown);
-    // The auto-copy notice timer used to be cleaned up here;
-    // moved into MeetingSection's onDestroy alongside the rest
-    // of the auto-clear lifecycle (#432 slice 2/3).
     if (appProfileNoticeTimer !== null) {
       clearTimeout(appProfileNoticeTimer);
       appProfileNoticeTimer = null;
@@ -970,10 +943,6 @@
     showPermissionsDialog = true;
   }
 
-  // dismissPermissionsDialog moved into PermissionHealthSection
-  // (#432). The orchestrator now just sets `showPermissionsDialog
-  // = true` to open; the section flips it back on dismiss.
-
   async function openPrivacyPane(
     target: "microphone" | "input-monitoring" | "screen-recording",
   ) {
@@ -1297,17 +1266,11 @@
   // 10 s — a longer dwell because the message carries an action
   // the user has to discover, not just an acknowledgement.
   // The notice copy ("open the History meeting row below to copy
-  // it manually") assumes the source was a meeting recording and
-  // points at HistoryPanel's meeting-row affordance. Today only
-  // `copyMeetingSessionToClipboard` writes here; if a future
-  // caller (PTT auto-copy, dictation auto-copy retrofit) needs
-  // the same surface, the failure-message text will need to vary
-  // by source. UX review caught the meeting-only assumption on
-  // #415.
-  //
-  // Auto-clear timer + render moved into MeetingSection (#432
-  // slice 2/3); the orchestrator now just sets `meetingCopyNotice
-  // = {kind, message}` and the section handles dwell + dismiss.
+  // it manually") assumes the source was a meeting recording. If
+  // a future caller (PTT auto-copy, dictation auto-copy retrofit)
+  // needs the same surface, the failure-message text will need to
+  // vary by source. UX review caught the meeting-only assumption
+  // on #415.
   let meetingCopyNotice = $state<MeetingCopyNotice | null>(null);
 
   function setMeetingCopyNotice(notice: MeetingCopyNotice) {
@@ -1402,11 +1365,6 @@
       meetingBusy = false;
     }
   }
-
-  // diagnose_macos_permissions probe + permStatuses lifecycle
-  // moved into PermissionHealthSection (#432). The orchestrator
-  // just reads the bound `permStatuses` + `macosCapable` for the
-  // welcome derivations and the MacosPermsPill props.
 
   /// Map a tagged IPC error to a user-facing string. Recovery hints are
   /// embedded here rather than in the Rust enum's Display because the
@@ -1779,9 +1737,6 @@
    data-kind: success (green-tinted) auto-clears after 4 s,
    failure (amber-tinted) after 10 s. Dismiss button is a
    manual escape hatch in case the dwell feels long. */
-/* The .meeting-copy-notice rules moved into MeetingSection.svelte
-   (#432 slice 2/3) along with the markup. */
-
 /* Per-app audio profile auto-apply notice (#427 Item 5 / #457).
    Subtle accent-tinted, matches the meeting-copy-notice's row
    geometry so the two notices line up cleanly when both fire
@@ -1822,9 +1777,5 @@
 .app-profile-notice-dismiss:hover {
   opacity: 1;
 }
-
-/* `.hint`, `.hint-sticky`, and `.hint kbd` rules moved into
-   DictationSection.svelte (#432 slice 3/3) along with the markup
-   that uses them. */
 
 </style>

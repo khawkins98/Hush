@@ -1,41 +1,15 @@
 <!--
-  Permission-health lifecycle wrapper (#432 main-page decomp).
+  macOS permission-probe lifecycle: the focus-debounced
+  `get_permission_health` poll, the one-shot
+  `diagnose_macos_permissions` capability check, and the recovery
+  `PermissionsDialog` overlay.
 
-  Owns the macOS permission probe lifecycle that previously sat on
-  the main page: the focus-debounced `get_permission_health` poll,
-  the one-shot `diagnose_macos_permissions` capability check, and
-  the recovery `PermissionsDialog` overlay.
-
-  The pre-#432 main page directly owned `permissionHealth`,
-  `permStatuses`, `macosCapable`, `showPermissionsDialog`, and
-  `permissionsDialogIntro`, plus the focus-event listener and the
-  250 ms debounce timer. After the split this component holds the
-  lifecycle code; the orchestrator still owns the *state* via
-  bindable props because both the dictation section (Record-mode
-  branch reads `permissionHealth`) and the welcome modal
-  (`allPermsGranted`) need to read it without re-deriving.
-
-  Visually this component renders only the recovery dialog overlay.
-  The `MacosPermsPill` banner stays in the dictation section's
-  layout slot so the visual structure of the page is unchanged —
-  the orchestrator passes the bound `macosCapable` /
-  `allPermsGranted` / `anyPermsDenied` to the pill.
-
-  ## Cross-section boundary
-
-  - **Bindable inputs**: parent sets `showDialog = true` /
-    `dialogIntro = "..."` from any code path that wants the
-    recovery dialog to open (TCC-shaped errors, FirstRunModal
-    callback, …).
-  - **Bindable outputs**: parent reads `permissionHealth`,
-    `permStatuses`, `macosCapable` reactively. Re-deriving
-    `allPermsGranted` etc. in the orchestrator keeps cross-section
-    consumers (welcome path, MacosPermsPill, ControlsSection's
-    screen-recording badge) on a single source of truth without
-    forcing the section to re-export every derived shape.
-  - **Callback**: `onOpenPrivacyPane` is supplied by the parent
-    because the open-in-System-Settings flow has retry/error
-    handling that lives outside this section's scope.
+  State (`permissionHealth`, `permStatuses`, `macosCapable`,
+  `showDialog`, `dialogIntro`) is bindable so the orchestrator
+  stays the single source of truth — the dictation flow's
+  Record-mode branch and the welcome derivations both read it.
+  This component holds the *lifecycle*; the parent holds the
+  *state*.
 -->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
