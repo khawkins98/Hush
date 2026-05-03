@@ -2,9 +2,11 @@
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type {
+    AudioSourceListing,
     BuiltinAppEntry,
     MeetingAppKind,
     MeetingAppOverride,
+    ModelCard,
   } from "./types";
 
   type Props = {
@@ -16,6 +18,15 @@
     /// already covered before adding a redundant override.
     /// Empty array is fine — the disclosure just stays empty.
     defaults: BuiltinAppEntry[];
+    /// Audio sources for the per-app profile dropdown (#427 Item 5).
+    /// Loaded by the parent from `audio_list_sources` and threaded
+    /// in. Empty array hides the dropdowns; the per-row UI keeps
+    /// rendering the kind + remove controls as before.
+    audioSources?: AudioSourceListing[];
+    /// Whisper models for the per-app profile dropdown (#427 Item 5).
+    /// Loaded by the parent from `model_list`. Same empty-array
+    /// fallback as `audioSources`.
+    models?: ModelCard[];
     // Form fields are bindable so the parent owns the state and can
     // clear them after a successful add.
     newAppName: string;
@@ -34,6 +45,16 @@
       kind: MeetingAppKind,
     ) => void | Promise<void>;
     onDelete: (override: MeetingAppOverride) => void | Promise<void>;
+    /// Set or clear the per-app audio profile (#427 Item 5). Both
+    /// args together represent the full intended state — `null`
+    /// resets to "use the global default", a string pins the
+    /// value. Optional so the panel still renders cleanly if a
+    /// future caller doesn't wire this yet.
+    onSetProfile?: (
+      override: MeetingAppOverride,
+      preferredAudioSource: string | null,
+      preferredModelId: string | null,
+    ) => void | Promise<void>;
   };
 
   let {
@@ -41,6 +62,8 @@
     overridesLoaded,
     overridesError,
     defaults,
+    audioSources = [],
+    models = [],
     newAppName = $bindable(),
     newKind = $bindable(),
     inputEl = $bindable(),
@@ -48,6 +71,7 @@
     onSubmitVariants,
     onChangeKind,
     onDelete,
+    onSetProfile,
   }: Props = $props();
 
   // Redundant-override warning (#320). When the user types an
@@ -310,6 +334,74 @@
           >
             {confirmingAppName === override.appName ? "Click to confirm" : "Remove"}
           </button>
+
+          {#if onSetProfile && (audioSources.length > 0 || models.length > 0)}
+            <!--
+              Per-app audio profile (#427 Item 5). Two optional
+              dropdowns: pick a preferred audio source / Whisper
+              model for this app. "— use global —" maps to the DB
+              NULL sentinel that the foreground-watcher will
+              interpret as "fall through to the global default".
+              Each select fires onSetProfile with the FULL state
+              (both fields) so the panel always sends the user's
+              full intent — no merge.
+            -->
+            <div class="override-profile" data-testid="override-profile-row">
+              {#if audioSources.length > 0}
+                <label class="override-profile-field">
+                  <span class="override-profile-label">Audio</span>
+                  <select
+                    class="override-profile-select"
+                    data-testid={`override-audio-${override.appName}`}
+                    aria-label="Preferred audio source for {override.appName}"
+                    value={override.preferredAudioSource ?? ""}
+                    onchange={(e) => {
+                      const next =
+                        (e.currentTarget as HTMLSelectElement).value || null;
+                      void onSetProfile?.(
+                        override,
+                        next,
+                        override.preferredModelId ?? null,
+                      );
+                    }}
+                  >
+                    <option value="">— use global —</option>
+                    {#each audioSources as src (src.id)}
+                      <option value={src.id}>
+                        {src.name}{src.isDefault ? " (default)" : ""}
+                      </option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
+
+              {#if models.length > 0}
+                <label class="override-profile-field">
+                  <span class="override-profile-label">Model</span>
+                  <select
+                    class="override-profile-select"
+                    data-testid={`override-model-${override.appName}`}
+                    aria-label="Preferred model for {override.appName}"
+                    value={override.preferredModelId ?? ""}
+                    onchange={(e) => {
+                      const next =
+                        (e.currentTarget as HTMLSelectElement).value || null;
+                      void onSetProfile?.(
+                        override,
+                        override.preferredAudioSource ?? null,
+                        next,
+                      );
+                    }}
+                  >
+                    <option value="">— use global —</option>
+                    {#each models as model (model.id)}
+                      <option value={model.id}>{model.displayName}</option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
+            </div>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -454,10 +546,11 @@
 
 .override-row {
   display: grid;
-  /* Three columns: app name, kind dropdown, remove button. The
-     redundant static-label column shipped earlier was dropped in
-     the walkthrough polish round — the dropdown's selected value
-     was already visible. */
+  /* First row: app name, kind dropdown, remove button. Second
+     row spans all three columns and holds the optional profile
+     dropdowns (#427 Item 5). The redundant static-label column
+     shipped earlier was dropped in the walkthrough polish round
+     — the dropdown's selected value was already visible. */
   grid-template-columns: 1fr auto auto;
   align-items: center;
   gap: 0.6rem;
@@ -478,6 +571,34 @@
 .override-kind {
   padding: 0.25em 0.5em;
   font-size: 0.85rem;
+}
+
+/* Per-app audio profile (#427 Item 5). Spans all three columns
+   below the app name + kind + remove row so the dropdowns aren't
+   crowded into the narrow auto columns. */
+.override-profile {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed #e7e7e7;
+}
+.override-profile-field {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+.override-profile-label {
+  color: #666;
+  font-weight: 500;
+}
+.override-profile-select {
+  padding: 0.18em 0.4em;
+  font-size: 0.8rem;
+  font-family: inherit;
+  max-width: 12rem;
 }
 
 .empty-history {
