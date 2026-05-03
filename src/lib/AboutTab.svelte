@@ -36,6 +36,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { platform } from "@tauri-apps/plugin-os";
   import { onDestroy, onMount } from "svelte";
 
   import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
@@ -79,6 +80,14 @@
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenInstallPending: UnlistenFn | null = null;
 
+  // The Gatekeeper warning under the Install button is macOS-
+  // only — the Linux / Windows updater path doesn't have an
+  // equivalent quarantine prompt. Read once on mount so a
+  // failed `platform()` call falls through silently to "treat
+  // as non-macOS" rather than leaving the warning permanently
+  // visible on Linux.
+  let isMacOS = $state(false);
+
   async function loadAppMetadata(): Promise<void> {
     try {
       const [name, version, tauri] = await Promise.all([
@@ -116,11 +125,11 @@
 
   // Click-driven install (#10). Wraps the IPC + manages the
   // download-progress / install-pending state transitions for the
-  // UI. The IPC's "auto-update is not configured for this build"
-  // error path is the gate for whether the install path is even
-  // available; we map it to `installUnavailable = true` so the
-  // markup falls back to the manual release-notes link without
-  // surfacing the implementation detail to the user.
+  // UI. The IPC's `updater-unavailable` typed variant is the gate
+  // for whether the install path is even active; we match on
+  // `kind` so the UI can pick the right fallback copy without
+  // substring-matching free-form messages (same pattern #386
+  // established for permission errors).
   async function onInstallUpdate() {
     installState = "installing";
     installProgress = null;
@@ -139,25 +148,21 @@
       // rather than the stale "Update available" message.
       void onCheckForUpdates();
     } catch (e) {
-      const message = formatErrorMessage(e);
-      // The Rust IPC's friendly gate-error is the marker for "not
-      // configured" — match on its substring so the UI can pick
-      // the right fallback copy. Other errors (network, signature,
-      // disk write) get the generic retry path.
-      if (message.includes("auto-update is not configured")) {
+      const ipc = e as { kind?: string; message?: string };
+      if (ipc.kind === "updater-unavailable") {
         installUnavailable = true;
       } else {
-        installError = message;
+        installError = formatErrorMessage(e);
       }
       installState = "failed";
     }
   }
 
-  /// Format `installProgress` as a percentage string when the
-  /// upstream archive declared a Content-Length, else as a raw
-  /// downloaded-byte count. The plugin reports per-chunk delta —
-  /// not running totals — so we accumulate locally in
-  /// `installProgress.downloaded`.
+  // Format `installProgress` as a percentage string when the
+  // upstream archive declared a Content-Length, else as a raw
+  // downloaded-byte count. The plugin reports per-chunk delta —
+  // not running totals — so we accumulate locally in
+  // `installProgress.downloaded`.
   function formatInstallProgress(p: { downloaded: number; total: number | null } | null): string {
     if (p === null) {
       return "Starting download…";
@@ -172,6 +177,12 @@
 
   onMount(async () => {
     void loadAppMetadata();
+
+    try {
+      isMacOS = (await platform()) === "macos";
+    } catch (e) {
+      console.warn("[hush] platform() failed in AboutTab", e);
+    }
 
     // Menu-driven probe handler (#265). The native menu spawns
     // the probe asynchronously and emits `updater:result` on
@@ -191,14 +202,14 @@
     // Auto-update install events (#10). The plugin invokes our
     // progress callback once per chunk; we accumulate locally so
     // the UI's progress bar moves smoothly even though each event
-    // carries only the chunk delta, not a running total.
+    // carries only the chunk delta (`chunkLen`), not a running total.
     unlistenDownloadProgress = await listen<{
-      downloaded: number;
+      chunkLen: number;
       total: number | null;
     }>("updater:download-progress", (e) => {
       const prev = installProgress?.downloaded ?? 0;
       installProgress = {
-        downloaded: prev + e.payload.downloaded,
+        downloaded: prev + e.payload.chunkLen,
         total: e.payload.total,
       };
     });
@@ -310,11 +321,19 @@
                 class="about-update-fallback"
               >Open release notes</a>
             </div>
-            <p class="about-install-gatekeeper-note">
-              <strong>macOS:</strong> after installing, macOS may
-              ask you to confirm it's safe to open Hush. Click
-              <strong>Open</strong> when prompted.
-            </p>
+            {#if isMacOS}
+              <!--
+                Gatekeeper note (#491). Shown pre-click so the user
+                isn't surprised by the system dialog after relaunch.
+                Also shown in the failed-retry branch below so a
+                user who clicks Try Again still has the forewarning.
+              -->
+              <p class="about-install-gatekeeper-note">
+                After installing, macOS may ask you to confirm it's
+                safe to open Hush. Click <strong>Open</strong> when
+                prompted.
+              </p>
+            {/if}
           {:else if installState === "installing"}
             <p
               class="about-update-result about-update-installing"
@@ -337,8 +356,8 @@
           {:else if installState === "failed"}
             {#if installUnavailable}
               <p class="about-install-unavailable" role="status">
-                Auto-install isn't enabled for this build yet.
-                Use the link below to update manually.
+                Auto-install isn't available yet. Use the link
+                below to download the latest release manually.
               </p>
               <p class="about-install-actions">
                 <a
@@ -371,6 +390,19 @@
                   class="about-update-fallback"
                 >Open release notes</a>
               </div>
+              {#if isMacOS}
+                <!--
+                  Repeat the Gatekeeper note here so a user who
+                  retries still sees the forewarning before the
+                  successful relaunch surfaces the dialog (UX
+                  review F6).
+                -->
+                <p class="about-install-gatekeeper-note">
+                  After installing, macOS may ask you to confirm
+                  it's safe to open Hush. Click
+                  <strong>Open</strong> when prompted.
+                </p>
+              {/if}
             {/if}
           {/if}
         </div>

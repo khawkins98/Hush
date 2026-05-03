@@ -35,6 +35,12 @@ use super::{IpcError, IpcResult};
 /// forward to the frontend as a typed JSON object so the About-
 /// tab progress bar can render bytes-received-of-total.
 ///
+/// `chunk_len` is the **delta** for this event — the bytes added
+/// since the previous progress callback, not a running total.
+/// The frontend accumulates locally to render the progress bar.
+/// Named explicitly to avoid the "downloaded" reading which
+/// suggests a cumulative count.
+///
 /// `total` is `Option<u64>` because the upstream archive may not
 /// declare a Content-Length (chunked transfer / unknown size).
 /// The UI treats `None` as "indeterminate" — spinner instead of
@@ -42,7 +48,7 @@ use super::{IpcError, IpcResult};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdaterDownloadProgress {
-    pub downloaded: u64,
+    pub chunk_len: u64,
     pub total: Option<u64>,
 }
 
@@ -91,9 +97,7 @@ const EVENT_INSTALL_PENDING: &str = "updater:install-pending";
 ///   retry or fall back to the "Open release notes" manual link.
 #[tauri::command]
 pub async fn install_pending_update(app: AppHandle) -> IpcResult<()> {
-    let updater = app
-        .updater()
-        .map_err(|_| IpcError::Internal("auto-update is not configured for this build".into()))?;
+    let updater = app.updater().map_err(|_| IpcError::UpdaterUnavailable)?;
 
     let maybe_update = updater
         .check()
@@ -116,7 +120,7 @@ pub async fn install_pending_update(app: AppHandle) -> IpcResult<()> {
         .download_and_install(
             move |chunk_len, total| {
                 let payload = UpdaterDownloadProgress {
-                    downloaded: chunk_len as u64,
+                    chunk_len: chunk_len as u64,
                     total,
                 };
                 if let Err(e) = app_for_progress.emit(EVENT_DOWNLOAD_PROGRESS, &payload) {

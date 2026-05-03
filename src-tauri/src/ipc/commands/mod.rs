@@ -167,6 +167,18 @@ pub enum IpcError {
     #[error("permission-denied: {0}")]
     PermissionDenied(String),
 
+    /// Auto-update is wired in code but the runtime support isn't
+    /// active in this build — typically because the maintainer
+    /// hasn't completed Steps 1–4 of the #10 plan (signing keypair,
+    /// `tauri.conf.json` `plugins.updater` block, CI secrets, and
+    /// plugin registration). Surfaced as a typed variant so the
+    /// frontend's About-tab install flow can `kind`-match on it
+    /// (showing the manual-install fallback) instead of substring-
+    /// matching a free-form `Internal` message — same rationale as
+    /// `PermissionDenied`'s carve-out from `MeetingSessions` (#386).
+    #[error("updater-unavailable")]
+    UpdaterUnavailable,
+
     /// In-process state guard panicked while a lock was held. Should not
     /// happen in practice — only the IPC commands lock our internal
     /// mutexes and they don't panic — but a poisoned lock surfacing here
