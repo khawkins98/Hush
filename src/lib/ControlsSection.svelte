@@ -1,8 +1,16 @@
 <script lang="ts">
+  import { onDestroy, onMount } from "svelte";
+  import type { UnlistenFn } from "@tauri-apps/api/event";
+
   import AudioWaveform from "./AudioWaveform.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import Select from "./Select.svelte";
+  import StatusLine from "./StatusLine.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
+  import {
+    listenForStatusLineChanges,
+    readStatusLineEnabled,
+  } from "./status-line";
   import type { AudioSourceListing, PermissionHealth } from "./types";
 
   type Props = {
@@ -112,6 +120,35 @@
   let hasUsableSource = $derived(
     mics.length > 0 || (systemAudio?.isSupported ?? false),
   );
+
+  // F5 status line: opt-in display of `🎤 device · model` below
+  // the waveform. Persistence is localStorage via the helper; we
+  // also listen for cross-window toggles so a Settings change
+  // updates this main-window view without a reload.
+  let statusLineEnabled = $state(false);
+  let unlistenStatusLine: UnlistenFn | null = null;
+
+  onMount(async () => {
+    statusLineEnabled = readStatusLineEnabled();
+    unlistenStatusLine = await listenForStatusLineChanges((next) => {
+      statusLineEnabled = next;
+    });
+  });
+
+  onDestroy(() => {
+    unlistenStatusLine?.();
+    unlistenStatusLine = null;
+  });
+
+  // Resolve the picker's selected id back to the source's display
+  // name so the F5 status line shows "Built-in Microphone" rather
+  // than the raw device id. Falls through to a friendly literal
+  // for the system-audio case where `id === "system"`.
+  let selectedSourceLabel = $derived.by(() => {
+    if (selected === null) return null;
+    if (selected === "system") return systemAudio?.name ?? "System Audio";
+    return sources.find((s) => s.id === selected)?.name ?? null;
+  });
 
   // Waveform mood (#411 phase F1). The component is mounted whenever
   // the controls section is visible so the breathing idle bars give
@@ -358,6 +395,13 @@
   <div class="status-waveform">
     <AudioWaveform mode={waveformMode} metering />
   </div>
+
+  {#if statusLineEnabled}
+    <StatusLine
+      audioSourceLabel={selectedSourceLabel}
+      modelName={activeModelName}
+    />
+  {/if}
 </section>
 
 {#if error}
