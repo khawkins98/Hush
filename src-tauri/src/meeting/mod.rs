@@ -38,6 +38,7 @@ pub mod app_overrides;
 pub mod audio_buffer;
 pub mod autostart;
 pub mod autostart_poller;
+pub mod classifier;
 pub mod manager;
 pub mod pump;
 pub mod sqlite;
@@ -48,7 +49,8 @@ pub use app_overrides::{
 };
 pub use autostart::{AutostartDecision, MeetingAutostartMode};
 pub use autostart_poller::{evaluate_autostart_tick, ForegroundAppProbe, TickOutcome};
-pub use manager::{AppClassifier, SessionManager};
+pub use classifier::AppClassifier;
+pub use manager::SessionManager;
 pub use sqlite::SqliteMeetingSessionRepository;
 
 use anyhow::Result;
