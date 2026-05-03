@@ -69,6 +69,15 @@ cpal = "0.15"
 # Mutex<Vec<f32>> that worked in practice but violated the
 # discipline; #55 has the full reasoning.
 rtrb = "0.3"
+# Audio playback for the start/done cue files (#446). `default-
+# features = false` drops the MP3 / OGG / FLAC decoders we don't
+# use; the cue files are short PCM WAVs synthesised at build time
+# (see `build.rs::synth_cue_files`). Routes through CPAL on every
+# platform, which gives free system-volume + Do-Not-Disturb
+# behaviour without per-platform shims. Replaces the macOS-only
+# `NSSound soundNamed:` path that depended on Apple's bundled
+# system sounds.
+rodio = { version = "0.19", default-features = false, features = ["wav"] }
 
 # HTTP client for the model auto-download path. `rustls-tls` keeps the
 # build cross-platform without depending on system OpenSSL — the same

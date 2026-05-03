@@ -134,6 +134,7 @@
 //!    the Install button:
 //!    > "After installing, macOS may ask you to confirm it's safe to
 //!    > open Hush. Click **Open** when prompted."
+//!
 //!    See TODO(#10) in `AboutTab.svelte` for the exact insertion point.
 //! 4. Keep the "Open release notes" link as a fallback for users who
 //!    prefer to update manually.
