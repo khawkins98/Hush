@@ -141,11 +141,16 @@
     gap: 0.3rem;
   }
 
+  /* Panic-flavoured all-caps section label — same idiom Nova
+     and Transmit use for sidebar group headers. Tight letter-
+     spacing reads as "section title" rather than "form label";
+     the muted colour keeps it from competing with the picker. */
   .field-label {
-    font-size: 0.8rem;
-    font-weight: 500;
+    font-size: 0.68rem;
+    font-weight: 600;
     color: var(--text-muted);
-    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
 
   .empty-devices {
