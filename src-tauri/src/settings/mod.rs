@@ -83,6 +83,15 @@ pub mod keys {
     /// focus mode).
     pub const SOUND_CUES_ENABLED: &str = "sound_cues_enabled";
 
+    /// Per-event sub-toggles for the audio-cues feature (#463). Each
+    /// row is read independently of [`SOUND_CUES_ENABLED`]; the master
+    /// row is the kill-switch and these select which individual cues
+    /// fire when the master is on. Boolean-encoded the same way.
+    /// Absent rows default to `true` so existing master-on installs
+    /// keep hearing both events without a one-time migration.
+    pub const SOUND_CUE_START_ENABLED: &str = "sound_cue_start_enabled";
+    pub const SOUND_CUE_COMPLETE_ENABLED: &str = "sound_cue_complete_enabled";
+
     /// Auto-start mode for Meeting Mode. The foreground poller
     /// uses this to decide what to do when a Meeting-classified
     /// app focuses. Stored as one of:

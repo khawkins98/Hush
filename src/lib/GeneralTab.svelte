@@ -63,6 +63,16 @@
   let soundCuesBusy = $state(false);
   let soundCuesError = $state<string | null>(null);
 
+  // Per-event sub-toggles (#463). Default true so master-on users
+  // hear both events without an explicit opt-in step. The checkboxes
+  // are visually nested beneath the master toggle and disabled when
+  // the master is off.
+  let soundCueStartEnabled = $state(true);
+  let soundCueCompleteEnabled = $state(true);
+  let soundCueStartBusy = $state(false);
+  let soundCueCompleteBusy = $state(false);
+  let soundCueSubError = $state<string | null>(null);
+
   // Two-cell slider (#348): `inferenceThreads` is the persisted
   // value; `inferenceThreadsDisplay` tracks the slider thumb live
   // during drag so the inline label updates without firing one
@@ -242,6 +252,51 @@
     }
   }
 
+  async function loadSoundCueSubEnabled(): Promise<void> {
+    try {
+      const [start, complete] = await Promise.all([
+        invoke<boolean>("get_sound_cue_start_enabled"),
+        invoke<boolean>("get_sound_cue_complete_enabled"),
+      ]);
+      soundCueStartEnabled = start;
+      soundCueCompleteEnabled = complete;
+      soundCueSubError = null;
+    } catch (e) {
+      soundCueSubError = "Couldn't read per-event audio-cue settings.";
+      console.warn("[hush] get_sound_cue_*_enabled failed", e);
+    }
+  }
+
+  async function onSoundCueStartToggle(e: Event) {
+    const checked = (e.target as HTMLInputElement).checked;
+    soundCueStartBusy = true;
+    soundCueSubError = null;
+    try {
+      await invoke("set_sound_cue_start_enabled", { enabled: checked });
+      soundCueStartEnabled = checked;
+    } catch (err) {
+      soundCueSubError = formatErrorMessage(err);
+      await loadSoundCueSubEnabled();
+    } finally {
+      soundCueStartBusy = false;
+    }
+  }
+
+  async function onSoundCueCompleteToggle(e: Event) {
+    const checked = (e.target as HTMLInputElement).checked;
+    soundCueCompleteBusy = true;
+    soundCueSubError = null;
+    try {
+      await invoke("set_sound_cue_complete_enabled", { enabled: checked });
+      soundCueCompleteEnabled = checked;
+    } catch (err) {
+      soundCueSubError = formatErrorMessage(err);
+      await loadSoundCueSubEnabled();
+    } finally {
+      soundCueCompleteBusy = false;
+    }
+  }
+
   async function loadInferenceThreads(): Promise<void> {
     try {
       inferenceThreads = await invoke<number>("get_inference_threads");
@@ -312,6 +367,7 @@
       loadAutostartPathStatus(),
       loadHudEnabled(),
       loadSoundCuesEnabled(),
+      loadSoundCueSubEnabled(),
       loadInferenceThreads(),
       loadDictationStats(),
     ]);
@@ -449,6 +505,54 @@
   </label>
   {#if soundCuesError}
     <p class="settings-error">{soundCuesError}</p>
+  {/if}
+
+  <!--
+    Per-event sub-toggles (#463). Visually nested beneath the master
+    so the relationship reads at a glance; both rows default to on
+    so the user only sees them when picking which cue to silence.
+    Disabled (and dimmed) when the master is off — the master is
+    the kill-switch, the sub-toggles only select among allowed cues.
+  -->
+  <div
+    class="sound-cue-subtoggles"
+    class:is-disabled={!soundCuesEnabled}
+    aria-label="Per-event audio cues"
+  >
+    <label class="toggle-row toggle-row-sub">
+      <input
+        type="checkbox"
+        data-testid="settings-sound-cue-start-toggle"
+        disabled={!soundCuesEnabled || soundCueStartBusy}
+        checked={soundCueStartEnabled}
+        onchange={onSoundCueStartToggle}
+      />
+      <span class="toggle-label">
+        <span class="toggle-name">Recording-start cue</span>
+        <span class="toggle-desc">
+          Plays the Tink chime the moment the mic goes hot.
+        </span>
+      </span>
+    </label>
+    <label class="toggle-row toggle-row-sub">
+      <input
+        type="checkbox"
+        data-testid="settings-sound-cue-complete-toggle"
+        disabled={!soundCuesEnabled || soundCueCompleteBusy}
+        checked={soundCueCompleteEnabled}
+        onchange={onSoundCueCompleteToggle}
+      />
+      <span class="toggle-label">
+        <span class="toggle-name">Transcription-complete cue</span>
+        <span class="toggle-desc">
+          Plays the Glass chime once the transcript is on the
+          clipboard — the "safe to paste" signal.
+        </span>
+      </span>
+    </label>
+  </div>
+  {#if soundCueSubError}
+    <p class="settings-error">{soundCueSubError}</p>
   {/if}
 </section>
 
