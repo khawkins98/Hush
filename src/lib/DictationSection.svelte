@@ -1,20 +1,25 @@
 <!--
-  Dictation page-section render. Wraps the section header, the
-  keyboard-shortcut hint, ControlsSection, the conditional
-  ResultBlock (with F6 transitions), and the MacosPermsPill.
+  Dictation page-section render. Now lays out the section as a
+  two-column grid (#468 slice C / #411 Phase A.2): a sidebar
+  column for `AudioSourcePicker` (source + model chip) and a
+  content column for `RecordPanel` (record button, status,
+  waveform, F5 status line) plus the result block and the macOS
+  permissions banner.
 
-  Render-only by design: every dictation IPC handler and hotkey
-  listener stays in the orchestrator because they touch state
-  that lives across multiple sections (refreshHistory, the
-  meeting-pump upgrade path, the permissions recovery surface).
-  Pulling them out would entangle the seam more than it unwinds.
+  Render-only by design: the orchestrator owns dictation IPC and
+  hotkey listeners. This section composes the leaves and computes
+  the cross-leaf deriveds (`hasUsableSource`, `badgeVisible`,
+  `willRecordMeeting`, `selectedSourceLabel`) that pre-#468 lived
+  on `ControlsSection`.
 -->
 <script lang="ts">
   import { backOut, cubicIn } from "svelte/easing";
   import { fade, fly } from "svelte/transition";
 
-  import ControlsSection from "./ControlsSection.svelte";
+  import AudioSourcePicker from "./AudioSourcePicker.svelte";
+  import ErrorDisplay from "./ErrorDisplay.svelte";
   import MacosPermsPill from "./MacosPermsPill.svelte";
+  import RecordPanel from "./RecordPanel.svelte";
   import ResultBlock from "./ResultBlock.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import { motionDuration } from "./motion";
@@ -25,48 +30,22 @@
   } from "./types";
 
   type Props = {
-    /// Whether the host platform is macOS — drives the PTT-key
-    /// glyph in the keyboard-shortcut hint.
     isMacOS: boolean;
-    /// Audio source list + load state (loaded by orchestrator).
     sources: AudioSourceListing[];
     sourcesLoaded: boolean;
-    /// Bindable picker selection — proxied straight through to
-    /// `ControlsSection` so the orchestrator's `selectedAsAudioSource`
-    /// helper sees the same value.
     selected: string | null;
-    /// Live recording state (orchestrator owns the writes).
     recording: boolean;
-    /// IPC-in-flight guard.
     busy: boolean;
-    /// Derived mid-transcription flag.
     transcribing: boolean;
-    /// Models list reports nothing downloaded — drives the
-    /// no-model setup banner inside `ControlsSection`.
     noModelInstalled: boolean;
-    /// Last error to surface inline (passed through to
-    /// `ControlsSection`'s `<ErrorDisplay>`).
     error: ErrorDisplayShape | null;
-    /// Dictation result for the inline transcript card. Null
-    /// after dismiss / before any session lands.
     result: DictationResult | null;
-    /// Active recording mode — drives the `mic only / mic + system
-    /// audio` label inside the recording status pill.
     recordMode: "dictation" | "meeting" | null;
-    /// Active model display name — `null` while none loaded.
     activeModelName: string | null;
-    /// Three-state Screen Recording health for the mic-only
-    /// badge inside `ControlsSection`.
     permissionHealth: PermissionsHealth | null;
-    /// macOS perm-pill props (loaded by `PermissionHealthSection`,
-    /// passed through here).
     macosCapable: boolean;
     allPermsGranted: boolean;
     anyPermsDenied: boolean;
-    /// Action callbacks — owned by the orchestrator because each
-    /// reaches into cross-section state (open Settings tab,
-    /// scroll the model picker into view, kick off the start /
-    /// stop IPC fan-out).
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onScrollToModelPicker: () => void;
@@ -95,6 +74,42 @@
     onScrollToModelPicker,
     onOpenPermissionsTab,
   }: Props = $props();
+
+  // Cross-leaf deriveds — computed once here so each leaf
+  // receives concrete props rather than re-deriving from
+  // `sources` + `selected` + the screen-recording health.
+  let mics = $derived(sources.filter((s) => s.kind === "microphone"));
+  let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
+
+  let hasUsableSource = $derived(
+    mics.length > 0 || (systemAudio?.isSupported ?? false),
+  );
+
+  let screenRecordingHealth = $derived(
+    permissionHealth?.screenRecording ?? null,
+  );
+
+  let badgeVisible = $derived(
+    !recording
+      && selected !== null
+      && selected !== "system"
+      && (screenRecordingHealth === "stale"
+        || screenRecordingHealth === "not-granted"),
+  );
+  let badgeIsStale = $derived(screenRecordingHealth === "stale");
+
+  let willRecordMeeting = $derived(
+    !recording
+      && selected !== null
+      && selected !== "system"
+      && screenRecordingHealth === "confirmed",
+  );
+
+  let selectedSourceLabel = $derived.by(() => {
+    if (selected === null) return null;
+    if (selected === "system") return systemAudio?.name ?? "System Audio";
+    return sources.find((s) => s.id === selected)?.name ?? null;
+  });
 </script>
 
 <section id="dictation-section" class="page-section">
@@ -111,50 +126,194 @@
     to push-to-talk.
   </aside>
 
-  <ControlsSection
-    {sources}
-    {sourcesLoaded}
-    bind:selected
-    {recording}
-    {busy}
-    {transcribing}
-    {noModelInstalled}
-    {error}
-    {onStart}
-    {onStop}
-    {onScrollToModelPicker}
-    {activeModelName}
-    screenRecordingHealth={permissionHealth?.screenRecording ?? null}
-    onOpenPermissions={onOpenPermissionsTab}
-    {recordMode}
-  />
-
-  {#if result}
-    <!--
-      F6: spring-out fly + fade on appear, plain fade on dismiss.
-      The transcript rising up from below mirrors the speech-to-
-      text "result emerges" mental model; the exit just dissolves
-      so the user doesn't see it slide off-screen mid-cleanup.
-      `motionDuration` honours prefers-reduced-motion (collapses
-      to 0 ms there).
-    -->
-    <div
-      in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
-      out:fade={{ duration: motionDuration(150), easing: cubicIn }}
-    >
-      <ResultBlock {result} />
-    </div>
+  {#if noModelInstalled}
+    <aside class="setup-banner" role="status" aria-label="First-time setup">
+      <div class="setup-banner-text">
+        <strong>Set up your first model</strong>
+        <span>
+          Hush needs a Whisper model to transcribe. Open Settings →
+          Model to pick one — Whisper Base is a solid default.
+        </span>
+      </div>
+      <button class="primary" onclick={onScrollToModelPicker}>
+        Open Settings → Model
+      </button>
+    </aside>
   {/if}
 
-  <MacosPermsPill
-    capable={macosCapable}
-    allGranted={allPermsGranted}
-    anyDenied={anyPermsDenied}
-    onOpenPermissions={onOpenPermissionsTab}
-  />
+  <div class="main-layout">
+    <aside class="sidebar" aria-label="Session configuration">
+      <AudioSourcePicker
+        {sources}
+        {sourcesLoaded}
+        bind:selected
+        {recording}
+        {busy}
+        {activeModelName}
+        {onScrollToModelPicker}
+      />
+    </aside>
+
+    <div class="content">
+      <RecordPanel
+        {recording}
+        {busy}
+        {transcribing}
+        {hasUsableSource}
+        {noModelInstalled}
+        {willRecordMeeting}
+        {badgeVisible}
+        {badgeIsStale}
+        {recordMode}
+        {selectedSourceLabel}
+        {activeModelName}
+        {error}
+        {onStart}
+        {onStop}
+        onOpenPermissions={onOpenPermissionsTab}
+      />
+
+      {#if result}
+        <div
+          in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
+          out:fade={{ duration: motionDuration(150), easing: cubicIn }}
+        >
+          <ResultBlock {result} />
+        </div>
+      {/if}
+
+      <MacosPermsPill
+        capable={macosCapable}
+        allGranted={allPermsGranted}
+        anyDenied={anyPermsDenied}
+        onOpenPermissions={onOpenPermissionsTab}
+      />
+    </div>
+  </div>
+
+  {#if error}
+    <ErrorDisplay {error} />
+  {/if}
 </section>
 
 <style>
+  /* Widen the dictation section beyond the default 36rem so the
+     two-column grid (200 px sidebar + 1fr content) has room to
+     breathe. History stays at 36rem because it's a single column.
+     `:global()` because the .page-section selector is owned by
+     +page.svelte and its scoping hash differs from this leaf. */
+  :global(#dictation-section) {
+    max-width: 52rem;
+  }
+
+  .main-layout {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  /* Sidebar column hosts the session config (audio source +
+     model chip). Nova-inspired hairline divider — barely visible
+     in dark, slightly more present in light. The eye reads the
+     boundary without a heavy rule. */
+  .sidebar {
+    padding-right: 1.5rem;
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .sidebar {
+      border-right-color: rgba(255, 255, 255, 0.06);
+    }
+  }
+  :root[data-theme="dark"] .sidebar {
+    border-right-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    min-width: 0;
+  }
+
+  /* Below ~520px the sidebar's 200 px would crowd the content
+     column. Stack instead, with the boundary moving to a
+     bottom-divider so the visual hierarchy still reads. */
+  @media (max-width: 520px) {
+    .main-layout {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+    .sidebar {
+      padding-right: 0;
+      padding-bottom: 1rem;
+      border-right: none;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    @media (prefers-color-scheme: dark) {
+      .sidebar {
+        border-right-color: transparent;
+        border-bottom-color: rgba(255, 255, 255, 0.06);
+      }
+    }
+  }
+
+  .setup-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.85rem 1rem;
+    margin: 0 0 1rem;
+    background-color: var(--info-bg);
+    border: 1px solid var(--info-border);
+    border-radius: var(--radius-md);
+  }
+  .setup-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+    min-width: 0;
+  }
+  .setup-banner-text strong {
+    font-size: 0.95rem;
+    color: var(--info-text);
+  }
+  .setup-banner-text span {
+    font-size: 0.85rem;
+    color: var(--info-text);
+    opacity: 0.85;
+  }
+  .setup-banner button {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  /* Setup banner's primary button — colocated here because it's
+     the only consumer left after slice B trimmed ControlsSection. */
+  button.primary {
+    background-color: var(--accent);
+    color: var(--text-on-accent);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    padding: 0.45rem 1rem;
+    font-size: 0.88rem;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.12s;
+  }
+  button.primary:hover:not(:disabled) {
+    background-color: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+
   .hint {
     margin: 0 0 2rem;
     padding: 0.75rem 1rem;
@@ -168,10 +327,6 @@
   }
 
   .hint-sticky {
-    /* Sticky so the hotkey hint stays visible as the page grows.
-       The UX review flagged that the original (non-sticky) card
-       scrolls off once the user has built up some history /
-       replacements / vocabulary. */
     position: sticky;
     top: 0.75rem;
     z-index: 5;
