@@ -235,6 +235,16 @@
     gap: 1rem;
   }
 
+  /* Section-header subtitle. Lifted from +page.svelte when the
+     History tagline was removed and this became the only consumer
+     — keeping it in the parent file would have left a Svelte
+     unused-selector warning since Svelte component styles are
+     scoped per file. */
+  .tagline {
+    color: var(--text-muted);
+    margin: 0 0 1.25rem;
+  }
+
   .setup-banner {
     display: flex;
     align-items: center;
