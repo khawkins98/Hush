@@ -1494,23 +1494,40 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Single-scroll layout: top bar + main content column. */
+/* Single-scroll layout: top bar + main content column.
+   Brand mark is centre-anchored (#450 / former #411 Phase E) —
+   reads more like a polished native app title bar than a
+   web-style left-aligned logo. Settings button sits at the
+   right, end-aligned via flex. The brand is `position: absolute`
+   relative to the sticky `.app-bar` (sticky establishes a
+   containing block for absolutely-positioned descendants), so
+   it stays centred regardless of the right-side button width. */
 .app-bar {
   position: sticky;
   top: 0;
   z-index: 10;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0.6rem 1.5rem;
   background-color: var(--bg-sidebar, #f0f0f3);
   border-bottom: 1px solid var(--border, #e1e1e1);
 }
 
 .brand {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  /* Click-through layer — the brand isn't an interactive
+     element today, so let pointer events fall to the sticky
+     bar beneath it. If a future iteration makes the brand
+     clickable (e.g. resets to dictation home), drop this
+     and add `cursor: pointer`. */
+  pointer-events: none;
 }
 .brand-icon {
   width: 22px;
