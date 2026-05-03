@@ -318,6 +318,11 @@ export async function installMocks(
           appName,
           kind,
           createdAt: "2026-04-28T00:00:00Z",
+          // #427 Item 5 foundation slice — new schema columns are
+          // returned by the IPC. Default to null since the panel
+          // UI that populates them hasn't shipped yet.
+          preferredAudioSource: null,
+          preferredModelId: null,
         };
       },
       meeting_app_override_delete: () => undefined,

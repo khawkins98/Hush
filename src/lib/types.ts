@@ -171,6 +171,14 @@ export type MeetingAppOverride = {
   appName: string;
   kind: MeetingAppKind;
   createdAt: string;
+  // Per-app audio profile (#427 Item 5 foundation slice). `null`
+  // means "use the global default"; populated values pin a
+  // preferred audio source / Whisper model to this app for a
+  // future foreground-watcher iteration to apply on focus. The
+  // Settings panel surface for these fields ships in a follow-up
+  // PR; this slice only adds the storage + read path.
+  preferredAudioSource?: string | null;
+  preferredModelId?: string | null;
 };
 
 // Built-in classification table entry (#320). Mirrors the Rust
