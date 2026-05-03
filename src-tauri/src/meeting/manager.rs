@@ -166,6 +166,14 @@ impl super::MeetingAppOverrideRepository for NoOpAppOverrides {
     async fn upsert(&self, _: super::NewMeetingAppOverride) -> Result<super::MeetingAppOverride> {
         Err(anyhow!("NoOpAppOverrides::upsert not supported"))
     }
+    async fn set_profile(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<super::MeetingAppOverride> {
+        Err(anyhow!("NoOpAppOverrides::set_profile not supported"))
+    }
     async fn delete(&self, _: &str) -> Result<()> {
         Ok(())
     }
