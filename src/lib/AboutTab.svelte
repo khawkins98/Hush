@@ -36,6 +36,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { platform } from "@tauri-apps/plugin-os";
   import { onDestroy, onMount } from "svelte";
 
   import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
@@ -60,7 +61,32 @@
   let updateCheck = $state<UpdateCheckResult | null>(null);
   let updateChecking = $state(false);
 
+  // Auto-update install flow (#10 Step 6). The Install button drives
+  // `install_pending_update`; the IPC fires `updater:download-progress`
+  // and `updater:install-pending` events that this tab listens on so
+  // the user sees the download bar and the "installing…" handoff.
+  //
+  // Inert when the plugin isn't registered (Steps 1–4 of the spec are
+  // maintainer-only; until those land the IPC surfaces
+  // `installUnavailable = true` and the UI falls back to the manual
+  // release-notes link).
+  type InstallState = "idle" | "installing" | "pending" | "failed";
+  let installState = $state<InstallState>("idle");
+  let installProgress = $state<{ downloaded: number; total: number | null } | null>(null);
+  let installError = $state<string | null>(null);
+  let installUnavailable = $state(false);
+
   let unlistenUpdaterResult: UnlistenFn | null = null;
+  let unlistenDownloadProgress: UnlistenFn | null = null;
+  let unlistenInstallPending: UnlistenFn | null = null;
+
+  // The Gatekeeper warning under the Install button is macOS-
+  // only — the Linux / Windows updater path doesn't have an
+  // equivalent quarantine prompt. Read once on mount so a
+  // failed `platform()` call falls through silently to "treat
+  // as non-macOS" rather than leaving the warning permanently
+  // visible on Linux.
+  let isMacOS = $state(false);
 
   async function loadAppMetadata(): Promise<void> {
     try {
@@ -97,8 +123,66 @@
     }
   }
 
+  // Click-driven install (#10). Wraps the IPC + manages the
+  // download-progress / install-pending state transitions for the
+  // UI. The IPC's `updater-unavailable` typed variant is the gate
+  // for whether the install path is even active; we match on
+  // `kind` so the UI can pick the right fallback copy without
+  // substring-matching free-form messages (same pattern #386
+  // established for permission errors).
+  async function onInstallUpdate() {
+    installState = "installing";
+    installProgress = null;
+    installError = null;
+    installUnavailable = false;
+    try {
+      await invoke<void>("install_pending_update");
+      // The plugin relaunches the app on success, so this branch
+      // is rarely observed in production. Still — if we ever do
+      // return cleanly without a relaunch (e.g. a race where the
+      // update was withdrawn between check + install), reset the
+      // install state so the UI doesn't sit in a stale
+      // "installing…" forever.
+      installState = "idle";
+      // Re-fetch the check result so the UI reflects "up to date"
+      // rather than the stale "Update available" message.
+      void onCheckForUpdates();
+    } catch (e) {
+      const ipc = e as { kind?: string; message?: string };
+      if (ipc.kind === "updater-unavailable") {
+        installUnavailable = true;
+      } else {
+        installError = formatErrorMessage(e);
+      }
+      installState = "failed";
+    }
+  }
+
+  // Format `installProgress` as a percentage string when the
+  // upstream archive declared a Content-Length, else as a raw
+  // downloaded-byte count. The plugin reports per-chunk delta —
+  // not running totals — so we accumulate locally in
+  // `installProgress.downloaded`.
+  function formatInstallProgress(p: { downloaded: number; total: number | null } | null): string {
+    if (p === null) {
+      return "Starting download…";
+    }
+    if (p.total !== null && p.total > 0) {
+      const pct = Math.min(100, Math.floor((p.downloaded / p.total) * 100));
+      return `Downloading… ${pct}%`;
+    }
+    const mb = (p.downloaded / 1024 / 1024).toFixed(1);
+    return `Downloading… ${mb} MB`;
+  }
+
   onMount(async () => {
     void loadAppMetadata();
+
+    try {
+      isMacOS = (await platform()) === "macos";
+    } catch (e) {
+      console.warn("[hush] platform() failed in AboutTab", e);
+    }
 
     // Menu-driven probe handler (#265). The native menu spawns
     // the probe asynchronously and emits `updater:result` on
@@ -114,10 +198,38 @@
         updateCheck = e.payload;
       },
     );
+
+    // Auto-update install events (#10). The plugin invokes our
+    // progress callback once per chunk; we accumulate locally so
+    // the UI's progress bar moves smoothly even though each event
+    // carries only the chunk delta (`chunkLen`), not a running total.
+    unlistenDownloadProgress = await listen<{
+      chunkLen: number;
+      total: number | null;
+    }>("updater:download-progress", (e) => {
+      const prev = installProgress?.downloaded ?? 0;
+      installProgress = {
+        downloaded: prev + e.payload.chunkLen,
+        total: e.payload.total,
+      };
+    });
+
+    unlistenInstallPending = await listen<{ version: string }>(
+      "updater:install-pending",
+      () => {
+        // Bytes are on disk; the plugin is about to swap the
+        // installed app and relaunch. Swap the UI from
+        // "Downloading…" to "Installing — app will relaunch"
+        // so the user knows the upcoming reload is expected.
+        installState = "pending";
+      },
+    );
   });
 
   onDestroy(() => {
     unlistenUpdaterResult?.();
+    unlistenDownloadProgress?.();
+    unlistenInstallPending?.();
   });
 </script>
 
@@ -177,32 +289,123 @@
         </p>
       {:else if updateCheck.kind === "updateAvailable"}
         <!--
-          TODO(#10): Replace this section with the full auto-update UI
-          once tauri-plugin-updater is wired. The new surface should:
-
-          1. Show an "Install update" button that calls
-             `invoke("install_pending_update")` (Step 5 in updater/mod.rs).
-          2. Show a download progress indicator while bytes flow in
-             (listen on `updater:download-progress` event).
-          3. Show a macOS Gatekeeper warning beneath the Install button —
-             because Hush ships without Apple notarisation, macOS may block
-             the relaunch after the update installs:
-               "After installing, macOS may ask you to confirm it's safe to
-               open Hush. Click Open when prompted."
-             Remove this note if/when a Developer ID cert is obtained.
-          4. Keep the "Open release notes" link below as a manual-install
-             fallback.
+          Auto-update install surface (#10). Steps 1–4 of the
+          spec in `src-tauri/src/updater/mod.rs` are
+          maintainer-only — until those land the IPC returns
+          "auto-update is not configured for this build" and the
+          markup falls back to the manual release-notes link.
+          Once activated, the Install button drives
+          `install_pending_update` and the download / install
+          progress lights up via the two listeners in onMount.
         -->
-        <p class="about-update-result about-update-available" role="status">
-          <strong>Update available:</strong>
-          {updateCheck.latest} (you're on
-          {updateCheck.current}).
-          <a
-            href={updateCheck.releaseUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >Open release notes</a>.
-        </p>
+        <div class="about-update-available-block" role="status">
+          <p class="about-update-result about-update-available">
+            <strong>Update available:</strong>
+            {updateCheck.latest} (you're on {updateCheck.current}).
+          </p>
+
+          {#if installState === "idle"}
+            <div class="about-install-actions">
+              <button
+                type="button"
+                class="primary"
+                data-testid="about-install-update"
+                onclick={onInstallUpdate}
+              >
+                Install update
+              </button>
+              <a
+                href={updateCheck.releaseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="about-update-fallback"
+              >Open release notes</a>
+            </div>
+            {#if isMacOS}
+              <!--
+                Gatekeeper note (#491). Shown pre-click so the user
+                isn't surprised by the system dialog after relaunch.
+                Also shown in the failed-retry branch below so a
+                user who clicks Try Again still has the forewarning.
+              -->
+              <p class="about-install-gatekeeper-note">
+                After installing, macOS may ask you to confirm it's
+                safe to open Hush. Click <strong>Open</strong> when
+                prompted.
+              </p>
+            {/if}
+          {:else if installState === "installing"}
+            <p
+              class="about-update-result about-update-installing"
+              data-testid="about-install-progress"
+              role="status"
+              aria-live="polite"
+            >
+              {formatInstallProgress(installProgress)}
+            </p>
+          {:else if installState === "pending"}
+            <p
+              class="about-update-result about-update-installing"
+              data-testid="about-install-pending"
+              role="status"
+              aria-live="polite"
+            >
+              <strong>Installing —</strong> Hush will relaunch in a
+              moment.
+            </p>
+          {:else if installState === "failed"}
+            {#if installUnavailable}
+              <p class="about-install-unavailable" role="status">
+                Auto-install isn't available yet. Use the link
+                below to download the latest release manually.
+              </p>
+              <p class="about-install-actions">
+                <a
+                  href={updateCheck.releaseUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >Open release notes</a>
+              </p>
+            {:else}
+              <p
+                class="about-update-result about-update-failed"
+                data-testid="about-install-failed"
+                role="status"
+              >
+                <strong>Install failed.</strong>
+                {installError ?? "Something went wrong."}
+              </p>
+              <div class="about-install-actions">
+                <button
+                  type="button"
+                  class="primary"
+                  onclick={onInstallUpdate}
+                >
+                  Try again
+                </button>
+                <a
+                  href={updateCheck.releaseUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="about-update-fallback"
+                >Open release notes</a>
+              </div>
+              {#if isMacOS}
+                <!--
+                  Repeat the Gatekeeper note here so a user who
+                  retries still sees the forewarning before the
+                  successful relaunch surfaces the dialog (UX
+                  review F6).
+                -->
+                <p class="about-install-gatekeeper-note">
+                  After installing, macOS may ask you to confirm
+                  it's safe to open Hush. Click
+                  <strong>Open</strong> when prompted.
+                </p>
+              {/if}
+            {/if}
+          {/if}
+        </div>
       {:else if updateCheck.kind === "checkFailed"}
         <!--
           Bare `reason` strings (e.g. "Try again in a few
@@ -345,6 +548,47 @@
     background-color: #fff7e6;
     border: 1px solid #ffd591;
     color: #8a5a00;
+  }
+  .about-update-installing {
+    background-color: #eef2ff;
+    border: 1px solid #c7d2fe;
+    color: #1e1b4b;
+    font-variant-numeric: tabular-nums;
+  }
+  .about-update-available-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .about-install-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+    margin: 0;
+  }
+  .about-install-gatekeeper-note {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    background-color: var(--bg-surface, #f4f4f6);
+    border: 1px solid var(--border, #e1e1e6);
+    font-size: 0.82rem;
+    line-height: 1.4;
+    color: var(--text-secondary, #555);
+  }
+  .about-install-unavailable {
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.88rem;
+    color: var(--text-secondary, #555);
+    background-color: var(--bg-surface, #f4f4f6);
+    border: 1px solid var(--border, #e1e1e6);
+  }
+  .about-update-fallback {
+    font-size: 0.88rem;
+    color: var(--text-secondary, #555);
   }
   .about-meta {
     display: grid;

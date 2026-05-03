@@ -638,10 +638,19 @@ test.describe("settings window — About tab", () => {
     await expect(page.locator(".about-update-available")).toContainText(
       /Update available.*0\.2\.0/,
     );
+    // The release-notes link sits inside the install-flow surface
+    // alongside the Install button (#10). Scoped to the parent
+    // `.about-update-available-block` so this still pins "the
+    // link is visible somewhere on the update-available surface"
+    // without coupling to which sibling in the surface owns it.
     await expect(
       page.locator(
-        '.about-update-available a[href$="releases/tag/v0.2.0"]',
+        '.about-update-available-block a[href$="releases/tag/v0.2.0"]',
       ),
+    ).toBeVisible();
+    // Install button is the new primary action.
+    await expect(
+      page.locator('[data-testid="about-install-update"]'),
     ).toBeVisible();
   });
 
