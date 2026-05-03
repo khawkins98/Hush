@@ -460,11 +460,6 @@
   // the copy lands, so a subsequent dictation-mode session
   // doesn't accidentally re-copy it.
   let lastMeetingId: number | null = null;
-  // Wall-clock start stamp captured when click-record opens a
-  // meeting-pump session, used to fill `result.durationMs` for
-  // the inline transcript card after the joined utterances are
-  // built. `null` outside the brief stop window.
-  let lastRecordingStartedAtMs: number | null = null;
 
   // PTT path: hotkey-driven recording. Always dictation — instant
   // clipboard write on stop is the load-bearing UX for hold-to-
@@ -501,56 +496,54 @@
     result = null;
     busy = true;
     const sourceShape = selectedAsAudioSource();
-    // Click-record always goes through the meeting pump now —
-    // simplification + live-transcript parity. PTT stays on
-    // `start_dictation` because that's the hot key path (no
-    // pump overhead, instant clipboard write on key-up).
-    //
-    // Source list:
-    //   - mic + SCK confirmed   → [mic, system-audio] (multi-source
-    //                              meeting; diarisation runs)
-    //   - mic, no SCK           → [mic] (single-source; pump still
-    //                              works, no diarisation)
-    //   - system-audio explicit → [system-audio]
-    const sources: AudioSource[] =
-      sourceShape === null
-        ? [] // backend uses default
-        : sourceShape.kind === "microphone" && screenRecordingLive
-          ? [
-              { kind: "microphone", deviceId: sourceShape.deviceId },
-              { kind: "system-audio" },
-            ]
-          : [sourceShape];
-    const isMultiSource = sources.length > 1;
+    // Upgrade to meeting mode only when:
+    //   - the user picked a microphone (system-audio sole-source
+    //     stays single-source — picking it explicitly is a
+    //     deliberate "just record system audio" intent),
+    //   - SCK currently reads as confirmed (not Stale, not
+    //     NotGranted — Stale is honest about a rotated TCC
+    //     entry, the badge nudges the user to re-grant).
+    const upgradeToMeeting =
+      sourceShape !== null
+      && sourceShape.kind === "microphone"
+      && screenRecordingLive;
     try {
-      const session = await invoke<MeetingSession>("meeting_start_manual", {
-        sources,
-        appName: null,
-      });
-      recording = true;
-      // Drive the status-pill copy off source count, not the pump
-      // used. Single-source mic still reads as "mic only"; the
-      // multi-source path reads as "mic + system audio".
-      recordMode = isMultiSource ? "meeting" : "dictation";
-      lastMeetingId = session.id;
-      lastRecordingStartedAtMs = Date.now();
-      // Bind the active session id so the live-transcript $effect
-      // starts polling immediately; pre-r3 this only updated via
-      // `refreshMeetingSessions()` and there'd be a window where
-      // partials accrued without surfacing.
-      meetingActiveId = session.id;
-      if (isMultiSource) {
-        // Strongest-signal SCK confirmation (#382): a clean start
-        // with system-audio in the source list means SCK opened.
+      if (upgradeToMeeting) {
+        // Build the meeting-pump source list: the user's selected
+        // mic + the system-audio entry. The pump handles diarisation
+        // across both buckets; with only a single bucket per
+        // direction the source-count guard in the diarizer
+        // (#369) skips the ONNX pass for mic-only fallbacks but
+        // still runs it here.
+        const sources: AudioSource[] = [
+          { kind: "microphone", deviceId: sourceShape.deviceId },
+          { kind: "system-audio" },
+        ];
+        const session = await invoke<MeetingSession>("meeting_start_manual", {
+          sources,
+          appName: null,
+        });
+        recording = true;
+        recordMode = "meeting";
+        lastMeetingId = session.id;
+        // Same strongest-signal SCK confirmation as the existing
+        // meeting flow (#382): a clean start with system-audio in
+        // the source list means SCK actually opened.
         void invoke("confirm_permission", {
           permission: "screen-recording",
         }).catch((err) => {
           console.warn("[hush] confirm_permission(screen-recording) failed", err);
         });
+      } else {
+        await invoke("start_dictation", { source: sourceShape });
+        recording = true;
+        recordMode = "dictation";
       }
     } catch (e) {
       error = formatErrorDisplay(e);
-      if (isMultiSource && isPermissionShapedError(e)) {
+      // Permission-shaped meeting failures pop the reusable
+      // dialog (#232) so the next click opens System Settings.
+      if (upgradeToMeeting && isPermissionShapedError(e)) {
         permissionsDialogIntro =
           (error.headline ?? "Screen Recording permission needed")
           + " — open System Settings below to grant access, then try Record again.";
@@ -574,62 +567,56 @@
 
   async function stop() {
     busy = true;
-    // Branch on which start path opened this session. Click-record
-    // always goes through `meeting_start_manual` post-r3 (which
-    // sets `lastMeetingId`); PTT keeps using `start_dictation`
-    // (which doesn't). The branch is captured here in a snapshot
-    // so an interleaved start can't race against the stop logic.
-    const meetingId = lastMeetingId;
-    const modeAtStop = recordMode;
+    // Snapshot the active mode before we clear it; stop_dictation
+    // and meeting_stop_manual have different return shapes and
+    // post-stop refresh paths, so the branch reads from the
+    // captured value rather than racing with an interleaved
+    // start.
+    const mode = recordMode;
     try {
-      if (meetingId !== null) {
+      if (mode === "meeting") {
+        // Meeting-pump stop (#369). The pump finalises any in-
+        // flight chunks and writes the session + utterances rows;
+        // refresh the meeting feed so the new card appears in
+        // History. No `result` block on the Dictation panel — the
+        // multi-speaker output lives in the History meeting row,
+        // which renders the joined transcript with speaker labels.
+        //
         await invoke("meeting_stop_manual");
         recording = false;
         recordMode = null;
-        meetingActiveId = null;
-        lastMeetingId = null;
-        // Slightly longer delay than the dictation path — the
+        // Slightly longer delay than the dictation path: the
         // pump's final transcription pass can lag the stop_manual
         // return by a few hundred ms while the last whisper batch
         // drains.
         setTimeout(() => void refreshMeetingSessions(), 300);
         setTimeout(() => void refreshHistory(), 300);
-        // Auto-copy + result block. Single-source ("dictation")
-        // sessions also populate `result` so the inline transcript
-        // card surfaces post-stop the same way it did pre-r3 when
-        // mic-only click-record went through `start_dictation`.
-        // Multi-source meetings keep the History-row-only output;
-        // a result block joining N speakers would be confusing
-        // there.
-        const populateResult = modeAtStop === "dictation";
-        const recordedAt = lastRecordingStartedAtMs;
-        lastRecordingStartedAtMs = null;
-        setTimeout(async () => {
-          await copyMeetingSessionToClipboard(meetingId);
-          if (populateResult) {
-            try {
-              const detail = await invoke<MeetingSessionDetail>(
-                "meeting_session_get",
-                { id: meetingId },
-              );
-              const finals = (detail.utterances ?? []).filter(
-                (u) => u.isFinal,
-              );
-              if (finals.length > 0) {
-                const text = finals
-                  .map((u) =>
-                    u.speakerLabel ? `${u.speakerLabel}: ${u.text}` : u.text,
-                  )
-                  .join("\n\n");
-                const durationMs =
-                  recordedAt !== null ? Date.now() - recordedAt : null;
-                result = { text, foreground: null, durationMs };
-              }
-            } catch (e) {
-              console.warn("[hush] failed to populate result block", e);
-            }
-          }
-        }, 350);
+        // Auto-copy parity (#385). Click-driven Record in meeting
+        // mode previously dropped the dictation path's instant-
+        // clipboard UX. Fetch the just-finished session's
+        // utterances and join them; write to clipboard with the
+        // same delay used for the meeting feed refresh so the
+        // pump's final whisper batch has settled. PTT keeps
+        // running through `start_dictation` and gets clipboard
+        // via `stop_dictation`'s normal return path, so the
+        // hotkey hold-to-talk experience is unchanged.
+        //
+        // Edge cases consciously not handled:
+        // - If the final whisper batch hasn't flushed at 350 ms,
+        //   the copy misses the trailing utterance. The user can
+        //   recopy from History. A retry/poll loop would handle
+        //   this but adds complexity for a corner case.
+        // - If the session has zero utterances (silence /
+        //   capture failure), skip the clipboard write entirely
+        //   so we don't blow away whatever else the user has on
+        //   the clipboard with empty text.
+        if (lastMeetingId !== null) {
+          const idAtStop = lastMeetingId;
+          lastMeetingId = null;
+          setTimeout(() => {
+            void copyMeetingSessionToClipboard(idAtStop);
+          }, 350);
+        }
       } else {
         result = await invoke<DictationResult>("stop_dictation");
         recording = false;

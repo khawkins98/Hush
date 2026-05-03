@@ -112,45 +112,50 @@ test.describe("audio source picker", () => {
     await expect(sysOption).not.toContainText(/coming soon/i);
   });
 
-  test("Start invokes meeting_start_manual with a single mic AudioSource", async ({
+  test("Start invokes start_dictation with a Microphone AudioSource", async ({
     page,
   }) => {
-    // Pin the wire shape of the source list passed to the meeting
-    // pump. Click-record always goes through `meeting_start_manual`
-    // post-#468 r3 — single-source mic when SCK isn't confirmed,
-    // [mic, system-audio] when SCK is. PTT keeps using
-    // `start_dictation` (hot-path), but click-record's contract
-    // is the meeting pump.
-    const seen: { sources: unknown }[] = [];
+    // Capture the args passed to `start_dictation` so we can pin the
+    // wire shape of the `AudioSource` argument. This is the load-
+    // bearing contract the Rust side dispatches on — a future change
+    // that drops the discriminator or renames `deviceId` would
+    // silently start sending an undecodable shape.
+    const seen: { source: unknown }[] = [];
     await page.exposeFunction("__hush_record_start", (args: unknown) => {
-      seen.push(args as { sources: unknown });
+      seen.push(args as { source: unknown });
     });
     await installMocks(page, {
-      meeting_start_manual: (args: unknown) => {
+      start_dictation: (args: unknown) => {
+        // Re-fire on the page side so the test side can collect.
+        // Playwright's overrideEntries serialise functions via
+        // `toString()`, which is why we need the indirection: a
+        // direct closure capture on `seen` would not survive the
+        // bridge.
         (
           window as unknown as {
             __hush_record_start: (a: unknown) => void;
           }
         ).__hush_record_start(args);
-        return { id: 1, startedAt: Date.now(), endedAt: null };
+        return undefined;
       },
     });
     await page.goto("/");
 
+    // Default mock has Whisper Base as isDownloaded — start is enabled.
     await page.getByRole("button", { name: "Start recording" }).click();
 
+    // Wait for the invoke to land.
     await expect.poll(() => seen.length).toBeGreaterThan(0);
 
-    // Default mock has SCK NOT confirmed, so click-record stays
-    // single-source mic. Multi-source path is exercised when the
-    // permission_health mock returns confirmed.
+    // The discriminated AudioSource argument: kind="microphone",
+    // deviceId is the picker's selected id. The default mock pre-
+    // populates the picker with "Built-in Microphone" (the one mic
+    // returned by `audio_list_sources`).
     expect(seen[0]).toMatchObject({
-      sources: [
-        {
-          kind: "microphone",
-          deviceId: "Built-in Microphone",
-        },
-      ],
+      source: {
+        kind: "microphone",
+        deviceId: "Built-in Microphone",
+      },
     });
   });
 
