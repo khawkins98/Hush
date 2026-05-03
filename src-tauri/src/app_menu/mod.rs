@@ -60,7 +60,12 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // app. Settings + standard "hide / hide others / show all / quit"
     // group are HIG-canonical; missing any of them feels off.
     let app_submenu = SubmenuBuilder::new(app, "Hush")
-        .about(None)
+        // Custom "About Hush" that opens Settings → About tab (#478-adjacent).
+        // Using `.about(None)` would show the bare native macOS panel (icon +
+        // version only). The custom AboutTab.svelte is far richer — version,
+        // blurb, pipeline diagram, update checker, links — so we intercept the
+        // click and route it to Settings just like "Check for Updates" does.
+        .item(&MenuItemBuilder::with_id("about-hush", "About Hush").build(app)?)
         .item(&MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(app)?)
         .separator()
         .item(
@@ -158,6 +163,14 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 }
             }
             "app-quit" => crate::request_user_quit(app),
+            "about-hush" => {
+                if let Err(e) = crate::settings_window::show(app) {
+                    tracing::error!(error = ?e, "menu: open settings (about)");
+                }
+                if let Err(e) = app.emit("settings:goto-tab", "about") {
+                    tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
+                }
+            }
             "check-for-updates" => {
                 // One-click semantics (#265). Pre-fix the menu
                 // opened Settings → About and waited for a second
