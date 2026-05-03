@@ -73,16 +73,56 @@
   let statusLineEnabled = $state(false);
   let unlistenStatusLine: UnlistenFn | null = null;
 
+  // Recording-duration timer. Mirrors the HUD's pattern (#360):
+  // wall-clock start stamp when `recording` flips true, rAF
+  // refresh of the label, reset to `0:00` on stop. Lets the user
+  // see how long they've been recording without checking the HUD.
+  let recordingStartedAt: number | null = null;
+  let elapsedLabel = $state("0:00");
+  let raf: number | undefined;
+
+  function formatElapsed(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const mm = minutes.toString().padStart(2, "0");
+    const ss = seconds.toString().padStart(2, "0");
+    if (hours > 0) return `${hours}:${mm}:${ss}`;
+    return `${mm}:${ss}`;
+  }
+
+  $effect(() => {
+    if (recording) {
+      recordingStartedAt = Date.now();
+      elapsedLabel = "00:00";
+    } else {
+      recordingStartedAt = null;
+      elapsedLabel = "00:00";
+    }
+  });
+
   onMount(async () => {
     statusLineEnabled = readStatusLineEnabled();
     unlistenStatusLine = await listenForStatusLineChanges((next) => {
       statusLineEnabled = next;
     });
+    const tick = () => {
+      if (recordingStartedAt !== null) {
+        elapsedLabel = formatElapsed(Date.now() - recordingStartedAt);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
   });
 
   onDestroy(() => {
     unlistenStatusLine?.();
     unlistenStatusLine = null;
+    if (raf !== undefined) {
+      cancelAnimationFrame(raf);
+      raf = undefined;
+    }
   });
 
   // Waveform mood priority: error > recording > processing > idle.
@@ -123,37 +163,48 @@
       {@render leftAdjunct?.()}
     </div>
 
-    {#if !recording}
-      <button
-        class="record-btn"
-        onclick={onStart}
-        disabled={busy || !hasUsableSource || noModelInstalled}
-        aria-label={busy
-          ? "Working"
-          : noModelInstalled
-            ? "Choose a model first"
-            : willRecordMeeting
-              ? "Record meeting (mic plus system audio)"
-              : "Start recording"}
-        title={noModelInstalled ? "Choose a model first" : undefined}
-        data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
-      >
-        {#if transcribing}
-          <span class="spinner" aria-hidden="true"></span>
-        {:else}
-          <span class="record-icon record-icon-idle" aria-hidden="true"></span>
-        {/if}
-      </button>
-    {:else}
-      <button
-        class="record-btn recording"
-        onclick={onStop}
-        disabled={busy}
-        aria-label="Stop recording and transcribe"
-      >
-        <span class="record-icon record-icon-stop" aria-hidden="true"></span>
-      </button>
-    {/if}
+    <div class="record-btn-cell">
+      <!--
+        Visible "RECORD" label above the button gives the centre
+        column the same vertical rhythm as the source / model
+        adjuncts (label above, control below). Without it the
+        button floats with empty space above where the field
+        labels sit on the flanking columns. aria-hidden because
+        the button itself carries an aria-label.
+      -->
+      <span class="record-btn-label" aria-hidden="true">Record</span>
+      {#if !recording}
+        <button
+          class="record-btn"
+          onclick={onStart}
+          disabled={busy || !hasUsableSource || noModelInstalled}
+          aria-label={busy
+            ? "Working"
+            : noModelInstalled
+              ? "Choose a model first"
+              : willRecordMeeting
+                ? "Record meeting (mic plus system audio)"
+                : "Start recording"}
+          title={noModelInstalled ? "Choose a model first" : undefined}
+          data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
+        >
+          {#if transcribing}
+            <span class="spinner" aria-hidden="true"></span>
+          {:else}
+            <span class="record-icon record-icon-idle" aria-hidden="true"></span>
+          {/if}
+        </button>
+      {:else}
+        <button
+          class="record-btn recording"
+          onclick={onStop}
+          disabled={busy}
+          aria-label="Stop recording and transcribe"
+        >
+          <span class="record-icon record-icon-stop" aria-hidden="true"></span>
+        </button>
+      {/if}
+    </div>
 
     <div class="record-row-adjunct record-row-adjunct--right">
       {@render rightAdjunct?.()}
@@ -161,8 +212,22 @@
   </div>
 
   <!--
-    Status label sits under the button — the verb the user is
-    primed to do. aria-live so screen readers announce the
+    Recording-duration readout. Tabular-nums so the digits don't
+    jitter horizontally as they tick up. Always visible (shows
+    "00:00" while idle) so the column header rhythm stays
+    constant across recording / not-recording states.
+  -->
+  <p
+    class="record-time"
+    class:live={recording}
+    aria-label={recording ? `Recording duration ${elapsedLabel}` : undefined}
+  >
+    {elapsedLabel}
+  </p>
+
+  <!--
+    Status label sits under the time readout — the verb the user
+    is primed to do. aria-live so screen readers announce the
     state change when a hotkey toggles recording from another
     app. Stays empty in idle so the focal weight goes to the
     button.
@@ -231,19 +296,36 @@
     padding: 0.5rem 0 0.25rem;
   }
 
-  /* Three-column row hosting the audio source picker (left), the
-     circular Record button (centre), and the model chip (right).
-     The adjunct columns share equal flex weight so the button
-     visually sits at the centre regardless of which adjunct is
-     wider. `align-items: end` so the source/model controls land
-     on the same baseline as the button (their .field-label
-     headers float above). */
+  /* Three-column row: audio source (left) | Record button (centre)
+     | model chip (right). Adjuncts share equal flex weight so the
+     button stays centred regardless of which adjunct is wider.
+     `align-items: end` aligns the bottoms of the controls so the
+     dropdown trigger and the button are on the same baseline. */
   .record-row {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: end;
     gap: 1.25rem;
     width: 100%;
+  }
+
+  /* Centre-column wrapper that gives the Record button a label
+     above (matching the source/model field-label rhythm) so the
+     three columns share the same visual structure: caption +
+     control. */
+  .record-btn-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+  .record-btn-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
   .record-row-adjunct {
     display: flex;
@@ -381,7 +463,25 @@
     display: inline-block;
   }
 
-  /* Status label below the button — the verb / state copy. */
+  /* Recording-duration readout. tabular-nums prevents the digits
+     from jittering horizontally as they tick up. Idle "00:00"
+     reads as a quiet placeholder; the `.live` variant tints
+     accent-red so the eye knows time is advancing. */
+  .record-time {
+    margin: 0.3rem 0 0;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .record-time.live {
+    color: var(--danger);
+  }
+
+  /* Status label below the time — the verb / state copy. */
   .record-label {
     margin: 0;
     min-height: 1.2em;
