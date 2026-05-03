@@ -230,6 +230,49 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     Ok(())
 }
 
+/// Main-thread-safe wrappers for [`show`] / [`hide`] (#476).
+///
+/// `show` / `hide` lower to AppKit `orderFront:` / `orderOut:` on
+/// the underlying NSWindow. AppKit window operations are
+/// main-thread-only and macOS 26 enforces that strictly — calling
+/// from a tokio worker triggers
+/// `-[NSWMWindowCoordinator performTransactionUsingBlock:]` →
+/// `_os_crash` → process abort.
+///
+/// Tauri runs sync `#[tauri::command]` handlers on the main
+/// thread, but `pub async fn` handlers land on a tokio worker.
+/// These helpers dispatch onto the main runloop so async command
+/// handlers can show / hide the HUD safely; sync handlers can
+/// keep calling `show` / `hide` directly (the dispatch hop would
+/// be pointless cost there).
+///
+/// Best-effort: a dispatch failure is logged and swallowed
+/// because a HUD-show/hide failure shouldn't fail the dictation
+/// hot path. The actual show/hide runs asynchronously on the next
+/// runloop tick — callers that need the visibility flip *before*
+/// the next IPC return must remain on the main thread.
+pub fn show_async<R: Runtime>(app: &AppHandle<R>) {
+    let app_clone = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || {
+        if let Err(e) = show(&app_clone) {
+            tracing::error!(error = ?e, "HUD show failed on main thread");
+        }
+    }) {
+        tracing::error!(error = ?e, "failed to dispatch HUD show to main thread");
+    }
+}
+
+pub fn hide_async<R: Runtime>(app: &AppHandle<R>) {
+    let app_clone = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || {
+        if let Err(e) = hide(&app_clone) {
+            tracing::error!(error = ?e, "HUD hide failed on main thread");
+        }
+    }) {
+        tracing::error!(error = ?e, "failed to dispatch HUD hide to main thread");
+    }
+}
+
 /// HUD lifecycle state — drives the frontend's render branch
 /// (#291). The HUD stays visible across `recording` → `processing`
 /// → hidden so the user has a continuous "Hush is still working"

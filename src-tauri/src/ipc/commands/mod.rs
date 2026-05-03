@@ -461,7 +461,7 @@ pub async fn stop_dictation(
     // showing a stuck Processing pill on a failed capture is
     // worse than no pill.
     let captured = stop_audio_capture(&state).map_err(|e| {
-        let _ = crate::hud::hide(&app);
+        crate::hud::hide_async(&app);
         e
     })?;
     if let Err(e) = crate::hud::set_state(&app, crate::hud::HudState::Processing) {
@@ -540,9 +540,7 @@ pub async fn stop_dictation(
         // visual would falsely imply "still working". No
         // completion cue either; silence is the right signal
         // for a genuinely empty press (#291 / #292).
-        if let Err(e) = crate::hud::hide(&app) {
-            tracing::warn!(error = ?e, "failed to hide HUD on too-short dictation");
-        }
+        crate::hud::hide_async(&app);
         // Don't write to the clipboard for an empty result —
         // pre-#197 this branch was unreachable so the question
         // didn't come up. The user just held the hotkey and got
@@ -564,9 +562,7 @@ pub async fn stop_dictation(
     let utterances = match transcriber.transcribe_chunks(&[captured.samples], format, &prompt) {
         Ok(u) => u,
         Err(e) => {
-            if let Err(hide_err) = crate::hud::hide(&app) {
-                tracing::warn!(error = ?hide_err, "failed to hide HUD on transcription error");
-            }
+            crate::hud::hide_async(&app);
             return Err(IpcError::Transcription(e.to_string()));
         }
     };
@@ -615,9 +611,7 @@ pub async fn stop_dictation(
     // transcript (#291). The user can paste safely from this
     // point on. Hide after the clipboard write so the HUD
     // doesn't flicker out before the user knows it's ready.
-    if let Err(e) = crate::hud::hide(&app) {
-        tracing::error!(error = ?e, "failed to hide recording HUD");
-    }
+    crate::hud::hide_async(&app);
     // Completion cue: short "Glass" chime so the user knows the
     // clipboard is ready without glancing at the HUD (#292).
     // Fired AFTER the clipboard write so the cue truly means
