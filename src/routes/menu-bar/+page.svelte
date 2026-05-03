@@ -54,7 +54,6 @@
 -->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { PhysicalPosition } from "@tauri-apps/api/dpi";
   import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { onDestroy, onMount } from "svelte";
@@ -142,75 +141,6 @@
     }
   }
 
-  // Hand-rolled drag via mousemove + `setPosition`. Tauri 2 has
-  // both `data-tauri-drag-region` and a JS `startDragging()` API
-  // that ought to work on a borderless transparent always-on-top
-  // window — neither did in practice for this popover (cursor
-  // changed but mousedown didn't move the window). Falling
-  // through to the documented escape hatch: track the mouse delta
-  // ourselves and call `setPosition`. A bit more work than a
-  // single attribute, but it is reliable and platform-agnostic.
-  //
-  // `dragState` captures the offset between the cursor and the
-  // window's top-left at mousedown time, so on mousemove we just
-  // compute `cursorScreen - offset` to get the new window
-  // position. Tracking on `screenX/Y` (not `clientX/Y`) so a
-  // fast drag that crosses the popover's edge keeps the offset
-  // intact instead of chasing a moving target.
-  let dragState: {
-    /** Cursor X at mousedown, in screen-space px. */
-    cursorStartX: number;
-    /** Cursor Y at mousedown, in screen-space px. */
-    cursorStartY: number;
-    /** Window X at mousedown, in physical px (Tauri's outerPosition). */
-    windowStartX: number;
-    /** Window Y at mousedown. */
-    windowStartY: number;
-    /** Device pixel ratio at mousedown — `screenX/Y` is in CSS px,
-        `outerPosition` is in physical px. Multiply the cursor delta
-        by this to get the right magnitude on retina. */
-    scale: number;
-  } | null = $state(null);
-
-  async function handleMouseDown(event: MouseEvent) {
-    const target = event.target as Element | null;
-    if (
-      target?.closest(
-        "button, input, textarea, select, a, [contenteditable], [data-no-drag]",
-      )
-    ) {
-      return;
-    }
-    try {
-      const win = getCurrentWebviewWindow();
-      const pos = await win.outerPosition();
-      dragState = {
-        cursorStartX: event.screenX,
-        cursorStartY: event.screenY,
-        windowStartX: pos.x,
-        windowStartY: pos.y,
-        scale: window.devicePixelRatio || 1,
-      };
-    } catch (e) {
-      console.warn("[hush] popover drag setup failed", e);
-    }
-  }
-
-  function handleMouseMove(event: MouseEvent) {
-    if (!dragState) return;
-    const dx = (event.screenX - dragState.cursorStartX) * dragState.scale;
-    const dy = (event.screenY - dragState.cursorStartY) * dragState.scale;
-    void getCurrentWebviewWindow().setPosition(
-      new PhysicalPosition(
-        Math.round(dragState.windowStartX + dx),
-        Math.round(dragState.windowStartY + dy),
-      ),
-    );
-  }
-
-  function handleMouseUp() {
-    dragState = null;
-  }
 
   function formatError(e: unknown): string {
     if (e instanceof Error) return e.message;
@@ -227,25 +157,26 @@
   onkeydown={(e) => {
     if (e.key === "Escape") void dismiss();
   }}
-  onmousemove={handleMouseMove}
-  onmouseup={handleMouseUp}
 />
 
 <!--
-  Drag wired via `onmousedown → startDragging()` rather than
-  `data-tauri-drag-region`. The data-attribute path didn't
-  initiate the platform drag on this borderless transparent
-  always-on-top window in practice, even when reduced to a
-  single root attribute matching the HUD pattern. The JS API
-  is documented + reliable; `handleMouseDown` filters out
-  clicks on interactive descendants so buttons keep working.
+  `data-tauri-drag-region` on the root makes the entire popover a
+  window-drag handle — descendants inherit unless they carry
+  `data-tauri-drag-region="false"`, which the buttons below set
+  explicitly so click events route to their handlers instead.
+  This only works because the window declaration in
+  `tauri.conf.json` has `resizable: true` (clamped to a fixed
+  size via min/max). On macOS, `resizable: false` +
+  `decorations: false` strips the NSWindow's movable styleMask
+  bits — drag-region, `startDragging`, and even direct
+  `setPosition` are all no-ops in that combination. See
+  `learnings.md` 2026-05-03.
 -->
 <div
   class="popover-root"
   role="dialog"
   aria-label="Hush quick controls"
-  tabindex="-1"
-  onmousedown={handleMouseDown}
+  data-tauri-drag-region
   data-testid="menu-bar-root"
 >
   <header class="popover-header">
@@ -264,6 +195,7 @@
       type="button"
       class="primary-action"
       data-testid="popover-toggle"
+      data-tauri-drag-region="false"
       disabled={busy}
       onclick={toggleRecording}
     >
@@ -300,6 +232,7 @@
       type="button"
       class="secondary-action"
       data-testid="popover-open-main"
+      data-tauri-drag-region="false"
       onclick={openMain}
     >
       Open Hush

@@ -4,6 +4,57 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-03 — macOS borderless window won't drag when `resizable: false` (#427 Item 1)
+
+The menu-bar quick-popover (#427 Item 1) is a borderless transparent always-on-top window. Three approaches to make it draggable all silently failed in practice:
+
+1. `data-tauri-drag-region` on the root (matching the HUD pill's pattern that works elsewhere).
+2. `getCurrentWebviewWindow().startDragging()` from a JS `mousedown` handler.
+3. Hand-rolled drag tracking cursor delta + calling `setPosition` from window-level `mousemove`.
+
+In every case the cursor-grab CSS fired and the click was registered, but the window stayed put. Even direct programmatic `setPosition` calls during drag did nothing.
+
+### Cause
+
+The `decorations: false` + `resizable: false` combination on macOS strips the movable styleMask bits from the underlying NSWindow. AppKit then ignores Tauri's drag-region, `startDragging`, **and** programmatic `setFrame:` from a non-trusted path. `transparent: true` and `alwaysOnTop: true` are not the trigger on their own; `resizable: false` is the load-bearing one.
+
+Documented across several Tauri GitHub issues (notably the discussion at [tauri-apps/tauri#4362](https://github.com/tauri-apps/tauri/discussions/4362) and the macOS-specific drag-region issues #11605 / #9503 / #12042).
+
+### Fix
+
+Flip `resizable: true` and clamp the window to a fixed size via matched `minWidth`/`maxWidth`/`minHeight`/`maxHeight`:
+
+```jsonc
+{
+  "label": "menu-bar",
+  "width": 320, "height": 220,
+  "minWidth": 320, "maxWidth": 320,
+  "minHeight": 220, "maxHeight": 220,
+  "decorations": false,
+  "transparent": true,
+  "alwaysOnTop": true,
+  "resizable": true,   // required for movable bits on macOS
+  ...
+}
+```
+
+The user can't actually resize because min == max. The NSWindow gains the movable styleMask and `data-tauri-drag-region` starts working. No Rust / objc2 / `tauri-nspanel` needed.
+
+### When the fix isn't enough
+
+If the popover ALSO needs to not steal focus from the active app on click (typical menu-bar app UX), graduate to [`tauri-nspanel`](https://github.com/ahkohd/tauri-nspanel) and convert the window with `to_panel()` + `NSWindowStyleMaskNonactivatingPanel`. Reference implementation: [ahkohd/tauri-macos-menubar-app-example](https://github.com/ahkohd/tauri-macos-menubar-app-example). Last-resort escape hatch: drop into `objc2`/`cocoa` from `setup` and call `[ns_window setMovable: YES]` + `[ns_window setMovableByWindowBackground: YES]` directly.
+
+### What does NOT help (verified during the chase)
+
+- More `data-tauri-drag-region` placement gymnastics — root + header + footer attributes don't change anything.
+- `webkit-app-region: drag` CSS — Electron-only Chromium fork attribute; wry/WebKit ignores it.
+- `tauri-plugin-positioner` — purely positioning, doesn't unlock drag.
+- `tauri-plugin-decorum` — Windows/Linux decorations polish; doesn't touch macOS movable bits.
+
+The HUD pill (`focus: false` + `acceptFirstMouse: true` + `decorations: false` + `resizable: false`) has the same theoretical limitation but its size + auto-hide lifecycle mean nobody actually drags it. The popover is the first window where drag matters for UX.
+
+---
+
 ## 2026-05-02 — Sync-primitive conventions in `AppState` and `SessionManager` (#431)
 
 `AppState` (`src-tauri/src/ipc/mod.rs`) and `SessionManager` (`src-tauri/src/meeting/manager.rs`) collectively reach for four kinds of synchronisation primitive — `std::sync::Mutex`, `std::sync::RwLock`, `tokio::sync::Mutex`, and the `Atomic*` family. Each call site is individually defensible, but the rules for which one to pick weren't written down. Audit follow-up (#431) flagged this as a "next contributor will re-derive it" smell. Recording the convention here so they don't.
