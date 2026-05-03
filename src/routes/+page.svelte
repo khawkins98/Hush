@@ -3,9 +3,12 @@
   import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { platform } from "@tauri-apps/plugin-os";
   import { onDestroy, onMount } from "svelte";
+  import { backOut, cubicIn } from "svelte/easing";
+  import { fade, fly } from "svelte/transition";
 
   import ControlsSection from "$lib/ControlsSection.svelte";
   import ResultBlock from "$lib/ResultBlock.svelte";
+  import { motionDuration } from "$lib/motion";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
   import PermissionsDialog from "$lib/PermissionsDialog.svelte";
@@ -1469,7 +1472,20 @@
     />
 
     {#if result}
-      <ResultBlock {result} />
+      <!--
+        F6: spring-out fly + fade on appear, plain fade on dismiss.
+        The transcript rising up from below mirrors the speech-to-
+        text "result emerges" mental model; the exit just dissolves
+        so the user doesn't see it slide off-screen mid-cleanup.
+        `motionDuration` honours prefers-reduced-motion (collapses
+        to 0 ms there).
+      -->
+      <div
+        in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
+        out:fade={{ duration: motionDuration(150), easing: cubicIn }}
+      >
+        <ResultBlock {result} />
+      </div>
     {/if}
 
     <MacosPermsPill
@@ -1498,6 +1514,8 @@
         class="app-profile-notice"
         role="status"
         data-testid="app-profile-notice"
+        in:fly={{ y: -6, duration: motionDuration(200), easing: backOut }}
+        out:fade={{ duration: motionDuration(150), easing: cubicIn }}
       >
         <span class="app-profile-notice-icon" aria-hidden="true">↻</span>
         <span class="app-profile-notice-message">{appProfileNotice}</span>
@@ -1537,6 +1555,8 @@
         data-kind={meetingCopyNotice.kind}
         role="status"
         data-testid="meeting-copy-notice"
+        in:fly={{ y: -6, duration: motionDuration(200), easing: backOut }}
+        out:fade={{ duration: motionDuration(150), easing: cubicIn }}
       >
         <span class="meeting-copy-notice-icon" aria-hidden="true">
           {meetingCopyNotice.kind === "success" ? "✓" : "⚠︎"}
