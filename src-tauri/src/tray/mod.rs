@@ -205,17 +205,53 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
     }
 }
 
-/// Show + focus the menu-bar quick popover (#427 Item 1). The
-/// window is created with `visible: false` in `tauri.conf.json`
-/// so it stays hidden until the user invokes it from the tray
-/// menu. Best-effort — a missing window or failed `show()` is
-/// logged and swallowed; the user can still reach the main
-/// window via the "Show Hush" menu item.
+/// Show + focus + tray-anchor the menu-bar quick popover (#427
+/// Item 1). The window is created with `visible: false` in
+/// `tauri.conf.json` so it stays hidden until the user invokes
+/// it from the tray menu.
+///
+/// Position is the top-right of the primary monitor with a
+/// small inset — close to where the macOS tray icon lives, so
+/// the popover feels anchored to the click. Tauri 2 doesn't
+/// expose the tray icon's screen rect on `MenuEvent` (only on
+/// `TrayIconEvent::Click`), so the click-aware path is a
+/// follow-up; a fixed top-right anchor lands the popover next
+/// to where the menu just closed in the meantime. Falls
+/// through to the OS-default position if the monitor query
+/// fails. Best-effort throughout.
 fn show_menu_bar_popover<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("menu-bar") else {
         tracing::warn!("tray: menu-bar popover window not found");
         return;
     };
+
+    // Anchor near the tray icon: top-right of the primary monitor
+    // with a small horizontal inset and a vertical inset that
+    // clears the menu bar (~28 px on macOS, but adding a buffer
+    // for menu-bar-app users who hide the bar differently).
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let monitor_size = monitor.size();
+        let monitor_pos = monitor.position();
+        let scale = monitor.scale_factor();
+        // Window's outer size is in physical pixels; declared as
+        // 320×220 logical, so multiply by the monitor's scale
+        // factor for retina displays. Inset from the right edge
+        // (a hair off the screen edge looks awkward) and from the
+        // top so the popover starts below the menu bar.
+        let popover_logical_w = 320.0_f64;
+        let inset_right = 12.0_f64;
+        let inset_top = 36.0_f64;
+        let x = monitor_pos.x as f64 + monitor_size.width as f64
+            - (popover_logical_w + inset_right) * scale;
+        let y = monitor_pos.y as f64 + inset_top * scale;
+        if let Err(e) = window.set_position(tauri::PhysicalPosition::new(
+            x.round() as i32,
+            y.round() as i32,
+        )) {
+            tracing::warn!(error = ?e, "tray: failed to anchor popover near tray");
+        }
+    }
+
     if let Err(e) = window.show() {
         tracing::warn!(error = ?e, "tray: failed to show menu-bar popover");
         return;
