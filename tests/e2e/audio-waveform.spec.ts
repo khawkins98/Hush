@@ -37,5 +37,23 @@ test.describe("AudioWaveform — mount points", () => {
     );
     await expect(idleWaveform).toBeVisible();
     await expect(idleWaveform.locator("span")).toHaveCount(14);
+    // F4: the main-page consumer opts in to metering. The peak-
+    // hold marker only paints once a real level sample lands, so
+    // we don't assert its presence here — just that the wrapper
+    // is in metering mode so a future regression that drops the
+    // prop fails this spec instead of a manual smoke.
+    await expect(idleWaveform).toHaveAttribute("data-metering", "on");
+  });
+
+  test("HUD page is not in metering mode", async ({ page }) => {
+    await installMocks(page);
+    await page.goto("/hud");
+    // F4: the HUD pill stays compact — peak-hold + clip warning
+    // would over-decorate the menu-bar overlay. Lock that in so a
+    // future "wire metering everywhere" change has to revisit
+    // this trade-off explicitly.
+    const waveform = page.locator('[data-testid="audio-waveform"]');
+    await expect(waveform).toBeVisible();
+    await expect(waveform).not.toHaveAttribute("data-metering", "on");
   });
 });

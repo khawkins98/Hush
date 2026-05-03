@@ -1,5 +1,5 @@
 <!--
-  Live audio-level waveform (#411 phase B + phase F1 moods).
+  Live audio-level waveform (#411 phase B + F1 moods + F4 metering).
 
   Self-contained leaf that subscribes to the backend's `audio:level`
   pump (~30 Hz RMS samples in [0, 1]), runs an attack/release
@@ -47,6 +47,22 @@
   not given. `active=true` ⇒ `recording`, `active=false` ⇒ `idle`,
   matching the pre-F1 track-vs-flatten semantics for callers that
   haven't migrated.
+
+  ## Metering (#411 phase F4)
+
+  Opt-in via `metering={true}`. Adds:
+
+  - A peak-hold line — thin horizontal marker at the highest
+    `displayLevel` seen recently. Holds for `PEAK_HOLD_MS` then
+    falls at `PEAK_DECAY_PER_FRAME`. Off-screen (peak === 0)
+    renders nothing.
+  - A clip warning — brief border flash when the level crosses
+    `CLIP_THRESHOLD`. Self-clears after `CLIP_FLASH_MS`.
+  - A peak-dB readout on the wrapper's `title` for tooltip-on-
+    hover (re: F4's "dB readout on hover").
+
+  Metering is a no-op outside `recording` mode so the breathing
+  idle wave doesn't trip the meter.
 -->
 <script lang="ts">
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -62,9 +78,13 @@
     /// Legacy gating flag (#411 phase B). `true` ⇒ recording mood,
     /// `false` ⇒ idle. Ignored when `mode` is set.
     active?: boolean;
+    /// Phase F4: enable peak-hold marker, clip warning, and the
+    /// peak-dB title readout. Off by default so the HUD's compact
+    /// pill stays unchanged; the main window opts in.
+    metering?: boolean;
   };
 
-  let { mode, active = true }: Props = $props();
+  let { mode, active = true, metering = false }: Props = $props();
 
   let effectiveMode = $derived<WaveformMode>(
     mode ?? (active ? "recording" : "idle"),
@@ -87,14 +107,42 @@
   // surrounding error message becomes the focal point.
   const ERROR_FLASH_MS = 600;
 
+  // Peak-hold: holds at the high-water mark for ~800 ms before
+  // falling. Per-frame decay coefficient at ~60 Hz works out to
+  // roughly -0.9 dB/s — fast enough to track varying speech, slow
+  // enough to read as a held "you peaked here" marker.
+  const PEAK_HOLD_MS = 800;
+  const PEAK_DECAY_PER_FRAME = 0.985;
+  // Clip warning: fires when the post-envelope level crosses the
+  // threshold. 0.9 leaves headroom — RMS values from the backend
+  // pump rarely sit at 1.0 even on saturated inputs, so a stricter
+  // ceiling would never fire. 250 ms is enough to register without
+  // strobing.
+  const CLIP_THRESHOLD = 0.9;
+  const CLIP_FLASH_MS = 250;
+
   let rms = $state(0);
   let displayLevel = $state(0);
   let waveform = $state<number[]>(new Array(BAR_COUNT).fill(0));
   let flashing = $state(false);
+  let peak = $state(0);
+  let clipping = $state(false);
 
   let unlistenLevel: UnlistenFn | null = null;
   let raf: number | undefined;
   let flashTimer: ReturnType<typeof setTimeout> | null = null;
+  let clipTimer: ReturnType<typeof setTimeout> | null = null;
+  let peakSetAt = 0;
+
+  // Map a 0..1 linear level to a peak-dB string. Floor at -60 dB
+  // because anything below that is effectively silence and the
+  // numeric value isn't useful in a tooltip.
+  let peakDbLabel = $derived.by(() => {
+    if (!metering || peak <= 0.001) return "";
+    const db = 20 * Math.log10(peak);
+    const clamped = Math.max(-60, db);
+    return `Peak: ${clamped.toFixed(1)} dB`;
+  });
 
   onMount(async () => {
     unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
@@ -128,6 +176,29 @@
         waveform = [...waveform.slice(1), displayLevel];
         lastWaveformPush = now;
       }
+
+      // F4 metering — only meaningful while we're tracking live
+      // audio. Idle's sine-wave target would otherwise paint a
+      // bogus -28 dB peak while nothing's recording.
+      if (metering && effectiveMode === "recording") {
+        if (displayLevel > peak) {
+          peak = displayLevel;
+          peakSetAt = now;
+        } else if (now - peakSetAt > PEAK_HOLD_MS) {
+          peak *= PEAK_DECAY_PER_FRAME;
+          if (peak < 0.001) peak = 0;
+        }
+        if (displayLevel >= CLIP_THRESHOLD && !clipping) {
+          clipping = true;
+          if (clipTimer !== null) clearTimeout(clipTimer);
+          clipTimer = setTimeout(() => {
+            clipping = false;
+          }, CLIP_FLASH_MS);
+        }
+      } else if (peak > 0) {
+        peak = 0;
+      }
+
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -157,6 +228,10 @@
       clearTimeout(flashTimer);
       flashTimer = null;
     }
+    if (clipTimer !== null) {
+      clearTimeout(clipTimer);
+      clipTimer = null;
+    }
   });
 </script>
 
@@ -164,13 +239,25 @@
   class="audio-waveform"
   data-testid="audio-waveform"
   data-mode={effectiveMode}
+  data-metering={metering ? "on" : null}
   class:flashing
+  class:clipping
+  title={peakDbLabel || undefined}
   role="presentation"
 >
   {#each waveform as level, i (i)}
     {@const heightPct = Math.min(100, Math.max(6, level * 400))}
     <span class="audio-waveform-bar" style="height: {heightPct}%"></span>
   {/each}
+  {#if metering && peak > 0.05}
+    {@const peakPct = Math.min(100, Math.max(6, peak * 400))}
+    <span
+      class="audio-waveform-peak"
+      data-testid="audio-waveform-peak"
+      style="bottom: {peakPct}%"
+      aria-hidden="true"
+    ></span>
+  {/if}
 </div>
 
 <style>
@@ -182,6 +269,7 @@
     height: var(--audio-waveform-height, 16px);
     gap: 1px;
     flex-shrink: 0;
+    position: relative;
   }
   .audio-waveform-bar {
     flex: 1 1 0;
@@ -193,6 +281,32 @@
     border-radius: 1px;
     transition: height 60ms linear;
     will-change: height;
+  }
+
+  /* F4: peak-hold line, painted as a thin absolutely-positioned
+     marker so it floats above the bars without disturbing flex
+     layout. Horizontal extent matches the bar strip. The bottom
+     offset is set inline by the script in % units, anchored to
+     the wrapper bottom so the line tracks the same bar-height
+     scale as the bars themselves. */
+  .audio-waveform-peak {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--audio-waveform-peak-color, rgba(255, 255, 255, 0.85));
+    pointer-events: none;
+    transition: bottom 80ms linear;
+    will-change: bottom;
+  }
+
+  /* F4 clip warning — thin red outline on the wrapper for
+     CLIP_FLASH_MS. Border, not background, so the bars still read
+     through clearly. Padded out via outline so the wrapper's
+     inline width doesn't shift on the flash on/off transition. */
+  .audio-waveform.clipping {
+    outline: 1px solid var(--danger, #d92626);
+    outline-offset: 1px;
   }
 
   /* Idle: dim the bars so the breathing oscillation reads as
@@ -236,7 +350,8 @@
   /* Reduced-motion: keep the bars but drop the inter-sample
      glide. Same policy as the HUD's pre-#411 inline rule and the
      dot pulse — convey the signal, skip the motion. The
-     processing pulse and error flash also collapse. */
+     processing pulse, error flash, and peak-line glide also
+     collapse. */
   @media (prefers-reduced-motion: reduce) {
     .audio-waveform-bar {
       transition: none;
@@ -246,6 +361,9 @@
       opacity: 0.7;
     }
     .audio-waveform.flashing .audio-waveform-bar {
+      transition: none;
+    }
+    .audio-waveform-peak {
       transition: none;
     }
   }
