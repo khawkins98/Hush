@@ -13,7 +13,8 @@ test.describe("StatusLine — F5 toggle wiring", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // Toggle is hidden until Advanced is expanded — mirrors the
     // Performance + first-run patterns already in this tab.

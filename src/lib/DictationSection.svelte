@@ -223,6 +223,13 @@
      `+page.svelte` and its scoping hash differs from this leaf. */
   :global(#dictation-section) {
     max-width: 52rem;
+    /* Centre the centerpiece on ultra-wide windows so it doesn't
+       hug the sidebar edge with empty space on the right. The
+       page-section's pre-r3 default `margin: 0 auto` was dropped
+       in #479 slice 1 to let History fill the column; centering
+       is reinstated here per-section because the centerpiece
+       composition reads better bounded. */
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     gap: 1rem;

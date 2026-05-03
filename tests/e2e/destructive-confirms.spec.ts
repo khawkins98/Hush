@@ -22,7 +22,8 @@ test.describe("destructive confirm — Vocabulary Delete", () => {
     await installMocks(page, {
       vocabulary_list: () => [{ id: 1, term: "Tauri" }],
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-vocabulary"]').click();
 
     const btn = page.locator('[data-testid="vocab-delete-1"]');
@@ -54,7 +55,8 @@ test.describe("destructive confirm — Vocabulary Delete", () => {
         return undefined;
       },
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-vocabulary"]').click();
 
     // First click — armed, no IPC.
@@ -90,7 +92,8 @@ test.describe("destructive confirm — Replacements Delete", () => {
         return undefined;
       },
     });
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-replacements"]').click();
 
     const btn = page.locator('[data-testid="replacement-delete-4"]');

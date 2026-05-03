@@ -26,7 +26,8 @@ test.describe("settings → appearance picker", () => {
       }
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // System default — no attribute present.
     await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.*/);
@@ -63,7 +64,8 @@ test.describe("settings → appearance picker", () => {
       }
     });
 
-    await page.goto("/settings");
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
     // The layout's synchronous applyThemeAttribute call must have
     // fired before children mounted, so the attribute is on

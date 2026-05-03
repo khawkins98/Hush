@@ -226,16 +226,11 @@ pub fn audio_list_sources(state: State<'_, AppState>) -> IpcResult<Vec<AudioSour
         .map_err(|e| IpcError::Audio(e.to_string()))
 }
 
-/// Open (or focus, if already visible) the standalone Settings
-/// window. Frontend invokes this from the main window's "Open
-/// Settings" affordances; the macOS menu bar's `Hush → Settings…`
-/// entry (⌘,) calls this directly from the menu-event handler in
-/// [`crate::lib`].
-#[tauri::command]
-pub fn open_settings(app: AppHandle) -> IpcResult<()> {
-    crate::settings_window::show(&app)
-        .map_err(|e| IpcError::Internal(format!("open settings window: {e:#}")))
-}
+// `open_settings` IPC deleted in #479 slice 3 — Settings is an
+// inline panel inside the main window. The native menu's
+// `Hush → Settings…` and the tray's "Open Settings…" emit
+// `settings:goto-tab` directly; the main window's listener flips
+// the active sidebar section + tab.
 
 /// Show + focus the main `"Hush"` window (#427 Item 1). Called by
 /// the menu-bar quick popover's "Open Hush" link so the popover

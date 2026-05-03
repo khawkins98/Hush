@@ -402,10 +402,21 @@ export async function gotoSection(
   page: Page,
   section: "dictation" | "meetings" | "history" | "configuration",
 ): Promise<void> {
-  // Sidebar navigation was removed; sections are always in the DOM.
-  // "meetings" content lives in the history section.
-  const target = section === "meetings" ? "history" : section;
-  await page.locator(`#${target}-section`).scrollIntoViewIfNeeded();
+  // #479 slice 1: dictation + history are now mutually-exclusive
+  // panels driven by the left sidebar. Click the matching sidebar
+  // item to swap the active panel. "meetings" still maps to
+  // History (legacy alias). "configuration" is the old Settings
+  // tab strip — opens the standalone Settings window in slice 1.
+  const target =
+    section === "meetings"
+      ? "history"
+      : section === "configuration"
+        ? "settings"
+        : section;
+  await page.locator(`[data-testid="sidebar-nav-${target}"]`).click();
+  if (target !== "settings") {
+    await page.locator(`#${target}-section`).waitFor({ state: "visible" });
+  }
 }
 
 /**

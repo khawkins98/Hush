@@ -196,8 +196,13 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
         "tray:popover" => show_menu_bar_popover(app),
         "tray:toggle" => emit_toggle(app),
         "tray:settings" => {
-            if let Err(e) = crate::settings_window::show(app) {
-                tracing::warn!(error = ?e, "tray: failed to open settings window");
+            // #479 slice 3: Settings is inline. Show the main
+            // window first (in case it's hidden) and emit
+            // `settings:goto-tab` so the listener flips the
+            // sidebar to the Settings panel.
+            show_main_window(app);
+            if let Err(e) = app.emit("settings:goto-tab", "general") {
+                tracing::warn!(error = ?e, "tray: emit goto-tab(general) failed");
             }
         }
         "tray:quit" => crate::request_user_quit(app),
