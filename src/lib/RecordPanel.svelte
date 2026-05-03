@@ -197,10 +197,8 @@
 {/if}
 
 <style>
-  /* CSS cloned verbatim out of pre-#468 ControlsSection — slice
-     B is visually byte-identical. The vibe pass (slice D) will
-     retune the start-btn hover/recording states. */
-
+  /* Record button — Panic spring on hover; Rogue Amoeba live-
+     indicator pulse while recording. */
   .start-btn {
     border-radius: var(--radius-md);
     border: 1px solid var(--border-input);
@@ -216,12 +214,28 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+    /* Panic-flavoured overshoot easing on the transform — tiny
+       "pop" at the top of the hover scale, physical not linear.
+       Other property transitions stay ease-y. */
+    transition:
+      transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      border-color 150ms ease,
+      background-color 150ms ease,
+      box-shadow 150ms ease;
     width: 100%;
   }
   .start-btn:hover:not(:disabled) {
+    transform: scale(1.02);
     border-color: var(--accent-hover);
-    box-shadow: 0 0 0 3px var(--accent-subtle);
+    box-shadow:
+      0 2px 6px rgba(0, 0, 0, 0.18),
+      0 0 0 3px var(--accent-subtle);
+  }
+  .start-btn:active:not(:disabled) {
+    /* Press damping — lands the spring on click rather than
+       leaving the button in its hover-scaled state mid-press. */
+    transform: scale(0.99);
+    transition: transform 80ms ease-out;
   }
   .start-btn:focus-visible {
     outline: none;
@@ -231,16 +245,47 @@
   .start-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+    transform: none;
   }
   .start-btn.stop {
     background-color: var(--danger);
     color: white;
     border-color: var(--danger);
+    /* Rogue Amoeba live-indicator pulse — Stop IS the live
+       recording marker. One slow heartbeat / 2 s reads as
+       "active" without strobing. */
+    animation: recording-pulse 2s ease-out infinite;
   }
   .start-btn.stop:hover:not(:disabled) {
     background-color: #c02e2e;
     border-color: #c02e2e;
-    box-shadow: 0 0 0 3px rgba(216, 58, 58, 0.18);
+    /* Recording-state hover keeps the pulse — overriding
+       box-shadow would freeze the keyframe. Only the colours
+       shift on hover here. */
+  }
+
+  @keyframes recording-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(216, 58, 58, 0.45);
+    }
+    70% {
+      box-shadow: 0 0 0 8px rgba(216, 58, 58, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(216, 58, 58, 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .start-btn,
+    .start-btn:hover:not(:disabled),
+    .start-btn:active:not(:disabled) {
+      transform: none;
+      transition: border-color 100ms ease, background-color 100ms ease;
+    }
+    .start-btn.stop {
+      animation: none;
+    }
   }
 
   .record-mode-hint {
