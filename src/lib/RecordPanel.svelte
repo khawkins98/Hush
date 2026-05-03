@@ -111,40 +111,87 @@
   );
 </script>
 
-{#if !recording}
-  <button
-    class="start-btn"
-    onclick={onStart}
-    disabled={busy || !hasUsableSource || noModelInstalled}
-    aria-label={busy
-      ? "Working"
-      : noModelInstalled
-        ? "Choose a model first"
-        : willRecordMeeting
-          ? "Record meeting (mic plus system audio)"
-          : "Start recording"}
-    title={noModelInstalled ? "Choose a model first" : undefined}
-    data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
-  >
-    {#if transcribing}
-      <span class="spinner" aria-hidden="true"></span> Transcribing…
+<div class="record-stage" data-recording={recording ? "true" : "false"}>
+  <!--
+    Big expressive waveform as the visual centerpiece (#411
+    mockup target). Width is 100 % of the content column,
+    height bumps to 88 px, and the bars get a purple→cyan
+    gradient while recording. Idle / processing / error moods
+    keep the muted bar treatment from F1.
+  -->
+  <div class="record-waveform">
+    <AudioWaveform mode={waveformMode} metering />
+  </div>
+
+  <!--
+    Circular Record / Stop button — fixed-size icon button that
+    sits below the waveform. Single button instance toggling its
+    state class so the spring-on-hover transitions stay
+    consistent across start/stop. aria-label drives test
+    `getByRole("button", { name: "Start recording" })` and the
+    Settings-window dictation specs.
+  -->
+  {#if !recording}
+    <button
+      class="record-btn"
+      onclick={onStart}
+      disabled={busy || !hasUsableSource || noModelInstalled}
+      aria-label={busy
+        ? "Working"
+        : noModelInstalled
+          ? "Choose a model first"
+          : willRecordMeeting
+            ? "Record meeting (mic plus system audio)"
+            : "Start recording"}
+      title={noModelInstalled ? "Choose a model first" : undefined}
+      data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
+    >
+      {#if transcribing}
+        <span class="spinner" aria-hidden="true"></span>
+      {:else}
+        <span class="record-icon record-icon-idle" aria-hidden="true"></span>
+      {/if}
+    </button>
+  {:else}
+    <button
+      class="record-btn recording"
+      onclick={onStop}
+      disabled={busy}
+      aria-label="Stop recording and transcribe"
+    >
+      <span class="record-icon record-icon-stop" aria-hidden="true"></span>
+    </button>
+  {/if}
+
+  <!--
+    Status label sits under the button — the verb the user is
+    primed to do. aria-live so screen readers announce the
+    state change when a hotkey toggles recording from another
+    app. Stays empty in idle so the focal weight goes to the
+    button.
+  -->
+  <p class="record-label" aria-live="polite">
+    {#if recording}
+      Recording
+      {#if recordMode === "meeting"}
+        <span class="status-mode" data-record-mode="meeting"
+          >· mic + system audio</span
+        >
+      {:else if recordMode === "dictation"}
+        <span class="status-mode" data-record-mode="dictation"
+          >· mic only</span
+        >
+      {/if}
+      — release hotkey or press Stop
+    {:else if transcribing}
+      Transcribing…
     {:else if willRecordMeeting}
-      <span class="rec-dot idle" aria-hidden="true"></span> Record meeting
-      <span class="record-mode-hint">mic + system audio</span>
-    {:else}
-      <span class="rec-dot idle" aria-hidden="true"></span> Start recording
+      Record meeting <span class="record-mode-hint">mic + system audio</span>
+    {:else if !noModelInstalled && hasUsableSource}
+      Press to record
     {/if}
-  </button>
-{:else}
-  <button
-    class="start-btn stop"
-    onclick={onStop}
-    disabled={busy}
-    aria-label="Stop recording and transcribe"
-  >
-    <span class="rec-dot stop" aria-hidden="true"></span> Stop and transcribe
-  </button>
-{/if}
+  </p>
+</div>
 
 {#if badgeVisible}
   <button
@@ -166,29 +213,6 @@
   </button>
 {/if}
 
-<p class="status" aria-live="polite">
-  {#if recording}
-    <span class="recording-dot" aria-hidden="true"></span> Recording
-    {#if recordMode === "meeting"}
-      <span class="status-mode" data-record-mode="meeting"
-        >· mic + system audio</span
-      >
-    {:else if recordMode === "dictation"}
-      <span class="status-mode" data-record-mode="dictation"
-        >· mic only</span
-      >
-    {/if}
-    — release the hotkey or press Stop to transcribe.
-  {:else if transcribing}
-    Transcribing — this can take a few seconds for short clips,
-    longer for big models.
-  {/if}
-</p>
-
-<div class="status-waveform">
-  <AudioWaveform mode={waveformMode} metering />
-</div>
-
 {#if statusLineEnabled}
   <StatusLine
     audioSourceLabel={selectedSourceLabel}
@@ -197,75 +221,131 @@
 {/if}
 
 <style>
-  /* Record button — Panic spring on hover; Rogue Amoeba live-
-     indicator pulse while recording. */
-  .start-btn {
-    border-radius: var(--radius-md);
+  /* The content column's centerpiece: big expressive waveform
+     above a circular Record / Stop button, with status copy
+     below. Sits inside a flex-column stage so the three pieces
+     stack with even spacing regardless of which states are
+     showing. */
+  .record-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0 0.25rem;
+  }
+
+  /* Big waveform — overrides AudioWaveform's default 60 × 16 px
+     compact strip with a content-column-filling 88 px stage so
+     the bars become the visual anchor. While recording the bars
+     pick up the purple → cyan gradient from the spec; idle /
+     processing / error keep their muted treatments owned by
+     AudioWaveform itself. */
+  .record-waveform {
+    width: 100%;
+    --audio-waveform-width: 100%;
+    --audio-waveform-height: 88px;
+    --audio-waveform-bar-color: linear-gradient(
+      to top,
+      #8b5cf6 0%,
+      #06b6d4 100%
+    );
+  }
+  /* Bars feel taller / chunkier in the centerpiece role. */
+  .record-waveform :global(.audio-waveform) {
+    gap: 4px;
+  }
+  .record-waveform :global(.audio-waveform-bar) {
+    border-radius: 3px;
+  }
+
+  /* Circular record button — fixed-size icon button, replaces
+     the pre-r2 wide-pill `.start-btn`. Reads as a hardware-style
+     control rather than a form button. Spring hover + press
+     damping carry over from the prior treatment. */
+  .record-btn {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
     border: 1px solid var(--border-input);
-    height: var(--control-height);
-    padding: 0 1.2em;
-    font-size: 1em;
-    font-family: inherit;
+    background: var(--bg-surface);
     color: var(--text-primary);
-    background-color: var(--bg-surface);
     cursor: pointer;
-    font-weight: 600;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
-    /* Resting shadow — gives the idle button presence so it
-       reads as "filled, confident" per the #468 spec rather
-       than a ghost outline. Hover (below) lifts it visibly. */
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-    /* Panic-flavoured overshoot easing on the transform — tiny
-       "pop" at the top of the hover scale, physical not linear.
-       Other property transitions stay ease-y. */
+    /* Resting shadow gives the idle button presence per the
+       #468 spec ("Idle: Confident, filled. Not ghosted"). */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
     transition:
       transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
       border-color 150ms ease,
       background-color 150ms ease,
       box-shadow 150ms ease;
-    width: 100%;
   }
-  .start-btn:hover:not(:disabled) {
-    transform: scale(1.02);
-    border-color: var(--accent-hover);
+  .record-btn:hover:not(:disabled) {
+    transform: scale(1.04);
+    border-color: var(--accent);
     box-shadow:
-      0 4px 10px rgba(0, 0, 0, 0.10),
+      0 6px 14px rgba(0, 0, 0, 0.12),
       0 0 0 3px var(--accent-subtle);
   }
-  .start-btn:active:not(:disabled) {
-    /* Press damping — lands the spring on click rather than
-       leaving the button in its hover-scaled state mid-press. */
-    transform: scale(0.99);
+  .record-btn:active:not(:disabled) {
+    transform: scale(0.97);
     transition: transform 80ms ease-out;
   }
-  .start-btn:focus-visible {
+  .record-btn:focus-visible {
     outline: none;
     border-color: var(--border-focus);
     box-shadow: 0 0 0 3px var(--accent-subtle);
   }
-  .start-btn:disabled {
+  .record-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
     transform: none;
   }
-  .start-btn.stop {
-    background-color: var(--danger);
-    color: white;
+  /* Recording state: red fill + heartbeat pulse, square stop
+     glyph inside. The pulse owns the box-shadow during this
+     state so hover only changes the fill colour — overriding
+     the shadow would freeze the keyframe. */
+  .record-btn.recording {
+    background: var(--danger);
     border-color: var(--danger);
-    /* Rogue Amoeba live-indicator pulse — Stop IS the live
-       recording marker. One slow heartbeat / 2 s reads as
-       "active" without strobing. */
+    color: white;
     animation: recording-pulse 2s ease-out infinite;
   }
-  .start-btn.stop:hover:not(:disabled) {
-    background-color: #c02e2e;
+  .record-btn.recording:hover:not(:disabled) {
+    background: #c02e2e;
     border-color: #c02e2e;
-    /* Recording-state hover keeps the pulse — overriding
-       box-shadow would freeze the keyframe. Only the colours
-       shift on hover here. */
+  }
+
+  /* Idle state glyph: a small filled dot — Audio Hijack-style
+     "press to record" indicator. */
+  .record-icon-idle {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--danger);
+    display: inline-block;
+  }
+  /* Recording state glyph: a small white square (universal
+     "stop" affordance). */
+  .record-icon-stop {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    background: white;
+    display: inline-block;
+  }
+
+  /* Status label below the button — the verb / state copy. */
+  .record-label {
+    margin: 0;
+    min-height: 1.2em;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.35;
+    max-width: 30rem;
   }
 
   @keyframes recording-pulse {
@@ -273,7 +353,7 @@
       box-shadow: 0 0 0 0 rgba(216, 58, 58, 0.45);
     }
     70% {
-      box-shadow: 0 0 0 8px rgba(216, 58, 58, 0);
+      box-shadow: 0 0 0 14px rgba(216, 58, 58, 0);
     }
     100% {
       box-shadow: 0 0 0 0 rgba(216, 58, 58, 0);
@@ -281,13 +361,13 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .start-btn,
-    .start-btn:hover:not(:disabled),
-    .start-btn:active:not(:disabled) {
+    .record-btn,
+    .record-btn:hover:not(:disabled),
+    .record-btn:active:not(:disabled) {
       transform: none;
       transition: border-color 100ms ease, background-color 100ms ease;
     }
-    .start-btn.stop {
+    .record-btn.recording {
       animation: none;
     }
   }
@@ -296,26 +376,11 @@
     font-size: 0.78rem;
     font-weight: 500;
     padding: 0.1rem 0.5rem;
-    margin-left: 0.45rem;
+    margin-left: 0.35rem;
     background-color: var(--accent-subtle);
     color: var(--accent);
     border-radius: 999px;
     white-space: nowrap;
-  }
-
-  .rec-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
-  }
-  .rec-dot.idle {
-    background-color: var(--text-secondary);
-    opacity: 0.6;
-  }
-  .rec-dot.stop {
-    background-color: white;
   }
 
   .record-mode-badge {
@@ -389,25 +454,6 @@
     }
   }
 
-  .status {
-    margin: 0;
-    min-height: 1.4em;
-    font-size: 0.88rem;
-    color: var(--text-muted);
-    text-align: center;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.45rem;
-  }
-  .recording-dot {
-    width: 0.65rem;
-    height: 0.65rem;
-    border-radius: 50%;
-    background-color: var(--danger);
-    display: inline-block;
-    animation: pulse 1.2s ease-in-out infinite;
-  }
   .status-mode {
     font-weight: 500;
     color: var(--text-secondary);
@@ -417,27 +463,10 @@
     font-weight: 600;
   }
 
-  .status-waveform {
-    display: flex;
-    justify-content: center;
-    margin-top: 0.5rem;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.55; transform: scale(0.85); }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .recording-dot,
-    .spinner {
-      animation: none;
-    }
-  }
-
+  /* Spinner inside the circular button while transcribing. */
   .spinner {
-    width: 0.85rem;
-    height: 0.85rem;
+    width: 22px;
+    height: 22px;
     border: 2px solid currentColor;
     border-right-color: transparent;
     border-radius: 50%;
@@ -446,5 +475,11 @@
   }
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+    }
   }
 </style>
