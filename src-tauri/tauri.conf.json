@@ -24,7 +24,7 @@
         "label": "hud",
         "title": "Hush — Recording",
         "url": "/hud",
-        "width": 250,
+        "width": 290,
         "height": 60,
         "decorations": false,
         "transparent": true,

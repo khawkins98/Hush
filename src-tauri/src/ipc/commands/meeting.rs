@@ -595,6 +595,20 @@ pub async fn meeting_start_manual(
         .load(std::sync::atomic::Ordering::Relaxed)
     {
         crate::hud::show_async(&app);
+        // Force the HUD into Recording with a fresh `started_at_ms`
+        // so the persistent HUD page resets its elapsed-time counter
+        // (#481). Pre-fix the meeting flow only called `show` and
+        // relied on the HUD page's default `hudState = "recording"`
+        // — which kept the previous session's `recordingStartedAt`
+        // alive across back-to-back meetings.
+        if let Err(e) = crate::hud::set_state(
+            &app,
+            crate::hud::HudState::Recording {
+                started_at_ms: crate::hud::now_unix_ms(),
+            },
+        ) {
+            tracing::warn!(error = ?e, "emit hud:state(recording) failed for meeting");
+        }
     }
     Ok(session)
 }

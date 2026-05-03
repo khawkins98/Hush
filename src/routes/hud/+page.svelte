@@ -25,6 +25,15 @@
   import { Events } from "$lib/events";
   import AudioWaveform from "$lib/AudioWaveform.svelte";
 
+  // Wire shape mirrors `HudStatePayload` in `src-tauri/src/hud/mod.rs`
+  // (camelCase per `serde(rename_all = "camelCase")`). `startedAtMs`
+  // is only present on Recording transitions; Processing transitions
+  // omit it so the frontend keeps the freeze-at-final-value behaviour.
+  type HudStatePayload = {
+    state: "recording" | "processing";
+    startedAtMs?: number;
+  };
+
   // HUD lifecycle state (#291). Backend emits `hud:state` with
   // `"recording"` or `"processing"`. Recording renders the pulsing
   // dot + waveform; Processing replaces the waveform with a
@@ -80,36 +89,35 @@
       raf = requestAnimationFrame(tick);
     };
 
-    unlistenState = await listen<string>(Events.HudState, (event) => {
-      const next = event.payload;
-      if (next === "recording" || next === "processing") {
-        hudState = next;
-        if (next === "processing") {
-          // Freeze the timer (don't reset) — the user still sees
-          // the final duration of the just-finished capture during
-          // the post-stop transcription window. A back-to-back
-          // dictation will reset on the next `recording` event.
-          // The waveform's own freeze-on-flip-off behaviour is
-          // driven by `active={hudState === "recording"}` on the
-          // AudioWaveform component below.
-          recordingStartedAt = null;
-        } else {
-          // Recording — start a fresh timer. Resets cleanly across
-          // back-to-back cycles per #360 acceptance.
-          recordingStartedAt = Date.now();
-          elapsedLabel = "0:00";
+    unlistenState = await listen<HudStatePayload>(
+      Events.HudState,
+      (event) => {
+        const payload = event.payload;
+        const next = payload?.state;
+        if (next === "recording" || next === "processing") {
+          hudState = next;
+          if (next === "processing") {
+            // Freeze the timer (don't reset) — the user still sees
+            // the final duration of the just-finished capture during
+            // the post-stop transcription window. A back-to-back
+            // dictation will reset on the next `recording` event.
+            // The waveform's own freeze-on-flip-off behaviour is
+            // driven by `active={hudState === "recording"}` on the
+            // AudioWaveform component below.
+            recordingStartedAt = null;
+          } else {
+            // Recording — anchor the timer to the backend-supplied
+            // `startedAtMs` (#481). The persistent HUD page can
+            // race the show/emit pair, so seeding from `Date.now()`
+            // here drifts across cycles. The Rust path always sends
+            // a fresh timestamp on every Recording transition;
+            // missing field is a defensive fallback.
+            recordingStartedAt = payload.startedAtMs ?? Date.now();
+            elapsedLabel = "0:00";
+          }
         }
-      }
-    });
-
-    // First-paint default: the HUD is rendered with `hudState`
-    // initially "recording" so a same-tick `start_dictation`
-    // doesn't flicker the Processing label. Seed the timer at
-    // mount so the first frame already shows 0:00 ticking up
-    // even before the backend's first `hud:state` event lands.
-    if (recordingStartedAt === null && hudState === "recording") {
-      recordingStartedAt = Date.now();
-    }
+      },
+    );
 
     raf = requestAnimationFrame(tick);
   });

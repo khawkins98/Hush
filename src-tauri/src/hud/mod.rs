@@ -64,7 +64,14 @@ pub const HUD_LABEL: &str = "hud";
 /// HUD logical width in CSS pixels. Mirrors `tauri.conf.json` so the
 /// position math has a single source of truth — if the window is
 /// resized, the corner offset stays accurate.
-const HUD_LOGICAL_WIDTH: f64 = 250.0;
+///
+/// Bumped from 250 → 290 in #481 to give the elapsed-time readout
+/// room for the H:MM:SS format meetings hit routinely. At the
+/// previous 250 px width "Recording 1:28:46" overflowed the pill,
+/// clipping the grip icon on the left and the dismiss button on
+/// the right inside the `border-radius: 999px` corners. 290 px
+/// fits "Recording 9:59:59" with normal padding to spare.
+const HUD_LOGICAL_WIDTH: f64 = 290.0;
 
 /// Top + right margin from the screen edge. Matches the visual
 /// breathing room every other system HUD uses (Zoom, Discord, the
@@ -281,32 +288,75 @@ pub fn hide_async<R: Runtime>(app: &AppHandle<R>) {
 /// apps and paste before the clipboard had been written.
 #[derive(Debug, Clone, Copy)]
 pub enum HudState {
-    /// Audio capture is active. Pulsing dot + level meter.
-    Recording,
+    /// Audio capture is active. Pulsing dot + level meter. The
+    /// `started_at_ms` field is the Unix-ms timestamp the backend
+    /// captured at the moment it considered the recording started;
+    /// the frontend anchors its elapsed-time counter to this so
+    /// back-to-back sessions reset to 0:00 deterministically (#481).
+    Recording { started_at_ms: u64 },
     /// Audio capture stopped, transcription + clipboard write in
     /// flight. Static dot, "Processing…" label, no level meter.
     Processing,
 }
 
 impl HudState {
-    /// Wire-format string the frontend matches on. Lowercase to
-    /// keep the JSON payload tidy.
-    fn as_str(self) -> &'static str {
+    /// Wire-format state string the frontend matches on.
+    fn state_str(self) -> &'static str {
         match self {
-            HudState::Recording => "recording",
+            HudState::Recording { .. } => "recording",
             HudState::Processing => "processing",
         }
     }
 }
 
+/// Wire payload for the `hud:state` Tauri event. Pre-#481 the
+/// payload was a bare string; the frontend mounted the elapsed-
+/// time counter from `Date.now()` at event-receipt time, which
+/// drifted across back-to-back sessions whenever the persistent
+/// HUD page's listener was racing with the show/emit pair on the
+/// Rust side. The struct shape pins the start moment to the Rust
+/// clock so the timer always reads 0:00 at the cycle the user
+/// sees the pill flip into Recording.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HudStatePayload {
+    state: &'static str,
+    /// Unix-ms timestamp captured by the backend at the moment the
+    /// recording started. Only populated for the Recording state.
+    /// `None` for Processing — the frontend keeps the existing
+    /// "freeze the timer at the final value" behaviour while
+    /// transcription completes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at_ms: Option<u64>,
+}
+
 /// Tell the HUD to render a particular lifecycle state. Emits the
-/// `hud:state` Tauri event with the state name as a JSON string;
-/// the HUD page listens on that event and switches its visual.
-/// Best-effort: a missing emitter is logged and swallowed because
-/// a HUD-event-emit failure shouldn't fail the dictation hot path.
+/// `hud:state` Tauri event with a `{ state, startedAtMs? }` JSON
+/// payload; the HUD page listens on that event and switches its
+/// visual. Best-effort: a missing emitter is logged and swallowed
+/// because a HUD-event-emit failure shouldn't fail the dictation
+/// hot path.
 pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: HudState) -> Result<()> {
     use tauri::Emitter as _;
-    app.emit("hud:state", state.as_str())
-        .context("emit hud:state")?;
+    let started_at_ms = match state {
+        HudState::Recording { started_at_ms } => Some(started_at_ms),
+        HudState::Processing => None,
+    };
+    let payload = HudStatePayload {
+        state: state.state_str(),
+        started_at_ms,
+    };
+    app.emit("hud:state", &payload).context("emit hud:state")?;
     Ok(())
+}
+
+/// Capture the current Unix-ms timestamp for [`HudState::Recording`].
+/// Helper so callsites don't repeat the `SystemTime::now()` boilerplate
+/// and clamp-to-zero on the (extremely rare) pre-epoch system clock.
+pub fn now_unix_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
