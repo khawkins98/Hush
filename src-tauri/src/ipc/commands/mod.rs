@@ -237,6 +237,32 @@ pub fn open_settings(app: AppHandle) -> IpcResult<()> {
         .map_err(|e| IpcError::Internal(format!("open settings window: {e:#}")))
 }
 
+/// Show + focus the main `"Hush"` window (#427 Item 1). Called by
+/// the menu-bar quick popover's "Open Hush" link so the popover
+/// can bring the main window forward without needing the broader
+/// `core:window:allow-get-all-windows` JS permission. Best-effort:
+/// a missing window or a `show()` / `set_focus()` failure logs a
+/// warning and returns Ok — the user can still reach the main
+/// window via the tray's "Show Hush" menu item.
+#[tauri::command]
+pub fn show_main_window(app: AppHandle) -> IpcResult<()> {
+    use tauri::Manager as _;
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("show_main_window: main window not found");
+        return Ok(());
+    };
+    if let Err(e) = window.show() {
+        tracing::warn!(error = ?e, "show_main_window: show failed");
+    }
+    if let Err(e) = window.unminimize() {
+        tracing::warn!(error = ?e, "show_main_window: unminimize failed");
+    }
+    if let Err(e) = window.set_focus() {
+        tracing::warn!(error = ?e, "show_main_window: set_focus failed");
+    }
+    Ok(())
+}
+
 /// Begin capturing from `source` (microphone or system audio).
 ///
 /// Captures the foreground app *before* opening the input stream so the
