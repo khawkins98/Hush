@@ -36,10 +36,12 @@
   import { formatErrorDisplay, formatErrorMessage, type ErrorDisplay } from "./errors";
   import "./settings-tab.css";
   import type {
+    AudioSourceListing,
     BuiltinAppEntry,
     DiarizerModelStatus,
     MeetingAppKind,
     MeetingAppOverride,
+    ModelCard,
   } from "./types";
 
   // Auto-start mode. Backend serde encoding is kebab-case
@@ -82,6 +84,15 @@
   let overrideInputEl = $state<HTMLInputElement | null>(null);
   // Built-in classification table (#320). Read once on mount.
   let appDefaults = $state<BuiltinAppEntry[]>([]);
+
+  // Per-app audio profile data (#427 Item 5). Loaded once on mount
+  // alongside the override list — the panel renders a source +
+  // model dropdown per row, so we need both lists available before
+  // any row's profile is editable. Failures are non-fatal: the
+  // panel hides the dropdowns when the lists are empty, so a
+  // missing IPC just degrades gracefully to the kind-only UX.
+  let availableAudioSources = $state<AudioSourceListing[]>([]);
+  let availableModels = $state<ModelCard[]>([]);
 
   type DownloadProgressEvent = {
     id: string;
@@ -222,6 +233,57 @@
     }
   }
 
+  // Per-app profile dropdown data (#427 Item 5). Both lists are
+  // best-effort: failures leave the array empty, the panel hides
+  // the dropdowns, and the user is back to the kind-only UX.
+  // Refresh on every mount rather than caching across mounts —
+  // sources can change between sessions (mic plugged/unplugged).
+  async function loadAvailableAudioSources(): Promise<void> {
+    try {
+      availableAudioSources = await invoke<AudioSourceListing[]>(
+        "audio_list_sources",
+      );
+    } catch (e) {
+      console.warn("[hush] audio_list_sources failed", e);
+    }
+  }
+
+  async function loadAvailableModels(): Promise<void> {
+    try {
+      availableModels = await invoke<ModelCard[]>("model_list");
+    } catch (e) {
+      console.warn("[hush] model_list failed", e);
+    }
+  }
+
+  // Wired through to MeetingAppOverridesPanel's `onSetProfile`.
+  // The panel sends the FULL intended state on every change; we
+  // forward both fields verbatim and patch the local
+  // `appOverrides` list with the returned row so the UI reflects
+  // the persisted state without a follow-up `list` round-trip.
+  async function setAppOverrideProfile(
+    override: MeetingAppOverride,
+    preferredAudioSource: string | null,
+    preferredModelId: string | null,
+  ) {
+    try {
+      const updated = await invoke<MeetingAppOverride>(
+        "meeting_app_override_set_profile",
+        {
+          appName: override.appName,
+          preferredAudioSource,
+          preferredModelId,
+        },
+      );
+      appOverrides = appOverrides.map((o) =>
+        o.appName === updated.appName ? updated : o,
+      );
+      appOverridesError = null;
+    } catch (e) {
+      appOverridesError = formatErrorDisplay(e);
+    }
+  }
+
   async function addAppOverride(e: Event) {
     e.preventDefault();
     const name = newOverrideName.trim();
@@ -316,6 +378,8 @@
       loadDiarizerModelStatus(),
       loadAppOverrides(),
       loadAppDefaults(),
+      loadAvailableAudioSources(),
+      loadAvailableModels(),
     ]);
 
     // Diarizer download lifecycle listeners (#301). Backend reuses
@@ -589,6 +653,8 @@
     overridesLoaded={appOverridesLoaded}
     overridesError={appOverridesError}
     defaults={appDefaults}
+    audioSources={availableAudioSources}
+    models={availableModels}
     bind:newAppName={newOverrideName}
     bind:newKind={newOverrideKind}
     bind:inputEl={overrideInputEl}
@@ -596,6 +662,7 @@
     onSubmitVariants={addAppOverrideVariants}
     onChangeKind={changeAppOverrideKind}
     onDelete={deleteAppOverride}
+    onSetProfile={setAppOverrideProfile}
   />
 </AdvancedSection>
 
