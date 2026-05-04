@@ -21,6 +21,13 @@
 
 import type { IpcError } from "./types";
 
+/// Discriminated tag the parent screen can map to a concrete
+/// callback when rendering an actionable error. Keeping it a string
+/// keeps `ErrorDisplay` serialisable and avoids closing over UI
+/// callbacks inside `lib/errors.ts` (which has no view dependencies).
+/// Add new keys here when an error class can offer a one-click recovery.
+export type ErrorActionKey = "open-model-settings";
+
 export type ErrorDisplay = {
   /// Plain-language summary, ~5 words. Always present.
   headline: string;
@@ -30,6 +37,14 @@ export type ErrorDisplay = {
   /// Raw technical message — surfaced in a collapsed `<details>`
   /// so power users can debug, but not in the user's face.
   details?: string;
+  /// Optional one-click recovery. The component renders a button
+  /// labelled `actionLabel` that calls the parent's `onAction`
+  /// callback with `actionKey`; the parent maps the key to a
+  /// concrete handler (e.g. `"open-model-settings"` → opens the
+  /// Model tab in Settings). Both fields must be set for a button
+  /// to render.
+  actionKey?: ErrorActionKey;
+  actionLabel?: string;
 };
 
 /// Check whether a thrown value is a permission-shaped IPC error
@@ -169,8 +184,10 @@ export function formatErrorDisplay(e: unknown): ErrorDisplay {
       return {
         headline: "No transcription model loaded",
         hint:
-          "Open Settings → Model and pick one. Hush will fetch and " +
-          "verify it, then load it without a restart.",
+          "Pick one in Settings → Model. Hush will fetch and verify " +
+          "it, then load it without a restart.",
+        actionKey: "open-model-settings",
+        actionLabel: "Open Settings → Model",
       };
     case "audio":
       return {
