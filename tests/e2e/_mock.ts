@@ -172,6 +172,7 @@ export async function installMocks(
       request_input_monitoring_permission: () => true,
       open_settings: () => undefined,
       show_main_window: () => undefined,
+      open_debug_window: () => undefined,
       diagnose_macos_permissions: () => ({
         bundleId: "io.github.khawkins98.hush",
         microphoneHint: "Mocked microphone hint.",

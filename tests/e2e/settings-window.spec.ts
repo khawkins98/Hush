@@ -10,7 +10,7 @@ import { installMocks } from "./_mock";
 // `error-states` style files when those flows land.
 
 test.describe("settings window — toolbar nav", () => {
-  test("renders all seven tabs and lands on General by default", async ({
+  test("renders all six tabs and lands on General by default", async ({
     page,
   }) => {
     await installMocks(page);
@@ -20,6 +20,8 @@ test.describe("settings window — toolbar nav", () => {
     // Toolbar tabs use stable testIds, so the spec is robust to
     // label copy changes — the test asserts the tabs exist + the
     // active one is General without locking the visible text.
+    // Note: "about" is now a sidebar-level item (sidebar-nav-about),
+    // not a settings tab.
     for (const key of [
       "general",
       "model",
@@ -27,7 +29,6 @@ test.describe("settings window — toolbar nav", () => {
       "replacements",
       "meeting",
       "permissions",
-      "about",
     ]) {
       await expect(
         page.locator(`[data-testid="settings-tab-${key}"]`),
@@ -545,18 +546,13 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
   });
 });
 
-test.describe("settings window — About tab", () => {
+test.describe("settings window — About section", () => {
   test("renders app name + version + license + repo links", async ({
     page,
   }) => {
     await installMocks(page);
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-
-    await page.locator('[data-testid="settings-tab-about"]').click();
-    await expect(
-      page.locator('[data-testid="settings-tab-about"]'),
-    ).toHaveAttribute("aria-current", "page");
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
 
     // App-info plugin mocks return "Hush" / "0.1.0" / "2.10.3".
     // Fail mode for this assertion is the silent-fallback path
@@ -589,8 +585,7 @@ test.describe("settings window — About tab", () => {
       check_for_updates: () => ({ kind: "upToDate", current: "0.1.0" }),
     });
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
 
     await page.locator('[data-testid="settings-check-updates"]').click();
     await expect(page.locator(".about-update-ok")).toContainText(
@@ -610,8 +605,7 @@ test.describe("settings window — About tab", () => {
       }),
     });
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
 
     await page.locator('[data-testid="settings-check-updates"]').click();
     await expect(page.locator(".about-update-available")).toContainText(
@@ -667,8 +661,7 @@ test.describe("settings window — About tab", () => {
       install_pending_update: () => new Promise(() => {}),
     });
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
     await page.locator('[data-testid="settings-check-updates"]').click();
 
     // Click Install — this fires the IPC (which silently
@@ -739,8 +732,7 @@ test.describe("settings window — About tab", () => {
       },
     });
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
     await page.locator('[data-testid="settings-check-updates"]').click();
     await page.locator('[data-testid="about-install-update"]').click();
 
@@ -761,8 +753,7 @@ test.describe("settings window — About tab", () => {
       }),
     });
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
 
     await page.locator('[data-testid="settings-check-updates"]').click();
     await expect(page.locator(".about-update-failed")).toContainText(
@@ -790,9 +781,7 @@ test.describe("settings window — About tab", () => {
       },
     });
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-
-    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
     await expect(page.locator(".about-name")).toHaveText("Hush");
     // Version line is gated on a non-empty appVersion — should be hidden.
     await expect(page.locator(".about-version")).toHaveCount(0);

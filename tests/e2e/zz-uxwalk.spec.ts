@@ -435,11 +435,10 @@ test.describe("UX walkthrough — settings window", () => {
     await shot(page, "25-settings-permissions");
   });
 
-  test("settings: About tab", async ({ page }) => {
+  test("settings: About", async ({ page }) => {
     await installMocks(page);
     await page.goto("/");
-    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
-    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
     await shot(page, "26-settings-about");
   });
 });

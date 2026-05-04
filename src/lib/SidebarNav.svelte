@@ -32,7 +32,7 @@
   its own tab strip when the user lands on it.
 -->
 <script lang="ts">
-  export type SidebarSection = "dictation" | "history" | "settings";
+  export type SidebarSection = "dictation" | "history" | "settings" | "about";
 
   type Item = {
     id: SidebarSection;
@@ -69,6 +69,7 @@
     { id: "dictation", label: "Dictation", showRecordingDot: recording },
     { id: "history", label: "History" },
     { id: "settings", label: "Settings" },
+    { id: "about", label: "About" },
   ]);
 
   function handleClick(id: SidebarSection) {
@@ -149,11 +150,18 @@
                 <path d="M3 4v5h5" />
                 <path d="M12 7v5l3 2" />
               </svg>
-            {:else}
+            {:else if item.id === "settings"}
               <!-- Settings gear -->
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" />
                 <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+              </svg>
+            {:else}
+              <!-- Info circle (About) -->
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="8" stroke-width="2.5" stroke-linecap="round" />
+                <path d="M11 12h1v5h1" />
               </svg>
             {/if}
             {#if item.showRecordingDot}

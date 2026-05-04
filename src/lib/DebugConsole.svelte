@@ -74,6 +74,23 @@
     maxSeenSeq = -1;
   }
 
+  let allCopied = $state(false);
+  async function onCopyAll() {
+    const text = entries
+      .map(
+        (e) =>
+          `[${new Date(e.timestampMs).toISOString()}] ${e.level.padEnd(5)} ${e.target} ${e.message}`,
+      )
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      allCopied = true;
+      setTimeout(() => (allCopied = false), 2000);
+    } catch (err) {
+      console.warn("[hush] clipboard write failed", err);
+    }
+  }
+
   onMount(async () => {
     // Subscribe first to guarantee no events are missed between the
     // snapshot call and the listener registration.
@@ -96,11 +113,17 @@
   });
 </script>
 
+<div class="debug-console">
 <div class="debug-console-toolbar">
   <span class="debug-console-count">
     {entries.length} entries
   </span>
-  <button type="button" class="ghost small" onclick={onClear}> Clear </button>
+  <div class="debug-console-actions">
+    <button type="button" class="ghost small" disabled={entries.length === 0} onclick={onCopyAll}>
+      {allCopied ? "Copied!" : "Copy All"}
+    </button>
+    <button type="button" class="ghost small" onclick={onClear}> Clear </button>
+  </div>
 </div>
 
 <div
@@ -127,8 +150,29 @@
     {/each}
   {/if}
 </div>
+</div>
 
 <style>
+  /* Terminal-surface token set. These are intentionally static —
+     the debug console is always a dark terminal regardless of OS
+     light/dark mode, so it owns its own semantic token layer
+     rather than borrowing from the app's theme variables
+     (var(--text-secondary) etc. which flip in light mode). The
+     display:contents wrapper propagates them to all children
+     without disrupting the surrounding layout. */
+  .debug-console {
+    display: contents;
+    --debug-bg: #141414;
+    --debug-border: #333;
+    --debug-text: #e6edf3;
+    --debug-text-muted: #8b949e;
+    --debug-level-error: #f85149;
+    --debug-level-warn: #e3b341;
+    --debug-level-info: #58a6ff;
+    --debug-level-debug: #7ee787;
+    --debug-level-trace: #8b949e;
+  }
+
   .debug-console-toolbar {
     display: flex;
     align-items: center;
@@ -139,25 +183,31 @@
 
   .debug-console-count {
     font-size: 0.78rem;
-    color: var(--text-secondary);
+    color: var(--debug-text-muted);
+  }
+
+  .debug-console-actions {
+    display: flex;
+    gap: 0.4rem;
   }
 
   .debug-console-output {
-    height: 320px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    background: var(--bg-code, #1a1a1a);
-    border: 1px solid var(--border);
+    background: var(--debug-bg);
+    border: 1px solid var(--debug-border);
     border-radius: 6px;
     padding: 0.5rem;
     font-family: "SF Mono", "Fira Code", monospace;
     font-size: 0.72rem;
     line-height: 1.5;
-    color: var(--text-primary);
+    color: var(--debug-text);
   }
 
   .debug-console-empty {
     margin: 0;
-    color: var(--text-secondary);
+    color: var(--debug-text-muted);
     font-style: italic;
     text-align: center;
     padding-top: 2rem;
@@ -172,7 +222,7 @@
 
   .log-time {
     flex-shrink: 0;
-    color: var(--text-secondary);
+    color: var(--debug-text-muted);
   }
 
   .log-level {
@@ -183,24 +233,24 @@
   }
 
   .level-error {
-    color: #f85149;
+    color: var(--debug-level-error);
   }
   .level-warn {
-    color: #e3b341;
+    color: var(--debug-level-warn);
   }
   .level-info {
-    color: #58a6ff;
+    color: var(--debug-level-info);
   }
   .level-debug {
-    color: #7ee787;
+    color: var(--debug-level-debug);
   }
   .level-trace {
-    color: #8b949e;
+    color: var(--debug-level-trace);
   }
 
   .log-target {
     flex-shrink: 0;
-    color: var(--text-secondary);
+    color: var(--debug-text-muted);
     max-width: 18rem;
     overflow: hidden;
     text-overflow: ellipsis;

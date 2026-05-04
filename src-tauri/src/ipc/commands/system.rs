@@ -45,6 +45,28 @@ pub fn show_main_window(app: AppHandle) -> IpcResult<()> {
     Ok(())
 }
 
+/// Show + focus the floating debug-console window (declared in
+/// `tauri.conf.json` with `"label": "debug"`, `visible: false`).
+/// Called from the Settings → Debug tab when the developer console
+/// is enabled. Opens it as a palette that floats above the main
+/// window so the user can watch the live log while clicking around
+/// the app.
+#[tauri::command]
+pub fn open_debug_window(app: AppHandle) -> IpcResult<()> {
+    use tauri::Manager as _;
+    let Some(window) = app.get_webview_window("debug") else {
+        tracing::warn!("open_debug_window: debug window not found");
+        return Ok(());
+    };
+    if let Err(e) = window.show() {
+        tracing::warn!(error = ?e, "open_debug_window: show failed");
+    }
+    if let Err(e) = window.set_focus() {
+        tracing::warn!(error = ?e, "open_debug_window: set_focus failed");
+    }
+    Ok(())
+}
+
 /// Returns whether the macOS first-run welcome has been shown and
 /// dismissed for this install. The value is stored under
 /// [`crate::settings::keys::FIRST_RUN_COMPLETED`] as the literal
