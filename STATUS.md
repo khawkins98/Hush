@@ -1,12 +1,27 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-04-29, post-release-pipeline + manual update probe + perms-smoothing
+**Snapshot:** 2026-05-04, post-Phase-F vibe-pass + sidebar redesign + cross-platform audio cues + auto-update wiring
 **Author:** Claude (working async on Ken's behalf)
 
 A working hand-off doc; not the canonical CHANGELOG or PRD. The goal:
 "what's the project state right now, what's blocking, how do I verify
 it works." This file is meant to **rot fast** — re-write on next
 pickup, don't try to keep it incrementally up-to-date.
+
+---
+
+## What's shipped since the previous snapshot (2026-04-29 → 2026-05-04)
+
+Roughly 30 PRs landed across the week. The bigger threads:
+
+- **Sidebar shell + Settings inline** (#480, #479) — three-window topology dropped to two: standalone Settings window deleted, a 56 px icon column drives section switching inside the main window (Dictation / History / Settings). Native menu + tray emit `settings:goto-tab` instead of opening a window.
+- **Phase F vibe pass** (#470–#473, #475) — indigo-violet accent, two-column dictation layout, Panic-style spring hover + Rogue Amoeba recording-pulse animation, sidebar dim-and-lock during recording.
+- **HUD bug fixes** (#477, #483) — main-thread HUD show/hide (macOS 26 AppKit affinity), pill widened to 290 px so H:MM:SS elapsed-time doesn't clip grip / dismiss icons, timer resets cleanly across back-to-back sessions via `hud:state(startedAtMs)` payload.
+- **Sound-cue split + cross-platform** (#482, #490) — master "Audio cues" toggle fans out to per-event sub-toggles (Recording-start cue / Transcription-complete cue). The cues themselves became cross-platform: synthesised WAVs at compile time, played through `rodio`, replacing the macOS-only `NSSound soundNamed:"Tink"/"Glass"` path.
+- **IPC + meeting refactor sweep** (#486, #487, #489) — `commands/mod.rs` split into 5 peer modules (history, settings, system, ptt, diarizer); `meeting/manager.rs` split into `manager.rs` (state) + `lifecycle.rs` (start/stop/append) + `classifier.rs` (bundle-id → kind table).
+- **Auto-update wiring** (#491) — `install_pending_update` IPC + AboutTab install flow with download-progress + install-pending events. Inert until the maintainer completes Steps 1–4 of the plan in `src-tauri/src/updater/mod.rs` (signing keypair, `tauri.conf.json` `plugins.updater` block, CI secrets, plugin registration).
+
+The "What's deferred" section below is partially stale — #10 is no longer fully deferred (Steps 5–6 shipped in #491); Steps 1–4 remain maintainer-only.
 
 ---
 

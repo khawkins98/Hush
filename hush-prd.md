@@ -139,7 +139,7 @@ These are tagged as future work, with a brief note on what each will need when p
 
 ## 9. In-scope feature list (v1)
 
-- Multi-platform builds: macOS universal, Windows x64 + arm64, Linux x64 (.deb and .AppImage).
+- Multi-platform builds: macOS Apple Silicon (.dmg; macOS 26 is the supported target), Windows x64 + arm64, Linux x64 (.deb and .AppImage). macOS Intel is out of scope per the macOS 26-only design target — see `learnings.md` 2026-04-26 for the rationale.
 - Whisper model picker with download progress, SHA verification, and disk-usage display.
 - Push-to-talk and toggle-record hotkeys, user-configurable. Default-on across all platforms as of #194; on macOS the Input Monitoring TCC prompt fires at first listener spawn. The macOS 26 rdev abort (#69) is resolved by pinning the [fufesou rdev fork](https://github.com/fufesou/rdev) (CGEventTap attached to `CFRunLoopGetMain()`).
 - Recording HUD overlay (transparent window) shown while listening, with a level meter.
