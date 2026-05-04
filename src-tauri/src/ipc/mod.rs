@@ -364,6 +364,12 @@ pub struct AppState {
     /// new `OnnxDiarizer` takes effect on the next meeting tick
     /// — no app restart required.
     pub diarize_slot: crate::diarization::DiarizeSlot,
+    /// In-app debug log console (#532). Holds the ring buffer of
+    /// the last 200 backend `tracing` events. The tracing layer
+    /// is registered before the Tauri builder in `run()` and
+    /// forwarded here. The `get_log_entries` IPC command drains
+    /// a snapshot so the frontend can catch up to the live stream.
+    pub debug_log: crate::debug_log::DebugLogState,
     /// User-facing flags that mirror Settings rows — see
     /// [`RuntimeFlags`] for the full per-field rationale. Grouped
     /// into a substruct (#431) so `AppState` stays readable.
@@ -545,6 +551,11 @@ pub struct AppStateBuilder {
     /// with the IPC writer and the meeting pump. When unset,
     /// `build` constructs a fresh Arc at 0.0 dB — fine for tests.
     mic_gain_db_arc: Option<Arc<std::sync::atomic::AtomicU32>>,
+    /// Debug log state (#532). Set via
+    /// [`AppStateBuilder::debug_log`] when `run()` wires the
+    /// tracing layer. When unset, `build` constructs a new
+    /// (empty) state — fine for tests.
+    debug_log: Option<crate::debug_log::DebugLogState>,
 }
 
 impl AppStateBuilder {
@@ -704,6 +715,14 @@ impl AppStateBuilder {
         self
     }
 
+    /// Set the [`crate::debug_log::DebugLogState`] created in `run()`
+    /// so `AppState` owns a handle to the ring buffer. Tests can omit
+    /// this; `build` will construct a fresh (empty) state.
+    pub fn debug_log(mut self, state: crate::debug_log::DebugLogState) -> Self {
+        self.debug_log = Some(state);
+        self
+    }
+
     /// Set the pre-built [`crate::diarization::DiarizeSlot`] (#301).
     /// The `FlagGatedDiarizer` holds an `Arc::clone` of the same
     /// slot, so the IPC `download_diarizer_model` path can
@@ -815,6 +834,9 @@ impl AppStateBuilder {
                         as Arc<dyn crate::diarization::Diarize>,
                 ))
             }),
+            debug_log: self
+                .debug_log
+                .unwrap_or_else(crate::debug_log::DebugLogState::new),
             runtime_flags: RuntimeFlags {
                 hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
                     self.hud_enabled.unwrap_or(true),
@@ -1010,6 +1032,7 @@ impl AppState {
         app: tauri::AppHandle,
         db_path: &Path,
         models_dir: PathBuf,
+        debug_log: crate::debug_log::DebugLogState,
     ) -> Result<Self> {
         let audio: Arc<dyn AudioCapture> = Arc::new(CpalAudioCapture::new());
 
@@ -1259,6 +1282,7 @@ impl AppState {
             .diarize_slot(diarize_slot)
             .inference_threads_arc(inference_threads_arc)
             .mic_gain_db_arc(mic_gain_db_arc)
+            .debug_log(debug_log)
             .build()
     }
 }

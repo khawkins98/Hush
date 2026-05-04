@@ -4,6 +4,7 @@ pub mod app_menu;
 pub mod audio;
 pub mod audio_cues;
 pub mod db;
+pub mod debug_log;
 pub mod diarization;
 pub mod dictionary;
 pub mod events;
@@ -234,14 +235,29 @@ fn migrate_legacy_app_data_dir(new_path: &std::path::Path) {
 pub fn run() {
     // Initialise tracing here so service-construction errors (database
     // open, whisper model load) reach `RUST_LOG` consumers before the
-    // Tauri event loop starts. `try_init` rather than `init` so re-runs
-    // in tests (`cargo tauri dev`-restart-cycle) do not panic.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
+    // Tauri event loop starts.
+    //
+    // We compose two layers:
+    //   1. The standard fmt subscriber (writes to stderr / RUST_LOG).
+    //   2. DebugLogLayer — captures events into a ring buffer and
+    //      forwards them to the frontend via the `log:event` Tauri
+    //      event once the AppHandle is available (#532).
+    //
+    // `try_init` rather than `init` so re-runs in tests
+    // (`cargo tauri dev`-restart-cycle) do not panic.
+    let debug_log = crate::debug_log::DebugLogState::new();
+    {
+        use tracing_subscriber::prelude::*;
+        let fmt_layer = tracing_subscriber::fmt::layer().with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
+        );
+        let debug_layer = crate::debug_log::DebugLogLayer::new(debug_log.clone());
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(debug_layer)
+            .try_init();
+    }
 
     tauri::Builder::default()
         // Single-instance lock (#326). Registered first so a second
@@ -359,10 +375,15 @@ pub fn run() {
             );
 
             let app_handle = app.handle().clone();
+            // Enable live streaming of log events to the frontend (#532).
+            // Must be done before build_default so any log events during
+            // app-state construction are captured.
+            debug_log.set_handle(app_handle.clone());
             let state = tauri::async_runtime::block_on(ipc::AppState::build_default(
                 app_handle,
                 &db_path,
                 models_dir,
+                debug_log,
             ))
             .map_err(|e| format!("build app state: {e:#}"))?;
             // Clone the audio Arc out before `manage` takes ownership of
@@ -707,6 +728,7 @@ pub fn run() {
             ipc::commands::system::get_autostart_path_status,
             ipc::commands::system::retry_autostart_registration,
             ipc::commands::system::check_for_updates,
+            ipc::commands::system::get_app_version,
             ipc::commands::ptt::ptt_get_config,
             ipc::commands::ptt::ptt_set_config,
             ipc::commands::macos::open_macos_privacy_pane,
@@ -732,6 +754,7 @@ pub fn run() {
             ipc::commands::meeting::meeting_app_override_delete,
             ipc::commands::meeting::meeting_app_classifier_defaults,
             ipc::commands::updater::install_pending_update,
+            ipc::commands::debug::get_log_entries,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Hush")

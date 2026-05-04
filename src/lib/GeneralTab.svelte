@@ -37,9 +37,21 @@
     readStatusLineEnabled,
     setStatusLineEnabled,
   } from "./status-line";
+  import {
+    readDebugConsoleEnabled,
+    setDebugConsoleEnabled,
+  } from "./debug-console";
   import { readStoredTheme, setTheme, type ThemePref } from "./theme";
   import type { DictationStats } from "./types";
   import "./settings-tab.css";
+
+  type Props = {
+    /// Callback invoked when the developer console toggle changes.
+    /// `SettingsPanel` listens to conditionally show the Debug tab.
+    onDebugConsoleChange?: (enabled: boolean) => void;
+  };
+
+  let { onDebugConsoleChange }: Props = $props();
 
   let autostartEnabled = $state(false);
   let autostartBusy = $state(false);
@@ -124,6 +136,20 @@
     } finally {
       statusLineBusy = false;
     }
+  }
+
+  // Developer console toggle (#532). Enables the Debug tab in
+  // Settings, which shows a live view of the Rust tracing log.
+  // localStorage-backed (same pattern as statusLine); no IPC.
+  // Calls `onDebugConsoleChange` so SettingsPanel can show/hide
+  // the Debug tab without a Tauri event broadcast.
+  let debugConsoleEnabled = $state(false);
+
+  function onDebugConsoleToggle(event: Event) {
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    setDebugConsoleEnabled(checked);
+    debugConsoleEnabled = checked;
+    onDebugConsoleChange?.(checked);
   }
 
   // Appearance / theme override (#411 phase A). Default "system"
@@ -436,6 +462,7 @@
     }
     themePref = readStoredTheme();
     statusLineEnabled = readStatusLineEnabled();
+    debugConsoleEnabled = readDebugConsoleEnabled();
   });
 </script>
 
@@ -798,6 +825,22 @@
           "🎤 Built-in Microphone · whisper-medium" so you can
           confirm the active device and Whisper model at a glance.
           Off by default.
+        </span>
+      </span>
+    </label>
+    <label class="toggle-row">
+      <input
+        type="checkbox"
+        data-testid="settings-debug-console-toggle"
+        checked={debugConsoleEnabled}
+        onchange={onDebugConsoleToggle}
+      />
+      <span class="toggle-label">
+        <span class="toggle-name">Developer console</span>
+        <span class="toggle-desc">
+          Adds a Debug tab with a live view of the Rust backend's
+          log stream. Useful for diagnosing issues and generating
+          bug reports. Off by default.
         </span>
       </span>
     </label>

@@ -40,6 +40,7 @@
 // a hidden `__cmd__<name>` symbol as a sibling of each command, and
 // `pub use` re-exports do not carry that symbol with them. See the
 // 2026-04-25 entry in `learnings.md`.
+pub mod debug;
 pub mod diarizer;
 pub mod dictionary;
 pub mod export;
