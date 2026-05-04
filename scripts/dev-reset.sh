@@ -17,6 +17,7 @@
 #   <home>/Library/Caches/io.github.khawkins98.hush/                       (WebKit etc.)
 #   <home>/Library/Caches/hush/
 #   autostart LaunchAgent (if enabled via Settings → Launch at Login)
+#   Legacy com.khawkins.hush data/TCC/prefs (from before PR #526 bundle rename)
 #
 # Models are kept by default because they are large and slow to re-download.
 # Pass --nuke-models to wipe them too.
@@ -31,6 +32,9 @@
 set -euo pipefail
 
 BUNDLE_ID="io.github.khawkins98.hush"
+# Legacy bundle ID from before the rename (PR #526). TCC entries, prefs, and
+# app-support data keyed to this ID linger after an upgrade and must be purged.
+LEGACY_BUNDLE_ID="com.khawkins.hush"
 nuke_models=0
 explicit_user=""
 
@@ -118,6 +122,13 @@ _tccutil reset Microphone    "$BUNDLE_ID" && echo "  Microphone cleared"    || t
 _tccutil reset ListenEvent   "$BUNDLE_ID" && echo "  ListenEvent cleared"   || true
 _tccutil reset Accessibility "$BUNDLE_ID" && echo "  Accessibility cleared" || true
 
+# Also purge any lingering TCC entries from the legacy bundle ID.
+echo "[dev-reset] purging legacy TCC permissions for $LEGACY_BUNDLE_ID..."
+_tccutil reset ScreenCapture "$LEGACY_BUNDLE_ID" 2>/dev/null && echo "  legacy ScreenCapture cleared" || true
+_tccutil reset Microphone    "$LEGACY_BUNDLE_ID" 2>/dev/null && echo "  legacy Microphone cleared"    || true
+_tccutil reset ListenEvent   "$LEGACY_BUNDLE_ID" 2>/dev/null && echo "  legacy ListenEvent cleared"   || true
+_tccutil reset Accessibility "$LEGACY_BUNDLE_ID" 2>/dev/null && echo "  legacy Accessibility cleared" || true
+
 # ── 3. App data ───────────────────────────────────────────────────────────────
 echo "[dev-reset] removing app data..."
 
@@ -140,11 +151,24 @@ else
   echo "  keeping downloaded models (pass --nuke-models to remove them too)"
 fi
 
+# Legacy app support directory from before the bundle ID rename.
+legacy_app_support="$TARGET_HOME/Library/Application Support/$LEGACY_BUNDLE_ID"
+if [ -d "$legacy_app_support" ]; then
+  rm -rf "$legacy_app_support"
+  echo "  removed legacy $legacy_app_support"
+fi
+
 # ── 4. Preferences (NSUserDefaults / window geometry / recent dirs) ───────────
 pref="$TARGET_HOME/Library/Preferences/$BUNDLE_ID.plist"
 if [ -f "$pref" ]; then
   rm "$pref"
   echo "  removed $pref"
+fi
+# Legacy pref file from before the bundle ID rename.
+legacy_pref="$TARGET_HOME/Library/Preferences/$LEGACY_BUNDLE_ID.plist"
+if [ -f "$legacy_pref" ]; then
+  rm "$legacy_pref"
+  echo "  removed legacy $legacy_pref"
 fi
 # Flush cfprefsd cache so the deleted plist takes effect immediately.
 # Run as the target user to avoid flushing a different user's daemon.
@@ -157,6 +181,7 @@ fi
 # ── 5. Caches ─────────────────────────────────────────────────────────────────
 for cache_dir in \
   "$TARGET_HOME/Library/Caches/$BUNDLE_ID" \
+  "$TARGET_HOME/Library/Caches/$LEGACY_BUNDLE_ID" \
   "$TARGET_HOME/Library/Caches/hush"; do
   if [ -d "$cache_dir" ]; then
     rm -rf "$cache_dir"
@@ -165,16 +190,19 @@ for cache_dir in \
 done
 
 # ── 6. Autostart LaunchAgent ──────────────────────────────────────────────────
-launch_agent="$TARGET_HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
-if [ -f "$launch_agent" ]; then
-  if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
-    launchctl asuser "$TARGET_UID" launchctl unload "$launch_agent" 2>/dev/null || true
-  else
-    launchctl unload "$launch_agent" 2>/dev/null || true
+for launch_agent in \
+  "$TARGET_HOME/Library/LaunchAgents/$BUNDLE_ID.plist" \
+  "$TARGET_HOME/Library/LaunchAgents/$LEGACY_BUNDLE_ID.plist"; do
+  if [ -f "$launch_agent" ]; then
+    if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
+      launchctl asuser "$TARGET_UID" launchctl unload "$launch_agent" 2>/dev/null || true
+    else
+      launchctl unload "$launch_agent" 2>/dev/null || true
+    fi
+    rm "$launch_agent"
+    echo "  removed autostart LaunchAgent: $launch_agent"
   fi
-  rm "$launch_agent"
-  echo "  removed autostart LaunchAgent"
-fi
+done
 
 echo ""
 echo "[dev-reset] done. Next launch of Hush will behave as a first-ever install."
