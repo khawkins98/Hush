@@ -97,7 +97,7 @@
             running via <code>npm run tauri dev</code>, the binary at
             <code>target/debug/hush</code> is unsigned, so macOS may key
             the permission entry against the launching shell (iTerm /
-            Terminal) rather than under <code>com.khawkins.hush</code>.
+            Terminal) rather than under <code>io.github.khawkins98.hush</code>.
             Production-signed builds register under the bundle id
             cleanly.
           </li>

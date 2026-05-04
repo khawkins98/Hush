@@ -24,11 +24,11 @@ The toggle hotkey (`⌃⌥H` by default) is independent — it goes through Taur
 
 ## Why dev builds are flaky for permissions
 
-macOS's TCC (Transparency, Consent, and Control) database keys permissions to a specific code-signing identity + bundle ID. A signed `Hush.app` (from `npm run tauri:bundle`) registers under `com.khawkins.hush` and the grant survives rebuilds. The `cargo tauri dev` flow runs `target/debug/hush` — an unsigned binary — and TCC behaviour gets unpredictable:
+macOS's TCC (Transparency, Consent, and Control) database keys permissions to a specific code-signing identity + bundle ID. A signed `Hush.app` (from `npm run tauri:bundle`) registers under `io.github.khawkins98.hush` and the grant survives rebuilds. The `cargo tauri dev` flow runs `target/debug/hush` — an unsigned binary — and TCC behaviour gets unpredictable:
 
 - The grant may bind to the binary's hash, which changes on every Cargo rebuild. Result: you grant once, the next launch silently has no permission.
 - The first prompt may attribute to *Terminal* (or whatever shell parent invoked `cargo tauri dev`) rather than to Hush itself. Granting Terminal does nothing for Hush. Microphone and Input Monitoring fall through this parent-attribution path and work fine; **Screen Recording is stricter** and effectively requires a real `.app` bundle.
-- If the bundle ID didn't get applied (some unsigned dev builds register under a binary path instead), `tccutil reset … com.khawkins.hush` returns "No such bundle identifier" and you have to reset more broadly.
+- If the bundle ID didn't get applied (some unsigned dev builds register under a binary path instead), `tccutil reset … io.github.khawkins98.hush` returns "No such bundle identifier" and you have to reset more broadly.
 
 The signed-bundle path (`npm run tauri:bundle`) is the most realistic test of "what users will see." Use the dev path for fast iteration, the bundle path before claiming a permission flow is shipped or before testing system-audio capture.
 
@@ -46,12 +46,12 @@ You hold `Right ⌘` (the default PTT key on macOS) but no recording starts. The
 2. System Settings → Privacy & Security → **Input Monitoring**. If Hush is listed and toggled on, but PTT still doesn't fire, toggle it off and on. If listed multiple times (multiple binary paths), remove all entries.
 3. Reset and re-prompt:
    ```sh
-   tccutil reset ListenEvent com.khawkins.hush
+   tccutil reset ListenEvent io.github.khawkins98.hush
    ```
    (Yes, "Input Monitoring" is `ListenEvent` in the TCC vocabulary. macOS naming.)
 4. Relaunch Hush — the prompt should reappear on first PTT press.
 
-If the `tccutil reset` returns "No such bundle identifier," the dev binary isn't registered under `com.khawkins.hush`. Run `tccutil reset ListenEvent` (no bundle id) — this resets *every* app's Input Monitoring permission, so other apps will re-prompt too, but it clears Hush's stale entry. Settings → Permissions in Hush wraps this same call.
+If the `tccutil reset` returns "No such bundle identifier," the dev binary isn't registered under `io.github.khawkins98.hush`. Run `tccutil reset ListenEvent` (no bundle id) — this resets *every* app's Input Monitoring permission, so other apps will re-prompt too, but it clears Hush's stale entry. Settings → Permissions in Hush wraps this same call.
 
 ---
 
@@ -66,7 +66,7 @@ You press Start, Stop after a few seconds, and the result is the friendly "No au
 1. System Settings → Privacy & Security → **Microphone**. Confirm Hush is enabled.
 2. Reset and re-prompt:
    ```sh
-   tccutil reset Microphone com.khawkins.hush
+   tccutil reset Microphone io.github.khawkins98.hush
    ```
 3. Relaunch Hush. Start recording — the OS should prompt this time.
 
@@ -83,7 +83,7 @@ You start a meeting with system audio enabled and immediately see a "Screen Reco
 1. System Settings → Privacy & Security → **Screen Recording**. Confirm Hush is enabled.
 2. Reset and re-prompt:
    ```sh
-   tccutil reset ScreenCapture com.khawkins.hush
+   tccutil reset ScreenCapture io.github.khawkins98.hush
    ```
 3. Relaunch Hush. Start a meeting with system audio — the OS should prompt this time. Until it's granted, microphone-only meetings still work.
 
@@ -104,7 +104,7 @@ The first time you run `cargo tauri dev`, the macOS Microphone or Input Monitori
    ```sh
    npm run tauri:bundle
    ```
-3. The bundled app will prompt under its own identity (`com.khawkins.hush`). Grant.
+3. The bundled app will prompt under its own identity (`io.github.khawkins98.hush`). Grant.
 4. Subsequent `cargo tauri dev` sessions inherit the bundle-ID grant in many cases (TCC is forgiving when the bundle ID matches). When they don't, see the symptoms above for the reset recipe.
 
 ---
@@ -112,10 +112,10 @@ The first time you run `cargo tauri dev`, the macOS Microphone or Input Monitori
 ## Resetting all Hush permissions at once
 
 ```sh
-tccutil reset Microphone com.khawkins.hush
-tccutil reset ListenEvent com.khawkins.hush      # Input Monitoring
-tccutil reset ScreenCapture com.khawkins.hush    # Screen Recording
-tccutil reset Accessibility com.khawkins.hush    # if the app ever asked
+tccutil reset Microphone io.github.khawkins98.hush
+tccutil reset ListenEvent io.github.khawkins98.hush      # Input Monitoring
+tccutil reset ScreenCapture io.github.khawkins98.hush    # Screen Recording
+tccutil reset Accessibility io.github.khawkins98.hush    # if the app ever asked
 ```
 
 Followed by relaunch. Each permission re-prompts on the next trigger:
@@ -140,7 +140,7 @@ When the active build's identity differs from the row that's currently switched 
 4. The original row stays in the list under its old identity, also showing as on, and now both fight for the grant.
 5. Subsequent launches: the wrong row wins, screen recording is silently blocked, no prompt fires because *some* Hush.app row is granted.
 
-`tccutil reset ScreenCapture com.khawkins.hush` only resets entries that match `com.khawkins.hush`. Stale rows from older identities don't go anywhere.
+`tccutil reset ScreenCapture io.github.khawkins98.hush` only resets entries that match `io.github.khawkins98.hush`. Stale rows from older identities don't go anywhere.
 
 **Recovery:**
 
