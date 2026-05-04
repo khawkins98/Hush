@@ -14,6 +14,7 @@
   import SidebarNav from "$lib/SidebarNav.svelte";
   import type { SidebarSection } from "$lib/SidebarNav.svelte";
   import { motionDuration } from "$lib/motion";
+  import { joinUtterances } from "$lib/transcript-format";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
   import MeetingSection, {
@@ -655,11 +656,9 @@
                 (u) => u.isFinal,
               );
               if (finals.length > 0) {
-                const text = finals
-                  .map((u) =>
-                    u.speakerLabel ? `${u.speakerLabel}: ${u.text}` : u.text,
-                  )
-                  .join("\n\n");
+                // Speaker labels suppressed when only one speaker
+                // appears in the session (#478) — see joinUtterances.
+                const text = joinUtterances(finals, "\n\n");
                 const durationMs =
                   recordedAt !== null ? Date.now() - recordedAt : null;
                 result = { text, foreground: null, durationMs };
@@ -1273,17 +1272,13 @@
         // toast would be confusing without context.
         return;
       }
-      // Format: speaker prefix when the diarizer set a label,
-      // plain text otherwise. Multi-speaker meetings get
-      // "Speaker A: …" prefixes; single-source mic-only sessions
-      // (the diarizer-skipped path from #369) get the source-
-      // derived label like "mic: …" — same labelling the
-      // History meeting row renders.
-      const joined = finals
-        .map((u) =>
-          u.speakerLabel ? `${u.speakerLabel}: ${u.text}` : u.text,
-        )
-        .join("\n\n");
+      // Format: speaker prefix when ≥2 distinct speakers appear
+      // in the session (#478). Single-speaker sessions render the
+      // bare text — repeating "Speaker A: " on every line is just
+      // noise. Once a second speaker is detected the labels are
+      // applied uniformly across the transcript so the prior
+      // lines retroactively gain context.
+      const joined = joinUtterances(finals, "\n\n");
       await navigator.clipboard.writeText(joined);
       setMeetingCopyNotice({
         kind: "success",

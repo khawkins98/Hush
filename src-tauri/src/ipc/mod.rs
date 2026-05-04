@@ -861,12 +861,25 @@ pub(crate) fn parse_sound_cue_sub_setting(raw: Option<String>) -> bool {
 }
 
 /// Parse the persisted [`crate::settings::keys::DIARIZATION_ENABLED`]
-/// row (#111). Wire encoding lives in [`crate::settings::codec`];
-/// per-key default is `false` — diarization is opt-in, and a
-/// corrupted row shouldn't silently turn it on since that flips the
-/// pump into the wespeaker model-download path.
+/// row (#111).
+///
+/// **Pre-#478**: per-key default was `false` because the wespeaker
+/// model wasn't downloaded out of the box and triggering a download
+/// at first-record-time would have surprised the user. **Post-#478**
+/// the wespeaker model ships alongside the Whisper model in the
+/// first-run download flow, so by the time `diarization_enabled` is
+/// read the model is on disk (or first-run was explicitly skipped /
+/// the wespeaker download failed best-effort, in which case the
+/// `FlagGatedDiarizer` falls through to `NoopDiarizer` automatically
+/// — no behavioural difference for the recording).
+///
+/// Default flips to `true`. Existing users who explicitly toggled
+/// the setting OFF have a `"false"` row in the settings table; the
+/// `decode_bool` step preserves that, so their preference survives
+/// the upgrade. The `unwrap_or(true)` only fires for absent /
+/// corrupted rows — i.e. fresh installs and new users.
 pub(crate) fn parse_diarization_enabled_setting(raw: Option<String>) -> bool {
-    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(false)
+    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(true)
 }
 
 /// Parse the persisted [`crate::settings::keys::INFERENCE_THREADS`]
@@ -2017,22 +2030,25 @@ mod tests {
 
     #[test]
     fn parse_diarization_enabled_setting_handles_all_branches() {
-        // Absent row → off. Diarization is opt-in until PR-B
-        // ships the model + download path; a missing row must not
-        // imply "on" or the foundation PR's NoopDiarizer would
-        // make a `true` setting misleading.
-        assert!(!parse_diarization_enabled_setting(None));
-        // Literal "true" → on. The only string that turns it on.
+        // Absent row → on (#478 default flip). The wespeaker model
+        // is bundled into the first-run download flow, so by the
+        // time this is read on a fresh install the model is on
+        // disk; existing users with an explicit `"false"` row
+        // keep their preference (the round-trip below pins that).
+        assert!(parse_diarization_enabled_setting(None));
+        // Literal "true" → on.
         assert!(parse_diarization_enabled_setting(Some("true".into())));
-        // Literal "false" → off.
+        // Literal "false" → off. Critical: an existing user who
+        // explicitly toggled diarization OFF before #478 has
+        // exactly this row, and the upgrade must respect it.
         assert!(!parse_diarization_enabled_setting(Some("false".into())));
-        // Anything else falls through to off — corrupted rows
-        // shouldn't silently enable a feature that costs a model
-        // download.
-        assert!(!parse_diarization_enabled_setting(Some("garbage".into())));
-        assert!(!parse_diarization_enabled_setting(Some("".into())));
-        assert!(!parse_diarization_enabled_setting(Some("True".into())));
-        assert!(!parse_diarization_enabled_setting(Some("1".into())));
+        // Anything else falls through to the absent-row default
+        // (now `true`) — same fallthrough policy other settings
+        // (`hud_enabled`) use for corrupted rows.
+        assert!(parse_diarization_enabled_setting(Some("garbage".into())));
+        assert!(parse_diarization_enabled_setting(Some("".into())));
+        assert!(parse_diarization_enabled_setting(Some("True".into())));
+        assert!(parse_diarization_enabled_setting(Some("1".into())));
     }
 
     #[test]
