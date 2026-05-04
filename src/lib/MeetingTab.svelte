@@ -764,20 +764,20 @@
     font-size: 0.85rem;
   }
   .diarizer-details dt {
-    color: #555;
+    color: var(--text-muted);
     font-weight: 500;
   }
   .diarizer-details dd {
     margin: 0;
-    color: #1a1a1a;
+    color: var(--text-primary);
     user-select: text;
     word-break: break-all;
   }
   .path-code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
     font-size: 0.78rem;
-    color: #2a2a2a;
-    background-color: rgba(0, 0, 0, 0.04);
+    color: var(--text-secondary);
+    background-color: rgba(0, 0, 0, 0.05);
     padding: 0.1em 0.3em;
     border-radius: 4px;
   }
@@ -785,7 +785,7 @@
     background: none;
     border: none;
     padding: 0;
-    color: #2c3e8f;
+    color: var(--info-text);
     text-decoration: underline;
     cursor: pointer;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
@@ -794,7 +794,7 @@
     text-align: left;
   }
   button.link-like:hover {
-    color: #1a2a6c;
+    color: var(--accent);
   }
   .diarizer-explainer {
     margin: 0.5rem 0 0;
@@ -819,6 +819,9 @@
     :root:not([data-theme="light"]) .diarizer-manual-install > summary:hover {
       color: #d8d8d8;
     }
+    :root:not([data-theme="light"]) .path-code {
+      background-color: rgba(255, 255, 255, 0.08);
+    }
   }
   :root[data-theme="dark"] .diarizer-model-status {
     background-color: #2a2a2d;
@@ -829,5 +832,8 @@
   }
   :root[data-theme="dark"] .diarizer-manual-install > summary:hover {
     color: #d8d8d8;
+  }
+  :root[data-theme="dark"] .path-code {
+    background-color: rgba(255, 255, 255, 0.08);
   }
 </style>
