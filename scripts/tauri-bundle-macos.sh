@@ -38,11 +38,8 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 export CMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}"
 
 # --bundles app: produce only the .app bundle, not the .dmg.
-# Tauri's create-dmg script mis-parses OS_MAJOR_VERSION on macOS 26+
-# (sees "26", expects ≤10 style versioning) and exits with "Not enough
-# arguments", failing the entire build even though the .app is good.
-# For TCC smoke-testing we only need the .app; DMG is a release artifact.
-# --debug skips release-profile optimisations.
+# For TCC smoke-testing we only need the .app; DMG is a release artifact
+# produced by `npm run tauri:dmg`. --debug skips release-profile optimisations.
 npx tauri build --debug --bundles app
 
 APP_PATH="src-tauri/target/debug/bundle/macos/Hush.app"
