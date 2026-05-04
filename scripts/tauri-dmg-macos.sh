@@ -59,3 +59,7 @@ fi
 
 echo "[hush tauri:dmg] DMG ready: $DMG_PATH"
 open "$(dirname "$DMG_PATH")"
+
+echo ""
+echo "[hush tauri:dmg] tip: to test the installer as a first-time user, run"
+echo "  'npm run dev-reset' before mounting the DMG to start from a vanilla state."

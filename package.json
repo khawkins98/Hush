@@ -14,6 +14,7 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:tauri": "wdio run wdio.conf.ts",
     "dev-cleanup": "bash scripts/dev-cleanup.sh",
+    "dev-reset": "bash scripts/dev-reset.sh",
     "tauri": "tauri",
     "tauri:bundle": "bash scripts/tauri-bundle-macos.sh",
     "tauri:dmg": "bash scripts/tauri-dmg-macos.sh"
