@@ -39,7 +39,7 @@ mod format;
 #[cfg(target_os = "macos")]
 mod screencapturekit;
 
-pub use format::downmix_to_mono;
+pub use format::{apply_mic_gain, downmix_to_mono};
 #[cfg(target_os = "macos")]
 pub use screencapturekit::{
     prime_screen_recording_permission, validate_screen_recording_capability,

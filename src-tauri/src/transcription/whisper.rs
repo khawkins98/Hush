@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::audio::{downmix_to_mono, CaptureFormat, CapturedAudio};
+use crate::audio::{apply_mic_gain, downmix_to_mono, CaptureFormat, CapturedAudio};
 use crate::transcription::resample::resample_to_mono;
 use crate::transcription::streaming::{
     SlidingWindowConfig, SlidingWindowState, StreamSegment, StreamingTranscribeSession,
@@ -99,6 +99,13 @@ pub struct WhisperTranscription {
     /// (cloned out of the parent) and the AppState IPC writer share
     /// one canonical count.
     inference_threads: Arc<std::sync::atomic::AtomicI32>,
+    /// Live microphone gain in dB (#531). Stored as `f32` bits in an
+    /// `AtomicU32` (`f32::to_bits` / `f32::from_bits`) — std has no
+    /// `AtomicF32`. Applied after `prepare_audio` in the one-shot
+    /// path and after `convert_chunk` in the streaming path so every
+    /// inference call sees the current slider position without a
+    /// model reload. 0.0 bits = unity (no boost).
+    mic_gain_db: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl WhisperTranscription {
@@ -209,6 +216,23 @@ impl WhisperTranscription {
         self.inference_threads
             .store(clamped, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Borrow the live mic-gain atomic (#531). `AppStateBuilder` reads this
+    /// at boot to share the same Arc with the IPC `set_mic_gain_db` writer,
+    /// so a slider change takes effect on the next inference call without a
+    /// model reload.
+    pub fn shared_mic_gain_db(&self) -> Arc<std::sync::atomic::AtomicU32> {
+        Arc::clone(&self.mic_gain_db)
+    }
+
+    /// Builder-style setter: swap the mic-gain atomic for a caller-supplied
+    /// one. Production wiring uses this so the loaded transcriber points at
+    /// `AppState`'s canonical Arc. Tests that don't care about live updates
+    /// skip the setter entirely.
+    pub fn with_mic_gain_db(mut self, arc: Arc<std::sync::atomic::AtomicU32>) -> Self {
+        self.mic_gain_db = arc;
+        self
+    }
 }
 
 impl LoadedContext {
@@ -219,6 +243,7 @@ impl LoadedContext {
             inference_threads: Arc::new(std::sync::atomic::AtomicI32::new(
                 DEFAULT_INFERENCE_THREADS,
             )),
+            mic_gain_db: Arc::new(std::sync::atomic::AtomicU32::new(0f32.to_bits())),
         })
     }
 }
@@ -231,7 +256,13 @@ impl WhisperTranscription {
     /// (greedy sampling, thread count, lossy segment concatenation) is
     /// identical, so it lives here behind one parameter.
     fn run_inference(&self, audio: &CapturedAudio, prompt: &str) -> Result<String> {
-        let pcm = Self::prepare_audio(audio)?;
+        let mut pcm = Self::prepare_audio(audio)?;
+
+        // Apply user-configured mic gain before inference (#531). A 0-bit
+        // AtomicU32 maps to 0.0 dB (unity) which is the no-op fast path
+        // inside `apply_mic_gain`.
+        let gain_db = f32::from_bits(self.mic_gain_db.load(std::sync::atomic::Ordering::Relaxed));
+        apply_mic_gain(&mut pcm, gain_db);
 
         // Configure inference. Greedy with best_of=1 is the cheapest mode
         // and is sufficient for dictation; beam search is a quality/latency

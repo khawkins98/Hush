@@ -40,13 +40,13 @@
 //! for embedding extraction and is dropped at session end.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::audio::{AudioSession, AudioSource, CaptureFormat};
+use crate::audio::{apply_mic_gain, AudioSession, AudioSource, CaptureFormat};
 use crate::transcription::{StreamingTranscribeSession, Utterance};
 
 use super::manager::{MeetingSourceFailedPayload, MEETING_SOURCE_FAILED_EVENT};
@@ -110,6 +110,10 @@ pub(super) struct PumpContext {
     /// non-Noop impl can override `"mic"` / `"system"` with
     /// per-speaker labels.
     pub diarize: Arc<dyn crate::diarization::Diarize>,
+    /// Live microphone gain in dB (#531). Shared Arc from `RuntimeFlags`;
+    /// applied to the drained capture-format samples before they enter
+    /// both the streaming inference session and the diarizer audio buffer.
+    pub mic_gain_db: Arc<AtomicU32>,
 }
 
 /// Pump task body. Loops on a `PUMP_TICK` cadence: drain each audio
@@ -226,6 +230,14 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                 );
                 continue;
             };
+
+            // Apply mic gain to the drained raw samples (#531) before
+            // feeding them to both the diarizer buffer and the streaming
+            // inference session. A single application here means neither
+            // consumer needs its own gain path.
+            let gain_db = f32::from_bits(ctx.mic_gain_db.load(Ordering::Relaxed));
+            apply_mic_gain(&mut drain_buffers[i], gain_db);
+
             let samples = std::mem::take(&mut drain_buffers[i]);
             let source_label = ctx.sources[i].speaker_tag().to_owned();
             let session_id = ctx.session_id;
