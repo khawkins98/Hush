@@ -421,18 +421,18 @@
   /* `.ghost-subtle` is a PttHotkeyEditor-only quieter variant of
      `button.ghost` for the secondary "Reset" affordance. */
   button.ghost-subtle {
-    color: #666;
+    color: var(--text-muted);
   }
 
   .settings-hint {
     margin: 0;
     font-size: 0.8rem;
-    color: #666;
+    color: var(--text-muted);
     line-height: 1.4;
   }
   .settings-hint.warn {
-    color: #8a5a00;
-    background-color: #fff7e6;
+    color: var(--warning-text);
+    background-color: var(--warning-bg);
     border: 1px solid #ffd591;
     border-radius: 6px;
     padding: 0.55rem 0.75rem;
@@ -441,25 +441,34 @@
      to the neutral hint after the 1.8 s timer in
      `onCaptureKeyDown`. */
   .settings-hint-flash {
-    color: #8a1f1f;
+    color: var(--danger);
     transition: color 0.18s ease-out;
   }
   .muted {
-    color: #888;
+    color: var(--text-muted);
     font-size: 0.85rem;
   }
 
   @media (prefers-color-scheme: dark) {
-    .combo-row {
+    :root:not([data-theme="light"]) .combo-row {
       background-color: #2a2a2d;
       border-color: #38383b;
     }
-    .settings-hint { color: #a8a8a8; }
-    .settings-hint.warn {
+    :root:not([data-theme="light"]) .settings-hint { color: #a8a8a8; }
+    :root:not([data-theme="light"]) .settings-hint.warn {
       color: #ffd591;
       background-color: #3a2c00;
       border-color: #6b5300;
     }
-    button.ghost-subtle { color: #888; }
+  }
+  :root[data-theme="dark"] .combo-row {
+    background-color: #2a2a2d;
+    border-color: #38383b;
+  }
+  :root[data-theme="dark"] .settings-hint { color: #a8a8a8; }
+  :root[data-theme="dark"] .settings-hint.warn {
+    color: #ffd591;
+    background-color: #3a2c00;
+    border-color: #6b5300;
   }
 </style>

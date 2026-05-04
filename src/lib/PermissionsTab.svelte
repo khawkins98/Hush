@@ -214,13 +214,13 @@
   }
   .placeholder {
     margin: 0;
-    color: #666;
+    color: var(--text-muted);
     font-size: 0.95rem;
   }
   .perm-recovery-intro {
     margin: 1rem 0;
     font-size: 0.85rem;
-    color: #555;
+    color: var(--text-secondary);
     max-width: 44rem;
   }
   /* Local copy of the parent page's button + .ghost variant.
@@ -232,8 +232,8 @@
     padding: 0.55em 1.1em;
     font-size: 0.95em;
     font-family: inherit;
-    color: #0f0f0f;
-    background-color: #ffffff;
+    color: var(--text-primary);
+    background-color: var(--bg-surface);
     cursor: pointer;
     font-weight: 600;
     transition: border-color 0.15s, background-color 0.15s;
@@ -248,29 +248,24 @@
     background-color: transparent;
   }
   button.ghost:hover:not(:disabled) {
-    background-color: #f0f0f0;
+    background-color: var(--bg-app);
   }
   button:disabled {
     opacity: 0.55;
     cursor: not-allowed;
   }
   @media (prefers-color-scheme: dark) {
-    .placeholder {
-      color: #a8a8a8;
-    }
-    .perm-recovery-intro {
-      color: #b0b0b0;
-    }
-    button {
-      color: #f0f0f0;
-      background-color: #2a2a2a;
+    :root:not([data-theme="light"]) button {
       border-color: #3a3a3a;
     }
-    button.ghost {
-      background-color: transparent;
-    }
-    button.ghost:hover:not(:disabled) {
+    :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
       background-color: #353535;
     }
+  }
+  :root[data-theme="dark"] button {
+    border-color: #3a3a3a;
+  }
+  :root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+    background-color: #353535;
   }
 </style>

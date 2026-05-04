@@ -109,8 +109,8 @@
 <style>
   .history-row {
     padding: 0.75rem 1rem;
-    background-color: white;
-    border: 1px solid #e1e1e1;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
   }
 
@@ -125,7 +125,7 @@
   .history-meta {
     margin: 0 0 0.5rem;
     font-size: 0.8rem;
-    color: #6b6b6b;
+    color: var(--text-muted);
   }
 
   .history-actions {
@@ -138,55 +138,70 @@
     font-size: 0.8rem;
     font-weight: 500;
     background-color: transparent;
-    border: 1px solid #d1d1d1;
+    border: 1px solid var(--border-input);
     border-radius: 8px;
     cursor: pointer;
     font-family: inherit;
-    color: #0f0f0f;
+    color: var(--text-primary);
     transition: border-color 0.15s, background-color 0.15s;
   }
   button.ghost:hover:not(:disabled) {
-    background-color: #f0f0f0;
+    background-color: var(--bg-app);
   }
   button.ghost.danger {
-    color: #b03030;
-    border-color: #e1b8b8;
+    color: var(--danger);
+    border-color: var(--danger-border);
   }
   button.ghost.danger:hover:not(:disabled) {
-    background-color: #fbeaea;
+    background-color: var(--danger-bg);
     border-color: var(--danger);
   }
   button.ghost.danger.confirming {
-    background-color: #fbeaea;
+    background-color: var(--danger-bg);
     border-color: var(--danger);
     color: #8a0000;
   }
 
   @media (prefers-color-scheme: dark) {
-    .history-row {
-      background-color: #1f1f22;
-      border-color: #2f2f33;
-    }
-    .history-text { color: #e8e8e8; }
-    .history-meta { color: #9a9aa0; }
-    button.ghost {
+    :root:not([data-theme="light"]) .history-meta { color: #9a9aa0; }
+    :root:not([data-theme="light"]) button.ghost {
       color: #d8d8d8;
       border-color: #38383b;
     }
-    button.ghost:hover:not(:disabled) {
+    :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
       background-color: #2a2a2d;
     }
-    button.ghost.danger {
+    :root:not([data-theme="light"]) button.ghost.danger {
       color: #f0a0a0;
       border-color: #5a3a3a;
     }
-    button.ghost.danger:hover:not(:disabled) {
+    :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
       background-color: #3d1d1d;
     }
-    button.ghost.danger.confirming {
+    :root:not([data-theme="light"]) button.ghost.danger.confirming {
       background-color: #3d1d1d;
       border-color: var(--danger);
       color: #f0c0c0;
     }
+  }
+  :root[data-theme="dark"] .history-meta { color: #9a9aa0; }
+  :root[data-theme="dark"] button.ghost {
+    color: #d8d8d8;
+    border-color: #38383b;
+  }
+  :root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+    background-color: #2a2a2d;
+  }
+  :root[data-theme="dark"] button.ghost.danger {
+    color: #f0a0a0;
+    border-color: #5a3a3a;
+  }
+  :root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
+    background-color: #3d1d1d;
+  }
+  :root[data-theme="dark"] button.ghost.danger.confirming {
+    background-color: #3d1d1d;
+    border-color: var(--danger);
+    color: #f0c0c0;
   }
 </style>

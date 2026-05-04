@@ -288,8 +288,8 @@
 <style>
   .history-row {
     padding: 0.75rem 1rem;
-    background-color: white;
-    border: 1px solid #e1e1e1;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
   }
 
@@ -298,21 +298,21 @@
     flex-wrap: wrap;
     gap: 0.4rem 0.6rem;
     font-size: 0.82rem;
-    color: #5a5a5a;
+    color: var(--text-secondary);
     margin-bottom: 0.5rem;
   }
   .meeting-app {
     font-weight: 600;
-    color: #2a2a2a;
+    color: var(--text-primary);
   }
   .meeting-utterances,
   .meeting-sources {
-    color: #6b6b6b;
+    color: var(--text-muted);
   }
   .meeting-app-title {
     margin: 0 0 0.4rem;
     font-size: 0.85rem;
-    color: #4a4a4a;
+    color: var(--text-secondary);
     font-style: italic;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -322,7 +322,7 @@
   .meeting-notes {
     margin: 0 0 0.5rem;
     font-size: 0.88rem;
-    color: #444;
+    color: var(--text-secondary);
     line-height: 1.4;
   }
 
@@ -344,8 +344,8 @@
     list-style: none;
     margin: 0;
     padding: 0.25rem;
-    background-color: white;
-    border: 1px solid #d1d1d1;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-input);
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     min-width: 11rem;
@@ -363,11 +363,11 @@
     border-radius: 6px;
     font-size: 0.85rem;
     font-family: inherit;
-    color: #2a2a2a;
+    color: var(--text-primary);
     cursor: pointer;
   }
   .export-menu-item:hover {
-    background-color: #f0f0f3;
+    background-color: var(--bg-sidebar);
   }
 
   button.ghost {
@@ -375,26 +375,26 @@
     font-size: 0.8rem;
     font-weight: 500;
     background-color: transparent;
-    border: 1px solid #d1d1d1;
+    border: 1px solid var(--border-input);
     border-radius: 8px;
     cursor: pointer;
     font-family: inherit;
-    color: #0f0f0f;
+    color: var(--text-primary);
     transition: border-color 0.15s, background-color 0.15s;
   }
   button.ghost:hover:not(:disabled) {
-    background-color: #f0f0f0;
+    background-color: var(--bg-app);
   }
   button.ghost.danger {
-    color: #b03030;
-    border-color: #e1b8b8;
+    color: var(--danger);
+    border-color: var(--danger-border);
   }
   button.ghost.danger:hover:not(:disabled) {
-    background-color: #fbeaea;
+    background-color: var(--danger-bg);
     border-color: var(--danger);
   }
   button.ghost.danger.confirming {
-    background-color: #fbeaea;
+    background-color: var(--danger-bg);
     border-color: var(--danger);
     color: #8a0000;
   }
@@ -402,11 +402,11 @@
   .meeting-detail-status {
     margin: 0.75rem 0 0;
     font-size: 0.85rem;
-    color: #6b6b6b;
+    color: var(--text-muted);
     font-style: italic;
   }
   .meeting-detail-error {
-    color: #b03030;
+    color: var(--danger);
     font-style: normal;
   }
 
@@ -414,7 +414,7 @@
     list-style: none;
     margin: 0.75rem 0 0;
     padding: 0.6rem;
-    background-color: #fafafa;
+    background-color: var(--bg-surface);
     border-radius: 6px;
     display: flex;
     flex-direction: column;
@@ -428,61 +428,66 @@
   }
   .utterance-speaker {
     font-weight: 600;
-    color: #444;
+    color: var(--text-secondary);
     margin-right: 0.4rem;
   }
   .utterance-text {
-    color: #2a2a2a;
+    color: var(--text-primary);
     white-space: pre-wrap;
   }
 
   @media (prefers-color-scheme: dark) {
-    .history-row {
-      background-color: #1f1f22;
-      border-color: #2f2f33;
-    }
-    .meeting-meta { color: #a8a8a8; }
-    .meeting-app { color: #e8e8e8; }
-    .meeting-utterances,
-    .meeting-sources { color: #9a9aa0; }
-    .meeting-app-title { color: #b0b0b8; }
-    .meeting-notes { color: #c0c0c0; }
-    .export-menu {
-      background-color: #2a2a2d;
-      border-color: #38383b;
+    :root:not([data-theme="light"]) .meeting-utterances,
+    :root:not([data-theme="light"]) .meeting-sources { color: #9a9aa0; }
+    :root:not([data-theme="light"]) .export-menu {
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     }
-    .export-menu-item {
-      color: #e8e8e8;
-    }
-    .export-menu-item:hover {
-      background-color: #353539;
-    }
-    button.ghost {
+    :root:not([data-theme="light"]) button.ghost {
       color: #d8d8d8;
       border-color: #38383b;
     }
-    button.ghost:hover:not(:disabled) {
+    :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
       background-color: #2a2a2d;
     }
-    button.ghost.danger {
+    :root:not([data-theme="light"]) button.ghost.danger {
       color: #f0a0a0;
       border-color: #5a3a3a;
     }
-    button.ghost.danger:hover:not(:disabled) {
+    :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
       background-color: #3d1d1d;
     }
-    button.ghost.danger.confirming {
+    :root:not([data-theme="light"]) button.ghost.danger.confirming {
       background-color: #3d1d1d;
       border-color: var(--danger);
       color: #f0c0c0;
     }
-    .meeting-detail-status { color: #9a9aa0; }
-    .meeting-detail-error { color: #f0a0a0; }
-    .meeting-transcript {
-      background-color: #18181b;
-    }
-    .utterance-speaker { color: #b8b8b8; }
-    .utterance-text { color: #e8e8e8; }
+    :root:not([data-theme="light"]) .meeting-detail-status { color: #9a9aa0; }
+    :root:not([data-theme="light"]) .meeting-detail-error { color: #f0a0a0; }
   }
+  :root[data-theme="dark"] .meeting-utterances,
+  :root[data-theme="dark"] .meeting-sources { color: #9a9aa0; }
+  :root[data-theme="dark"] .export-menu {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+  :root[data-theme="dark"] button.ghost {
+    color: #d8d8d8;
+    border-color: #38383b;
+  }
+  :root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+    background-color: #2a2a2d;
+  }
+  :root[data-theme="dark"] button.ghost.danger {
+    color: #f0a0a0;
+    border-color: #5a3a3a;
+  }
+  :root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
+    background-color: #3d1d1d;
+  }
+  :root[data-theme="dark"] button.ghost.danger.confirming {
+    background-color: #3d1d1d;
+    border-color: var(--danger);
+    color: #f0c0c0;
+  }
+  :root[data-theme="dark"] .meeting-detail-status { color: #9a9aa0; }
+  :root[data-theme="dark"] .meeting-detail-error { color: #f0a0a0; }
 </style>

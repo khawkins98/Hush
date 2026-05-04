@@ -55,7 +55,7 @@
 .error-card {
   margin: 0.75rem 0;
   padding: 0.85rem 1rem;
-  background-color: #fee;
+  background-color: var(--danger-bg);
   border: 1px solid var(--danger);
   border-radius: 8px;
   color: #8a0000;
@@ -92,7 +92,7 @@
   background-color: var(--danger);
   border: 1px solid var(--danger);
   border-radius: 6px;
-  color: #ffffff;
+  color: var(--text-on-accent);
   font-family: inherit;
   font-size: 0.85rem;
   font-weight: 600;
@@ -100,8 +100,8 @@
   transition: background-color 0.12s, transform 0.05s;
 }
 .error-action:hover {
-  background-color: #b03030;
-  border-color: #b03030;
+  background-color: var(--danger);
+  border-color: var(--danger);
 }
 .error-action:active {
   transform: translateY(1px);
@@ -146,19 +146,33 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .error-card {
+  :root:not([data-theme="light"]) .error-card {
     background-color: #4a1a1a;
     border-color: var(--danger);
     color: #ffd0d0;
   }
-  .error-hint {
+  :root:not([data-theme="light"]) .error-hint {
     color: #ffb0b0;
   }
-  .error-details {
+  :root:not([data-theme="light"]) .error-details {
     color: #d8a0a0;
   }
-  .error-details-body {
+  :root:not([data-theme="light"]) .error-details-body {
     color: #c89898;
   }
+}
+:root[data-theme="dark"] .error-card {
+  background-color: #4a1a1a;
+  border-color: var(--danger);
+  color: #ffd0d0;
+}
+:root[data-theme="dark"] .error-hint {
+  color: #ffb0b0;
+}
+:root[data-theme="dark"] .error-details {
+  color: #d8a0a0;
+}
+:root[data-theme="dark"] .error-details-body {
+  color: #c89898;
 }
 </style>

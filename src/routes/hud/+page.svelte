@@ -342,7 +342,7 @@
     width: 0.85rem;
     height: 0.85rem;
     border-radius: 50%;
-    background-color: #ff4040;
+    background-color: var(--danger);
     box-shadow: 0 0 8px rgba(255, 64, 64, 0.55);
     animation: hud-pulse 1.2s ease-in-out infinite;
   }

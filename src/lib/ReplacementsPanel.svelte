@@ -122,7 +122,7 @@
   text-align: left;
   /* Per-panel accent stripe + slightly inset padding so each section
      reads visually distinct as the page grows. */
-  border-left: 3px solid #e1e1e1;
+  border-left: 3px solid var(--border);
   padding-left: 1rem;
   padding-bottom: 0.25rem;
 }
@@ -143,7 +143,7 @@
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .panel-tag {
@@ -155,32 +155,32 @@
   border-radius: 5px;
   font-size: 0.75em;
   font-weight: 700;
-  background-color: #e8e8e8;
-  color: #444;
+  background-color: var(--bg-sidebar);
+  color: var(--text-secondary);
   margin-right: 0.5rem;
 }
 .panel-tag-replacements {
   background-color: #dde5ff;
-  color: #2c3e8f;
+  color: var(--info-text);
 }
 
 .panel-subtitle {
   margin-left: 0.6rem;
   font-size: 0.7em;
   font-weight: 400;
-  color: #888;
+  color: var(--text-muted);
   font-style: italic;
 }
 
 input,
 button {
   border-radius: 8px;
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border-input);
   padding: 0.7em 1.2em;
   font-size: 1em;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   transition: border-color 0.15s, background-color 0.15s;
 }
 
@@ -207,25 +207,25 @@ button.ghost {
   font-size: 0.8rem;
   font-weight: 500;
   background-color: transparent;
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border-input);
 }
 
 button.ghost:hover:not(:disabled) {
-  background-color: #f0f0f0;
+  background-color: var(--bg-app);
 }
 
 button.ghost.danger {
-  color: #b03030;
-  border-color: #e1b8b8;
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
 
 button.ghost.danger:hover:not(:disabled) {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
 }
 
 button.ghost.danger.confirming {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
   color: #8a0000;
   font-weight: 600;
@@ -234,10 +234,10 @@ button.ghost.danger.confirming {
 .empty-history {
   margin: 0.5rem 0;
   padding: 1rem;
-  background-color: #fafafa;
-  border: 1px dashed #d1d1d1;
+  background-color: var(--bg-surface);
+  border: 1px dashed var(--border-input);
   border-radius: 8px;
-  color: #666;
+  color: var(--text-muted);
   font-size: 0.9rem;
   text-align: center;
 }
@@ -245,9 +245,9 @@ button.ghost.danger.confirming {
 .loading-skeleton {
   margin: 0.5rem 0;
   padding: 1rem;
-  background-color: #fafafa;
+  background-color: var(--bg-surface);
   border-radius: 6px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 0.9rem;
   text-align: center;
   font-style: italic;
@@ -256,12 +256,13 @@ button.ghost.danger.confirming {
 .hint-prose {
   margin: 0 0 1rem;
   font-size: 0.85rem;
-  color: #555;
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
 .hint-prose code {
-  background-color: #eef2ff;
+  background-color: var(--info-bg);
+  color: var(--info-text);
   padding: 0.05em 0.4em;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -290,7 +291,7 @@ button.ghost.danger.confirming {
 }
 
 .arrow {
-  color: #888;
+  color: var(--text-muted);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -309,15 +310,15 @@ button.ghost.danger.confirming {
   gap: 0.6rem;
   align-items: center;
   padding: 0.55rem 0.8rem;
-  background-color: white;
-  border: 1px solid #e1e1e1;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.85rem;
 }
 
 .replacement-find,
 .replacement-replace {
-  background-color: #f4f4f4;
+  background-color: var(--bg-sidebar);
   padding: 0.1em 0.5em;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -334,56 +335,85 @@ button.ghost.danger.confirming {
 }
 
 @media (prefers-color-scheme: dark) {
-  input,
-  button {
-    color: #f0f0f0;
+  :root:not([data-theme="light"]) input,
+  :root:not([data-theme="light"]) button {
     background-color: #2a2a2a;
     border-color: #3a3a3a;
   }
-  button:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button:hover:not(:disabled) {
     border-color: var(--accent);
   }
-  button.ghost {
+  :root:not([data-theme="light"]) button.ghost {
     border-color: #3a3a3a;
-    color: #f0f0f0;
   }
-  button.ghost:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
     background-color: #353535;
   }
-  button.ghost.danger {
+  :root:not([data-theme="light"]) button.ghost.danger {
     color: #ff9090;
-    border-color: #5a2020;
   }
-  button.ghost.danger:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
     border-color: var(--danger);
   }
-  .history-header h2 {
+  :root:not([data-theme="light"]) .history-header h2 {
     color: #d8d8d8;
   }
-  .empty-history {
+  :root:not([data-theme="light"]) .empty-history {
     background-color: #1f1f1f;
     border-color: #3a3a3a;
     color: #999;
   }
-  .hint-prose {
+  :root:not([data-theme="light"]) .hint-prose {
     color: #aaa;
   }
-  .hint-prose code {
-    background-color: #1e2a4a;
-    color: #c0d0ff;
-  }
-  .replacement-row {
+  :root:not([data-theme="light"]) .replacement-row {
     background-color: #2a2a2a;
     border-color: #3a3a3a;
   }
-  .replacement-find,
-  .replacement-replace {
+  :root:not([data-theme="light"]) .replacement-find,
+  :root:not([data-theme="light"]) .replacement-replace {
     background-color: #1f1f1f;
-    color: #f0f0f0;
   }
-  .arrow {
-    color: #888;
-  }
+}
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] button {
+  background-color: #2a2a2a;
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+:root[data-theme="dark"] button.ghost {
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+  background-color: #353535;
+}
+:root[data-theme="dark"] button.ghost.danger {
+  color: #ff9090;
+}
+:root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
+  background-color: #3a1818;
+  border-color: var(--danger);
+}
+:root[data-theme="dark"] .history-header h2 {
+  color: #d8d8d8;
+}
+:root[data-theme="dark"] .empty-history {
+  background-color: #1f1f1f;
+  border-color: #3a3a3a;
+  color: #999;
+}
+:root[data-theme="dark"] .hint-prose {
+  color: #aaa;
+}
+:root[data-theme="dark"] .replacement-row {
+  background-color: #2a2a2a;
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] .replacement-find,
+:root[data-theme="dark"] .replacement-replace {
+  background-color: #1f1f1f;
 }
 </style>

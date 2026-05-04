@@ -235,12 +235,12 @@
   h2 {
     margin: 0;
     font-size: 1.15rem;
-    color: #1a1a1a;
+    color: var(--text-primary);
   }
   .dialog-desc {
     margin: 0;
     font-size: 0.85rem;
-    color: #5a5a5a;
+    color: var(--text-secondary);
     line-height: 1.45;
   }
   .dialog-field {
@@ -254,7 +254,7 @@
   .dialog-field legend {
     font-weight: 600;
     font-size: 0.82rem;
-    color: #444;
+    color: var(--text-secondary);
     margin-bottom: 0.25rem;
   }
   .dialog-field[disabled] {
@@ -265,7 +265,7 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.88rem;
-    color: #2a2a2a;
+    color: var(--text-primary);
     cursor: pointer;
   }
   .dialog-actions {
@@ -285,17 +285,17 @@
     transition: background-color 0.12s, border-color 0.12s;
   }
   button.ghost {
-    color: #2a2a2a;
+    color: var(--text-primary);
     background-color: transparent;
     border: 1px solid #d1d1d1;
   }
   button.ghost:hover {
-    background-color: #f0f0f0;
+    background-color: var(--bg-app);
   }
   button.primary {
     color: white;
-    background-color: #2c3e8f;
-    border: 1px solid #2c3e8f;
+    background-color: var(--accent);
+    border: 1px solid var(--accent);
     font-weight: 600;
   }
   button.primary:hover {
@@ -304,28 +304,33 @@
   }
 
   @media (prefers-color-scheme: dark) {
-    .dialog-body {
+    :root:not([data-theme="light"]) .dialog-body {
       background-color: #1f1f22;
       box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
     }
-    h2 { color: #e8e8e8; }
-    .dialog-desc { color: #b0b0b8; }
-    .dialog-field legend { color: #c8c8c8; }
-    .radio-row { color: #d8d8d8; }
-    button.ghost {
-      color: #d8d8d8;
+    :root:not([data-theme="light"]) button.ghost {
       border-color: #38383b;
     }
-    button.ghost:hover {
+    :root:not([data-theme="light"]) button.ghost:hover {
       background-color: #2a2a2d;
     }
-    button.primary {
-      background-color: #4a5fb8;
-      border-color: #4a5fb8;
-    }
-    button.primary:hover {
+    :root:not([data-theme="light"]) button.primary:hover {
       background-color: #3d4f9c;
       border-color: #3d4f9c;
     }
+  }
+  :root[data-theme="dark"] .dialog-body {
+    background-color: #1f1f22;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  }
+  :root[data-theme="dark"] button.ghost {
+    border-color: #38383b;
+  }
+  :root[data-theme="dark"] button.ghost:hover {
+    background-color: #2a2a2d;
+  }
+  :root[data-theme="dark"] button.primary:hover {
+    background-color: #3d4f9c;
+    border-color: #3d4f9c;
   }
 </style>

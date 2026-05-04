@@ -288,7 +288,7 @@
     flex-shrink: 0;
   }
   .state-dot.recording {
-    background-color: #ff4040;
+    background-color: var(--danger);
     box-shadow: 0 0 6px rgba(255, 64, 64, 0.65);
     animation: dot-pulse 1.2s ease-in-out infinite;
   }
