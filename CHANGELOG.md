@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### Waveform sensitivity — log scale + adaptive gain (#539)
+
+- `AudioWaveform` now maps raw RMS amplitude through a dBFS logarithmic scale rather than a linear multiplier. Conversational speech at −38 dBFS renders at ~38 % bar height instead of the near-invisible ~5 % it produced with `level × 400`.
+- An adaptive ceiling tracker follows the loudest recent signal with a fast attack (~60 ms) and a very slow release (~11 s). The displayed range is always centred on what the mic or system audio is actually delivering, so quiet USB mics and boosted system capture both look equally alive without any manual gain knob.
+- Both the main-window waveform and the HUD waveform benefit automatically; the HUD's `levelScale={480}` prop is now a no-op in log mode but kept for `logScale={false}` callers.
+- `logScale` prop defaults to `true`; passing `logScale={false}` restores the original linear behaviour for any caller that needs it.
+
+#### Model-state mismatch after rebuild / DB reset (#538)
+
+- `build_transcriber` now branches strictly on whether `SELECTED_MODEL_ID` is stored in settings. When the key is absent the catalog default (Whisper Base) is tried if its file exists; when the key is present only that model is attempted — no silent fallback to the catalog default for a broken explicit selection.
+- The stale "No transcription model loaded" error banner is now cleared immediately when the user successfully loads a model, even if the error was shown before the selection was made.
+
 ## [0.3.0] - 2026-05-04
 
 This release covers the post-v0.2.0 stretch: the menu-bar quick popover scaffolding, an audio-pipeline diagram in the welcome + About surfaces, progressive disclosure of advanced settings, four-format dictation export (text / Markdown / SRT / WebVTT), the live-waveform extraction into a reusable component, the Light / Dark / System theme override, the traffic-light permission-health model, the sidebar shell that subsumed the standalone Settings window, the Phase F vibe pass (indigo-violet accent, two-column dictation layout, spring hover, recording-pulse animation, sidebar dim-and-lock), HUD bug fixes (main-thread show/hide, pill widening for H:MM:SS, timer reset across sessions), per-event sound-cue split + cross-platform synthesis, the IPC + meeting refactor sweep, and the auto-update install flow (inert until maintainer Steps 1–4 land).

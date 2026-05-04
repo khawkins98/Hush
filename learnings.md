@@ -1240,3 +1240,35 @@ Components that only implemented the `@media` block fail when the user forces da
 - **Fallback:** Add both a `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .selector { ... } }` block AND a matching `:root[data-theme="dark"] .selector { ... }` block.
 
 **Pattern in `app.css`:** `src/app.css` is the authoritative source for all CSS tokens. Inspect it before hardcoding any colour value.
+
+---
+
+### 2026-05-XX — AudioWaveform: log scale + adaptive gain for waveform sensitivity
+
+**Problem:** Linear `level × levelScale` mapping made the waveform nearly flat for quiet-to-normal speech. At −38 dBFS (typical conversational level) the linear amplitude is ~1.3 % of full scale, giving a ~5 % bar height that's visually indistinguishable from silence. Different microphones and system-audio boost levels compounded this — a quiet USB mic with no software gain looked dead while a heavily boosted system capture railed.
+
+**Solution:** dBFS logarithmic mapping with an adaptive ceiling tracker.
+
+*Log scale math:*
+```
+db  = 20 * log10(level)
+norm = (clamp(db, DB_FLOOR) - DB_FLOOR) / (dynamicCeil - DB_FLOOR)
+height% = clamp(norm * 100, silenceFloorPct, 100)
+```
+At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 % height — clearly visible and proportionally accurate.
+
+*Adaptive ceiling:*
+- `adaptivePeak` tracks a slow EMA of `displayLevel` with a fast attack (0.15/frame ≈ 60 ms) and very slow release (0.0015/frame ≈ 11 s).
+- `dynamicCeil = clamp(adaptivePeakDb + HEADROOM_DB, DB_CEIL_MIN, DB_CEIL_DEFAULT)` so bars spend most of their range on the actual signal rather than headroom the mic never reaches.
+- Adaptive tracking only runs during `effectiveMode === "recording"` to prevent ceiling decay eating scale when the user pauses between sessions.
+- Initialised at 0.01 (−40 dBFS) so first-frame speech looks proportional immediately.
+
+**Why not a manual gain knob?** Different mics, OS boosts, and recording scenarios have a multi-decade dynamic range. A static knob either clips a hot mic or stays invisible on a quiet one. Adaptive gain handles all cases without user config.
+
+**Constants chosen:**
+- `DB_FLOOR = −70`: floor below conversational speech; softer noise stays hidden.
+- `DB_CEIL_DEFAULT = −3`: headroom so a very loud mic doesn't permanently rail.
+- `DB_CEIL_MIN = −48`: prevents the adaptive ceiling from dropping so low that normal speech takes the whole range.
+- `ADAPTIVE_HEADROOM_DB = 6`: 6 dB above tracked peak; bars hit ~85–90 % at typical loudest frames.
+
+**Where the code lives:** `src/lib/AudioWaveform.svelte` — constants block, `adaptivePeak` state, adaptive update inside `tick()`, and IIFE height formula in the `{#each waveform}` block.
