@@ -137,8 +137,8 @@
 .result {
   margin-top: 2rem;
   padding: 1rem 1.25rem;
-  background-color: white;
-  border: 1px solid #d1d1d1;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-input);
   border-radius: 12px;
   text-align: left;
 }
@@ -146,7 +146,7 @@
 .result h2 {
   margin: 0 0 0.5rem;
   font-size: 1rem;
-  color: #555;
+  color: var(--text-secondary);
   font-weight: 600;
 }
 
@@ -165,13 +165,13 @@
      not a failure. */
   font-size: 0.95rem;
   font-style: italic;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .result .meta {
   margin: 0.25rem 0;
   font-size: 0.85rem;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 /* Export-format picker: a row of small button chips below the
@@ -186,14 +186,14 @@
 }
 .export-label {
   font-size: 0.8rem;
-  color: #777;
+  color: var(--text-muted);
   margin-right: 0.15rem;
 }
 .export-option {
   appearance: none;
-  border: 1px solid #d1d1d8;
-  background-color: white;
-  color: #333;
+  border: 1px solid var(--border-input);
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
   padding: 0.18rem 0.55rem;
   font-size: 0.78rem;
   font-family: inherit;
@@ -227,21 +227,13 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .result {
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  .result h2,
-  .result .meta {
-    color: #aaa;
-  }
-  .export-label {
-    color: #aaa;
-  }
-  .export-option {
-    background-color: #2a2a2d;
-    border-color: #3a3a3e;
-    color: #d8d8d8;
-  }
+  :root:not([data-theme="light"]) .result h2,
+  :root:not([data-theme="light"]) .result .meta { color: #aaa; }
+  :root:not([data-theme="light"]) .export-label { color: #aaa; }
+  :root:not([data-theme="light"]) .export-option { color: #d8d8d8; }
 }
+:root[data-theme="dark"] .result h2,
+:root[data-theme="dark"] .result .meta { color: #aaa; }
+:root[data-theme="dark"] .export-label { color: #aaa; }
+:root[data-theme="dark"] .export-option { color: #d8d8d8; }
 </style>

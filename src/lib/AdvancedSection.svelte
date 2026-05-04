@@ -96,7 +96,7 @@
   font-family: inherit;
   font-size: 0.78rem;
   font-weight: 600;
-  color: #666;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   cursor: pointer;
@@ -104,7 +104,7 @@
 }
 .advanced-toggle:hover {
   background-color: rgba(0, 0, 0, 0.04);
-  color: #333;
+  color: var(--text-primary);
 }
 .advanced-toggle:focus-visible {
   outline: 2px solid var(--accent, #7c6ff7);
@@ -114,7 +114,7 @@
   font-size: 0.85rem;
   width: 0.9rem;
   text-align: center;
-  color: #888;
+  color: var(--text-muted);
 }
 .advanced-content {
   margin-top: 0.6rem;
@@ -122,14 +122,14 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .advanced-toggle {
+  :root:not([data-theme="light"]) .advanced-toggle {
     color: #aaa;
   }
-  .advanced-toggle:hover {
+  :root:not([data-theme="light"]) .advanced-toggle:hover {
     background-color: rgba(255, 255, 255, 0.06);
     color: #d8d8d8;
   }
-  .chevron {
+  :root:not([data-theme="light"]) .chevron {
     color: #777;
   }
 }

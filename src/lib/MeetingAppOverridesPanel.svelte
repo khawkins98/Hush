@@ -476,7 +476,7 @@
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -484,7 +484,7 @@
 
 .panel-subtitle {
   font-size: 0.78rem;
-  color: #888;
+  color: var(--text-muted);
   font-weight: 400;
   margin-left: 0.4rem;
 }
@@ -498,8 +498,8 @@
   border-radius: 5px;
   font-size: 0.75em;
   font-weight: 700;
-  background-color: #e8e8e8;
-  color: #444;
+  background-color: var(--bg-sidebar);
+  color: var(--text-secondary);
 }
 
 .panel-tag-overrides {
@@ -509,7 +509,7 @@
 
 .hint-prose {
   margin: 0 0 1rem;
-  color: #555;
+  color: var(--text-secondary);
   font-size: 0.9rem;
   line-height: 1.5;
   max-width: 36rem;
@@ -555,7 +555,7 @@
   align-items: center;
   gap: 0.6rem;
   padding: 0.6rem 0.85rem;
-  background-color: white;
+  background-color: var(--bg-surface);
   border: 1px solid #e1e1e1;
   border-radius: 8px;
   font-size: 0.9rem;
@@ -591,7 +591,7 @@
   font-size: 0.8rem;
 }
 .override-profile-label {
-  color: #666;
+  color: var(--text-muted);
   font-weight: 500;
 }
 .override-profile-select {
@@ -604,10 +604,10 @@
 .empty-history {
   margin: 0.5rem 0;
   padding: 1rem;
-  background-color: #fafafa;
+  background-color: var(--bg-surface);
   border: 1px dashed #d1d1d1;
   border-radius: 8px;
-  color: #666;
+  color: var(--text-muted);
   font-size: 0.9rem;
   text-align: center;
 }
@@ -615,7 +615,7 @@
 .loading-skeleton {
   margin: 0.5rem 0;
   padding: 1rem;
-  background-color: #fafafa;
+  background-color: var(--bg-surface);
   border-radius: 6px;
   color: #999;
   font-size: 0.9rem;
@@ -629,8 +629,8 @@ button {
   padding: 0.5em 1em;
   font-size: 0.9em;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   cursor: pointer;
   font-weight: 600;
 }
@@ -649,71 +649,78 @@ button.ghost {
   border: 1px solid #d1d1d1;
 }
 button.ghost:hover:not(:disabled) {
-  background-color: #f0f0f0;
+  background-color: var(--bg-app);
 }
 button.ghost.danger {
-  color: #b03030;
-  border-color: #e1b8b8;
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
 button.ghost.danger:hover:not(:disabled) {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
 }
 /* Confirming state — armed first click, awaiting the second one. */
 button.ghost.danger.confirming {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
   color: #8a0000;
   font-weight: 600;
 }
 
 @media (prefers-color-scheme: dark) {
-  .history-header h2 {
-    color: #d8d8d8;
-  }
-  .hint-prose {
-    color: #b8b8b8;
-  }
-  .panel-tag {
-    background-color: #303030;
-    color: #c8c8c8;
-  }
-  .panel-tag-overrides {
+  :root:not([data-theme="light"]) .panel-tag-overrides {
     background-color: #3a2a4a;
     color: #d4a8e8;
   }
-  .override-row {
-    background-color: #2a2a2a;
+  :root:not([data-theme="light"]) .override-row {
     border-color: #3a3a3a;
   }
-  .empty-history {
-    background-color: #1f1f1f;
-    border-color: #3a3a3a;
-    color: #999;
-  }
-  button {
-    color: #f0f0f0;
-    background-color: #2a2a2a;
+  :root:not([data-theme="light"]) .empty-history {
     border-color: #3a3a3a;
   }
-  button.ghost {
-    color: #f0f0f0;
-    background-color: transparent;
+  :root:not([data-theme="light"]) button {
+    border-color: #3a3a3a;
   }
-  button.ghost:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
     background-color: #353535;
   }
-  button.ghost.danger {
+  :root:not([data-theme="light"]) button.ghost.danger {
     color: #ff9090;
-    border-color: #5a2020;
   }
-  button.ghost.danger:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
   }
-  button.ghost.danger.confirming {
+  :root:not([data-theme="light"]) button.ghost.danger.confirming {
     background-color: #3a1818;
     border-color: var(--danger);
     color: #ffb0b0;
   }
+}
+:root[data-theme="dark"] .panel-tag-overrides {
+  background-color: #3a2a4a;
+  color: #d4a8e8;
+}
+:root[data-theme="dark"] .override-row {
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] .empty-history {
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] button {
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+  background-color: #353535;
+}
+:root[data-theme="dark"] button.ghost.danger {
+  color: #ff9090;
+}
+:root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
+  background-color: #3a1818;
+}
+:root[data-theme="dark"] button.ghost.danger.confirming {
+  background-color: #3a1818;
+  border-color: var(--danger);
+  color: #ffb0b0;
 }
 </style>

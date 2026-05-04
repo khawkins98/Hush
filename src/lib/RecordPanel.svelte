@@ -506,8 +506,8 @@
     animation: recording-pulse 2s ease-out infinite;
   }
   .record-btn.recording:hover:not(:disabled) {
-    background: #c02e2e;
-    border-color: #c02e2e;
+    background: var(--danger);
+    border-color: var(--danger);
   }
 
   /* Idle state glyph: a small filled dot — Audio Hijack-style
@@ -656,7 +656,7 @@
        the pre-r2 999 px pill stretched into an oblong on
        multi-line text. */
     border-radius: var(--radius-md);
-    border: 1px solid #d1d1d8;
+    border: 1px solid var(--border-input);
     background-color: var(--bg-surface);
     color: var(--text-secondary);
     text-align: left;
@@ -679,7 +679,7 @@
     width: 0.55rem;
     height: 0.55rem;
     border-radius: 50%;
-    background-color: #c0c0c5;
+    background-color: var(--text-muted);
     flex-shrink: 0;
   }
   .record-mode-badge[data-health="stale"] .record-mode-badge-dot {
@@ -689,9 +689,9 @@
     background-color: var(--danger);
   }
   .record-mode-badge[data-health="stale"] {
-    background-color: #fdf6e3;
-    border-color: #e7c887;
-    color: #7a4e00;
+    background-color: var(--warning-bg);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
   }
   .record-mode-badge[data-health="stale"]:hover {
     background-color: #f9efce;
@@ -699,16 +699,16 @@
     color: #5a3700;
   }
   @media (prefers-color-scheme: dark) {
-    .record-mode-badge[data-health="stale"] {
-      background-color: #3d2f12;
-      color: #f0c878;
-      border-color: #6c4e1a;
-    }
-    .record-mode-badge[data-health="stale"]:hover {
+    :root:not([data-theme="light"]) .record-mode-badge[data-health="stale"]:hover {
       background-color: #4a3a18;
       color: #ffd790;
       border-color: #8a6520;
     }
+  }
+  :root[data-theme="dark"] .record-mode-badge[data-health="stale"]:hover {
+    background-color: #4a3a18;
+    color: #ffd790;
+    border-color: #8a6520;
   }
 
   .status-mode {

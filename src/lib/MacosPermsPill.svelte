@@ -104,7 +104,7 @@
   gap: 1rem;
   padding: 0.85rem 1rem;
   margin: 1.25rem 0 0;
-  background-color: #fff7e6;
+  background-color: var(--warning-bg);
   border: 1px solid #ffd591;
   border-radius: 8px;
 }
@@ -117,11 +117,11 @@
 }
 .permissions-banner-text strong {
   font-size: 0.95rem;
-  color: #6a4400;
+  color: var(--warning-text);
 }
 .permissions-banner-text span {
   font-size: 0.85rem;
-  color: #8a5a00;
+  color: var(--warning-text);
   line-height: 1.4;
 }
 .permissions-banner button {
@@ -180,24 +180,43 @@
   text-decoration: none;
 }
 @media (prefers-color-scheme: dark) {
-  .permissions-banner {
+  :root:not([data-theme="light"]) .permissions-banner {
     background-color: #3a2c00;
     border-color: #6b5300;
   }
-  .permissions-banner-text strong {
+  :root:not([data-theme="light"]) .permissions-banner-text strong {
     color: #ffd591;
   }
-  .permissions-banner-text span {
+  :root:not([data-theme="light"]) .permissions-banner-text span {
     color: #f0c87b;
   }
-  .permissions-pill {
+  :root:not([data-theme="light"]) .permissions-pill {
     background-color: #1a3a23;
     border-color: #2a6b3c;
     color: #b6e5c5;
   }
-  .permissions-pill .dot {
+  :root:not([data-theme="light"]) .permissions-pill .dot {
     background-color: #4ad07a;
     box-shadow: 0 0 0 2px rgba(74, 208, 122, 0.2);
   }
+}
+:root[data-theme="dark"] .permissions-banner {
+  background-color: #3a2c00;
+  border-color: #6b5300;
+}
+:root[data-theme="dark"] .permissions-banner-text strong {
+  color: #ffd591;
+}
+:root[data-theme="dark"] .permissions-banner-text span {
+  color: #f0c87b;
+}
+:root[data-theme="dark"] .permissions-pill {
+  background-color: #1a3a23;
+  border-color: #2a6b3c;
+  color: #b6e5c5;
+}
+:root[data-theme="dark"] .permissions-pill .dot {
+  background-color: #4ad07a;
+  box-shadow: 0 0 0 2px rgba(74, 208, 122, 0.2);
 }
 </style>

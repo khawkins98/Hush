@@ -431,7 +431,7 @@
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .history-header input[type="search"] {
@@ -454,20 +454,20 @@
   align-items: center;
   gap: 0.4rem;
   padding: 0.3rem 0.6rem;
-  background-color: #fdf3f3;
+  background-color: var(--danger-bg);
   border: 1px solid #e8c4c4;
   border-radius: 8px;
   font-size: 0.85rem;
 }
 .clear-confirm-text {
-  color: #8a3030;
+  color: var(--danger);
   font-weight: 500;
 }
 .clear-confirm-yes {
   /* Slightly emphasised — same `danger` palette but opaque so the
      primary action reads first. The Cancel button below it stays
      in the default ghost-danger styling. */
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
   color: #8a0000;
 }
@@ -485,21 +485,21 @@
   font-size: 0.82rem;
   font-weight: 500;
   font-family: inherit;
-  color: #444;
-  background-color: #f0f0f3;
+  color: var(--text-secondary);
+  background-color: var(--bg-sidebar);
   border: 1px solid #d8d8dc;
   border-radius: 999px;
   cursor: pointer;
   transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
 .filter-chip:hover:not(:disabled) {
-  background-color: #e5e5e9;
-  border-color: #c2c2c6;
+  background-color: var(--bg-sidebar);
+  border-color: var(--border);
 }
 .filter-chip.active {
   background-color: rgba(44, 62, 143, 0.14);
   border-color: rgba(44, 62, 143, 0.4);
-  color: #2c3e8f;
+  color: var(--info-text);
   font-weight: 600;
 }
 .filter-chip:disabled {
@@ -508,18 +508,30 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .clear-confirm {
+  :root:not([data-theme="light"]) .clear-confirm {
     background-color: #2c1818;
     border-color: #4a2020;
   }
-  .clear-confirm-text {
+  :root:not([data-theme="light"]) .clear-confirm-text {
     color: #ff9090;
   }
-  .clear-confirm-yes {
+  :root:not([data-theme="light"]) .clear-confirm-yes {
     background-color: #3a1818;
     border-color: var(--danger);
     color: #ff9090;
   }
+}
+:root[data-theme="dark"] .clear-confirm {
+  background-color: #2c1818;
+  border-color: #4a2020;
+}
+:root[data-theme="dark"] .clear-confirm-text {
+  color: #ff9090;
+}
+:root[data-theme="dark"] .clear-confirm-yes {
+  background-color: #3a1818;
+  border-color: var(--danger);
+  color: #ff9090;
 }
 
 .history-list {
@@ -537,8 +549,8 @@ button {
   padding: 0.7em 1.2em;
   font-size: 1em;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   cursor: pointer;
   font-weight: 600;
   display: inline-flex;
@@ -566,26 +578,26 @@ button.ghost {
 }
 
 button.ghost:hover:not(:disabled) {
-  background-color: #f0f0f0;
+  background-color: var(--bg-app);
 }
 
 button.ghost.danger {
-  color: #b03030;
-  border-color: #e1b8b8;
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
 
 button.ghost.danger:hover:not(:disabled) {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
 }
 
 .empty-history {
   margin: 0.5rem 0;
   padding: 1rem;
-  background-color: #fafafa;
+  background-color: var(--bg-surface);
   border: 1px dashed #d1d1d1;
   border-radius: 8px;
-  color: #666;
+  color: var(--text-muted);
   font-size: 0.9rem;
   text-align: center;
 }
@@ -607,17 +619,17 @@ button.ghost.danger:hover:not(:disabled) {
   border-radius: 5px;
   font-size: 0.75em;
   font-weight: 700;
-  background-color: #e8e8e8;
-  color: #444;
+  background-color: var(--bg-sidebar);
+  color: var(--text-secondary);
   margin-right: 0.5rem;
 }
 
 .loading-skeleton {
   margin: 0.5rem 0;
   padding: 1rem;
-  background-color: #fafafa;
+  background-color: var(--bg-surface);
   border-radius: 6px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 0.9rem;
   text-align: center;
   font-style: italic;
@@ -651,50 +663,87 @@ button.ghost.danger:hover:not(:disabled) {
 }
 
 @media (prefers-color-scheme: dark) {
-  button {
-    color: #f0f0f0;
+  :root:not([data-theme="light"]) button {
     background-color: #2a2a2a;
     border-color: #3a3a3a;
   }
-  button:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button:hover:not(:disabled) {
     border-color: var(--accent);
   }
-  .history-header h2 {
+  :root:not([data-theme="light"]) .history-header h2 {
     color: #d8d8d8;
   }
-  .filter-chip {
+  :root:not([data-theme="light"]) .filter-chip {
     background-color: #2a2a2d;
     border-color: #38383b;
-    color: #c0c0c0;
   }
-  .filter-chip:hover:not(:disabled) {
+  :root:not([data-theme="light"]) .filter-chip:hover:not(:disabled) {
     background-color: #353539;
     border-color: #4a4a4d;
   }
-  .filter-chip.active {
+  :root:not([data-theme="light"]) .filter-chip.active {
     background-color: rgba(150, 170, 240, 0.18);
     border-color: rgba(150, 170, 240, 0.5);
     color: #b8c8ff;
   }
-  button.ghost {
+  :root:not([data-theme="light"]) button.ghost {
     border-color: #3a3a3a;
-    color: #f0f0f0;
   }
-  button.ghost:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
     background-color: #353535;
   }
-  button.ghost.danger {
+  :root:not([data-theme="light"]) button.ghost.danger {
     color: #ff9090;
-    border-color: #5a2020;
   }
-  button.ghost.danger:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
     border-color: var(--danger);
   }
-  .empty-history {
+  :root:not([data-theme="light"]) .empty-history {
     background-color: #1f1f1f;
     border-color: #3a3a3a;
     color: #999;
   }
+}
+:root[data-theme="dark"] button {
+  background-color: #2a2a2a;
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+:root[data-theme="dark"] .history-header h2 {
+  color: #d8d8d8;
+}
+:root[data-theme="dark"] .filter-chip {
+  background-color: #2a2a2d;
+  border-color: #38383b;
+}
+:root[data-theme="dark"] .filter-chip:hover:not(:disabled) {
+  background-color: #353539;
+  border-color: #4a4a4d;
+}
+:root[data-theme="dark"] .filter-chip.active {
+  background-color: rgba(150, 170, 240, 0.18);
+  border-color: rgba(150, 170, 240, 0.5);
+  color: #b8c8ff;
+}
+:root[data-theme="dark"] button.ghost {
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+  background-color: #353535;
+}
+:root[data-theme="dark"] button.ghost.danger {
+  color: #ff9090;
+}
+:root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
+  background-color: #3a1818;
+  border-color: var(--danger);
+}
+:root[data-theme="dark"] .empty-history {
+  background-color: #1f1f1f;
+  border-color: #3a3a3a;
+  color: #999;
 }
 </style>

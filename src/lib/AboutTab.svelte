@@ -526,13 +526,13 @@
   }
   .about-version {
     margin: 0.15rem 0 0;
-    color: #666;
+    color: var(--text-muted);
     font-size: 0.85rem;
   }
   .about-blurb {
     margin: 0 0 1.25rem;
     font-size: 0.95rem;
-    color: #333;
+    color: var(--text-primary);
   }
   .about-updates {
     display: flex;
@@ -556,19 +556,19 @@
     color: #2a6b3c;
   }
   .about-update-available {
-    background-color: #eef2ff;
+    background-color: var(--info-bg);
     border: 1px solid #c7d2fe;
-    color: #1e1b4b;
+    color: var(--info-text);
   }
   .about-update-failed {
-    background-color: #fff7e6;
+    background-color: var(--warning-bg);
     border: 1px solid #ffd591;
-    color: #8a5a00;
+    color: var(--warning-text);
   }
   .about-update-installing {
-    background-color: #eef2ff;
+    background-color: var(--info-bg);
     border: 1px solid #c7d2fe;
-    color: #1e1b4b;
+    color: var(--info-text);
     font-variant-numeric: tabular-nums;
   }
   .about-update-available-block {
@@ -615,7 +615,7 @@
     font-size: 0.9rem;
   }
   .about-meta dt {
-    color: #666;
+    color: var(--text-muted);
     font-weight: 500;
   }
   .about-meta dd {
@@ -625,45 +625,44 @@
     font-family:
       ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.85em;
-    color: #444;
+    color: var(--text-secondary);
   }
   .about-credit {
     margin: 0;
-    color: #666;
+    color: var(--text-muted);
     font-size: 0.85rem;
   }
   .about-tab a {
     color: var(--accent-hover);
   }
   @media (prefers-color-scheme: dark) {
-    .about-version,
-    .about-meta dt,
-    .about-credit {
-      color: #9a9a9a;
-    }
-    .about-blurb {
-      color: #d8d8d8;
-    }
-    .about-meta code {
-      color: #b8b8b8;
-    }
-    .about-tab a {
+    :root:not([data-theme="light"]) .about-tab a {
       color: var(--accent);
     }
-    .about-update-ok {
+    :root:not([data-theme="light"]) .about-update-ok {
       background-color: rgba(46, 170, 83, 0.15);
       border-color: #2a6b3c;
       color: #b6e5c5;
     }
-    .about-update-available {
-      background-color: rgba(124, 111, 247, 0.15);
+    :root:not([data-theme="light"]) .about-update-available {
       border-color: #3a4a7a;
-      color: #d8e0ff;
     }
-    .about-update-failed {
-      background-color: rgba(255, 193, 7, 0.12);
+    :root:not([data-theme="light"]) .about-update-failed {
       border-color: #6b5300;
-      color: #ffd591;
     }
+  }
+  :root[data-theme="dark"] .about-tab a {
+    color: var(--accent);
+  }
+  :root[data-theme="dark"] .about-update-ok {
+    background-color: rgba(46, 170, 83, 0.15);
+    border-color: #2a6b3c;
+    color: #b6e5c5;
+  }
+  :root[data-theme="dark"] .about-update-available {
+    border-color: #3a4a7a;
+  }
+  :root[data-theme="dark"] .about-update-failed {
+    border-color: #6b5300;
   }
 </style>
