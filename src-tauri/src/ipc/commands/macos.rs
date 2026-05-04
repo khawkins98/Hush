@@ -144,6 +144,54 @@ pub async fn prime_screen_recording_permission() -> IpcResult<()> {
     }
 }
 
+/// Fire the macOS Microphone TCC prompt directly (#511).
+///
+/// Used by the first-run wizard's Allow button so the user can grant
+/// inline without having to open System Settings. `AVCaptureDevice
+/// requestAccessForMediaType:completionHandler:` shows the system
+/// dialog and returns immediately; the user's choice surfaces via
+/// the existing `get_permission_health` poll the frontend already
+/// runs against the Settings → Permissions tab — same poll cadence,
+/// different consumer.
+///
+/// No-op on non-macOS (Linux + Windows don't have an equivalent
+/// per-app TCC layer for raw mic access). Always returns `Ok(())`
+/// — the frontend treats this as a fire-and-forget and reads the
+/// post-prompt state through the health probe.
+#[tauri::command]
+pub async fn request_microphone_permission() -> IpcResult<()> {
+    crate::macos_perms::request_microphone_permission();
+    Ok(())
+}
+
+/// Fire the macOS Input Monitoring TCC prompt synchronously (#511).
+///
+/// Same first-run-wizard motivation as
+/// [`request_microphone_permission`], but `IOHIDRequestAccess`
+/// blocks until the user responds — so this IPC awaits the user's
+/// choice and returns the result. The frontend reflects the new
+/// state in the same poll loop without needing to wait on the
+/// return value, but having it lets the wizard show an immediate
+/// status flip when the user clicks Allow.
+///
+/// Returns `true` when the user granted (or already-granted state
+/// is observed without a prompt), `false` when denied / dismissed.
+/// No-op on non-macOS — Linux + Windows don't have an Input
+/// Monitoring TCC equivalent (the rdev listener works without a
+/// per-app prompt there); always returns `Ok(true)` so the wizard's
+/// success branch matches.
+#[tauri::command]
+pub async fn request_input_monitoring_permission() -> IpcResult<bool> {
+    // Synchronous OS prompt — keep off the Tokio worker thread
+    // so we don't tie up an async slot for the prompt's
+    // duration. `spawn_blocking` is the standard escape hatch.
+    let granted =
+        tokio::task::spawn_blocking(crate::macos_perms::request_input_monitoring_permission)
+            .await
+            .map_err(|e| IpcError::Internal(format!("request IM permission task: {e}")))?;
+    Ok(granted)
+}
+
 /// Bundle identifier this binary registers with macOS TCC. Hard-coded
 /// because `tauri.conf.json`'s `identifier` is the source of truth and
 /// reading it back through `AppHandle::config().identifier()` would

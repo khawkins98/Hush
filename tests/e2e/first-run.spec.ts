@@ -16,7 +16,7 @@ test.describe("first-run welcome modal", () => {
     await expect(page.getByRole("heading", { name: "Welcome to Hush" })).toHaveCount(0);
   });
 
-  test("renders for fresh installs and dismisses on Got it", async ({ page }) => {
+  test("renders for fresh installs and dismisses on Finish (#511 wizard)", async ({ page }) => {
     let markCalled = false;
     await installMocks(page, {
       get_first_run_completed: () => false,
@@ -30,12 +30,21 @@ test.describe("first-run welcome modal", () => {
     const heading = page.getByRole("heading", { name: "Welcome to Hush" });
     await expect(heading).toBeVisible();
 
-    await page.getByRole("button", { name: "Got it" }).click();
+    // Step 1 (welcome) → Continue advances to step 2 (permissions).
+    await page.locator('[data-testid="wizard-continue-welcome"]').click();
+    await expect(
+      page.getByRole("heading", { name: "Permissions" }),
+    ).toBeVisible();
+
+    // Step 2 → Finish dismisses the wizard. Continue is never
+    // hard-blocked even when permissions aren't granted (mic
+    // ungrant just shows a soft warning footer).
+    await page.locator('[data-testid="wizard-finish"]').click();
     await expect(heading).toHaveCount(0);
 
     // Confirm the IPC mark fired exactly once on the click — the
     // settings table backs the persistence, so the next launch
-    // skips the modal entirely.
+    // skips the wizard entirely.
     markCalled = await page.evaluate(
       () => (globalThis as unknown as { __markCalled?: boolean }).__markCalled === true,
     );
@@ -72,20 +81,19 @@ test.describe("first-run welcome modal", () => {
 
     await expect(page.getByRole("heading", { name: "Welcome to Hush" })).toBeVisible();
 
-    // The modal has three focusable buttons in DOM order:
-    //   1) Open Microphone settings
-    //   2) Open Input Monitoring settings
-    //   3) Got it
+    // Step 1 (welcome) has two focusable buttons in DOM order:
+    //   1) Skip setup (ghost)
+    //   2) Continue (primary)
     // Auto-focus lands on #1; one Shift+Tab from there must wrap
-    // to #3, not escape to whatever was on the page behind the
+    // to #2, not escape to whatever was on the page behind the
     // backdrop.
     await page.keyboard.press("Shift+Tab");
-    await expect(page.getByRole("button", { name: "Got it" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Continue" })).toBeFocused();
 
-    // Tab from "Got it" must wrap forward to the first button.
+    // Tab from "Continue" must wrap forward to the first button.
     await page.keyboard.press("Tab");
     await expect(
-      page.getByRole("button", { name: "Open Microphone settings" }),
+      page.getByRole("button", { name: "Skip setup" }),
     ).toBeFocused();
   });
 });
