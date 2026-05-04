@@ -142,15 +142,20 @@ When the active build's identity differs from the row that's currently switched 
 
 `tccutil reset ScreenCapture io.github.khawkins98.hush` only resets entries that match `io.github.khawkins98.hush`. Stale rows from older identities don't go anywhere.
 
+> **macOS 26 gotcha:** On macOS 26 `tccutil reset` sometimes does not remove the row from the System Settings UI — the entry persists with its old CSReq hash. The toggle appears ON, but the running binary's signature doesn't match, so the OS silently rejects the permission check. `npm run dev-reset` cannot work around this; **manual `−` removal in System Settings is required**.
+
 **Recovery:**
 
-1. Hit **Settings → Permissions → Reset permissions** in Hush (or run the four `tccutil reset` commands above by hand).
-2. Open System Settings → Privacy & Security → Screen & System Audio Recording (the per-row "Grant in Settings…" button on the Permissions tab deep-links there).
-3. If a `Hush.app` row is still in the list, **select it and click the `−` button at the bottom of the pane**. Repeat for any `Hush.app` row in Microphone and Input Monitoring.
-4. Quit Hush and relaunch the bundle.
-5. macOS will prompt fresh; clicking Allow now creates a single row that matches the current signing identity.
+1. Open System Settings → Privacy & Security → **Screen & System Audio Recording**. Select every `Hush.app` row and click the **`−`** button to remove it.
+2. Repeat for **Input Monitoring** (and Accessibility if present).
+3. Run `npm run dev-reset` (clears TCC database entries and app state).
+4. Quit Hush and relaunch **the bundle**: `open src-tauri/target/debug/bundle/macos/Hush.app`
+   - Do **not** use `npm run tauri dev` — the unsigned dev binary has a different identity and won't receive Screen Recording permission from SCK.
+5. Input Monitoring auto-prompts when Hush registers the hotkey — click **OK**.
+6. Screen Recording: Settings → Permissions → "Grant in Settings…" deep-links to the right pane; toggle on the freshly-created Hush row.
+7. macOS will now have a single row matching the current binary's CSReq.
 
-The same procedure applies if you switch between dev (unsigned `npm run tauri dev`) and bundle (`npm run tauri:bundle`) builds — they sign differently and TCC sees them as different apps even though the bundle id is identical.
+The same procedure applies any time you switch between dev (unsigned `npm run tauri dev`) and bundle (`npm run tauri:bundle`) builds — they sign differently and TCC sees them as different apps even though the bundle id is identical.
 
 ---
 
