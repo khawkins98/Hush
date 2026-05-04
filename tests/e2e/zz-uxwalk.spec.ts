@@ -72,7 +72,7 @@ test.describe("UX walkthrough — main window", () => {
         },
       ],
       diagnose_macos_permissions: () => ({
-        bundleId: "com.khawkins.hush",
+        bundleId: "io.github.khawkins98.hush",
         microphoneHint: "",
         inputMonitoringHint: "",
         canReset: true,
@@ -91,7 +91,7 @@ test.describe("UX walkthrough — main window", () => {
   test("dictation: yellow recovery hint when a perm is denied", async ({ page }) => {
     await installMocks(page, {
       diagnose_macos_permissions: () => ({
-        bundleId: "com.khawkins.hush",
+        bundleId: "io.github.khawkins98.hush",
         microphoneHint: "",
         inputMonitoringHint: "",
         canReset: true,
@@ -417,7 +417,7 @@ test.describe("UX walkthrough — settings window", () => {
   test("settings: Permissions tab", async ({ page }) => {
     await installMocks(page, {
       diagnose_macos_permissions: () => ({
-        bundleId: "com.khawkins.hush",
+        bundleId: "io.github.khawkins98.hush",
         microphoneHint: "Open System Settings → Privacy & Security → Microphone and enable Hush.",
         inputMonitoringHint:
           "Open System Settings → Privacy & Security → Input Monitoring and enable Hush.",

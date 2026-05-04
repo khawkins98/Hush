@@ -199,7 +199,7 @@ pub async fn request_input_monitoring_permission() -> IpcResult<bool> {
 /// constant string. If the bundle id ever changes, this constant and
 /// the `tauri.conf.json` field move together.
 #[cfg(target_os = "macos")]
-const MACOS_BUNDLE_ID: &str = "com.khawkins.hush";
+const MACOS_BUNDLE_ID: &str = "io.github.khawkins98.hush";
 
 /// What [`diagnose_macos_permissions`] returns to the frontend.
 ///
@@ -267,7 +267,7 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
                  time Hush opens an audio stream; if no prompt appears and the meter \
                  never moves, Microphone access is denied. Use Reset below to re-prompt \
                  cleanly. Hush will appear in the Microphone list under \
-                 \"com.khawkins.hush\" the first time you click Start (or under the \
+                 \"io.github.khawkins98.hush\" the first time you click Start (or under the \
                  launching binary for unsigned dev builds)."
                 .to_owned(),
             input_monitoring_hint:
@@ -275,7 +275,7 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
                  first time the listener spawns. Disable in Settings → General → \
                  Hotkeys if you'd rather skip the prompt — the toggle hotkey \
                  (⌃⌥H) and the on-screen Start button work either way. Hush will \
-                 appear in the Input Monitoring list under \"com.khawkins.hush\" \
+                 appear in the Input Monitoring list under \"io.github.khawkins98.hush\" \
                  once the listener has spawned at least once (or under the \
                  launching binary for unsigned dev builds — see CLAUDE.md's \
                  \"macOS TCC dev-binary quirk\" section)."
@@ -545,7 +545,7 @@ pub struct MacosPermissionResetResult {
 }
 
 /// Run the three `tccutil reset` commands documented in
-/// `docs/macos-permissions.md` for `com.khawkins.hush`: Microphone,
+/// `docs/macos-permissions.md` for `io.github.khawkins98.hush`: Microphone,
 /// Screen Recording (`ScreenCapture` — system-audio capture for
 /// meeting mode), and Input Monitoring (`ListenEvent`). Each is
 /// independent and a missing-entry on any one is treated as a
