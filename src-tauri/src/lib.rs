@@ -426,14 +426,16 @@ pub fn run() {
                     .await;
             });
 
-            // Hide-on-close for main + settings (#263). Tauri 2's
-            // default destroys the window on red-✕; without an
-            // intercept the user would close the main window
+            // Hide-on-close for main and debug (#263, #543). Tauri
+            // 2's default destroys the window on red-✕; without
+            // an intercept the user would close the main window
             // expecting it to hide and find Hush had quit (tray
-            // icon gone), or close Settings and find that ⌘, no
-            // longer reopens it (window is destroyed, only re-
-            // creatable on app restart). Both flows now intercept
-            // CloseRequested and call `hide()` instead.
+            // icon gone). The debug console window is included so
+            // closing its red-✕ hides it rather than destroying
+            // the webview — this prevents macOS from stranding
+            // focus on the desktop (which looks like the main
+            // window also closed) and keeps the window's log
+            // buffer alive for the next open.
             //
             // Pairs with the `RunEvent::ExitRequested` interceptor
             // wired below (#328): on Linux/Windows the runtime's
@@ -450,7 +452,7 @@ pub fn run() {
             // any user interaction can fire CloseRequested. The
             // closures clone the window handle so they outlive
             // setup; that's the standard pattern Tauri expects.
-            for label in ["main"] {
+            for label in ["main", "debug"] {
                 if let Some(window) = app.get_webview_window(label) {
                     let win_clone = window.clone();
                     window.on_window_event(move |event| {
