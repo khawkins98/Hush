@@ -1201,3 +1201,24 @@ out-of-band cleanup steps that the OS API can't do for us (the `−`
 button case). The post-reset summary is a good place for the
 latter; a GUI button can't do it because reaching into System
 Settings requires user consent.
+
+---
+
+### 2026-05-04 — Tauri debug bundle linker-signed identifier breaks TCC (and tccutil reset)
+
+**Symptom:** After running `npm run dev-reset` and opening the debug `.app` bundle, `tccutil reset io.github.khawkins98.hush` succeeds but TCC grants immediately vanish on the next rebuild. Input Monitoring and Screen Recording show as "Not yet granted" even after being toggled ON in System Settings.
+
+**Root cause:** Tauri's `cargo tauri build --debug` build on Apple Silicon leaves the binary with a *linker-signed* ad-hoc signature. The code-signing identifier embedded by the linker is a hash of the binary contents (`hush-44ac88ddc8db2594`), **not** the bundle identifier `io.github.khawkins98.hush`. Additionally, `Info.plist=not bound` — the Info.plist is not sealed into the signature.
+
+TCC keys permission entries to the code-signing identifier. So:
+- All grants are stored under `hush-<old-hash>`
+- `tccutil reset io.github.khawkins98.hush` is a no-op (no entries under that key exist)
+- Every rebuild produces a new hash, invalidating all stored grants
+
+**Confirmed by:** `codesign -dv Hush.app` showing `Identifier=hush-44ac88ddc8db2594`, `Info.plist=not bound`
+
+**Fix:** Run `codesign --force --deep --sign - Hush.app` after Tauri builds the bundle. This re-signs with a proper ad-hoc signature that sets `Identifier=io.github.khawkins98.hush` and seals the Info.plist. Now TCC entries are stable across rebuilds (until the binary contents change, which triggers the normal CSReq-mismatch flow documented earlier in this file).
+
+**Automation:** `scripts/tauri-bundle-macos.sh` and `scripts/tauri-dmg-macos.sh` both now run `codesign --force --deep --sign -` after building. `npm run tauri:bundle` is safe to use for TCC smoke-testing after this fix.
+
+**Why this didn't surface before:** The `com.khawkins.hush` era used the same linker-signed approach, so TCC was equally broken — but contributors didn't notice because the permissions screen was less prominently used. The bundle ID rename (#526) forced a full permission reset which exposed the underlying issue.

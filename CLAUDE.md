@@ -124,13 +124,21 @@ CI does not run a real Tauri runtime. A panic at app boot (plugin init, capabili
 
 ## macOS TCC dev-binary quirk
 
-The short version: `cargo tauri dev` builds an unsigned binary that TCC attributes to the parent terminal, so Microphone / Input Monitoring leak through but **Screen Recording (SCK / system-audio) does not**. For anything that touches SCK, build the real bundle:
+**The one canonical workflow for TCC / permission testing:**
 
-    npm run tauri:bundle
+    npm run dev-reset    # optional — wipe all state for a clean-slate test
+    npm run tauri:bundle # build → re-sign → install to ~/Applications/Hush.app → launch
 
-Stale `Hush.app` rows after rebuilds are recovered via Settings → Permissions → Reset permissions inside Hush, then `−` on the System Settings rows, then relaunch.
+`tauri:bundle` builds a debug `.app`, re-signs it so TCC uses the stable bundle ID (`io.github.khawkins98.hush`), and installs it to `~/Applications/Hush.app` — a standard macOS app location that TCC treats identically to `/Applications`. This is as reliable as a DMG install without requiring a full release compile (which can take 5–10 min).
 
-The full reasoning, symptom-by-symptom recovery recipes, and the "Dev-loop: stale Hush.app rows after a re-bundle" recipe live in [`docs/macos-permissions.md`](./docs/macos-permissions.md). `learnings.md` 2026-04-27 has the original investigation.
+Use `npm run tauri dev` for fast UI/Rust iteration — it can't test TCC reliably. Use `npm run tauri:dmg` only when you need a distributable release artifact.
+
+**Why `cargo tauri dev` and the raw debug binary don't work for TCC:**  
+`cargo tauri dev` produces an unsigned binary. TCC attributes it to the parent terminal, and Screen Recording in particular effectively requires a real `.app` bundle. Even `cargo tauri build --debug` leaves a linker-signed binary with a hash-based identifier (`hush-<hash>`), not `io.github.khawkins98.hush` — `tauri:bundle` fixes this automatically with `codesign --force --deep --sign -`. See `learnings.md` 2026-05-04 for the full investigation.
+
+Stale `Hush.app` rows after rebuilds are recovered by manually removing them with `−` in System Settings → Privacy, then running `npm run dev-reset`, then `npm run tauri:bundle`.
+
+The full troubleshooting guide lives in [`docs/macos-permissions.md`](./docs/macos-permissions.md).
 
 ## Conventions
 
