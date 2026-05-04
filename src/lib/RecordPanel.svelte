@@ -22,6 +22,7 @@
     listenForStatusLineChanges,
     readStatusLineEnabled,
   } from "./status-line";
+  import { joinUtterances } from "./transcript-format";
   import type { MeetingSessionDetail } from "./types";
 
   type Props = {
@@ -79,8 +80,13 @@
 
   // Live transcript text — joined from finalized utterances +
   // in-flight partials in the active meeting session. Speaker
-  // labels are prefixed when present (multi-source meetings get
-  // "Speaker A: …"). Mirrors the join in
+  // labels are prefixed when ≥2 distinct speakers appear in the
+  // session (#478). With only one speaker, the label is just
+  // noise on every line — hide it. The first time a second
+  // speaker is detected, all earlier utterances re-render with
+  // labels (the prior "unlabelled" lines retroactively belong
+  // to the first speaker, which the eye reads as natural
+  // turn-taking). Mirrors the join in
   // `copyMeetingSessionToClipboard` so live and clipboard text
   // come out identical. Empty when no active session or no
   // utterances yet.
@@ -88,14 +94,7 @@
     if (!meetingActiveDetail) return "";
     const finals = meetingActiveDetail.utterances ?? [];
     const partials = meetingActiveDetail.currentPartials ?? [];
-    const all = [
-      ...finals.map((u) => ({ text: u.text, label: u.speakerLabel })),
-      ...partials.map((u) => ({ text: u.text, label: u.speakerLabel })),
-    ];
-    if (all.length === 0) return "";
-    return all
-      .map((u) => (u.label ? `${u.label}: ${u.text}` : u.text))
-      .join("\n");
+    return joinUtterances([...finals, ...partials], "\n");
   });
   let showLiveTranscript = $derived(
     recording && liveTranscriptText.trim().length > 0,

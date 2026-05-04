@@ -142,6 +142,24 @@
         return label;
     }
   }
+
+  // Show speaker labels only when there are ≥2 distinct labels
+  // across the session's utterances (#478). Single-speaker
+  // sessions (one person dictating into the mic, the diarizer
+  // labelling everything as "Speaker A" or just "mic") render
+  // bare text — repeating the same label on every line is just
+  // noise. Once a second speaker is detected the labels become
+  // useful context for the prior lines too, so we apply the
+  // decision uniformly across the transcript.
+  let showSpeakerLabels = $derived.by(() => {
+    if (!detail) return false;
+    const distinct = new Set(
+      detail.utterances
+        .map((u) => u.speakerLabel)
+        .filter((l): l is string => !!l),
+    );
+    return distinct.size >= 2;
+  });
 </script>
 
 <li class="history-row meeting-row" data-kind="meeting" data-meeting-id={session.id}>
@@ -256,7 +274,9 @@
       <ol class="meeting-transcript" aria-label="Meeting transcript">
         {#each detail.utterances as utt (utt.id)}
           <li class="utterance">
-            <span class="utterance-speaker">{speakerCopy(utt.speakerLabel)}</span>
+            {#if showSpeakerLabels}
+              <span class="utterance-speaker">{speakerCopy(utt.speakerLabel)}</span>
+            {/if}
             <span class="utterance-text">{utt.text}</span>
           </li>
         {/each}

@@ -38,6 +38,7 @@
   import { Events } from "./events";
   import { formatMb } from "./format";
   import type {
+    DiarizerModelStatus,
     DownloadProgress,
     IpcError,
     ModelCard,
@@ -173,9 +174,38 @@
     );
     unlistenDownloadDone = await listen<DownloadStatusEvent>(
       Events.ModelDownloadDone,
-      (e) => {
+      async (e) => {
         modelFetch.downloading.delete(e.payload.id);
         void loadModels();
+        // Auto-bundle the wespeaker (speaker diarization) download
+        // sequentially after a Whisper model finishes (#478). The
+        // user is already committing to a model download in the
+        // first-run flow; tacking on the 26 MB wespeaker here means
+        // speaker labels work out of the box for any future mic
+        // session without a separate Settings → Meeting →
+        // Speakers click later.
+        //
+        // Best-effort: failures fall through silently (logged but
+        // not surfaced). The user lands in the existing "model
+        // not downloaded" state in MeetingTab where the manual
+        // Download button is the explicit retry. The wespeaker id
+        // is excluded so a wespeaker download completing doesn't
+        // try to re-trigger itself.
+        if (e.payload.id !== "wespeaker-resnet34-lm") {
+          try {
+            const status = await invoke<DiarizerModelStatus>(
+              "get_diarizer_model_status",
+            );
+            if (!status.downloaded) {
+              await invoke("download_diarizer_model");
+            }
+          } catch (err) {
+            console.warn(
+              "[hush] auto-bundle wespeaker download failed; user can retry from Settings → Meeting → Speakers",
+              err,
+            );
+          }
+        }
       },
     );
     unlistenDownloadFailed = await listen<DownloadStatusEvent>(
