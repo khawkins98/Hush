@@ -38,10 +38,17 @@
   // `"recording"` or `"processing"`. Recording renders the pulsing
   // dot + waveform; Processing replaces the waveform with a
   // shimmer so the user knows transcription is in flight and
-  // pasting too early would be premature. Defaults to recording —
-  // start_dictation always fires the explicit recording state too,
-  // so this is just a safe initial render.
-  let hudState = $state<"recording" | "processing">("recording");
+  // pasting too early would be premature.
+  //
+  // Defaults to `null` (no state yet) rather than `"recording"` so
+  // AudioWaveform only mounts after the backend explicitly fires the
+  // first `hud:state` event — which happens when the window is
+  // already visible. If we default to "recording", AudioWaveform
+  // mounts while the window is hidden, WebKit throttles/stops
+  // requestAnimationFrame, and the rAF loop never recovers when the
+  // window becomes visible, leaving the bars permanently frozen at
+  // the silence floor.
+  let hudState = $state<"recording" | "processing" | null>(null);
 
   // Recording-duration timer (#360). `recordingStartedAt` is set
   // when the backend emits `hud:state === "recording"`, freezes
@@ -205,9 +212,11 @@
       shimmer doesn't flash the bars. Extracted to $lib in #411
       phase B so the main window's recording status row can render
       the same affordance.
+      Only mounted when hudState is explicitly "recording" (set by
+      the backend event) so the rAF loop starts in a visible window.
     -->
     <AudioWaveform mode="recording" levelScale={480} silenceFloorPct={15} />
-  {:else}
+  {:else if hudState === "processing"}
     <!--
       Processing state: replace the level meter with a slim
       shimmer bar — same width / position as the meter so the
