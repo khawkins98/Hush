@@ -1327,6 +1327,10 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 
 **Root cause (registration):** Even if called in the right order, `init_app_menu` only auto-registers submenus with ID `WINDOW_SUBMENU_ID` (`"__tauri_window_menu__"`). A custom Window submenu built with `SubmenuBuilder::new(app, "Window")` gets a random ID so the auto-registration never fires. Call `window_submenu.set_as_windows_menu_for_nsapp()?` explicitly in your own code.
 
-**Fix:** In `build_and_set_menu`, call `set_as_windows_menu_for_nsapp()` **after** `app.set_menu(menu)?`. The method is already `#[cfg(target_os = "macos")]`, so no extra cfg guard is needed inside the macOS-only function.
+**Root cause (window level — second failure):** Even after fixing the ordering, ⌘\` still didn't cycle. `setWindowsMenu:` populates the Window menu and the windows appeared there, but macOS's ⌘\` only cycles windows at the **same NSWindowLevel**. A window with `alwaysOnTop: true` is promoted to `NSWindowLevelFloating`; a normal main window is at `NSWindowLevelNormal`. Windows on different levels are in separate cycle groups and ⌘\` won't bridge them. Fix: remove `alwaysOnTop` from any window you want to participate in the same ⌘\` cycle as the main window.
 
-**Alternative:** Use `SubmenuBuilder::with_id(app, WINDOW_SUBMENU_ID, "Window")` — Tauri's automatic path then finds and registers it. Prefer the explicit call because it's self-documenting and doesn't depend on the magic string staying stable across Tauri releases.
+**Full fix sequence:**
+1. Call `set_as_windows_menu_for_nsapp()` *after* `app.set_menu(menu)?`
+2. Ensure all windows you want in the ⌘\` cycle are at `NSWindowLevelNormal` (no `alwaysOnTop: true`)
+
+**Alternative for ID:** Use `SubmenuBuilder::with_id(app, WINDOW_SUBMENU_ID, "Window")` — Tauri's automatic path then finds and registers it. Prefer the explicit call because it's self-documenting and doesn't depend on the magic string staying stable across Tauri releases.
