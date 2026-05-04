@@ -60,6 +60,11 @@
     `CLIP_THRESHOLD`. Self-clears after `CLIP_FLASH_MS`.
   - A peak-dB readout on the wrapper's `title` for tooltip-on-
     hover (re: F4's "dB readout on hover").
+  - A visible current-dB label overlaid in the top-right corner
+    of the waveform container so the level is readable at a
+    glance while recording. Uses integer precision (floor -60 dB)
+    with a semi-transparent backdrop pill for legibility on both
+    light and dark themes.
 
   Metering is a no-op outside `recording` mode so the breathing
   idle wave doesn't trip the meter.
@@ -155,6 +160,18 @@
     const db = 20 * Math.log10(peak);
     const clamped = Math.max(-60, db);
     return `Peak: ${clamped.toFixed(1)} dB`;
+  });
+
+  // Visible current-level dB label (integer, -60 dB floor).
+  // Updates every rAF tick via the smoothed `displayLevel` — fast
+  // enough to feel live, stable enough to read without strobing.
+  // Only renders while metering + recording so idle/processing/
+  // error states don't show a bogus number.
+  let currentDbLabel = $derived.by(() => {
+    if (!metering || effectiveMode !== "recording" || displayLevel <= 0.001)
+      return "";
+    const db = 20 * Math.log10(displayLevel);
+    return `${Math.max(-60, db).toFixed(0)} dB`;
   });
 
   onMount(async () => {
@@ -272,6 +289,9 @@
       aria-hidden="true"
     ></span>
   {/if}
+  {#if currentDbLabel !== ""}
+    <span class="audio-waveform-db" aria-hidden="true">{currentDbLabel}</span>
+  {/if}
 </div>
 
 <style>
@@ -354,6 +374,28 @@
     background: var(--danger, #d92626);
     opacity: 1;
     transition: background 80ms linear, opacity 80ms linear;
+  }
+
+  /* dB readout — compact current-level label overlaid in the
+     top-right corner. A semi-transparent dark pill gives enough
+     contrast against the bar gradient in both light and dark
+     themes without leaking into the peak-hold line area.
+     Only rendered while metering + recording + signal > floor. */
+  .audio-waveform-db {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.35);
+    color: rgba(255, 255, 255, 0.92);
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
   }
 
   @keyframes audio-waveform-processing {
