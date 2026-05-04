@@ -63,9 +63,15 @@
     /// in (e.g. ⌘K palette's "Open Settings: Permissions" sets
     /// this to `"permissions"`).
     activeTab?: SettingsTab;
+    /// Called when a model is successfully hot-loaded into the
+    /// backend slot (`model_select` returned `loaded: true`). The
+    /// parent uses this to clear stale `TranscriptionUnavailable`
+    /// error banners that may have been set before a model was
+    /// explicitly picked.
+    onModelLoaded?: () => void;
   };
 
-  let { activeTab = $bindable("general") }: Props = $props();
+  let { activeTab = $bindable("general"), onModelLoaded }: Props = $props();
 
   // Debug tab is conditionally shown: only when the developer
   // console toggle (Settings → General → Advanced → Developer
@@ -145,6 +151,9 @@
       });
       modelFetch.restartNotice = result.loaded ? "loaded" : "needs-restart";
       modelFetch.error = null;
+      if (result.loaded) {
+        onModelLoaded?.();
+      }
       await loadModels();
     } catch (e) {
       modelFetch.error = formatErrorDisplay(e);
