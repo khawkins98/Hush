@@ -175,8 +175,35 @@
   let activeSection = $state<SidebarSection>("dictation");
   let settingsActiveTab = $state<SettingsTab>("general");
 
+  // Sidebar open/collapsed state (#494). Persisted in
+  // localStorage so the user's preference survives reload.
+  // Default `true` (open) for fresh installs — first-run users
+  // see labelled items rather than icon-only chrome, which was
+  // the discoverability concern that filed #494. Reads
+  // synchronously at script-evaluation time so first paint
+  // already has the right state and there's no flash.
+  const SIDEBAR_OPEN_KEY = "hush.sidebar.open";
+  let sidebarOpen = $state<boolean>(
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false"
+      : true,
+  );
+
   function onSidebarSelect(id: SidebarSection) {
     activeSection = id;
+  }
+
+  function onSidebarToggle() {
+    sidebarOpen = !sidebarOpen;
+    try {
+      localStorage.setItem(SIDEBAR_OPEN_KEY, sidebarOpen ? "true" : "false");
+    } catch (e) {
+      // localStorage write failure is non-fatal — the toggle still
+      // flipped in-memory and the user's current session works
+      // normally. Next launch reverts to the default if persistence
+      // can't write (private mode, quota, etc.).
+      console.warn("[hush] failed to persist sidebar.open", e);
+    }
   }
 
   // ⌘K command palette (#411 phase F3). State + the action set
@@ -1505,7 +1532,9 @@
   <SidebarNav
     bind:active={activeSection}
     {recording}
+    open={sidebarOpen}
     onSelect={onSidebarSelect}
+    onToggle={onSidebarToggle}
   />
 
 <main class="app-main" data-active-section={activeSection}>
