@@ -408,14 +408,40 @@ impl SessionManager {
                 // and empty pump_handle reflect that reality —
                 // the original cancel/handle have already done
                 // their job and aren't reusable.
+                //
+                // **Race-aware restore (#492).** While we awaited
+                // `close_session`, a concurrent `start_manual` may
+                // have claimed the slot (Idle → Opening → Active for
+                // a new session). The pre-#492 code unconditionally
+                // wrote `Active(<old id>)` here, silently clobbering
+                // the new session — orphaning its pump task and
+                // leaving its DB row stuck open. Now we only restore
+                // when the slot is still Idle; if it's been claimed,
+                // we log + drop the recovery and surface the close
+                // error to the user. The orphan row from the failed
+                // close gets cleaned up by `reconcile_orphan_sessions`
+                // on next launch (#249).
                 if let Ok(mut guard) = self.state.lock() {
-                    *guard = SessionState::Active(ActiveSession {
-                        id: active.id,
-                        started_at: active.started_at,
-                        cancel: Arc::new(AtomicBool::new(false)),
-                        pump_handle: Mutex::new(None),
-                        close_attempted: true,
-                    });
+                    match &*guard {
+                        SessionState::Idle => {
+                            *guard = SessionState::Active(ActiveSession {
+                                id: active.id,
+                                started_at: active.started_at,
+                                cancel: Arc::new(AtomicBool::new(false)),
+                                pump_handle: Mutex::new(None),
+                                close_attempted: true,
+                            });
+                        }
+                        SessionState::Opening | SessionState::Active(_) => {
+                            tracing::warn!(
+                                session_id = active.id,
+                                "stop_manual close_session failed but slot was \
+                                 claimed by a concurrent start; not clobbering \
+                                 the new session — orphan row will be closed by \
+                                 next-launch reconcile_orphan_sessions"
+                            );
+                        }
+                    }
                 }
                 Err(e)
             }
