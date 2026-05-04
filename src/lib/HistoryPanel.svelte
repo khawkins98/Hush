@@ -267,7 +267,7 @@
       <div class="search-wrap">
         <input
           type="search"
-          placeholder="Search transcriptions…"
+          placeholder="Search dictation history…"
           value={historyQuery}
           oninput={onSearchInput}
           aria-label="Search history"
