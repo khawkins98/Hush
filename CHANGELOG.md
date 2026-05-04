@@ -7,7 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-04
+
+This release covers the post-v0.2.0 stretch: the menu-bar quick popover scaffolding, an audio-pipeline diagram in the welcome + About surfaces, progressive disclosure of advanced settings, four-format dictation export (text / Markdown / SRT / WebVTT), the live-waveform extraction into a reusable component, the Light / Dark / System theme override, the traffic-light permission-health model, the sidebar shell that subsumed the standalone Settings window, the Phase F vibe pass (indigo-violet accent, two-column dictation layout, spring hover, recording-pulse animation, sidebar dim-and-lock), HUD bug fixes (main-thread show/hide, pill widening for H:MM:SS, timer reset across sessions), per-event sound-cue split + cross-platform synthesis, the IPC + meeting refactor sweep, and the auto-update install flow (inert until maintainer Steps 1–4 land).
+
 ### Added
+
+#### Sidebar shell + Settings inline (#479, #480)
+
+- Three-window topology drops to two: standalone Settings window deleted, a 56 px icon column drives section switching inside the main window (Dictation / History / Settings).
+- Native menu's "Settings…" item and tray's "Open Settings…" emit `settings:goto-tab` instead of opening a window.
+
+#### Phase F vibe pass (#470, #471, #472, #473, #475)
+
+- Indigo-violet accent (`#7c6ff7`) + 4-step dark-depth recalibration.
+- Two-column dictation layout: source picker on the left, model chip on the right, flanking the centerpiece Record button.
+- Panic-style spring hover (`scale(1.02)` + overshoot easing), Rogue Amoeba recording-pulse animation on the Stop button, ALL-CAPS Nova-style field labels, sidebar dim-and-lock during recording, reduced-motion honoured throughout.
+
+#### Per-event sound-cue split + cross-platform synthesis (#446, #463)
+
+- The "Audio cues" master toggle in Settings → General fans out to per-event sub-toggles ("Recording-start cue" / "Transcription-complete cue") so the user can silence one without losing the other.
+- The cues themselves became cross-platform: synthesised WAVs at compile time (`build.rs::synth_cue_files`), played via `rodio` through CPAL on every platform. Replaces the macOS-only `NSSound soundNamed:"Tink"/"Glass"` path. Linux + Windows users now get the same cues macOS users already had.
+
+#### Auto-update install flow — Steps 5–6 (#10)
+
+- New `install_pending_update` IPC + AboutTab Install button + download progress + `updater:install-pending` handoff. Inert until maintainer-only Steps 1–4 land (signing keypair, `tauri.conf.json` `plugins.updater` block, CI signing secret, plugin registration in `lib.rs`).
+- Typed `IpcError::UpdaterUnavailable` so the frontend `kind`-matches on the gate-error rather than substring-matching free-form copy.
+
+#### IPC + meeting refactor sweep (#431 / #486, #487, #488 / #489)
+
+- `src-tauri/src/ipc/commands/mod.rs` (3,329 LOC) split into 5 peer modules: `history.rs`, `settings.rs`, `system.rs`, `ptt.rs`, `diarizer.rs`. Drops `mod.rs` to 2,215 LOC, retaining only the dictation hot path + shared types.
+- `src-tauri/src/meeting/manager.rs` (2,193 LOC) split into `manager.rs` (state shape + Drop impl) + `lifecycle.rs` (`start_manual` / `stop_manual` / `append_if_active`) + `classifier.rs` (`AppClassifier` table). Drops `manager.rs` to ~1,600 LOC.
+- `RuntimeFlags` substruct + `learnings.md` 2026-05-02 sync-primitive convention closed out the audit-driven cleanup.
+
+### Fixed
+
+#### HUD pill width clipping at H:MM:SS + timer reset between sessions (#481, #483)
+
+- HUD window width 250 → 290 px so "Recording 9:59:59" fits without clipping the grip / dismiss icons.
+- `hud:state` payload changed from a bare string to `{ state, startedAtMs? }` so the persistent HUD page anchors `recordingStartedAt` to the backend clock — back-to-back sessions reset cleanly to 0:00.
+
+#### Recording crash on macOS 26: HUD AppKit calls from a tokio worker (#476, #477)
+
+- `hud::show_async` / `hide_async` wrappers dispatch onto `app.run_on_main_thread` so the AppKit `orderFront:` / `orderOut:` calls stay on the main thread. macOS 26 enforces the affinity strictly; the previous shape would `_os_crash` on `meeting_start_manual`'s tokio worker.
+- Click-record unified through `meeting_start_manual` now that the HUD path is main-thread-safe — cues, partials, and the meeting pump all reach the dictation UI without a separate code path.
+
+#### Menu-bar audit follow-ups + small UI nits
+
+- HUD timer regression spec (`tests/e2e/hud-timer.spec.ts`) pins the back-to-back reset behaviour.
+- Record button gains aria-label + status copy when no audio input devices are available.
+- Settings tabs no longer overflow the toolbar at the main window's minimum width (bumped 560 → 720 px).
+- `bundle_path` (history-export) replaces `debug_assert!` traversal-check with a release-build return-Err check.
+- Recording-pulse animation honours `prefers-reduced-motion`.
 
 #### Menu-bar quick-access popover (#427 Item 1, scaffolding)
 
