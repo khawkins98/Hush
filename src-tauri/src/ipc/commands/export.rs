@@ -135,7 +135,7 @@ pub async fn history_export_bundle(
         for entry in &entries {
             let body = history_csv_for_entries(std::slice::from_ref(entry))
                 .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;
-            let path = bundle_path(&dir, &format!("dictation-{}.csv", entry.id));
+            let path = bundle_path(&dir, &format!("dictation-{}.csv", entry.id))?;
             tokio::fs::write(&path, body)
                 .await
                 .map_err(|e| IpcError::Internal(format!("write {}: {e}", path.display())))?;
@@ -179,7 +179,7 @@ pub async fn history_export_bundle(
                 MeetingExportFormat::Json => meeting_session_json(session, &utterances)
                     .map_err(|e| IpcError::Internal(format!("JSON write: {e:#}")))?,
             };
-            let path = bundle_path(&dir, &format!("meeting-{}.{}", session.id, ext));
+            let path = bundle_path(&dir, &format!("meeting-{}.{}", session.id, ext))?;
             tokio::fs::write(&path, body)
                 .await
                 .map_err(|e| IpcError::Internal(format!("write {}: {e}", path.display())))?;
@@ -193,13 +193,49 @@ pub async fn history_export_bundle(
 /// Compose a path inside `dir` from a leaf filename, sanity-
 /// checking that the leaf doesn't try to escape (no `/`, no
 /// `..`). The frontend builds these from row ids so we trust
-/// the shape — but a defence-in-depth check keeps a future
-/// caller (or a malicious frontend) from writing outside the
-/// chosen directory by sneaking `../` into the filename.
-fn bundle_path(dir: &Path, leaf: &str) -> PathBuf {
-    debug_assert!(
-        !leaf.contains('/') && !leaf.contains('\\') && !leaf.contains(".."),
-        "bundle leaf must be a single filename component: got {leaf:?}"
-    );
-    dir.join(leaf)
+/// the shape — but a release-build defence-in-depth check
+/// keeps a future caller (or a malicious frontend) from writing
+/// outside the chosen directory by sneaking `../` into the
+/// filename. Pre-#499 this was a `debug_assert!`, which compiled
+/// out in release; the comment claimed a guarantee the binary
+/// didn't enforce.
+fn bundle_path(dir: &Path, leaf: &str) -> IpcResult<PathBuf> {
+    if leaf.contains('/') || leaf.contains('\\') || leaf.contains("..") {
+        return Err(IpcError::Internal(format!(
+            "unsafe bundle leaf rejected: {leaf:?}"
+        )));
+    }
+    Ok(dir.join(leaf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundle_path_accepts_simple_filename_components() {
+        let dir = Path::new("/tmp/x");
+        // Production-shaped leaves used by the two callers.
+        assert!(bundle_path(dir, "dictation-42.csv").is_ok());
+        assert!(bundle_path(dir, "meeting-42.json").is_ok());
+        assert!(bundle_path(dir, "anything-without-separators.txt").is_ok());
+    }
+
+    #[test]
+    fn bundle_path_rejects_path_separators_and_traversal() {
+        let dir = Path::new("/tmp/x");
+        // Forward slash — POSIX path separator.
+        assert!(bundle_path(dir, "../etc/passwd").is_err());
+        assert!(bundle_path(dir, "subdir/leaf.csv").is_err());
+        // Backslash — Windows path separator. Hush's hands-on
+        // target is macOS but the export IPC compiles on Windows,
+        // and a `\..\` leaf would equally escape there.
+        assert!(bundle_path(dir, r"subdir\leaf.csv").is_err());
+        // Plain `..` without a separator still escapes via
+        // `dir.join("..")`. Reject it too — the frontend has no
+        // legitimate use for it as a leaf.
+        assert!(bundle_path(dir, "..").is_err());
+        // Embedded `..` inside an otherwise innocent leaf.
+        assert!(bundle_path(dir, "data..csv").is_err());
+    }
 }

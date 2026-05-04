@@ -216,10 +216,16 @@
             ? "Working"
             : noModelInstalled
               ? "Choose a model first"
-              : willRecordMeeting
-                ? "Record meeting (mic plus system audio)"
-                : "Start recording"}
-          title={noModelInstalled ? "Choose a model first" : undefined}
+              : !hasUsableSource
+                ? "No audio input available — connect a microphone to record"
+                : willRecordMeeting
+                  ? "Record meeting (mic plus system audio)"
+                  : "Start recording"}
+          title={noModelInstalled
+            ? "Choose a model first"
+            : !hasUsableSource
+              ? "No audio input available"
+              : undefined}
           data-record-mode={willRecordMeeting ? "meeting" : "dictation"}
         >
           {#if transcribing}
@@ -285,6 +291,8 @@
       Record meeting <span class="record-mode-hint">mic + system audio</span>
     {:else if !noModelInstalled && hasUsableSource}
       Press to record
+    {:else if !hasUsableSource && !noModelInstalled}
+      No microphone detected — connect one and reopen Hush.
     {/if}
   </p>
 </div>

@@ -1,72 +1,13 @@
-//! Meeting Mode session manager — owns the "is a session active?"
-//! state, the chunking pump that drives auto-recording, and the
-//! policy for opening / closing sessions.
+//! Meeting Mode session manager — owns the [`SessionState`] /
+//! [`ActiveSession`] types and the per-session wiring (classifier,
+//! audio backend, transcribe slot, partials map, event emitter,
+//! diarizer).
 //!
-//! ## Lifecycle
-//!
-//! Manual-start: the user clicks "Start a session" in the panel.
-//! The manager opens audio capture handles for each chosen source
-//! (mic + optional system audio), opens one streaming inference
-//! session per source via [`crate::transcription::Transcribe::start_stream`],
-//! creates the session row, and spawns a pump task. The pump
-//! drains every audio handle on a `PUMP_TICK` cadence (without
-//! stopping the handles), feeds the drained samples into the
-//! corresponding streaming inference session, and dispatches
-//! returned utterances: finals to the database, partials to the
-//! in-memory partials store. When the user clicks Stop,
-//! `stop_manual` cancels the pump, awaits its `finish()`-driven
-//! tail-flush, clears partials, and writes `ended_at` on the
-//! session row.
-//!
-//! Auto-detect from foreground app is the next phase ([#112]) —
-//! the [`AppClassifier`] table is wired up but not yet driving
-//! the start lifecycle.
-//!
-//! ## Speaker labels
-//!
-//! Each persisted utterance carries a `speaker_label`. The pump
-//! runs every batch of finals through the configured `Diarize`
-//! impl (production: `FlagGatedDiarizer` over `OnnxDiarizer` when
-//! the Speakers toggle is on and the wespeaker model is loaded,
-//! else `NoopDiarizer`). When the diarizer abstains —
-//! `NoopDiarizer`, or `OnnxDiarizer` skipping a too-short
-//! utterance — `dispatch_utterances` stamps the source-derived
-//! `"mic"` / `"system"` tag from `AudioSource::speaker_tag()`
-//! (the single source of truth for the persistence-layer label
-//! shape); the panel maps that to "You" / "Remote" when
-//! rendering.
-//!
-//! ## Streaming (post-#108)
-//!
-//! The pump opens one [`StreamingTranscribeSession`] per audio
-//! source at session start and feeds samples into it on a tight
-//! 500 ms tick (via [`AudioSession::drain_into`]). The streaming
-//! session runs whisper.cpp on a rolling 30 s window every ~3 s of
-//! new audio (see `transcription::streaming` for the policy
-//! state-machine) and emits **partials** for the trailing tail and
-//! **finals** for segments aged past the commit threshold. The pump
-//! routes finals to the database (via the existing
-//! [`MeetingSessionRepository::append_utterance`] path) and stores
-//! partials in an in-memory `partials` map keyed by session id +
-//! speaker label. The panel polls [`meeting_session_get`] which
-//! merges the in-memory partials into the response — partials
-//! never touch the database, so a session's persisted history
-//! stays clean.
-//!
-//! The pre-#108 chunk-and-restart cycle (10 s chunks, stop-drain-
-//! transcribe-restart) is gone. The new shape needs the audio
-//! backend to support [`AudioSession::drain_into`] (PR2) and the
-//! transcribe backend to support
-//! [`crate::transcription::Transcribe::start_stream`] (PR1). When
-//! either is absent (test mocks, or the rare backend that opted
-//! out), the pump degrades to a no-op cycle that keeps the session
-//! row open but emits no utterances — same end-state as
-//! "transcriber not loaded" pre-#108, just via a different code
-//! path.
-//!
-//! [#108]: https://github.com/khawkins98/Hush/issues/108
-//! [#111]: https://github.com/khawkins98/Hush/issues/111
-//! [#112]: https://github.com/khawkins98/Hush/issues/112
+//! Lifecycle methods (`start_manual`, `stop_manual`,
+//! `append_if_active`) live in [`super::lifecycle`] — extracted
+//! under #488 so each file has one job. The chunking pump lives
+//! in [`super::pump`] (#108). Speaker-label fallback + classifier
+//! defaults live in [`super::classifier`] (#431).
 //!
 //! ## Privacy invariant (load-bearing)
 //!
