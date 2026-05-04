@@ -48,6 +48,7 @@ Subsequent runs are incremental.
 | Run frontend type check | `npm run check` |
 | Run frontend e2e tests | `npm run test:e2e` |
 | Kill stale dev server processes | `npm run dev-cleanup` |
+| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes **and** wipes all app state (macOS only) |
 
 ---
 
@@ -109,8 +110,15 @@ npx playwright test tests/e2e/meeting-panel.spec.ts
 # See tests/e2e-tauri/README.md for full setup.
 npm run test:e2e:tauri
 
-# Kill stale tauri/vite processes from a previous dev run
+# Kill stale tauri/vite processes from a previous dev run (process cleanup only).
 npm run dev-cleanup
+
+# Full vanilla reset — kills processes AND wipes TCC grants, app database,
+# preferences, and caches so the next launch behaves as a brand-new install.
+# Use this before testing onboarding, first-run permission prompts, or any
+# "new user" flow. Downloaded models are kept by default.
+# Pass --nuke-models to also remove them; --user <name> to target another account.
+npm run dev-reset
 
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
@@ -132,6 +140,14 @@ npm run tauri:bundle
 This produces a proper `.app` that TCC treats like a user-installed app. It's slow (30 s – 2 min), so use it deliberately rather than as your default loop.
 
 If macOS shows stale "Hush" rows in System Settings → Privacy & Security after rebuilding: Settings → Permissions → Reset permissions inside Hush, remove the stale row in System Settings, then relaunch.
+
+To get back to a completely clean state for testing onboarding or first-run permission prompts, run:
+
+```bash
+npm run dev-reset
+```
+
+This wipes all TCC grants, the app database, preferences, and caches. Screen Recording rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
 
 Full recovery recipes: [`docs/macos-permissions.md`](./macos-permissions.md).
 

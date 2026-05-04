@@ -50,3 +50,7 @@ fi
 
 echo "[hush tauri:bundle] opening $APP_PATH"
 open "$APP_PATH"
+
+echo ""
+echo "[hush tauri:bundle] tip: to test fresh onboarding or first-run permission prompts,"
+echo "  run 'npm run dev-reset' before launching the bundle to start from a vanilla state."

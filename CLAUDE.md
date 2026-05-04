@@ -72,8 +72,13 @@ npx playwright test tests/e2e/meeting-panel.spec.ts
 # deferred until tauri-driver's macOS support stabilises.
 npm run test:e2e:tauri
 
-# Reset stale dev servers (kills tauri/vite processes)
+# Reset stale dev servers (kills tauri/vite processes only)
 npm run dev-cleanup
+
+# Full vanilla reset — kills processes AND wipes TCC grants, app database,
+# preferences, and caches. Use before testing onboarding or new-user flows.
+# Pass --nuke-models to also remove downloaded models; --user <name> for another account.
+npm run dev-reset
 
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
