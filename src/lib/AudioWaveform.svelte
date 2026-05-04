@@ -82,9 +82,20 @@
     /// peak-dB title readout. Off by default so the HUD's compact
     /// pill stays unchanged; the main window opts in.
     metering?: boolean;
+    /// Amplification factor applied to the 0..1 RMS level before
+    /// mapping to bar height %. Default 400 keeps the historical
+    /// behaviour. The HUD passes 480 (~20% louder appearance) so
+    /// the compact 24 px bars reach the top on normal speech
+    /// without affecting the main window's 88 px waveform.
+    levelScale?: number;
+    /// Minimum bar height in %. Default 6 — the "honest silence"
+    /// baseline on the main window's 88 px stage. The HUD passes
+    /// 15 so bars render as a thin flat line rather than
+    /// disappearing during gaps between words.
+    silenceFloorPct?: number;
   };
 
-  let { mode, active = true, metering = false }: Props = $props();
+  let { mode, active = true, metering = false, levelScale = 400, silenceFloorPct = 6 }: Props = $props();
 
   let effectiveMode = $derived<WaveformMode>(
     mode ?? (active ? "recording" : "idle"),
@@ -249,11 +260,11 @@
   role="presentation"
 >
   {#each waveform as level, i (i)}
-    {@const heightPct = Math.min(100, Math.max(6, level * 400))}
+    {@const heightPct = Math.min(100, Math.max(silenceFloorPct, level * levelScale))}
     <span class="audio-waveform-bar" style="height: {heightPct}%"></span>
   {/each}
   {#if metering && peak > 0.05}
-    {@const peakPct = Math.min(100, Math.max(6, peak * 400))}
+    {@const peakPct = Math.min(100, Math.max(silenceFloorPct, peak * levelScale))}
     <span
       class="audio-waveform-peak"
       data-testid="audio-waveform-peak"

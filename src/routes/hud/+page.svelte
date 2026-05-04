@@ -206,7 +206,7 @@
       phase B so the main window's recording status row can render
       the same affordance.
     -->
-    <AudioWaveform mode="recording" />
+    <AudioWaveform mode="recording" levelScale={480} silenceFloorPct={15} />
   {:else}
     <!--
       Processing state: replace the level meter with a slim
@@ -260,6 +260,11 @@
     gap: 0.65rem;
     height: 100vh;
     width: 100vw;
+    box-sizing: border-box;
+    /* Side padding keeps the grip dots and dismiss button off the
+       pill edges. box-sizing: border-box ensures the padding is
+       absorbed into the 100vw width rather than overflowing. */
+    padding: 0 0.55rem;
     background-color: rgba(15, 15, 15, 0.82);
     border-radius: 999px;
     /* The Tauri window itself is a rectangle; this pill draws the
@@ -271,6 +276,10 @@
        transparent window's edges aren't rectangular-shadow'd). */
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     user-select: none;
+    /* The AudioWaveform height/scale are taller in the HUD than the
+       defaults so bars are clearly visible in the compact pill.
+       Custom properties cascade into the child component. */
+    --audio-waveform-height: 24px;
     /* Drag handling is via `data-tauri-drag-region` on the markup —
        Tauri 2's preferred path. The cursor hint here makes the
        drag affordance discoverable. */
@@ -314,7 +323,6 @@
     display: inline-flex;
     align-items: center;
     color: rgba(255, 255, 255, 0.35);
-    margin-right: -0.15rem;
     transition: color 0.12s;
   }
   .hud-root:hover .hud-grip {
@@ -377,7 +385,10 @@
 
   .hud-shimmer {
     width: 60px;
-    height: 6px;
+    /* Match the waveform height so the pill doesn't reflow when
+       state flips between recording and processing. Anchored to
+       the same custom property set on .hud-root. */
+    height: var(--audio-waveform-height, 16px);
     background-color: rgba(255, 255, 255, 0.12);
     border-radius: 3px;
     overflow: hidden;

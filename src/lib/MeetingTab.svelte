@@ -480,7 +480,7 @@
       <div class="diarizer-download-row">
         <button
           type="button"
-          class="diarizer-download-button"
+          class="ghost diarizer-download-button"
           data-testid="diarizer-download-button"
           disabled={diarizerDownloadBusy}
           onclick={onDiarizerDownload}
@@ -647,6 +647,7 @@
 <AdvancedSection
   label="Advanced — app overrides"
   testId="settings-meeting-advanced-toggle"
+  open={true}
 >
   <MeetingAppOverridesPanel
     overrides={appOverrides}
@@ -672,6 +673,78 @@
      button.ghost, dark-mode variants) imported from
      `settings-tab.css` (#392). Only the diarizer-installed-
      model details below are tab-specific. */
+
+  /* Speakers panel — not-installed / installing card. Matches the
+     same card treatment as .toggle-row so the section reads as a
+     cohesive block before the toggle appears beneath it. */
+  .diarizer-model-status {
+    background-color: white;
+    border: 1px solid #e1e1e6;
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem;
+    margin-bottom: 0.75rem;
+  }
+
+  /* Action row within the not-installed card — aligns the download
+     button and optional cancel button side-by-side. */
+  .diarizer-download-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.55rem;
+  }
+
+  /* "Or install manually" disclosure — styled to match the
+     AdvancedSection toggle so it reads as part of the same
+     design language rather than a bare browser <details>. */
+  .diarizer-manual-install {
+    margin-top: 0.65rem;
+  }
+  .diarizer-manual-install > summary {
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.25rem 0;
+    user-select: none;
+    border-radius: 4px;
+  }
+  .diarizer-manual-install > summary::-webkit-details-marker {
+    display: none;
+  }
+  .diarizer-manual-install > summary::before {
+    content: "▸";
+    font-size: 0.65rem;
+    width: 0.7rem;
+    text-align: center;
+    color: #888;
+  }
+  .diarizer-manual-install[open] > summary::before {
+    content: "▾";
+  }
+  .diarizer-manual-install > summary:hover {
+    color: #333;
+  }
+  .diarizer-manual-install > .settings-row-desc {
+    margin-top: 0.4rem;
+    padding-left: 0.1rem;
+  }
+
+  /* Diarization toggle — dim the whole row when the model isn't
+     installed so it's visually clear the feature is unavailable
+     until the download completes. Scoped here (not in
+     settings-tab.css) to avoid dimming unrelated disabled toggles
+     on other tabs. */
+  .toggle-row:has(input[type="checkbox"]:disabled) {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 
   /* Speakers panel — installed-model details (#351). */
   .diarizer-installed-details {
@@ -733,5 +806,28 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .diarizer-model-status {
+      background-color: #2a2a2d;
+      border-color: #38383b;
+    }
+    :root:not([data-theme="light"]) .diarizer-manual-install > summary {
+      color: #aaa;
+    }
+    :root:not([data-theme="light"]) .diarizer-manual-install > summary:hover {
+      color: #d8d8d8;
+    }
+  }
+  :root[data-theme="dark"] .diarizer-model-status {
+    background-color: #2a2a2d;
+    border-color: #38383b;
+  }
+  :root[data-theme="dark"] .diarizer-manual-install > summary {
+    color: #aaa;
+  }
+  :root[data-theme="dark"] .diarizer-manual-install > summary:hover {
+    color: #d8d8d8;
   }
 </style>
