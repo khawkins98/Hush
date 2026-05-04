@@ -1504,30 +1504,6 @@
   onClose={() => (paletteOpen = false)}
 />
 
-<header class="app-bar">
-  <div class="brand">
-    <!--
-      Small-optical-size brand icon (#395 follow-up). The
-      original `/app-icon.svg` is a detailed line-art mark
-      designed for the macOS bundle (.icns / 128 px+); at 22 px
-      its inner detail collapses and the speech-bubble framing
-      reads as chat, not dictation. `/app-icon-small.svg` is a
-      simple microphone glyph drawn for this size. The full
-      asset stays in static/ for any future use that wants the
-      branded original.
-    -->
-    <img
-      class="brand-icon"
-      src="/app-icon-small.svg"
-      alt=""
-      aria-hidden="true"
-      width="22"
-      height="22"
-    />
-    <span class="brand-name">Hush</span>
-  </div>
-</header>
-
 <div class="app-shell">
   <SidebarNav
     bind:active={activeSection}
@@ -1686,55 +1662,13 @@
    reads more like a polished native app title bar than a
    web-style left-aligned logo. Settings button sits at the
    right, end-aligned via flex. The brand is `position: absolute`
-   relative to the sticky `.app-bar` (sticky establishes a
-   containing block for absolutely-positioned descendants), so
-   it stays centred regardless of the right-side button width. */
-.app-bar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0.6rem 1.5rem;
-  background-color: var(--bg-sidebar, #f0f0f3);
-  border-bottom: 1px solid var(--border, #e1e1e1);
-}
-
-.brand {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  /* Click-through layer — the brand isn't an interactive
-     element today, so let pointer events fall to the sticky
-     bar beneath it. If a future iteration makes the brand
-     clickable (e.g. resets to dictation home), drop this
-     and add `cursor: pointer`. */
-  pointer-events: none;
-}
-.brand-icon {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  image-rendering: -webkit-optimize-contrast;
-}
-.brand-name {
-  font-weight: 600;
-  font-size: 0.95rem;
-  letter-spacing: -0.01em;
-}
-
 /* #479 slice 1: flex shell hosts the left icon sidebar + the
    active panel. Subtracts the sticky app-bar's height so the
    shell fills the remaining viewport — same total height the
    pre-r3 single-column layout occupied, just split horizontally. */
 .app-shell {
   display: flex;
-  height: calc(100vh - 45px);
+  height: 100vh;
   overflow: hidden;
 }
 
@@ -1773,20 +1707,6 @@
   padding-top: 2.5rem;
 }
 
-/* The pre-r2 dark `@media` overrides for `.app-bar`,
-   `.brand-name`, `.settings-btn`, and `.page-section + …` are
-   gone — every rule above already reads from
-   `var(--bg-…)` / `var(--text-…)` / `var(--accent)` /
-   `var(--border)`, which `app.css` swaps via the OS media query
-   OR the manual `:root[data-theme="dark"]` override. The
-   @media-only duplication just hid the manual-override path
-   when the OS preference disagreed. */
-.brand-name {
-  /* Explicit text token so the brand follows the theme cascade
-     without depending on inherited body colour (which the main
-     page doesn't set). */
-  color: var(--text-primary);
-}
 
 .section-header {
   margin-bottom: 1.5rem;

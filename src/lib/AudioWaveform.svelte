@@ -60,6 +60,11 @@
     `CLIP_THRESHOLD`. Self-clears after `CLIP_FLASH_MS`.
   - A peak-dB readout on the wrapper's `title` for tooltip-on-
     hover (re: F4's "dB readout on hover").
+  - A visible current-dB label overlaid in the top-right corner
+    of the waveform container so the level is readable at a
+    glance while recording. Uses integer precision (floor -60 dB)
+    with a semi-transparent backdrop pill for legibility on both
+    light and dark themes.
 
   Metering is a no-op outside `recording` mode so the breathing
   idle wave doesn't trip the meter.
@@ -82,9 +87,20 @@
     /// peak-dB title readout. Off by default so the HUD's compact
     /// pill stays unchanged; the main window opts in.
     metering?: boolean;
+    /// Amplification factor applied to the 0..1 RMS level before
+    /// mapping to bar height %. Default 400 keeps the historical
+    /// behaviour. The HUD passes 480 (~20% louder appearance) so
+    /// the compact 24 px bars reach the top on normal speech
+    /// without affecting the main window's 88 px waveform.
+    levelScale?: number;
+    /// Minimum bar height in %. Default 6 — the "honest silence"
+    /// baseline on the main window's 88 px stage. The HUD passes
+    /// 15 so bars render as a thin flat line rather than
+    /// disappearing during gaps between words.
+    silenceFloorPct?: number;
   };
 
-  let { mode, active = true, metering = false }: Props = $props();
+  let { mode, active = true, metering = false, levelScale = 400, silenceFloorPct = 6 }: Props = $props();
 
   let effectiveMode = $derived<WaveformMode>(
     mode ?? (active ? "recording" : "idle"),
@@ -136,6 +152,21 @@
   let clipTimer: ReturnType<typeof setTimeout> | null = null;
   let peakSetAt = 0;
 
+  // Fun loudness-context labels keyed by dBFS thresholds.
+  // Ranges are intentionally coarse — the goal is a smile,
+  // not metrological accuracy.
+  function dbContext(db: number): string {
+    if (db < -50) return "near silence 🤫";
+    if (db < -40) return "rustling leaves 🍃";
+    if (db < -30) return "quiet library 📚";
+    if (db < -20) return "soft whisper 🌬️";
+    if (db < -12) return "normal conversation 💬";
+    if (db <  -6) return "raised voice 📣";
+    if (db <  -3) return "lawnmower 🌿";
+    if (db <  -1) return "baby crying 👶";
+    return "rock concert 🎸";
+  }
+
   // Map a 0..1 linear level to a peak-dB string. Floor at -60 dB
   // because anything below that is effectively silence and the
   // numeric value isn't useful in a tooltip.
@@ -145,6 +176,13 @@
     const clamped = Math.max(-60, db);
     return `Peak: ${clamped.toFixed(1)} dB`;
   });
+
+  // Visible current-level dB label (integer, -60 dB floor).
+  // Throttled to 200 ms so the readout is legible without strobing.
+  // Only renders while metering + recording so idle/processing/
+  // error states don't show a bogus number.
+  let currentDbLabel = $state("");
+  let lastDbLabelUpdateMs = 0;
 
   onMount(async () => {
     unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
@@ -198,8 +236,17 @@
             clipping = false;
           }, CLIP_FLASH_MS);
         }
-      } else if (peak > 0) {
-        peak = 0;
+        if (now - lastDbLabelUpdateMs >= 200) {
+          lastDbLabelUpdateMs = now;
+          const db = 20 * Math.log10(Math.max(displayLevel, 0.001));
+          const dbInt = Math.max(-60, db);
+          currentDbLabel = displayLevel > 0.001
+            ? `${dbInt.toFixed(0)} dB · ${dbContext(dbInt)}`
+            : "";
+        }
+      } else {
+        if (peak > 0) peak = 0;
+        if (currentDbLabel !== "") currentDbLabel = "";
       }
 
       raf = requestAnimationFrame(tick);
@@ -249,17 +296,11 @@
   role="presentation"
 >
   {#each waveform as level, i (i)}
-    {@const heightPct = Math.min(100, Math.max(6, level * 400))}
+    {@const heightPct = Math.min(100, Math.max(silenceFloorPct, level * levelScale))}
     <span class="audio-waveform-bar" style="height: {heightPct}%"></span>
   {/each}
-  {#if metering && peak > 0.05}
-    {@const peakPct = Math.min(100, Math.max(6, peak * 400))}
-    <span
-      class="audio-waveform-peak"
-      data-testid="audio-waveform-peak"
-      style="bottom: {peakPct}%"
-      aria-hidden="true"
-    ></span>
+  {#if currentDbLabel !== ""}
+    <span class="audio-waveform-db" aria-hidden="true">{currentDbLabel}</span>
   {/if}
 </div>
 
@@ -284,23 +325,6 @@
     border-radius: 1px;
     transition: height 60ms linear;
     will-change: height;
-  }
-
-  /* F4: peak-hold line, painted as a thin absolutely-positioned
-     marker so it floats above the bars without disturbing flex
-     layout. Horizontal extent matches the bar strip. The bottom
-     offset is set inline by the script in % units, anchored to
-     the wrapper bottom so the line tracks the same bar-height
-     scale as the bars themselves. */
-  .audio-waveform-peak {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: var(--audio-waveform-peak-color, rgba(255, 255, 255, 0.85));
-    pointer-events: none;
-    transition: bottom 80ms linear;
-    will-change: bottom;
   }
 
   /* F4 clip warning — thin red outline on the wrapper for
@@ -345,6 +369,27 @@
     transition: background 80ms linear, opacity 80ms linear;
   }
 
+  /* dB readout — compact current-level label overlaid below the
+     waveform bars. Positioned at the bottom so the wider context
+     string doesn't overlap the bars; left-anchored so it reads
+     naturally and grows rightward into open space. */
+  .audio-waveform-db {
+    position: absolute;
+    bottom: -1.35rem;
+    left: 0;
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.35);
+    color: rgba(255, 255, 255, 0.92);
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+  }
+
   @keyframes audio-waveform-processing {
     0%, 100% { opacity: 0.85; }
     50% { opacity: 0.45; }
@@ -364,9 +409,6 @@
       opacity: 0.7;
     }
     .audio-waveform.flashing .audio-waveform-bar {
-      transition: none;
-    }
-    .audio-waveform-peak {
       transition: none;
     }
   }

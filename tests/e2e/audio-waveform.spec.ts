@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { fireEvent, installMocks } from "./_mock";
 
 // Smoke coverage for the extracted AudioWaveform component
 // (#411 phase B + F1 moods). The component is leaf-level and does
@@ -14,9 +14,17 @@ test.describe("AudioWaveform — mount points", () => {
   test("HUD page renders the waveform on first paint", async ({ page }) => {
     await installMocks(page);
     await page.goto("/hud");
-    // Default hudState is "recording" before any backend event,
-    // so the component should be on the page immediately, with
-    // mode="recording" wired by the HUD consumer.
+    // hudState starts as null so the AudioWaveform only mounts after
+    // the first genuine hud:state = recording event (this prevents
+    // WebKit from throttling rAF while the window is still hidden).
+    // Wait for the dismiss button — always in the template — to
+    // confirm SvelteKit has bootstrapped and onMount has registered
+    // the event listener before we fire the first event.
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: Date.now(),
+    });
     const waveform = page.locator('[data-testid="audio-waveform"]');
     await expect(waveform).toBeVisible();
     await expect(waveform).toHaveAttribute("data-mode", "recording");
@@ -52,6 +60,11 @@ test.describe("AudioWaveform — mount points", () => {
     // would over-decorate the menu-bar overlay. Lock that in so a
     // future "wire metering everywhere" change has to revisit
     // this trade-off explicitly.
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: Date.now(),
+    });
     const waveform = page.locator('[data-testid="audio-waveform"]');
     await expect(waveform).toBeVisible();
     await expect(waveform).not.toHaveAttribute("data-metering", "on");

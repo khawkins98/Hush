@@ -18,7 +18,8 @@
         "width": 800,
         "height": 600,
         "minWidth": 720,
-        "minHeight": 400
+        "minHeight": 400,
+        "maximizable": false
       },
       {
         "label": "hud",

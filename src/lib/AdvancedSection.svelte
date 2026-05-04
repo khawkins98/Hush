@@ -111,8 +111,8 @@
   outline-offset: 2px;
 }
 .chevron {
-  font-size: 0.65rem;
-  width: 0.7rem;
+  font-size: 0.85rem;
+  width: 0.9rem;
   text-align: center;
   color: #888;
 }

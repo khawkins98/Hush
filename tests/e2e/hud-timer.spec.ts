@@ -21,8 +21,11 @@ test.describe("HUD timer reset across sessions (#481)", () => {
     await installMocks(page);
     await page.goto("/hud");
 
+    // Wait for the dismiss button — always in the template — to confirm
+    // SvelteKit has bootstrapped and onMount's listen() has registered
+    // before we fire the first event.
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
     const elapsed = page.locator('[data-testid="hud-elapsed"]');
-    await expect(elapsed).toBeVisible();
 
     // Seed a recording that "started" exactly 65 seconds ago.
     // The label should round to 1:05 on the very next animation
@@ -33,6 +36,7 @@ test.describe("HUD timer reset across sessions (#481)", () => {
       startedAtMs: sixtyFiveSecondsAgo,
     });
 
+    await expect(elapsed).toBeVisible();
     await expect(elapsed).toHaveText(/^1:0[5-7]$/);
   });
 
@@ -40,12 +44,9 @@ test.describe("HUD timer reset across sessions (#481)", () => {
     await installMocks(page);
     await page.goto("/hud");
 
-    // Wait for the HUD page's `listen` to register before firing.
-    // The e2e event bus is created lazily on the first `listen` call;
-    // firing before the page's onMount has run would `throw bus not
-    // initialised`.
+    // Wait for SvelteKit bootstrap before firing any events.
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
     const elapsed = page.locator('[data-testid="hud-elapsed"]');
-    await expect(elapsed).toBeVisible();
 
     // First session: pretend it started 30s ago.
     await fireEvent(page, "hud:state", {
@@ -76,9 +77,8 @@ test.describe("HUD timer reset across sessions (#481)", () => {
     await installMocks(page);
     await page.goto("/hud");
 
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
     const elapsed = page.locator('[data-testid="hud-elapsed"]');
-    await expect(elapsed).toBeVisible();
-
     await fireEvent(page, "hud:state", {
       state: "recording",
       startedAtMs: Date.now() - 12_000,

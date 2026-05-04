@@ -246,42 +246,79 @@
     border-color: var(--accent);
   }
   @media (prefers-color-scheme: dark) {
-    .perm-row {
+    :root:not([data-theme="light"]) .perm-row {
       background-color: #2a2a2d;
       border-color: #38383b;
     }
-    .perm-name { color: #e8e8e8; }
-    .perm-why { color: #a8a8a8; }
-    .perm-status-pill {
+    :root:not([data-theme="light"]) .perm-name { color: #e8e8e8; }
+    :root:not([data-theme="light"]) .perm-why { color: #a8a8a8; }
+    :root:not([data-theme="light"]) .perm-status-pill {
       background: #3a3a3f;
       color: #c8c8cc;
     }
-    .perm-row[data-status="granted"] .perm-status-pill {
+    :root:not([data-theme="light"]) .perm-row[data-status="granted"] .perm-status-pill {
       background: #1d3a26;
       color: #8fd9a3;
     }
-    .perm-row[data-status="not-determined"] .perm-status-pill {
+    :root:not([data-theme="light"]) .perm-row[data-status="not-determined"] .perm-status-pill {
       background: #3d2f12;
       color: #f0c878;
     }
-    .perm-row[data-status="denied"] .perm-status-pill {
+    :root:not([data-theme="light"]) .perm-row[data-status="denied"] .perm-status-pill {
       background: #3d1d1d;
       color: #f0a0a0;
     }
-    .perm-row-action {
+    :root:not([data-theme="light"]) .perm-row-action {
       background-color: #1f1f22;
       border-color: #38383b;
       color: #c0d0ff;
     }
-    .perm-row-action:hover {
+    :root:not([data-theme="light"]) .perm-row-action:hover {
       background-color: #28283a;
       border-color: var(--accent);
     }
-    .perm-row[data-status="not-determined"] .perm-row-action,
-    .perm-row[data-status="denied"] .perm-row-action {
+    :root:not([data-theme="light"]) .perm-row[data-status="not-determined"] .perm-row-action,
+    :root:not([data-theme="light"]) .perm-row[data-status="denied"] .perm-row-action {
       background-color: #1e1b4b;
       border-color: #4338ca;
       color: #e0e7ff;
     }
+  }
+  :root[data-theme="dark"] .perm-row {
+    background-color: #2a2a2d;
+    border-color: #38383b;
+  }
+  :root[data-theme="dark"] .perm-name { color: #e8e8e8; }
+  :root[data-theme="dark"] .perm-why { color: #a8a8a8; }
+  :root[data-theme="dark"] .perm-status-pill {
+    background: #3a3a3f;
+    color: #c8c8cc;
+  }
+  :root[data-theme="dark"] .perm-row[data-status="granted"] .perm-status-pill {
+    background: #1d3a26;
+    color: #8fd9a3;
+  }
+  :root[data-theme="dark"] .perm-row[data-status="not-determined"] .perm-status-pill {
+    background: #3d2f12;
+    color: #f0c878;
+  }
+  :root[data-theme="dark"] .perm-row[data-status="denied"] .perm-status-pill {
+    background: #3d1d1d;
+    color: #f0a0a0;
+  }
+  :root[data-theme="dark"] .perm-row-action {
+    background-color: #1f1f22;
+    border-color: #38383b;
+    color: #c0d0ff;
+  }
+  :root[data-theme="dark"] .perm-row-action:hover {
+    background-color: #28283a;
+    border-color: var(--accent);
+  }
+  :root[data-theme="dark"] .perm-row[data-status="not-determined"] .perm-row-action,
+  :root[data-theme="dark"] .perm-row[data-status="denied"] .perm-row-action {
+    background-color: #1e1b4b;
+    border-color: #4338ca;
+    color: #e0e7ff;
   }
 </style>

@@ -21,7 +21,7 @@ test.describe("CommandPalette — F3 ⌘K", () => {
     // keyboard event — Playwright won't deliver window-level
     // keystrokes to a brand-new tab without something to focus
     // first.
-    await page.locator("header.app-bar").click();
+    await page.locator("section#dictation-section header").click(); // focus the page without hitting interactive elements
 
     const palette = page.locator('[data-testid="command-palette"]');
     await expect(palette).toHaveCount(0);
@@ -41,12 +41,11 @@ test.describe("CommandPalette — F3 ⌘K", () => {
     await installMocks(page);
     await page.goto("/");
 
-    // Click the app-bar (non-interactive) so the page has focus,
-    // then send the keystroke. Clicking body.click() would hit
-    // the Record button at the centre of the dictation section
-    // and flip the page into recording state, skewing the
+    // Click top-left corner (non-interactive) so the page has focus,
+    // then send the keystroke. Clicking body center would hit the Record
+    // button and flip the page into recording state, skewing the
     // palette's enabled-action set.
-    await page.locator("header.app-bar").click();
+    await page.locator("section#dictation-section header").click(); // focus the page without hitting interactive elements
     await page.keyboard.press("ControlOrMeta+k");
     const input = page.locator('[data-testid="command-palette-input"]');
     await expect(input).toBeFocused();
@@ -66,12 +65,9 @@ test.describe("CommandPalette — F3 ⌘K", () => {
     await installMocks(page);
     await page.goto("/");
 
-    // Click the app-bar (non-interactive) so the page has focus,
-    // then send the keystroke. Clicking body.click() would hit
-    // the Record button at the centre of the dictation section
-    // and flip the page into recording state, skewing the
-    // palette's enabled-action set.
-    await page.locator("header.app-bar").click();
+    // Click top-left corner (non-interactive) so the page has focus,
+    // then send the keystroke. Body click center would hit the Record button.
+    await page.locator("section#dictation-section header").click(); // focus the page without hitting interactive elements
     await page.keyboard.press("ControlOrMeta+k");
     const stopRow = page.locator(
       '[data-testid="command-palette-row"][data-action-id="dictation.stop"]',
@@ -91,9 +87,9 @@ test.describe("CommandPalette — F3 ⌘K", () => {
     await installMocks(page);
     await page.goto("/");
 
-    // Click the app-bar (non-interactive) to focus the page; then
-    // send the keystroke. Body click would hit the Record button.
-    await page.locator("header.app-bar").click();
+    // Click top-left corner (non-interactive) to focus the page; then
+    // send the keystroke. Body click center would hit the Record button.
+    await page.locator("section#dictation-section header").click(); // focus the page without hitting interactive elements
     await page.keyboard.press("ControlOrMeta+k");
     await page
       .locator(
