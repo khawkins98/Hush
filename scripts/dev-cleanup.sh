@@ -43,6 +43,7 @@ echo "[hush dev-cleanup] looking for stale processes..."
 # unrelated processes.
 declare -a patterns=(
   "target/debug/hush"
+  "Hush.app/Contents/MacOS/hush"
   "tauri dev"
   "vite dev"
 )

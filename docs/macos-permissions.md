@@ -130,27 +130,44 @@ The same recipe is wrapped behind a button in Settings → Permissions inside Hu
 
 ## Dev-loop: stale Hush.app rows after a re-bundle
 
-Each `npm run tauri:bundle` produces an ad-hoc-signed `.app`. The signing identity isn't stable across rebuilds (it's "ad-hoc" — derived from the binary contents), so macOS may end up with **multiple Hush.app rows in System Settings → Privacy & Security**, one per signing identity it has seen.
+**Root cause (fixed in tauri-bundle-macos.sh):** Tauri's `cargo tauri build --debug` leaves the binary with a *linker-signed* signature whose identifier is a hash like `hush-44ac88ddc8db2594`, not the bundle ID `io.github.khawkins98.hush`. `Info.plist` is also not bound. TCC keys permission grants to this hash — so `tccutil reset io.github.khawkins98.hush` is a no-op, and every rebuild silently invalidates all grants.
 
-When the active build's identity differs from the row that's currently switched **on**, you get the failure mode the in-app reset doesn't catch:
+The fix is `codesign --force --deep --sign - Hush.app` run after the build. **`npm run tauri:bundle` now does this automatically** — you don't need to run it manually.
+
+If you built a bundle before this fix was merged, run:
+```bash
+codesign --force --deep --sign - src-tauri/target/debug/bundle/macos/Hush.app
+```
+Then verify: `codesign -dv src-tauri/target/debug/bundle/macos/Hush.app` should show `Identifier=io.github.khawkins98.hush` and `Info.plist entries=17`.
+
+---
+
+Even with the correct identifier, ad-hoc signing is still unstable across rebuilds (the binary hash changes each time). macOS may end up with **multiple Hush.app rows in System Settings → Privacy & Security**, one per signing identity it has seen.
+
+When the active build's identity differs from the row that's currently switched **on**, you get:
 
 1. macOS prompts the new build for Screen Recording.
 2. You click Allow.
 3. A second `Hush.app` row appears, toggle on.
-4. The original row stays in the list under its old identity, also showing as on, and now both fight for the grant.
-5. Subsequent launches: the wrong row wins, screen recording is silently blocked, no prompt fires because *some* Hush.app row is granted.
+4. The original row stays in the list under its old identity, also showing as on.
+5. Subsequent launches: the wrong row wins, screen recording is silently blocked.
 
 `tccutil reset ScreenCapture io.github.khawkins98.hush` only resets entries that match `io.github.khawkins98.hush`. Stale rows from older identities don't go anywhere.
 
+> **macOS 26 gotcha:** On macOS 26 `tccutil reset` sometimes does not remove the row from the System Settings UI — the entry persists with its old CSReq hash. The toggle appears ON, but the running binary's signature doesn't match, so the OS silently rejects the permission check. `npm run dev-reset` cannot work around this; **manual `−` removal in System Settings is required**.
+
 **Recovery:**
 
-1. Hit **Settings → Permissions → Reset permissions** in Hush (or run the four `tccutil reset` commands above by hand).
-2. Open System Settings → Privacy & Security → Screen & System Audio Recording (the per-row "Grant in Settings…" button on the Permissions tab deep-links there).
-3. If a `Hush.app` row is still in the list, **select it and click the `−` button at the bottom of the pane**. Repeat for any `Hush.app` row in Microphone and Input Monitoring.
-4. Quit Hush and relaunch the bundle.
-5. macOS will prompt fresh; clicking Allow now creates a single row that matches the current signing identity.
+1. Open System Settings → Privacy & Security → **Screen & System Audio Recording**. Select every `Hush.app` row and click the **`−`** button to remove it.
+2. Repeat for **Input Monitoring** (and Accessibility if present).
+3. Run `npm run dev-reset` (clears TCC database entries, app state, and the `~/Applications/Hush.app` dev install).
+4. Run `npm run tauri:bundle` — this rebuilds, re-signs with the correct identifier, installs to `~/Applications/Hush.app`, and opens it.
+   - Do **not** use `npm run tauri dev` — the unsigned dev binary has a different identity and won't receive Screen Recording permission from SCK.
+5. Input Monitoring auto-prompts when Hush registers the hotkey — click **OK**.
+6. Screen Recording: Settings → Permissions → "Grant in Settings…" deep-links to the right pane; toggle on the freshly-created Hush row.
+7. macOS will now have a single row matching the current binary's CSReq.
 
-The same procedure applies if you switch between dev (unsigned `npm run tauri dev`) and bundle (`npm run tauri:bundle`) builds — they sign differently and TCC sees them as different apps even though the bundle id is identical.
+The same procedure applies any time you switch between dev (unsigned `npm run tauri dev`) and bundle (`npm run tauri:bundle`) builds — they sign differently and TCC sees them as different apps even though the bundle id is identical.
 
 ---
 
