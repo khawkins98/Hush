@@ -4,10 +4,10 @@
 
 # Hush
 
-**Local voice-to-text and meeting transcription for macOS.**
+**Local voice-to-text and meeting transcription.**
+macOS, Linux, and Windows. Free. Open source. No account. No cloud.
 
-Dictate anywhere, capture meetings with mic + system audio, label You vs Remote.
-Free. No account. No cloud.
+Dictate anywhere with a hotkey. Capture meetings with mic + system audio in parallel. Label You vs Remote.
 
 [Download](https://github.com/khawkins98/Hush/releases) · [Privacy](#privacy-grep-the-source) · [Engineering](#engineering) · [Contribute](./CONTRIBUTING.md)
 
@@ -17,8 +17,8 @@ Free. No account. No cloud.
 
 ## What it is
 
-- **A push-to-talk dictation tool.** Hold your hotkey (default `Right ⌘`), speak, release. The transcript is on your clipboard, ready to paste, before you've moved your hands. No browser tab, no web service, no upload.
-- **A meeting transcription tool.** Click Record while you're in a call. Hush captures your mic and the system audio in parallel via macOS ScreenCaptureKit, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model.
+- **A push-to-talk dictation tool.** Hold your hotkey (default `Right ⌘` on macOS, `Right Ctrl` on Linux + Windows), speak, release. The transcript is on your clipboard, ready to paste, before you've moved your hands. No browser tab, no web service, no upload.
+- **A meeting transcription tool.** Click Record while you're in a call. Hush captures your mic and the call's system audio in parallel, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model. *(Parallel system-audio capture currently ships on macOS via ScreenCaptureKit; Linux + Windows system-audio support is tracked in [#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107) — meeting mode runs mic-only there for now.)*
 - **Both, in one app, sharing one history.** Most tools pick one lane. Hush is dictation **and** meetings, with the same model loaded once and the same on-disk history.
 
 The audio never leaves your machine. The audio never lands on disk either — it's processed in RAM (a 30-second rolling ring during meetings; for dictation, drained directly through the transcriber and dropped when the call returns) and is gone as soon as the transcript is on your clipboard.
@@ -27,18 +27,24 @@ The audio never leaves your machine. The audio never lands on disk either — it
 
 ## How it compares
 
-|  | Local? | Meetings? | Free? | macOS-native? |
-|---|---|---|---|---|
-| **Hush** | ✅ | ✅ | ✅ | ✅ |
-| [VoiceInk](https://github.com/Beingpax/VoiceInk) | ✅ | — | ✅ | ✅ |
-| [MacWhisper](https://goodsnooze.gumroad.com/l/macwhisper) | ✅ | partial (file import) | freemium | ✅ |
-| [Superwhisper](https://superwhisper.com) | ✅ | — | freemium | ✅ |
-| [Aiko](https://sindresorhus.com/aiko) | ✅ | file import only | ✅ | ✅ |
-| [Otter.ai](https://otter.ai) | — | ✅ | freemium (cap) | web / Electron |
-| [Granola](https://www.granola.ai) | cloud LLM | ✅ | freemium | ✅ |
-| [Fireflies](https://fireflies.ai) / Fathom | — | ✅ (bot in call) | freemium | web |
+The table splits "Free?" (no-cost tier exists) from "Open source?" (source published under an OSI license) — they're often conflated, and the user's exposure is different. A free tier on a closed-source SaaS is the vendor's choice to revisit; an OSS license is yours to fork.
 
-Hush is the only row that's a yes across all four. The closest comparable, [VoiceInk](https://github.com/Beingpax/VoiceInk), is the project that inspired Hush — Hush adds meeting capture; see [Acknowledgements](#acknowledgements) for the relationship.
+|  | Local? | Dictation? | Meetings? | Free? | Open source? | Platforms |
+|---|---|---|---|---|---|---|
+| **Hush** | ✅ | ✅ hotkey | ✅ mic + system audio in parallel | ✅ | ✅ Apache 2.0 | macOS · Linux · Windows |
+| [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ✅ | ✅ | ✅ auto-detect Zoom / Teams | ✅ | ✅ MIT | macOS · Linux · Windows |
+| [Whispering](https://github.com/EpicenterHQ/epicenter) | ✅ | ✅ | — | ✅ | ✅ AGPLv3 | macOS · Linux · Windows |
+| [Buzz](https://github.com/chidiwilliams/buzz) | ✅ | partial (live mic, no PTT into other apps) | file import only | ✅ | ✅ MIT | macOS · Linux · Windows |
+| [Meetily](https://meetily.ai) | ✅ | — | ✅ system audio, no bot | ✅ | ✅ MIT | macOS · Linux · Windows |
+| [VoiceInk](https://github.com/Beingpax/VoiceInk) | ✅ | ✅ | — | ✅ | ✅ | macOS only |
+| [MacWhisper](https://goodsnooze.gumroad.com/l/macwhisper) | ✅ | ✅ | partial (file import) | freemium | — | macOS only |
+| [Superwhisper](https://superwhisper.com) | ✅ | ✅ | ✅ free tier ([Meeting Transcription](https://superwhisper.com/meeting-transcription)) | freemium | — | macOS · Windows · iOS |
+| [Granola](https://www.granola.ai) | cloud LLM | — | ✅ | freemium | — | macOS · Windows |
+| [Otter](https://otter.ai) / [Fireflies](https://fireflies.ai) / [Fathom](https://fathom.video) | — | — | ✅ (cloud bot or web) | freemium | — | web |
+
+The cross-platform OSS rows are the closest competitors. Within them the niches differ: **Whispering** is dictation-only with a similar Tauri+Svelte stack; **Buzz** does live-mic + post-hoc file imports without a global push-to-talk hotkey; **Meetily** is meeting-only without dictation. **OpenWhispr** is the most direct overlap — local dictation + meetings, same three OSes, MIT-licensed; if Hush isn't to your taste it's worth a look.
+
+Hush's wedge: dictation **and** parallel-source meeting capture in one app, sharing one whisper.cpp model load and one searchable history, with a verifiable privacy posture (see below). The closest macOS comparable, [VoiceInk](https://github.com/Beingpax/VoiceInk), is the project that inspired Hush — see [Acknowledgements](#acknowledgements) for the relationship.
 
 ---
 
