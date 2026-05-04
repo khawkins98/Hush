@@ -88,7 +88,7 @@
   {:else if replacements.length === 0}
     <p class="empty-history">
       No replacement rules yet — add one above to clean up
-      future transcriptions automatically.
+      future transcripts automatically.
     </p>
   {:else}
     <ul class="replacement-list">
