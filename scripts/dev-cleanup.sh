@@ -2,8 +2,7 @@
 # Kill stale Hush dev processes left over from a hung `npm run tauri dev`.
 #
 # Usage:
-#   npm run dev-cleanup              # kill processes only
-#   npm run dev-cleanup -- --reset   # also reset macOS TCC permissions
+#   npm run dev-cleanup
 #
 # What it kills:
 #   - The dev binary itself                       (target/debug/hush)
@@ -16,21 +15,23 @@
 # Vite child. Symptoms: "port 1420 already in use", or two windows on next
 # launch. Running this clears them all.
 #
+# To also wipe app state and TCC permissions (full clean slate), use:
+#   npm run dev-reset
+#
 # Each `pkill` returns 1 if no processes matched — that's the *common* case
 # (nothing stuck), so we ignore non-zero exits.
 
 set +e
 set -u
 
-reset_perms=0
 for arg in "$@"; do
   case "$arg" in
-    --reset|--reset-perms)
-      reset_perms=1
-      ;;
     --help|-h)
-      sed -n '2,17p' "$0" | sed 's|^# \?||'
+      awk 'NR>1 && /^[^#]/{exit} NR>1{sub(/^# ?/,""); print}' "$0"
       exit 0
+      ;;
+    *)
+      echo "[hush dev-cleanup] unknown argument: $arg (try --help)" >&2
       ;;
   esac
 done
@@ -70,25 +71,6 @@ fi
 
 if [ "$killed_any" -eq 0 ]; then
   echo "  no stale processes found."
-fi
-
-if [ "$reset_perms" -eq 1 ]; then
-  if [ "$(uname -s)" = "Darwin" ]; then
-    echo "[hush dev-cleanup] resetting macOS TCC permissions for com.khawkins.hush..."
-    # See docs/macos-permissions.md for what these reset.
-    tccutil reset Microphone com.khawkins.hush 2>/dev/null \
-      && echo "  Microphone reset" \
-      || echo "  Microphone reset skipped (no entry — that's OK)"
-    tccutil reset ListenEvent com.khawkins.hush 2>/dev/null \
-      && echo "  Input Monitoring reset" \
-      || echo "  Input Monitoring reset skipped (no entry — that's OK)"
-    tccutil reset Accessibility com.khawkins.hush 2>/dev/null \
-      && echo "  Accessibility reset" \
-      || echo "  Accessibility reset skipped (no entry — that's OK)"
-    echo "[hush dev-cleanup] next launch will re-prompt for any permissions Hush needs."
-  else
-    echo "[hush dev-cleanup] --reset is macOS-only; skipping (this is $(uname -s))."
-  fi
 fi
 
 echo "[hush dev-cleanup] done."
