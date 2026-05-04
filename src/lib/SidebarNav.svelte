@@ -1,24 +1,35 @@
 <!--
-  Left icon-column navigation (#479 slice 1).
+  Left navigation sidebar (#479 slice 1, refreshed for #494).
 
   Three top-level surfaces — Dictation, History, Settings — each
-  represented by a 22 px outlined icon. Clicking an item swaps the
-  active panel; the orchestrator owns `active` as a `$bindable`
-  state so other inputs (native menu's "View" submenu, ⌘K palette
-  Show-History action, deep links from FirstRunModal) can drive
-  the same selection.
+  represented by a 22 px outlined icon. Clicking an item swaps
+  the active panel; the orchestrator owns \`active\` as a
+  \`$bindable\` state so other inputs (native menu's "View"
+  submenu, ⌘K palette Show-History action, deep links from
+  FirstRunModal) drive the same selection.
 
-  Visual treatment per the #468 / #479 reference: 56 px wide,
-  icon-only with hover tooltips, accent left-chrome on the active
-  item (Panic-style, no background fill). Icons are deliberate
-  placeholders inline-SVG until proper icon work lands later.
+  ## Two states (#494)
 
-  Settings is treated as a single top-level item rather than
-  exploding the seven existing tabs into the sidebar; the Settings
-  panel will keep its own tab strip when it gets inlined in
-  slice 2. Slice 1 leaves the Settings window alive — clicking
-  the icon opens it the way the existing pre-r3 Settings button
-  in the app-bar did.
+  - **Open (default for fresh installs).** ~180 px wide, icon +
+    horizontal label per item. Labels are visible without a
+    hover, so a first-run user can tell Dictation / History /
+    Settings apart at a glance — the discoverability concern
+    that #494 filed. Panic-style left-chrome accent on the
+    active row.
+  - **Collapsed.** 56 px icon-only column with native
+    \`title=\` tooltips. For users who want screen real estate
+    over labels (the pre-#494 shape).
+
+  A chevron toggle lives at the top of the sidebar; clicking
+  flips the open state, fires the \`onToggle\` callback so the
+  orchestrator can persist the choice (\`localStorage["hush.sidebar.open"]\`),
+  and keeps focus on the toggle for keyboard ergonomics.
+
+  ## Settings tab
+
+  Settings is a single top-level item rather than exploding the
+  seven existing tabs into the sidebar; the Settings panel keeps
+  its own tab strip when the user lands on it.
 -->
 <script lang="ts">
   export type SidebarSection = "dictation" | "history" | "settings";
@@ -38,15 +49,21 @@
     /// dot on the Dictation icon regardless of which panel is
     /// active.
     recording: boolean;
+    /// True when the sidebar shows labels (open/expanded state),
+    /// false when icon-only (collapsed). The orchestrator owns
+    /// the persisted preference via `localStorage["hush.sidebar.open"]`
+    /// and wires it through this prop.
+    open: boolean;
     /// Called when the user clicks an item OR activates one with
-    /// keyboard. The orchestrator decides what to do — for slice
-    /// 1 the Settings click opens the standalone window; once the
-    /// Settings panel is inlined in slice 2 the same callback just
-    /// flips `active`.
+    /// keyboard.
     onSelect: (id: SidebarSection) => void | Promise<void>;
+    /// Called when the user clicks the open/collapse toggle. The
+    /// orchestrator flips `open` and persists.
+    onToggle: () => void | Promise<void>;
   };
 
-  let { active = $bindable(), recording, onSelect }: Props = $props();
+  let { active = $bindable(), recording, open, onSelect, onToggle }: Props =
+    $props();
 
   let items = $derived<Item[]>([
     { id: "dictation", label: "Dictation", showRecordingDot: recording },
@@ -57,9 +74,53 @@
   function handleClick(id: SidebarSection) {
     void onSelect(id);
   }
+
+  function handleToggle() {
+    void onToggle();
+  }
 </script>
 
-<nav class="sidebar-nav" aria-label="Main navigation">
+<nav
+  class="sidebar-nav"
+  class:open
+  class:collapsed={!open}
+  aria-label="Main navigation"
+  id="sidebar-nav-region"
+>
+  <!-- Toggle button. The chevron points right when collapsed
+       (suggesting "expand toward the content"), left when open
+       (suggesting "collapse back into the chrome"). aria-expanded
+       reflects current state; aria-controls points at the nav
+       region so AT can map the button to what it controls. -->
+  <button
+    type="button"
+    class="sidebar-nav-toggle"
+    aria-label={open ? "Collapse sidebar" : "Expand sidebar"}
+    aria-expanded={open}
+    aria-controls="sidebar-nav-region"
+    title={open ? "Collapse sidebar" : "Expand sidebar"}
+    data-testid="sidebar-nav-toggle"
+    onclick={handleToggle}
+  >
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      {#if open}
+        <polyline points="15 18 9 12 15 6" />
+      {:else}
+        <polyline points="9 18 15 12 9 6" />
+      {/if}
+    </svg>
+  </button>
+
   <ul class="sidebar-nav-list">
     {#each items as item (item.id)}
       <li>
@@ -69,7 +130,7 @@
           class:active={active === item.id}
           aria-label={item.label}
           aria-current={active === item.id ? "page" : undefined}
-          title={item.label}
+          title={open ? undefined : item.label}
           data-testid="sidebar-nav-{item.id}"
           onclick={() => handleClick(item.id)}
         >
@@ -99,6 +160,9 @@
               <span class="sidebar-nav-recording-dot" aria-hidden="true"></span>
             {/if}
           </span>
+          {#if open}
+            <span class="sidebar-nav-label">{item.label}</span>
+          {/if}
         </button>
       </li>
     {/each}
@@ -107,13 +171,56 @@
 
 <style>
   .sidebar-nav {
-    width: 56px;
     flex-shrink: 0;
     background: var(--bg-sidebar);
     border-right: 1px solid var(--border-subtle);
     padding: 0.6rem 0;
     display: flex;
     flex-direction: column;
+    /* Animate width changes so the open/collapsed transition
+       reads as a smooth state flip rather than a jarring jump.
+       Reduced-motion users get the instant transition via the
+       media query at the bottom. */
+    transition: width 160ms ease;
+  }
+  .sidebar-nav.open {
+    width: 180px;
+  }
+  .sidebar-nav.collapsed {
+    width: 56px;
+  }
+
+  /* Toggle button. Sits at the top of the column, slightly
+     offset from the edge so it doesn't fight the left-chrome
+     accent on active items. Quieter visual weight than the
+     nav items themselves — it's chrome, not navigation. */
+  .sidebar-nav-toggle {
+    appearance: none;
+    background: transparent;
+    border: none;
+    margin: 0 0.25rem 0.4rem auto;
+    padding: 0.35rem 0.5rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 120ms ease, background-color 120ms ease;
+  }
+  .sidebar-nav-toggle:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-surface);
+  }
+  .sidebar-nav-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  /* When collapsed, the toggle sits centred below the items
+     (no horizontal label to align to). Override the open-state
+     auto-margin. */
+  .sidebar-nav.collapsed .sidebar-nav-toggle {
+    margin: 0 auto 0.4rem;
   }
 
   .sidebar-nav-list {
@@ -136,11 +243,10 @@
     border: none;
     border-left: 3px solid transparent;
     margin: 0;
-    padding: 0.6rem 0;
+    padding: 0.55rem 0;
     width: 100%;
     display: flex;
     align-items: center;
-    justify-content: center;
     color: var(--text-muted);
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease;
@@ -156,6 +262,17 @@
     color: var(--accent);
     border-left-color: var(--accent);
   }
+  /* Layout per state. Collapsed: icon centred. Open: icon +
+     label horizontally, icon left-aligned with consistent
+     gutter so labels start at the same x across rows. */
+  .sidebar-nav.collapsed .sidebar-nav-item {
+    justify-content: center;
+  }
+  .sidebar-nav.open .sidebar-nav-item {
+    justify-content: flex-start;
+    padding-left: 1rem;
+    gap: 0.7rem;
+  }
 
   .sidebar-nav-icon {
     position: relative;
@@ -164,6 +281,16 @@
     justify-content: center;
     width: 22px;
     height: 22px;
+    flex-shrink: 0;
+  }
+
+  .sidebar-nav-label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    line-height: 1;
+    color: inherit;
+    user-select: none;
+    white-space: nowrap;
   }
 
   /* Recording-state dot on the Dictation icon — even when the
@@ -188,7 +315,11 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .sidebar-nav,
+    .sidebar-nav-toggle,
+    .sidebar-nav-item,
     .sidebar-nav-recording-dot {
+      transition: none;
       animation: none;
     }
   }
