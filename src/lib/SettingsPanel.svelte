@@ -22,6 +22,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
 
   import AboutTab from "./AboutTab.svelte";
   import GeneralTab from "./GeneralTab.svelte";
@@ -78,8 +79,15 @@
     loaded: boolean;
     error: ErrorDisplay | null;
     restartNotice: ModelSelectNotice;
-    downloading: Map<string, DownloadProgress>;
-    failed: Map<string, string>;
+    // SvelteMap rather than plain Map: per-card mutations
+    // (`.set` / `.delete`) trigger reactivity. A plain Map inside
+    // `$state(...)` looks reactive at type level but Svelte 5's
+    // proxy doesn't intercept Map operations, so a `Cancel` /
+    // `download-done` mutation only repainted on the next unrelated
+    // re-render (e.g. tab switch). See docs.svelte.dev → reactive
+    // built-ins.
+    downloading: SvelteMap<string, DownloadProgress>;
+    failed: SvelteMap<string, string>;
   };
 
   let modelFetch = $state<ModelFetch>({
@@ -87,8 +95,8 @@
     loaded: false,
     error: null,
     restartNotice: null,
-    downloading: new Map(),
-    failed: new Map(),
+    downloading: new SvelteMap(),
+    failed: new SvelteMap(),
   });
 
   let unlistenDownloadProgress: UnlistenFn | null = null;

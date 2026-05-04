@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ErrorDisplay } from "./errors";
+  import type { ErrorActionKey, ErrorDisplay } from "./errors";
 
   type Props = {
     error: ErrorDisplay;
@@ -8,9 +8,22 @@
     /// user sees which section is reporting. Pre-#199 panels did
     /// this with `<strong>` + a colon — kept for parity.
     scope?: string;
+    /// Optional handler for the one-click recovery button. The
+    /// button only renders when both `error.actionKey` /
+    /// `error.actionLabel` *and* `onAction` are set. The parent maps
+    /// the key to a concrete navigation/handler. Without this prop
+    /// the error renders headline + hint only — backwards-compatible
+    /// with every existing call site.
+    onAction?: (key: ErrorActionKey) => void;
   };
 
-  let { error, scope }: Props = $props();
+  let { error, scope, onAction }: Props = $props();
+
+  let showAction = $derived(
+    error.actionKey !== undefined
+    && error.actionLabel !== undefined
+    && onAction !== undefined,
+  );
 </script>
 
 <div class="error-card scoped-error" role="alert">
@@ -20,6 +33,15 @@
   </p>
   {#if error.hint}
     <p class="error-hint">{error.hint}</p>
+  {/if}
+  {#if showAction}
+    <button
+      type="button"
+      class="error-action"
+      onclick={() => onAction?.(error.actionKey!)}
+    >
+      {error.actionLabel}
+    </button>
   {/if}
   {#if error.details}
     <details class="error-details">
@@ -62,6 +84,31 @@
   /* Slightly less saturated than the headline so the eye reads
      headline first, hint second. */
   opacity: 0.92;
+}
+
+.error-action {
+  margin-top: 0.6rem;
+  padding: 0.35rem 0.85rem;
+  background-color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s, transform 0.05s;
+}
+.error-action:hover {
+  background-color: #b03030;
+  border-color: #b03030;
+}
+.error-action:active {
+  transform: translateY(1px);
+}
+.error-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .error-details {

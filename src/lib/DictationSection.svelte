@@ -212,7 +212,14 @@
   />
 
   {#if error}
-    <ErrorDisplay {error} />
+    <ErrorDisplay
+      {error}
+      onAction={(key) => {
+        if (key === "open-model-settings") {
+          onScrollToModelPicker();
+        }
+      }}
+    />
   {/if}
 </section>
 
