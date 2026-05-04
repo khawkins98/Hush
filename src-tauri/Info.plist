@@ -36,7 +36,7 @@
       bare dev binary.
     -->
     <key>CFBundleIdentifier</key>
-    <string>com.khawkins.hush</string>
+    <string>io.github.khawkins98.hush</string>
     <!--
       `CFBundlePackageType` = APPL signals "this is an application
       bundle" to macOS. With the identifier above it nudges TCC into

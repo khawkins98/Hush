@@ -12,9 +12,9 @@
 #
 # What gets removed:
 #   macOS TCC permissions (ScreenCapture, Microphone, ListenEvent, Accessibility)
-#   <home>/Library/Application Support/com.khawkins.hush/hush.db  (settings + history)
-#   <home>/Library/Preferences/com.khawkins.hush.plist             (NSUserDefaults)
-#   <home>/Library/Caches/com.khawkins.hush/                       (WebKit etc.)
+#   <home>/Library/Application Support/io.github.khawkins98.hush/hush.db  (settings + history)
+#   <home>/Library/Preferences/io.github.khawkins98.hush.plist             (NSUserDefaults)
+#   <home>/Library/Caches/io.github.khawkins98.hush/                       (WebKit etc.)
 #   <home>/Library/Caches/hush/
 #   autostart LaunchAgent (if enabled via Settings → Launch at Login)
 #
@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-BUNDLE_ID="com.khawkins.hush"
+BUNDLE_ID="io.github.khawkins98.hush"
 nuke_models=0
 explicit_user=""
 

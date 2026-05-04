@@ -134,6 +134,55 @@ const DB_FILENAME: &str = "hush.db";
 /// lands) will write here; for now users put files here manually.
 const MODELS_DIRNAME: &str = "models";
 
+/// Bundle identifier the app shipped under before #525. The rename to
+/// `io.github.khawkins98.hush` strands user data (DB, downloaded
+/// models) at the old path on any pre-rename install.
+const LEGACY_BUNDLE_ID: &str = "com.khawkins.hush";
+
+/// Move the legacy `com.khawkins.hush` app-data directory to the new
+/// path on first launch after the rename (#525). Idempotent — a no-op
+/// when the legacy path doesn't exist or the new path is already
+/// populated. Logs at info on success, warn on conflict, error on
+/// `rename` failure (e.g. cross-volume — extremely rare on macOS
+/// since both paths share `~/Library/Application Support/`).
+///
+/// Only the Application Support directory is migrated. `~/Library/
+/// Caches/com.khawkins.hush/` regenerates automatically and isn't
+/// worth the failure surface; `~/Library/LaunchAgents/com.khawkins.
+/// hush.plist` (autostart) points at the old binary path and is
+/// stale after a rebuild — the user re-toggles Settings → Start at
+/// Login to register a fresh entry. Documented in #525.
+fn migrate_legacy_app_data_dir(new_path: &std::path::Path) {
+    let Some(parent) = new_path.parent() else {
+        return;
+    };
+    let old_path = parent.join(LEGACY_BUNDLE_ID);
+    if !old_path.exists() {
+        return;
+    }
+    if new_path.exists() {
+        tracing::warn!(
+            old = %old_path.display(),
+            new = %new_path.display(),
+            "legacy bundle-id app-data dir present alongside the new one — leaving the old path untouched"
+        );
+        return;
+    }
+    match std::fs::rename(&old_path, new_path) {
+        Ok(()) => tracing::info!(
+            from = %old_path.display(),
+            to = %new_path.display(),
+            "migrated app-data dir from legacy bundle identifier (#525)"
+        ),
+        Err(e) => tracing::error!(
+            error = ?e,
+            from = %old_path.display(),
+            to = %new_path.display(),
+            "failed to migrate legacy app-data dir; the app will run with a fresh data dir"
+        ),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialise tracing here so service-construction errors (database
@@ -240,6 +289,12 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|e| format!("resolve app-data dir: {e}"))?;
+
+            // One-shot migration from the pre-#525 bundle identifier.
+            // Runs before any directory creation so the old DB + models
+            // are in place when the rest of setup looks for them.
+            migrate_legacy_app_data_dir(&app_data_dir);
+
             let db_path = app_data_dir.join(DB_FILENAME);
             let models_dir = app_data_dir.join(MODELS_DIRNAME);
 
@@ -892,5 +947,82 @@ mod tests {
             "--background=true".to_owned(),
         ];
         assert!(!is_background_launch(args.into_iter()));
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::{migrate_legacy_app_data_dir, LEGACY_BUNDLE_ID};
+    use std::fs;
+
+    /// `tempfile::tempdir()` would be cleaner, but the workspace doesn't
+    /// pull tempfile in for the lib crate yet. A scoped path under the
+    /// per-test target dir is good enough — drop on test exit.
+    struct TempRoot(std::path::PathBuf);
+    impl TempRoot {
+        fn new(name: &str) -> Self {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "hush-bundle-rename-test-{}-{}",
+                name,
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&p);
+            fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn migration_moves_legacy_dir_when_new_path_absent() {
+        let root = TempRoot::new("moves");
+        let old = root.0.join(LEGACY_BUNDLE_ID);
+        let new = root.0.join("io.github.khawkins98.hush");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("hush.db"), b"db-bytes").unwrap();
+
+        migrate_legacy_app_data_dir(&new);
+
+        assert!(!old.exists(), "legacy dir should be gone");
+        assert!(new.exists(), "new dir should exist after migration");
+        assert_eq!(fs::read(new.join("hush.db")).unwrap(), b"db-bytes");
+    }
+
+    #[test]
+    fn migration_is_noop_when_legacy_dir_absent() {
+        let root = TempRoot::new("noop-absent");
+        let new = root.0.join("io.github.khawkins98.hush");
+
+        migrate_legacy_app_data_dir(&new);
+
+        assert!(!new.exists(), "no migration → no new dir created");
+    }
+
+    #[test]
+    fn migration_leaves_both_when_new_path_already_present() {
+        // Re-install / re-run scenario: the user has launched the
+        // renamed app at least once (so the new dir exists), and a
+        // legacy dir still lingers from a pre-rename install. Don't
+        // clobber the new dir with old data; warn and leave both alone.
+        let root = TempRoot::new("conflict");
+        let old = root.0.join(LEGACY_BUNDLE_ID);
+        let new = root.0.join("io.github.khawkins98.hush");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("hush.db"), b"old").unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(new.join("hush.db"), b"new").unwrap();
+
+        migrate_legacy_app_data_dir(&new);
+
+        assert!(
+            old.exists(),
+            "legacy dir should remain when new path is populated"
+        );
+        assert_eq!(fs::read(new.join("hush.db")).unwrap(), b"new");
     }
 }
