@@ -1276,15 +1276,20 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 
 ---
 
-### 2026-05-XX — Debug console window: light-mode terminal text invisible
+### 2026-05-04 — Debug console window: light-mode terminal text invisible
 
-**Symptom:** In light mode, the debug console (Settings → Debug) showed invisible text — log lines had no visible contrast against the dark terminal background.
+**Symptom:** In light mode, the debug console showed invisible text — timestamps, log targets, and the entry count had no contrast against the dark `#141414` terminal background.
 
-**Root cause:** `DebugConsole.svelte` and `DebugTab.svelte` used `var(--text-primary)` for log text and `var(--bg-code)` for background. In light mode `--text-primary` is a dark colour (`#1a1a2e`-adjacent), so dark text on a dark background = invisible.
+**Root cause (original):** `DebugConsole.svelte` used `var(--text-primary)` and `var(--bg-code)`. In light mode `--text-primary` is `#111111`, so dark text on dark background = invisible.
 
-**Fix:** The debug console is intentionally a terminal-style dark surface that must stay dark regardless of theme. Hardcode explicit terminal tokens: `background: #141414`, `color: #e6edf3`. These are not theme-aware by design — a terminal emulator always looks the same in any OS theme.
+**Root cause (round 2):** The initial fix hardcoded `#141414`/`#e6edf3` for the output area but left `.log-time`, `.log-target`, and `.debug-console-count` reading `var(--text-secondary)`. In light mode `--text-secondary` is `#444444` — still invisible on `#141414`.
 
-**Pattern:** When a surface is intentionally always-dark (terminal, code block, diffs), hardcode its colours rather than using `var(--*)` tokens that flip with the theme.
+**Final fix:** Define a `--debug-*` token set on a `display: contents` wrapper at the root of `DebugConsole.svelte`. All colours inside the component read from these tokens (`var(--debug-text-muted)`, `var(--debug-border)`, `var(--debug-level-*)`, etc.). The `display: contents` wrapper propagates the custom properties to all children without affecting the surrounding flex layout.
+
+**Pattern:** When a surface is always-dark (terminal, code block, diffs):
+1. Give it a *dedicated token set* (`--debug-*`) defined on the component's root wrapper, not borrowed theme vars.
+2. Use `display: contents` on that wrapper so the token scope is the whole component without disrupting layout.
+3. Never use `var(--text-*)` or `var(--border)` inside the surface — those tokens flip in light mode.
 
 ---
 
@@ -1300,3 +1305,28 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 
 **Why not keep it in Settings:** Settings is configuration-space; About is informational / version-space. At one-click distance it's more discoverable; at two-click distance (Settings → tab) it got lost, especially for new users who want "what version is this?" without guessing which tab has it.
 
+---
+
+### 2026-05-04 — alwaysOnTop floating window: hide-on-close to prevent focus stranding
+
+**Symptom:** Closing the debug console palette (red-✕) made the main Hush window appear to also close. The main window was still alive but no longer visible or focused.
+
+**Root cause:** The debug window had no `CloseRequested` handler, so Tauri destroyed it. When an `alwaysOnTop` window is destroyed on macOS the window server returns focus to the desktop (not to the app's other windows) because floating windows live at a different NSWindowLevel and aren't part of the normal focus-restoration chain. The user saw the desktop and concluded the main window had also closed.
+
+**Fix:** Add `"debug"` to the `["main"]` loop in `lib.rs` that intercepts `CloseRequested` and calls `window.hide()` instead of letting Tauri destroy. Same three benefits: (1) focus stays with the app, (2) the log buffer is preserved for the next open, (3) window creation cost is paid once.
+
+**Rule:** Any `alwaysOnTop: true` window should use hide-on-close. When a floating window is destroyed, macOS does not automatically restore focus to the underlying application.
+
+---
+
+### 2026-05-04 — macOS ⌘\` window cycling requires set_as_windows_menu_for_nsapp
+
+**Symptom:** ⌘\` (Cycle Through Windows) did nothing in Hush despite a "Window" submenu being present in the menu bar.
+
+**Root cause (ordering):** `set_as_windows_menu_for_nsapp()` works by calling `[NSApp mainMenu]` and walking the installed menu tree to find the correct NSMenu for the submenu. If called *before* `app.set_menu()`, `mainMenu()` returns whatever was there before, the submenu can't be found, and the call silently does nothing. The fix is to call it *after* `app.set_menu(menu)`.
+
+**Root cause (registration):** Even if called in the right order, `init_app_menu` only auto-registers submenus with ID `WINDOW_SUBMENU_ID` (`"__tauri_window_menu__"`). A custom Window submenu built with `SubmenuBuilder::new(app, "Window")` gets a random ID so the auto-registration never fires. Call `window_submenu.set_as_windows_menu_for_nsapp()?` explicitly in your own code.
+
+**Fix:** In `build_and_set_menu`, call `set_as_windows_menu_for_nsapp()` **after** `app.set_menu(menu)?`. The method is already `#[cfg(target_os = "macos")]`, so no extra cfg guard is needed inside the macOS-only function.
+
+**Alternative:** Use `SubmenuBuilder::with_id(app, WINDOW_SUBMENU_ID, "Window")` — Tauri's automatic path then finds and registers it. Prefer the explicit call because it's self-documenting and doesn't depend on the magic string staying stable across Tauri releases.

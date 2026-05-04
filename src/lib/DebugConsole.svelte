@@ -192,7 +192,8 @@
   }
 
   .debug-console-output {
-    height: 320px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     background: var(--debug-bg);
     border: 1px solid var(--debug-border);

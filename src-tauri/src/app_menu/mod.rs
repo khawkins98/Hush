@@ -145,20 +145,18 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .fullscreen()
         .build()?;
 
-    // Register as NSApp's windowsMenu so macOS enables ⌘` window
-    // cycling. Without this call Tauri builds a "Window" submenu
-    // that looks correct but is never handed to
-    // [NSApp setWindowsMenu:], so the system's ⌘` shortcut has
-    // nothing to cycle through. The method is macOS-only and this
-    // function is already gated on target_os = "macos", so no
-    // cfg guard is needed here.
-    window_submenu.set_as_windows_menu_for_nsapp()?;
-
     let menu = MenuBuilder::new(app)
         .items(&[&app_submenu, &edit_submenu, &view_submenu, &window_submenu])
         .build()?;
 
     app.set_menu(menu)?;
+
+    // Register as NSApp's windowsMenu so macOS enables ⌘` window cycling.
+    // MUST be called after app.set_menu() — the underlying muda implementation
+    // resolves the correct NSMenu by calling [NSApp mainMenu] and walking the
+    // installed menu tree. If called before set_menu the main menu is the old
+    // default, the submenu can't be found, and the call silently does nothing.
+    window_submenu.set_as_windows_menu_for_nsapp()?;
 
     // Menu-event dispatch. Stable IDs are matched directly; goto-
     // ones are derived by stripping the prefix so adding a future

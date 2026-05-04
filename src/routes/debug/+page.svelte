@@ -92,5 +92,8 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 0 0.75rem 0.75rem;
   }
 </style>
