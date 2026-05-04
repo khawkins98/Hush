@@ -48,6 +48,7 @@
     formatErrorMessage,
     type ErrorDisplay as ErrorDisplayShape,
   } from "./errors";
+  import type { UpdateCheckResult } from "./types";
   import "./settings-tab.css";
 
   // Tauri runtime version + the app's productName / version, all
@@ -59,10 +60,6 @@
 
   // Manual "Check for updates" probe (#223). Tagged-union result;
   // markup picks one of three branches.
-  type UpdateCheckResult =
-    | { kind: "upToDate"; current: string }
-    | { kind: "updateAvailable"; current: string; latest: string; releaseUrl: string }
-    | { kind: "checkFailed"; reason: string };
   let updateCheck = $state<UpdateCheckResult | null>(null);
   let updateChecking = $state(false);
 
