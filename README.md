@@ -126,6 +126,7 @@ This isn't Electron-with-a-mic-icon. Three native macOS windows (main, settings,
 | **What it's meant to be** | [hush-prd.md](./hush-prd.md) — product spec, scope, non-goals, milestone plan |
 | **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, three-window topology, trait seams, meeting pump, module map |
 | **Installing + using** | [Releases](https://github.com/khawkins98/Hush/releases), [`docs/macos-permissions.md`](./docs/macos-permissions.md) for macOS TCC troubleshooting |
+| **Running it locally / dev commands** | [docs/developing.md](./docs/developing.md) — setup, command reference, macOS quirks, test layers |
 | **Building + contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md), [CLAUDE.md](./CLAUDE.md) for the Claude-assisted contributor workflow |
 | **Why decisions were made** | [learnings.md](./learnings.md) — append-only engineering decision log |
 | **Reporting a vulnerability** | [SECURITY.md](./SECURITY.md) |

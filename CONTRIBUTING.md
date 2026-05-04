@@ -19,32 +19,16 @@ See §13.8 of `hush-prd.md` for the full reasoning.
 
 ## Development environment
 
+Prerequisites: Rust stable (`rustup update stable`), Node.js ≥ 20 (`nvm install 22`), and on macOS cmake (`brew install cmake`) for the whisper.cpp bindings.
+
 ```bash
-# Install Rust stable
-rustup update stable
-
-# Install Node.js >= 20 (nvm recommended)
-nvm install 22
-
-# macOS only — whisper-rs needs cmake to build the whisper.cpp bindings
-brew install cmake
-
-# Clone and install
 git clone https://github.com/khawkins98/Hush.git
 cd Hush
 npm install
-
-# Run in dev mode
 npm run tauri dev
-
-# UI-only path: app launches without the Whisper transcription
-# backend so cmake isn't required on the machine. Useful for
-# frontend-only work; transcription returns
-# `IpcError::TranscriptionUnavailable` if you click Start.
-cd src-tauri && cargo tauri dev --no-default-features
 ```
 
-The `whisper` feature is **default-on** as of 2026-04-26 so a vanilla `npm run tauri dev` ships transcription. Contributors who don't have cmake (or who only need the UI layer) opt out with `--no-default-features`.
+For the full command reference — which command to run when, macOS TCC quirks, the ScreenCaptureKit dylib workaround, and all test commands — see **[docs/developing.md](./docs/developing.md)**.
 
 ---
 
@@ -121,57 +105,9 @@ Conventional Commits 1.0.0: `<type>(<scope>): <subject>`
 
 ## Testing
 
-Hush uses several layers of tests, each catching a different class of regression.
+Hush has four test layers: Rust unit tests (`cargo test --lib`), integration tests (`src-tauri/tests/`), frontend e2e with mocked IPC (`npm run test:e2e`), and frontend e2e with a real binary (`npm run test:e2e:tauri`). Before merging anything that touches the dictation hot path, also run the manual smoke checklist in [`STATUS.md`](./STATUS.md) §c.
 
-### Rust unit tests (`cargo test --lib`)
-
-Pure-logic tests at the trait + module boundaries. Fast (~100 ms total), run on every PR via CI on Linux + macOS.
-
-- **Default features.** Excludes the `whisper` feature so a contributor without cmake can still run them.
-- **`whisper` feature.** Same suite plus the `whisper`-gated paths. Needs cmake locally.
-- **`#[tokio::test]`** for async commands and SQLite-backed repository tests. Each test gets an in-memory SQLite via `SqliteDatabase::open_in_memory()` so they don't touch disk and don't share state.
-- **Hand-rolled mocks** at trait seams (`AudioCapture`, `Transcribe`, `HistoryRepository`, etc.) — see `src-tauri/src/ipc/mod.rs` for the `Noop*` and `Mem*` impls. Hand-rolled is preferred over `mockall` here for clearer test failures.
-
-### Integration tests (`src-tauri/tests/`)
-
-Tests that exercise larger slices than a single module. Two patterns in use:
-
-- **`wiremock`-driven HTTP tests** for the model-download path. The download orchestrator is pure logic; the wiremock server stands in for Hugging Face. See `src-tauri/src/transcription/download.rs`'s test module.
-- **`#[ignore]`'d env-var fixtures** for things that need a binary the repo can't ship. The audio fixture (`src-tauri/tests/audio_fixture.rs`) reads `HUSH_TEST_AUDIO` and runs a known WAV through the full transcription stack. Run it with `cargo test --features whisper -- --ignored`. See `src-tauri/tests/fixtures/README.md` for setup.
-
-When adding an integration test that needs an external resource (model file, audio clip, network endpoint), prefer this pattern over committing the resource — `#[ignore]` plus an env-var pointer keeps the repo small and lets contributors opt in.
-
-### Frontend e2e (`npm run test:e2e`)
-
-Playwright + Chromium drives the SvelteKit dev server in `HUSH_E2E=1` mode, which swaps `@tauri-apps/api/{core,event}` for in-tree stubs. Tests configure per-spec `invoke` handlers and fire backend-emitted events. See `tests/e2e/README.md` for the authoring pattern.
-
-What the suite catches: UI regressions, modal a11y, error-copy drift, retry-race UX, aria-attribute bugs.
-
-What it does **not** catch: real IPC, HUD lifecycle, hotkey registration, real audio, real model download. Those are Path B.
-
-### Frontend e2e — Path B (`npm run test:e2e:tauri`)
-
-`tauri-driver` + WebdriverIO drives a real built Hush binary. Catches the flows Path A's mocks can't: real `invoke` round-trips, real `listen` events, HUD secondary-window lifecycle, real model download against `wiremock`. Scaffold landed under #202 (refs #57); CI is deferred until tauri-driver's macOS path stabilises. Run locally per `tests/e2e-tauri/README.md` — `cargo install tauri-driver --locked`, `npm run tauri build -- --debug`, then the test command above.
-
-### Manual smoke
-
-Before merging anything that touches the dictation hot path, run through the manual checklist in [`STATUS.md`](./STATUS.md) §c. The path involves a real microphone and (optionally) a real Whisper model — neither of which CI has access to.
-
-### Dev-launch smoke (`npm run tauri dev`)
-
-A separate, much lighter check: **run `npm run tauri dev` once before opening a PR that touches startup**. CI does not run a real Tauri runtime — every test target is `cargo test --lib`, `cargo clippy`, or Playwright in plain Chromium with mocked IPC. That means a panic at app boot (plugin initialization, capability misconfig, `AppState::build_default` failure, missing `tauri.conf.json` block) is **invisible to CI** and only surfaces when a contributor pulls the branch. The fix is cheap: launch the dev app, wait for the "starting Hush" tracing log, confirm no panic, kill it. ~30 seconds.
-
-Required when your PR touches:
-
-- `src-tauri/src/lib.rs` (especially the `tauri::Builder` chain or the `setup` hook)
-- `src-tauri/tauri.conf.json` (window config, plugin config blocks)
-- `src-tauri/Cargo.toml` (adding/removing a Tauri plugin dep)
-- `src-tauri/capabilities/*.json`
-- Anything that adds or removes a `.plugin(...)` call
-
-### Type check (`npm run check`)
-
-Runs `svelte-check` against the entire frontend including `vite.config.js`. Required to be clean for every PR; the CI job runs the same command.
+For commands, what each layer catches, and when to run each one, see **[docs/developing.md — Testing layers](./docs/developing.md#testing-layers)**.
 
 ---
 
