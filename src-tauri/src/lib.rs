@@ -153,7 +153,9 @@ const LEGACY_BUNDLE_ID: &str = "com.khawkins.hush";
 /// stale after a rebuild — the user re-toggles Settings → Start at
 /// Login to register a fresh entry. Documented in #525.
 fn migrate_legacy_app_data_dir(new_path: &std::path::Path) {
-    let Some(parent) = new_path.parent() else { return };
+    let Some(parent) = new_path.parent() else {
+        return;
+    };
     let old_path = parent.join(LEGACY_BUNDLE_ID);
     if !old_path.exists() {
         return;
@@ -1017,7 +1019,10 @@ mod migration_tests {
 
         migrate_legacy_app_data_dir(&new);
 
-        assert!(old.exists(), "legacy dir should remain when new path is populated");
+        assert!(
+            old.exists(),
+            "legacy dir should remain when new path is populated"
+        );
         assert_eq!(fs::read(new.join("hush.db")).unwrap(), b"new");
     }
 }
