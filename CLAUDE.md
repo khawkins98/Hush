@@ -36,6 +36,13 @@ cd src-tauri && cargo tauri dev --no-default-features --features diarization-onn
 # quirk" below). Slow: 30 s – 2 min, not a hot-iteration tool.
 npm run tauri:bundle
 
+# macOS-only: build a release DMG for local distribution testing.
+# Automatically ejects any stale Hush DMG mounts left by previous
+# failed builds (the root cause of "failed to run bundle_dmg.sh"
+# errors — not a macOS 26 version-parsing bug as previously noted).
+# DMG lands at src-tauri/target/release/bundle/dmg/*.dmg.
+npm run tauri:dmg
+
 # Rust unit tests — fast, no real audio device needed.
 cd src-tauri && cargo test --lib
 cd src-tauri && cargo test --lib --features whisper             # plus whisper-gated paths
