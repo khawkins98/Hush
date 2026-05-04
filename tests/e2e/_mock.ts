@@ -153,6 +153,16 @@ export async function installMocks(
       "plugin:shell|open": () => undefined,
       open_macos_privacy_pane: () => undefined,
       prime_screen_recording_permission: () => undefined,
+      // First-run wizard inline-grant IPCs (#511). Default no-op
+      // for mic (real IPC fires the OS dialog asynchronously and
+      // returns immediately) and `true` for IM (real IPC blocks
+      // until the user responds, returning the resulting bool).
+      // Specs exercising the wizard grant flow override per-test
+      // to flip the diagnose_macos_permissions response between
+      // calls so the polled UI walks through not-determined →
+      // granted.
+      request_microphone_permission: () => undefined,
+      request_input_monitoring_permission: () => true,
       open_settings: () => undefined,
       show_main_window: () => undefined,
       diagnose_macos_permissions: () => ({
