@@ -195,3 +195,12 @@ pub(crate) async fn check_for_updates_inner(
     *state.last_update_check.lock().map_err(poisoned)? = Some((now, fresh.clone()));
     Ok(fresh)
 }
+
+/// Return the running Hush version string, sourced from `Cargo.toml`.
+///
+/// Used by the Debug tab's issue-report generator so the report
+/// always includes the correct version without a separate IPC round.
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
