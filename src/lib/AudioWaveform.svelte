@@ -163,16 +163,11 @@
   });
 
   // Visible current-level dB label (integer, -60 dB floor).
-  // Updates every rAF tick via the smoothed `displayLevel` — fast
-  // enough to feel live, stable enough to read without strobing.
+  // Throttled to 200 ms so the readout is legible without strobing.
   // Only renders while metering + recording so idle/processing/
   // error states don't show a bogus number.
-  let currentDbLabel = $derived.by(() => {
-    if (!metering || effectiveMode !== "recording" || displayLevel <= 0.001)
-      return "";
-    const db = 20 * Math.log10(displayLevel);
-    return `${Math.max(-60, db).toFixed(0)} dB`;
-  });
+  let currentDbLabel = $state("");
+  let lastDbLabelUpdateMs = 0;
 
   onMount(async () => {
     unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
@@ -226,8 +221,16 @@
             clipping = false;
           }, CLIP_FLASH_MS);
         }
-      } else if (peak > 0) {
-        peak = 0;
+        if (now - lastDbLabelUpdateMs >= 200) {
+          lastDbLabelUpdateMs = now;
+          const db = 20 * Math.log10(Math.max(displayLevel, 0.001));
+          currentDbLabel = displayLevel > 0.001
+            ? `${Math.max(-60, db).toFixed(0)} dB`
+            : "";
+        }
+      } else {
+        if (peak > 0) peak = 0;
+        if (currentDbLabel !== "") currentDbLabel = "";
       }
 
       raf = requestAnimationFrame(tick);
@@ -280,15 +283,6 @@
     {@const heightPct = Math.min(100, Math.max(silenceFloorPct, level * levelScale))}
     <span class="audio-waveform-bar" style="height: {heightPct}%"></span>
   {/each}
-  {#if metering && peak > 0.05}
-    {@const peakPct = Math.min(100, Math.max(silenceFloorPct, peak * levelScale))}
-    <span
-      class="audio-waveform-peak"
-      data-testid="audio-waveform-peak"
-      style="bottom: {peakPct}%"
-      aria-hidden="true"
-    ></span>
-  {/if}
   {#if currentDbLabel !== ""}
     <span class="audio-waveform-db" aria-hidden="true">{currentDbLabel}</span>
   {/if}
@@ -315,23 +309,6 @@
     border-radius: 1px;
     transition: height 60ms linear;
     will-change: height;
-  }
-
-  /* F4: peak-hold line, painted as a thin absolutely-positioned
-     marker so it floats above the bars without disturbing flex
-     layout. Horizontal extent matches the bar strip. The bottom
-     offset is set inline by the script in % units, anchored to
-     the wrapper bottom so the line tracks the same bar-height
-     scale as the bars themselves. */
-  .audio-waveform-peak {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: var(--audio-waveform-peak-color, rgba(255, 255, 255, 0.85));
-    pointer-events: none;
-    transition: bottom 80ms linear;
-    will-change: bottom;
   }
 
   /* F4 clip warning — thin red outline on the wrapper for
@@ -417,9 +394,6 @@
       opacity: 0.7;
     }
     .audio-waveform.flashing .audio-waveform-bar {
-      transition: none;
-    }
-    .audio-waveform-peak {
       transition: none;
     }
   }

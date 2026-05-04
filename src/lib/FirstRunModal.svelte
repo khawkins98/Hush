@@ -437,7 +437,8 @@
 }
 
 .first-run-card {
-  background-color: #ffffff;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
   border-radius: 12px;
   padding: 1.5rem 1.75rem;
   max-width: 32rem;
