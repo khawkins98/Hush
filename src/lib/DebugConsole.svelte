@@ -74,6 +74,23 @@
     maxSeenSeq = -1;
   }
 
+  let allCopied = $state(false);
+  async function onCopyAll() {
+    const text = entries
+      .map(
+        (e) =>
+          `[${new Date(e.timestampMs).toISOString()}] ${e.level.padEnd(5)} ${e.target} ${e.message}`,
+      )
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      allCopied = true;
+      setTimeout(() => (allCopied = false), 2000);
+    } catch (err) {
+      console.warn("[hush] clipboard write failed", err);
+    }
+  }
+
   onMount(async () => {
     // Subscribe first to guarantee no events are missed between the
     // snapshot call and the listener registration.
@@ -100,7 +117,12 @@
   <span class="debug-console-count">
     {entries.length} entries
   </span>
-  <button type="button" class="ghost small" onclick={onClear}> Clear </button>
+  <div class="debug-console-actions">
+    <button type="button" class="ghost small" disabled={entries.length === 0} onclick={onCopyAll}>
+      {allCopied ? "Copied!" : "Copy All"}
+    </button>
+    <button type="button" class="ghost small" onclick={onClear}> Clear </button>
+  </div>
 </div>
 
 <div
@@ -142,22 +164,32 @@
     color: var(--text-secondary);
   }
 
+  .debug-console-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  /* The log output is intentionally always dark — it's a terminal
+     surface, not a theme-aware panel. Using explicit colours rather
+     than --text-primary / --bg-surface so the text stays legible in
+     both light and dark app themes (light mode sets --text-primary
+     to a dark value which would disappear on the dark background). */
   .debug-console-output {
     height: 320px;
     overflow-y: auto;
-    background: var(--bg-code, #1a1a1a);
+    background: #141414;
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.5rem;
     font-family: "SF Mono", "Fira Code", monospace;
     font-size: 0.72rem;
     line-height: 1.5;
-    color: var(--text-primary);
+    color: #e6edf3;
   }
 
   .debug-console-empty {
     margin: 0;
-    color: var(--text-secondary);
+    color: #8b949e;
     font-style: italic;
     text-align: center;
     padding-top: 2rem;

@@ -1272,3 +1272,31 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 - `ADAPTIVE_HEADROOM_DB = 6`: 6 dB above tracked peak; bars hit ~85–90 % at typical loudest frames.
 
 **Where the code lives:** `src/lib/AudioWaveform.svelte` — constants block, `adaptivePeak` state, adaptive update inside `tick()`, and IIFE height formula in the `{#each waveform}` block.
+
+
+---
+
+### 2026-05-XX — Debug console window: light-mode terminal text invisible
+
+**Symptom:** In light mode, the debug console (Settings → Debug) showed invisible text — log lines had no visible contrast against the dark terminal background.
+
+**Root cause:** `DebugConsole.svelte` and `DebugTab.svelte` used `var(--text-primary)` for log text and `var(--bg-code)` for background. In light mode `--text-primary` is a dark colour (`#1a1a2e`-adjacent), so dark text on a dark background = invisible.
+
+**Fix:** The debug console is intentionally a terminal-style dark surface that must stay dark regardless of theme. Hardcode explicit terminal tokens: `background: #141414`, `color: #e6edf3`. These are not theme-aware by design — a terminal emulator always looks the same in any OS theme.
+
+**Pattern:** When a surface is intentionally always-dark (terminal, code block, diffs), hardcode its colours rather than using `var(--*)` tokens that flip with the theme.
+
+---
+
+### 2026-05-XX — About moved to top-level sidebar section (not a Settings tab)
+
+**Decision:** About was previously one of many Settings tabs (`settings-tab-about`). Moved to a fourth top-level sidebar section (`sidebar-nav-about`) so it's reachable in ~one click from anywhere in the app.
+
+**Affected places:**
+- `SidebarNav.svelte` — `SidebarSection` type extended, items array, icon branch
+- `SettingsPanel.svelte` — "about" removed from `SettingsTab` type, `baseTabs`, template body, and the `SettingsGotoTab` event listener
+- `+page.svelte` — `openSettingsTab("about")` intercept, About render block, `.about-panel` CSS
+- E2E tests — `settings-tab-about` selectors replaced with `sidebar-nav-about`
+
+**Why not keep it in Settings:** Settings is configuration-space; About is informational / version-space. At one-click distance it's more discoverable; at two-click distance (Settings → tab) it got lost, especially for new users who want "what version is this?" without guessing which tab has it.
+

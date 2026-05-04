@@ -679,6 +679,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ipc::commands::audio_list_sources,
             ipc::commands::system::show_main_window,
+            ipc::commands::system::open_debug_window,
             ipc::commands::start_dictation,
             ipc::commands::stop_dictation,
             ipc::commands::history::history_list,

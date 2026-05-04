@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Debug console floating window (#540)
+
+- The debug console (Settings → General → Advanced → Developer console) now opens as a floating always-on-top palette window (`"debug"` Tauri window) instead of living inline in the Settings tab. The window stays visible while the user clicks around the app — making it practical for live debugging.
+- New `open_debug_window` IPC command (`system.rs`) and matching Tauri window declaration in `tauri.conf.json` (760×520, `alwaysOnTop: true`, `visible: false`).
+- New `src/routes/debug/+page.svelte` route — fully self-contained dark-terminal surface with the live log, a collapsible Issue Report generator, and "Copy Report" / "Open GitHub Issue" actions.
+- A "Copy All" button in `DebugConsole.svelte` copies every visible log entry as plain text (in addition to the existing Clear button).
+- Debug console toolbar colours changed from `var(--text-primary)` / `var(--bg-code)` to hardcoded terminal tokens (`#141414` / `#e6edf3`) — in light mode `--text-primary` is dark, making log text invisible on the dark console background.
+
+#### About as a top-level sidebar section (#540)
+
+- About is now a fourth sidebar navigation item (alongside Dictation, History, Settings) rather than a tab inside Settings. This makes it a ~one-click destination from anywhere in the app.
+- An info-circle icon in `SidebarNav.svelte` identifies the About section; the sidebar `SidebarSection` type now includes `"about"`.
+- The command palette "Show About" entry and the macOS native-menu "Check for Updates" event both route to the About section correctly.
+
 ### Fixed
 
 #### Waveform sensitivity — log scale + adaptive gain (#539)
