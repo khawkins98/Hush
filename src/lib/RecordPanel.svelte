@@ -686,7 +686,7 @@
     background-color: #e0a020;
   }
   .record-mode-badge[data-health="not-granted"] .record-mode-badge-dot {
-    background-color: #d83a3a;
+    background-color: var(--danger);
   }
   .record-mode-badge[data-health="stale"] {
     background-color: #fdf6e3;

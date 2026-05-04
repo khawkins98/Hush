@@ -275,7 +275,7 @@ button.danger {
 
 button.danger:hover:not(:disabled) {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -294,7 +294,7 @@ button.danger:hover:not(:disabled) {
   }
   button.danger:hover:not(:disabled) {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
   }
 }
 </style>

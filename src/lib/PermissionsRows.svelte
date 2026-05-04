@@ -191,7 +191,7 @@
     background-color: #e0a020;
   }
   .perm-health-dot[data-health="not-granted"] {
-    background-color: #d83a3a;
+    background-color: var(--danger);
   }
   .perm-health-dot[data-health="not-applicable"] {
     background-color: #c0c0c5;

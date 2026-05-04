@@ -321,12 +321,12 @@ button.ghost.danger {
 
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
 }
 /* Confirming state — armed first click, awaiting the second one. */
 button.ghost.danger.confirming {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
   color: #8a0000;
   font-weight: 600;
 }
@@ -548,7 +548,7 @@ button.ghost.primary:hover:not(:disabled) {
   margin: 0;
   padding: 0.4rem 0.6rem;
   background-color: #fee;
-  border: 1px solid #d83a3a;
+  border: 1px solid var(--danger);
   border-radius: 4px;
   color: #8a0000;
   font-size: 0.85rem;
@@ -576,11 +576,11 @@ button.ghost.primary:hover:not(:disabled) {
   }
   button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
   }
   button.ghost.danger.confirming {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
     color: #ffb0b0;
   }
   button.ghost.primary {
@@ -654,7 +654,7 @@ button.ghost.primary:hover:not(:disabled) {
   }
   .model-failure {
     background-color: #4a1a1a;
-    border-color: #d83a3a;
+    border-color: var(--danger);
     color: #ffd0d0;
   }
 }

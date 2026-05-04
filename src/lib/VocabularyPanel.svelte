@@ -209,7 +209,7 @@ button.ghost.danger {
 
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
 }
 
 /* Armed state: first click flips the button into a higher-contrast
@@ -218,7 +218,7 @@ button.ghost.danger:hover:not(:disabled) {
    click" without ambiguity. Auto-resets after 5 s. */
 button.ghost.danger.confirming {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
   color: #8a0000;
   font-weight: 600;
 }
@@ -333,7 +333,7 @@ button.ghost.danger.confirming {
   }
   button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
   }
   .history-header h2 {
     color: #d8d8d8;

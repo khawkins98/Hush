@@ -657,12 +657,12 @@ button.ghost.danger {
 }
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
 }
 /* Confirming state — armed first click, awaiting the second one. */
 button.ghost.danger.confirming {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
   color: #8a0000;
   font-weight: 600;
 }
@@ -712,7 +712,7 @@ button.ghost.danger.confirming {
   }
   button.ghost.danger.confirming {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
     color: #ffb0b0;
   }
 }
