@@ -93,3 +93,27 @@ fn play_bytes(bytes: &'static [u8]) {
         sink.sleep_until_end();
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin that both compile-time-embedded cue WAVs are valid input
+    /// for the rodio decoder we play them through (#501). Catches
+    /// regressions in `build.rs::write_wav_mono_16bit` (header byte
+    /// order, chunk size math) before someone notices "the cue
+    /// stopped playing" through hands-on smoke testing.
+    #[test]
+    fn embedded_cues_decode_via_rodio() {
+        for (name, bytes) in [
+            ("start", CUE_RECORDING_START),
+            ("done", CUE_TRANSCRIPTION_READY),
+        ] {
+            let cursor = std::io::Cursor::new(bytes);
+            assert!(
+                rodio::Decoder::new(cursor).is_ok(),
+                "cue {name} failed to decode via rodio"
+            );
+        }
+    }
+}
