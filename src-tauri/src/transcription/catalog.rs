@@ -182,6 +182,20 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208".into(),
         },
         ModelMetadata {
+            id: "whisper-large-v3-turbo".into(),
+            display_name: "Whisper Turbo".into(),
+            filename: "ggml-large-v3-turbo.bin".into(),
+            size_mb: 1550,
+            speed_rating: 7,
+            accuracy_rating: 10,
+            description:
+                "Distilled Large v3. Near-large accuracy at roughly 8× the speed; the modern default for accuracy-leaning work."
+                    .into(),
+            is_default: false,
+            download_url: download_url_for("ggml-large-v3-turbo.bin"),
+            sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69".into(),
+        },
+        ModelMetadata {
             id: "whisper-large-v3".into(),
             display_name: "Whisper Large v3".into(),
             filename: "ggml-large-v3.bin".into(),
@@ -231,6 +245,7 @@ mod tests {
         assert!(ids.contains(&"whisper-base".to_string()));
         assert!(ids.contains(&"whisper-small".to_string()));
         assert!(ids.contains(&"whisper-medium".to_string()));
+        assert!(ids.contains(&"whisper-large-v3-turbo".to_string()));
         assert!(ids.contains(&"whisper-large-v3".to_string()));
     }
 
