@@ -1,4 +1,4 @@
-&lt;!--
+<!--
   First-run setup wizard (#511 — was a single-card permission
   briefing pre-rewrite). Two-step shell:
 
@@ -30,7 +30,7 @@
   is visible, refresh the permission diagnostic so the OS prompt
   the user just clicked Allow on flips the row's UI without a
   page refresh. Stops when the modal closes.
---&gt;
+-->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onDestroy } from "svelte";
