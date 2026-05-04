@@ -142,11 +142,20 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
     let models_dir = state.models_dir.clone();
     let id_for_load = id.clone();
     let inference_threads = std::sync::Arc::clone(&state.runtime_flags.inference_threads);
+    let mic_gain_db = std::sync::Arc::clone(&state.runtime_flags.mic_gain_db);
     let load_result = tauri::async_runtime::spawn_blocking(move || {
-        let dictation =
-            crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir, &inference_threads)?;
-        let meeting =
-            crate::ipc::load_transcriber_for_model(&id_for_load, &models_dir, &inference_threads)?;
+        let dictation = crate::ipc::load_transcriber_for_model(
+            &id_for_load,
+            &models_dir,
+            &inference_threads,
+            &mic_gain_db,
+        )?;
+        let meeting = crate::ipc::load_transcriber_for_model(
+            &id_for_load,
+            &models_dir,
+            &inference_threads,
+            &mic_gain_db,
+        )?;
         Ok::<_, anyhow::Error>((dictation, meeting))
     })
     .await

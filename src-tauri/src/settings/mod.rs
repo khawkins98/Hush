@@ -127,6 +127,13 @@ pub mod keys {
     /// change until the user touches the slider.
     pub const INFERENCE_THREADS: &str = "inference_threads";
 
+    /// Microphone gain applied before Whisper inference (#531). Stored as
+    /// the f32 literal in decimal (e.g. `"6.0"`); parsed back and clamped
+    /// to `[0.0, 20.0]` dB on read. 0.0 = unity (no boost). Absent rows
+    /// fall back to 0.0 so existing installs see no behaviour change until
+    /// the user touches the slider.
+    pub const MIC_GAIN_DB: &str = "mic_gain_db";
+
     /// Last successful Screen Recording permission probe (#378).
     /// ISO-8601 instant. Set by the macOS health-probe path when
     /// `CGPreflightScreenCaptureAccess` returns true AND

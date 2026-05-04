@@ -82,6 +82,12 @@
   let inferenceThreadsBusy = $state(false);
   let inferenceThreadsError = $state<string | null>(null);
 
+  // Mic gain slider (#531): same two-cell pattern as inferenceThreads.
+  let micGainDb = $state(0);
+  let micGainDbDisplay = $state(0);
+  let micGainDbBusy = $state(false);
+  let micGainDbError = $state<string | null>(null);
+
   let isMacOS = $state(false);
 
   // Dictation stats for the at-a-glance summary at the top of the
@@ -353,6 +359,43 @@
     }
   }
 
+  async function loadMicGainDb(): Promise<void> {
+    try {
+      micGainDb = await invoke<number>("get_mic_gain_db");
+      micGainDbDisplay = micGainDb;
+      micGainDbError = null;
+    } catch (e) {
+      micGainDbError = "Couldn't read mic gain setting.";
+      console.warn("[hush] get_mic_gain_db failed", e);
+    }
+  }
+
+  function onMicGainDbInput(e: Event) {
+    const next = Number((e.target as HTMLInputElement).value);
+    if (Number.isFinite(next)) {
+      micGainDbDisplay = next;
+    }
+  }
+
+  async function onMicGainDbChange(e: Event) {
+    const next = Number((e.target as HTMLInputElement).value);
+    if (!Number.isFinite(next)) {
+      return;
+    }
+    micGainDbBusy = true;
+    micGainDbError = null;
+    try {
+      await invoke("set_mic_gain_db", { gainDb: next });
+      micGainDb = next;
+      micGainDbDisplay = next;
+    } catch (err) {
+      micGainDbError = formatErrorMessage(err);
+      await loadMicGainDb();
+    } finally {
+      micGainDbBusy = false;
+    }
+  }
+
   async function onResetFirstRun() {
     firstRunResetBusy = true;
     try {
@@ -383,6 +426,7 @@
       loadSoundCuesEnabled(),
       loadSoundCueSubEnabled(),
       loadInferenceThreads(),
+      loadMicGainDb(),
       loadDictationStats(),
     ]);
     try {
@@ -688,6 +732,43 @@
     </label>
     {#if inferenceThreadsError}
       <p class="settings-error">{inferenceThreadsError}</p>
+    {/if}
+    <label class="slider-row">
+      <span class="toggle-label">
+        <span class="toggle-name">
+          Microphone boost:
+          <span
+            data-testid="settings-mic-gain-db-value"
+            aria-live="polite"
+          >{micGainDbDisplay === 0 ? "Off (0 dB)" : `+${micGainDbDisplay} dB`}</span>
+          {#if micGainDbBusy}
+            <span class="row-note" aria-live="polite">Saving…</span>
+          {/if}
+        </span>
+        <span id="settings-mic-gain-db-desc" class="toggle-desc">
+          Amplify microphone input before transcription. Useful if
+          your voice comes through quietly. 0 = no boost; 6 dB ≈
+          double the perceived volume; 20 dB is the maximum safe
+          boost. Has no effect on system-audio capture.
+        </span>
+      </span>
+      <input
+        type="range"
+        min="0"
+        max="20"
+        step="1"
+        data-testid="settings-mic-gain-db-slider"
+        aria-label="Microphone boost"
+        aria-describedby="settings-mic-gain-db-desc"
+        aria-valuetext={micGainDbDisplay === 0 ? "No boost" : `+${micGainDbDisplay} dB`}
+        disabled={micGainDbBusy}
+        value={micGainDbDisplay}
+        oninput={onMicGainDbInput}
+        onchange={onMicGainDbChange}
+      />
+    </label>
+    {#if micGainDbError}
+      <p class="settings-error">{micGainDbError}</p>
     {/if}
   </section>
 

@@ -431,6 +431,13 @@ pub struct RuntimeFlags {
     /// reload. `AtomicI32` matches `whisper-rs`'s `set_n_threads`
     /// signature.
     pub inference_threads: Arc<std::sync::atomic::AtomicI32>,
+    /// Microphone gain in dB (#531). Settings → General slider
+    /// writes through `set_mic_gain_db`; the loaded
+    /// `WhisperTranscription` and the meeting pump share this
+    /// same Arc so a slider change takes effect on the next
+    /// inference chunk without a model reload. Stored as
+    /// `AtomicU32` holding `f32` bits (no `AtomicF32` in std).
+    pub mic_gain_db: Arc<std::sync::atomic::AtomicU32>,
     /// Whether the LaunchAgent re-register on startup (#271)
     /// failed for a reason that needs the user's attention
     /// (read-only home, fs permission issue). Set by `lib.rs::run`
@@ -532,6 +539,12 @@ pub struct AppStateBuilder {
     /// unset, `build` constructs a fresh Arc seeded from the
     /// default thread count — fine for tests.
     inference_threads_arc: Option<Arc<std::sync::atomic::AtomicI32>>,
+    /// Pre-built shared mic-gain atomic (#531). Set via
+    /// [`AppStateBuilder::mic_gain_db_arc`] when `build_default`
+    /// wants to share the loaded `WhisperTranscription`'s atomic
+    /// with the IPC writer and the meeting pump. When unset,
+    /// `build` constructs a fresh Arc at 0.0 dB — fine for tests.
+    mic_gain_db_arc: Option<Arc<std::sync::atomic::AtomicU32>>,
 }
 
 impl AppStateBuilder {
@@ -681,6 +694,16 @@ impl AppStateBuilder {
         self
     }
 
+    /// Set the pre-built shared mic-gain atomic (#531).
+    /// `build_default` clones this out of the loaded
+    /// `WhisperTranscription::shared_mic_gain_db()` so the
+    /// AppState field, the IPC writer, the dictation transcriber,
+    /// and the meeting pump all read/write through the same atomic.
+    pub fn mic_gain_db_arc(mut self, arc: Arc<std::sync::atomic::AtomicU32>) -> Self {
+        self.mic_gain_db_arc = Some(arc);
+        self
+    }
+
     /// Set the pre-built [`crate::diarization::DiarizeSlot`] (#301).
     /// The `FlagGatedDiarizer` holds an `Arc::clone` of the same
     /// slot, so the IPC `download_diarizer_model` path can
@@ -819,6 +842,9 @@ impl AppStateBuilder {
                 inference_threads: self
                     .inference_threads_arc
                     .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicI32::new(4))),
+                mic_gain_db: self
+                    .mic_gain_db_arc
+                    .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU32::new(0f32.to_bits()))),
                 autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
         })
@@ -907,6 +933,15 @@ pub(crate) fn parse_inference_threads_setting(raw: Option<String>) -> i32 {
     {
         parsed.clamp(1, 16)
     }
+}
+
+/// Parse and clamp a stored mic gain dB string. Returns 0.0 (unity) when
+/// the setting is absent or unparseable; clamps to `[0.0, 20.0]` otherwise.
+pub(crate) fn parse_mic_gain_db_setting(raw: Option<String>) -> f32 {
+    raw.as_deref()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .unwrap_or(0.0)
+        .clamp(0.0, 20.0)
 }
 
 /// Build the "inner" diarizer for the FlagGatedDiarizer (#111).
@@ -1012,6 +1047,19 @@ impl AppState {
         let inference_threads_arc =
             Arc::new(std::sync::atomic::AtomicI32::new(inference_threads_initial));
 
+        // Mic gain (#531). Same Arc-sharing pattern as inference_threads:
+        // built before `build_transcriber` so the loaded models and the
+        // meeting pump all point at this exact Arc. Default 0.0 dB (unity).
+        let mic_gain_db_initial = parse_mic_gain_db_setting(
+            settings
+                .get(crate::settings::keys::MIC_GAIN_DB)
+                .await
+                .ok()
+                .flatten(),
+        );
+        let mic_gain_db_arc =
+            Arc::new(std::sync::atomic::AtomicU32::new(mic_gain_db_initial.to_bits()));
+
         // Resolve which transcriber to load at startup. Order:
         //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
         //   2. legacy `HUSH_MODEL_PATH` env var (M1/M2 dev workflow)
@@ -1027,9 +1075,11 @@ impl AppState {
         // `inference_threads_arc` so the slider in Settings (#255)
         // takes effect on every inference call regardless of slot.
         let transcribe_dictation =
-            build_transcriber(&settings, &models_dir, &inference_threads_arc).await;
+            build_transcriber(&settings, &models_dir, &inference_threads_arc, &mic_gain_db_arc)
+                .await;
         let transcribe_meeting =
-            build_transcriber(&settings, &models_dir, &inference_threads_arc).await;
+            build_transcriber(&settings, &models_dir, &inference_threads_arc, &mic_gain_db_arc)
+                .await;
 
         // Wrap each instance in its own `Arc<Mutex<...>>` so
         // `model_select` can hot-swap independently. SessionManager
@@ -1087,6 +1137,7 @@ impl AppState {
             event_emitter,
             Arc::clone(&diarize),
             Arc::clone(&meeting_app_overrides),
+            Arc::clone(&mic_gain_db_arc),
         ));
 
         // Restore the user's persisted PTT combo, if any. Falls back
@@ -1198,6 +1249,7 @@ impl AppState {
             .diarization_enabled_arc(diarization_enabled_arc)
             .diarize_slot(diarize_slot)
             .inference_threads_arc(inference_threads_arc)
+            .mic_gain_db_arc(mic_gain_db_arc)
             .build()
     }
 }
@@ -1256,6 +1308,7 @@ pub fn load_transcriber_for_model(
     model_id: &str,
     models_dir: &Path,
     inference_threads: &Arc<std::sync::atomic::AtomicI32>,
+    mic_gain_db: &Arc<std::sync::atomic::AtomicU32>,
 ) -> Result<Option<Arc<dyn Transcribe>>> {
     #[cfg(feature = "whisper")]
     {
@@ -1270,7 +1323,8 @@ pub fn load_transcriber_for_model(
         }
         let transcriber = crate::transcription::WhisperTranscription::new(&path)
             .with_context(|| format!("load whisper model {} from {}", meta.id, path.display()))?
-            .with_inference_threads(Arc::clone(inference_threads));
+            .with_inference_threads(Arc::clone(inference_threads))
+            .with_mic_gain_db(Arc::clone(mic_gain_db));
         tracing::info!(
             model_id = %meta.id,
             path = %path.display(),
@@ -1282,6 +1336,7 @@ pub fn load_transcriber_for_model(
     #[cfg(not(feature = "whisper"))]
     {
         let _ = inference_threads;
+        let _ = mic_gain_db;
         Ok(None)
     }
 }
@@ -1294,6 +1349,7 @@ async fn build_transcriber(
     settings: &Arc<dyn SettingsRepository>,
     models_dir: &Path,
     inference_threads: &Arc<std::sync::atomic::AtomicI32>,
+    mic_gain_db: &Arc<std::sync::atomic::AtomicU32>,
 ) -> Option<Arc<dyn Transcribe>> {
     #[cfg(feature = "whisper")]
     {
@@ -1313,7 +1369,8 @@ async fn build_transcriber(
                                 "loaded selected whisper model"
                             );
                             return Some(Arc::new(
-                                t.with_inference_threads(Arc::clone(inference_threads)),
+                                t.with_inference_threads(Arc::clone(inference_threads))
+                                    .with_mic_gain_db(Arc::clone(mic_gain_db)),
                             ) as Arc<dyn Transcribe>);
                         }
                         Err(e) => {
@@ -1347,8 +1404,10 @@ async fn build_transcriber(
                 Ok(t) => {
                     tracing::info!(path = %path.display(), "loaded HUSH_MODEL_PATH whisper model");
                     return Some(
-                        Arc::new(t.with_inference_threads(Arc::clone(inference_threads)))
-                            as Arc<dyn Transcribe>,
+                        Arc::new(
+                            t.with_inference_threads(Arc::clone(inference_threads))
+                                .with_mic_gain_db(Arc::clone(mic_gain_db)),
+                        ) as Arc<dyn Transcribe>,
                     );
                 }
                 Err(e) => {
@@ -1368,6 +1427,7 @@ async fn build_transcriber(
     {
         // Without the `whisper` feature there is no production
         // transcriber. The IPC layer surfaces `TranscriptionUnavailable`.
+        let _ = mic_gain_db;
         None
     }
 }
