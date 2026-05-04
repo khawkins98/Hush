@@ -540,7 +540,15 @@ mod tests {
             Arc::new(crate::diarization::NoopDiarizer);
         let app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
             Arc::new(NoOpAppOverrides);
-        SessionManager::new(repo, audio, transcribe, emitter, diarize, app_overrides, Arc::new(AtomicU32::new(0f32.to_bits())))
+        SessionManager::new(
+            repo,
+            audio,
+            transcribe,
+            emitter,
+            diarize,
+            app_overrides,
+            Arc::new(AtomicU32::new(0f32.to_bits())),
+        )
     }
 
     #[tokio::test]

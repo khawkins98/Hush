@@ -1057,8 +1057,9 @@ impl AppState {
                 .ok()
                 .flatten(),
         );
-        let mic_gain_db_arc =
-            Arc::new(std::sync::atomic::AtomicU32::new(mic_gain_db_initial.to_bits()));
+        let mic_gain_db_arc = Arc::new(std::sync::atomic::AtomicU32::new(
+            mic_gain_db_initial.to_bits(),
+        ));
 
         // Resolve which transcriber to load at startup. Order:
         //   1. settings → `selected_model_id` → `<models_dir>/<filename>`
@@ -1074,12 +1075,20 @@ impl AppState {
         // weights on disk. Both instances share the same
         // `inference_threads_arc` so the slider in Settings (#255)
         // takes effect on every inference call regardless of slot.
-        let transcribe_dictation =
-            build_transcriber(&settings, &models_dir, &inference_threads_arc, &mic_gain_db_arc)
-                .await;
-        let transcribe_meeting =
-            build_transcriber(&settings, &models_dir, &inference_threads_arc, &mic_gain_db_arc)
-                .await;
+        let transcribe_dictation = build_transcriber(
+            &settings,
+            &models_dir,
+            &inference_threads_arc,
+            &mic_gain_db_arc,
+        )
+        .await;
+        let transcribe_meeting = build_transcriber(
+            &settings,
+            &models_dir,
+            &inference_threads_arc,
+            &mic_gain_db_arc,
+        )
+        .await;
 
         // Wrap each instance in its own `Arc<Mutex<...>>` so
         // `model_select` can hot-swap independently. SessionManager
@@ -1403,12 +1412,10 @@ async fn build_transcriber(
             match crate::transcription::WhisperTranscription::new(&path) {
                 Ok(t) => {
                     tracing::info!(path = %path.display(), "loaded HUSH_MODEL_PATH whisper model");
-                    return Some(
-                        Arc::new(
-                            t.with_inference_threads(Arc::clone(inference_threads))
-                                .with_mic_gain_db(Arc::clone(mic_gain_db)),
-                        ) as Arc<dyn Transcribe>,
-                    );
+                    return Some(Arc::new(
+                        t.with_inference_threads(Arc::clone(inference_threads))
+                            .with_mic_gain_db(Arc::clone(mic_gain_db)),
+                    ) as Arc<dyn Transcribe>);
                 }
                 Err(e) => {
                     tracing::error!(

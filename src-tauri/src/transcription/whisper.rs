@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::audio::{downmix_to_mono, apply_mic_gain, CaptureFormat, CapturedAudio};
+use crate::audio::{apply_mic_gain, downmix_to_mono, CaptureFormat, CapturedAudio};
 use crate::transcription::resample::resample_to_mono;
 use crate::transcription::streaming::{
     SlidingWindowConfig, SlidingWindowState, StreamSegment, StreamingTranscribeSession,
@@ -261,10 +261,7 @@ impl WhisperTranscription {
         // Apply user-configured mic gain before inference (#531). A 0-bit
         // AtomicU32 maps to 0.0 dB (unity) which is the no-op fast path
         // inside `apply_mic_gain`.
-        let gain_db = f32::from_bits(
-            self.mic_gain_db
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
+        let gain_db = f32::from_bits(self.mic_gain_db.load(std::sync::atomic::Ordering::Relaxed));
         apply_mic_gain(&mut pcm, gain_db);
 
         // Configure inference. Greedy with best_of=1 is the cheapest mode
