@@ -74,6 +74,53 @@ fn is_background_launch(mut args: impl Iterator<Item = String>) -> bool {
     args.any(|a| a == "--background")
 }
 
+/// Hide the macOS zoom (green ＋) traffic-light button for a window
+/// whose `maximizable` is false. `maximizable: false` greys out the
+/// button but leaves it visible as a disabled circle — removing it
+/// entirely is cleaner. Called once from setup for the `main` window.
+///
+/// Best-effort: a missing handle or failed ObjC call is logged and
+/// swallowed; the worst case is the greyed-out button remains.
+#[cfg(target_os = "macos")]
+fn hide_macos_zoom_button<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let label = window.label().to_owned();
+    let ns_window_ptr = match window.ns_window() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                window = %label,
+                "hide_macos_zoom_button: ns_window() failed"
+            );
+            return;
+        }
+    };
+    let ns_window = ns_window_ptr as *mut AnyObject;
+    if ns_window.is_null() {
+        tracing::warn!(
+            window = %label,
+            "hide_macos_zoom_button: ns_window pointer is null"
+        );
+        return;
+    }
+    // Safety: Tauri owns the NSWindow for the window's full
+    // lifetime. `standardWindowButton:` returns a retained
+    // pointer to the button view (an NSButton subclass); calling
+    // `setHidden:` on it is a simple boolean setter with no
+    // ownership transfer.
+    //
+    // NSWindowZoomButton = 2 in AppKit's NSWindowButton enum.
+    unsafe {
+        let zoom_btn: *mut AnyObject = msg_send![ns_window, standardWindowButton: 2usize];
+        if !zoom_btn.is_null() {
+            let _: () = msg_send![zoom_btn, setHidden: true];
+        }
+    }
+}
+
 /// Make a borderless macOS window draggable from any non-
 /// interactive area (#427 Item 1).
 ///
@@ -431,6 +478,15 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window(label) {
                     unlock_macos_window_drag(&window);
                 }
+            }
+
+            // Hide the zoom (green) traffic-light button on the
+            // main window. `maximizable: false` disables it but
+            // leaves a greyed-out circle; removing it entirely is
+            // cleaner.
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                hide_macos_zoom_button(&window);
             }
 
             // Background-launch behaviour (#268). When the

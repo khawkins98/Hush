@@ -1222,3 +1222,21 @@ TCC keys permission entries to the code-signing identifier. So:
 **Automation:** `scripts/tauri-bundle-macos.sh` and `scripts/tauri-dmg-macos.sh` both now run `codesign --force --deep --sign -` after building. `npm run tauri:bundle` is safe to use for TCC smoke-testing after this fix.
 
 **Why this didn't surface before:** The `com.khawkins.hush` era used the same linker-signed approach, so TCC was equally broken — but contributors didn't notice because the permissions screen was less prominently used. The bundle ID rename (#526) forced a full permission reset which exposed the underlying issue.
+
+---
+
+### 2026-05-04 — `data-theme` vs `@media` dark mode gap in Svelte components
+
+**Symptom:** Some UI elements remain light-mode coloured when the user has forced dark mode via the in-app toggle (i.e., OS is in light mode, but `data-theme="dark"` is set on `<html>`).
+
+**Root cause:** Hush's dark mode uses two mechanisms simultaneously:
+1. `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) ... }` — respects the OS preference
+2. `:root[data-theme="dark"] ...` — respects the in-app override
+
+Components that only implemented the `@media` block fail when the user forces dark via the toggle (OS light, `data-theme="dark"`). Several components were authored this way (FirstRunModal, MeetingTab, etc.).
+
+**Fix options:**
+- **Preferred:** Use CSS custom properties (`var(--bg-surface)`, `var(--text-primary)`, `var(--text-muted)`, `var(--info-text)`, `var(--accent)`) directly in the base rule. `app.css` defines all tokens under both mechanisms already — no explicit dark block needed in the component.
+- **Fallback:** Add both a `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .selector { ... } }` block AND a matching `:root[data-theme="dark"] .selector { ... }` block.
+
+**Pattern in `app.css`:** `src/app.css` is the authoritative source for all CSS tokens. Inspect it before hardcoding any colour value.
