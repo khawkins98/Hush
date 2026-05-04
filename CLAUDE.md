@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. **Human contributors:** see [`docs/developing.md`](./docs/developing.md) for the dev setup, command reference, and test guide.
 
 ## Project shape
 
