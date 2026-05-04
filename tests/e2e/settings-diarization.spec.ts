@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import type { DiarizerModelStatus } from "../../src/lib/types";
+
 import { installMocks } from "./_mock";
 
 /**
@@ -121,11 +123,14 @@ test.describe("settings window — Speakers (#302)", () => {
     await installMocks(page, {
       get_diarizer_model_status: () => ({
         downloaded: false,
+        displayName: "wespeaker ResNet34-LM",
         sizeMb: 26,
         sha256:
           "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
         expectedPath: "/test/models/voxceleb_resnet34_LM.onnx",
-      }),
+        sourceUrl:
+          "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM",
+      } satisfies DiarizerModelStatus),
     });
 
     await page.goto("/");
@@ -157,11 +162,14 @@ test.describe("settings window — Speakers (#302)", () => {
     await installMocks(page, {
       get_diarizer_model_status: () => ({
         downloaded: false,
+        displayName: "wespeaker ResNet34-LM",
         sizeMb: 26,
         sha256:
           "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
         expectedPath: "/test/models/voxceleb_resnet34_LM.onnx",
-      }),
+        sourceUrl:
+          "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM",
+      } satisfies DiarizerModelStatus),
       download_diarizer_model: () => {
         (
           window as unknown as {
@@ -216,11 +224,14 @@ test.describe("settings window — Speakers (#302)", () => {
     await installMocks(page, {
       get_diarizer_model_status: () => ({
         downloaded: false,
+        displayName: "wespeaker ResNet34-LM",
         sizeMb: 26,
         sha256:
           "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
         expectedPath: "/test/models/voxceleb_resnet34_LM.onnx",
-      }),
+        sourceUrl:
+          "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM",
+      } satisfies DiarizerModelStatus),
       // Slow promise so we observe the busy state long enough to
       // see + click the cancel button.
       download_diarizer_model: () =>
@@ -269,11 +280,14 @@ test.describe("settings window — Speakers (#302)", () => {
     await installMocks(page, {
       get_diarizer_model_status: () => ({
         downloaded: false,
+        displayName: "wespeaker ResNet34-LM",
         sizeMb: 26,
         sha256:
           "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
         expectedPath: "/test/models/voxceleb_resnet34_LM.onnx",
-      }),
+        sourceUrl:
+          "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM",
+      } satisfies DiarizerModelStatus),
     });
 
     await page.goto("/");
