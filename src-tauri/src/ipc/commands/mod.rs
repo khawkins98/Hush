@@ -299,8 +299,6 @@ pub const UPDATE_CHECK_TTL: std::time::Duration = std::time::Duration::from_secs
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use crate::ipc::AppState;
 
     use super::*;
@@ -625,9 +623,11 @@ mod tests {
             .expect("write");
         drop(f);
 
-        let sentinel: Arc<dyn crate::diarization::Diarize> = Arc::new(SwapSentinelDiarizer);
-        let slot: crate::diarization::DiarizeSlot =
-            Arc::new(std::sync::RwLock::new(Arc::clone(&sentinel)));
+        let sentinel: std::sync::Arc<dyn crate::diarization::Diarize> =
+            std::sync::Arc::new(SwapSentinelDiarizer);
+        let slot: crate::diarization::DiarizeSlot = std::sync::Arc::new(
+            std::sync::RwLock::new(std::sync::Arc::clone(&sentinel)),
+        );
 
         let res = super::diarizer::swap_diarizer_after_download(&slot, &path);
         assert!(res.is_err(), "swap should reject a non-wespeaker file");
@@ -636,7 +636,7 @@ mod tests {
         // not a clone or replacement.
         let guard = slot.read().expect("slot read");
         assert!(
-            Arc::ptr_eq(&*guard, &sentinel),
+            std::sync::Arc::ptr_eq(&*guard, &sentinel),
             "swap failure must not replace the slot's Arc"
         );
     }
