@@ -158,15 +158,14 @@ When the active build's identity differs from the row that's currently switched 
 
 **Recovery:**
 
-1. Verify your bundle is correctly signed: `codesign -dv src-tauri/target/debug/bundle/macos/Hush.app` — confirm `Identifier=io.github.khawkins98.hush`. If not, run `npm run tauri:bundle` again (the fix is in the script).
-2. Open System Settings → Privacy & Security → **Screen & System Audio Recording**. Select every `Hush.app` row and click the **`−`** button to remove it.
-3. Repeat for **Input Monitoring** (and Accessibility if present).
-4. Run `npm run dev-reset` (clears TCC database entries and app state).
-5. Quit Hush and relaunch **the bundle**: `open src-tauri/target/debug/bundle/macos/Hush.app`
+1. Open System Settings → Privacy & Security → **Screen & System Audio Recording**. Select every `Hush.app` row and click the **`−`** button to remove it.
+2. Repeat for **Input Monitoring** (and Accessibility if present).
+3. Run `npm run dev-reset` (clears TCC database entries, app state, and the `~/Applications/Hush.app` dev install).
+4. Run `npm run tauri:bundle` — this rebuilds, re-signs with the correct identifier, installs to `~/Applications/Hush.app`, and opens it.
    - Do **not** use `npm run tauri dev` — the unsigned dev binary has a different identity and won't receive Screen Recording permission from SCK.
-6. Input Monitoring auto-prompts when Hush registers the hotkey — click **OK**.
-7. Screen Recording: Settings → Permissions → "Grant in Settings…" deep-links to the right pane; toggle on the freshly-created Hush row.
-8. macOS will now have a single row matching the current binary's CSReq.
+5. Input Monitoring auto-prompts when Hush registers the hotkey — click **OK**.
+6. Screen Recording: Settings → Permissions → "Grant in Settings…" deep-links to the right pane; toggle on the freshly-created Hush row.
+7. macOS will now have a single row matching the current binary's CSReq.
 
 The same procedure applies any time you switch between dev (unsigned `npm run tauri dev`) and bundle (`npm run tauri:bundle`) builds — they sign differently and TCC sees them as different apps even though the bundle id is identical.
 
