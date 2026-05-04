@@ -991,6 +991,17 @@
     }
   }
 
+  // Called by SettingsPanel when model_select returns `loaded: true`.
+  // Clears any stale TranscriptionUnavailable banner that may have been
+  // set before the user explicitly picked a model, then refreshes the
+  // model card list as best-effort.
+  function handleModelLoaded() {
+    if (error?.actionKey === "open-model-settings") {
+      error = null;
+    }
+    void refreshModels();
+  }
+
   async function dismissFirstRun() {
     showFirstRun = false;
     try {
@@ -1616,7 +1627,7 @@
   {/if}
 
   {#if activeSection === "settings"}
-    <SettingsPanel bind:activeTab={settingsActiveTab} />
+    <SettingsPanel bind:activeTab={settingsActiveTab} onModelLoaded={handleModelLoaded} />
   {/if}
 </main>
 </div>

@@ -834,9 +834,7 @@ impl AppStateBuilder {
                         as Arc<dyn crate::diarization::Diarize>,
                 ))
             }),
-            debug_log: self
-                .debug_log
-                .unwrap_or_default(),
+            debug_log: self.debug_log.unwrap_or_default(),
             runtime_flags: RuntimeFlags {
                 hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
                     self.hud_enabled.unwrap_or(true),
@@ -1389,9 +1387,14 @@ async fn build_transcriber(
         use crate::settings::keys;
         use crate::transcription::catalog;
 
-        // 1) Settings-driven path: model id → catalog → models_dir.
-        if let Ok(Some(id)) = settings.get(keys::SELECTED_MODEL_ID).await {
-            if let Some(meta) = catalog::find_by_id(&id) {
+        // Read the persisted selection once; we branch on its presence.
+        let selected_id = settings.get(keys::SELECTED_MODEL_ID).await.ok().flatten();
+
+        if let Some(ref id) = selected_id {
+            // 1) Explicit selection: try only the picked model. When an
+            //    explicit choice is present we never silently swap to a
+            //    different model — the user's intent wins.
+            if let Some(meta) = catalog::find_by_id(id) {
                 let path = models_dir.join(&meta.filename);
                 if path.exists() {
                     match crate::transcription::WhisperTranscription::new(&path) {
@@ -1426,6 +1429,35 @@ async fn build_transcriber(
                     model_id = %id,
                     "selected model id is not in the catalog; falling back"
                 );
+            }
+        } else {
+            // 1b) No explicit selection: mirror `model_list`'s implicit-
+            //     default logic. When SELECTED_MODEL_ID is absent the
+            //     frontend shows the catalog default as already selected;
+            //     load it here so the backend slot agrees with the UI.
+            let default_meta = catalog::default_model();
+            let default_path = models_dir.join(&default_meta.filename);
+            if default_path.exists() {
+                match crate::transcription::WhisperTranscription::new(&default_path) {
+                    Ok(t) => {
+                        tracing::info!(
+                            model_id = %default_meta.id,
+                            path = %default_path.display(),
+                            "loaded catalog-default whisper model (no explicit selection)"
+                        );
+                        return Some(Arc::new(
+                            t.with_inference_threads(Arc::clone(inference_threads))
+                                .with_mic_gain_db(Arc::clone(mic_gain_db)),
+                        ) as Arc<dyn Transcribe>);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = ?e,
+                            path = %default_path.display(),
+                            "catalog-default model failed to load; falling back"
+                        );
+                    }
+                }
             }
         }
 
