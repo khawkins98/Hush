@@ -4,6 +4,10 @@ about: Something isn't working
 labels: bug
 ---
 
+<!-- Please read CONTRIBUTING.md before filing — especially the "Issues and labels" section.
+     Area / status / priority labels are applied by the maintainer during triage.
+     Mention the affected area in your description if it's obvious (audio, UI, release, testing). -->
+
 **Describe the bug**
 A clear and concise description of the problem.
 
