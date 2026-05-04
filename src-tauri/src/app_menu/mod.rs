@@ -104,12 +104,9 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .select_all()
         .build()?;
 
-    // View submenu: section navigation. ⌘1/⌘2 mirror the sidebar
-    // order after #357 Phase 1 collapsed Dictation/Meetings/History
-    // to Dictation/History — meeting sessions surface in the unified
-    // History feed once Phase 2 lands. Configuration was a pre-IA
-    // placeholder; its panels live in the standalone Settings
-    // window (⌘, on the App menu).
+    // View submenu: section navigation. ⌘1/⌘2/⌘3 mirror the sidebar
+    // order (Dictation / History / About). Settings lives at ⌘, in
+    // the App menu — not duplicated here.
     let view_submenu = SubmenuBuilder::new(app, "View")
         .item(
             &MenuItemBuilder::with_id("goto-dictation", "Dictation")
@@ -119,6 +116,11 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .item(
             &MenuItemBuilder::with_id("goto-history", "History")
                 .accelerator("CmdOrCtrl+2")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("goto-about", "About")
+                .accelerator("CmdOrCtrl+3")
                 .build(app)?,
         )
         .build()?;
