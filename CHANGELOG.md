@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Debug window close, light-mode colours, and Cmd+` cycling (#543)
+
+- Closing the debug palette (red-✕) no longer hides the main window. The debug window now uses the same `CloseRequested → hide()` pattern as the main window so focus returns correctly to the app on macOS.
+- Debug console timestamps, log targets, and entry count are now readable in light mode. All colours inside `DebugConsole.svelte` now use a dedicated `--debug-*` token set defined on a `display: contents` wrapper — no `var(--text-*)` or `var(--border)` tokens that flip between themes.
+- ⌘\` (Cycle Through Windows) now works. The Window submenu is explicitly registered as NSApp's `windowsMenu` via `set_as_windows_menu_for_nsapp()`.
+
 #### Waveform sensitivity — log scale + adaptive gain (#539)
 
 - `AudioWaveform` now maps raw RMS amplitude through a dBFS logarithmic scale rather than a linear multiplier. Conversational speech at −38 dBFS renders at ~38 % bar height instead of the near-invisible ~5 % it produced with `level × 400`.
