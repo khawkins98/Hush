@@ -713,6 +713,236 @@ mod tests {
         );
     }
 
+    /// Failing `close_session` repo wrapper used by the #492 race
+    /// tests. Delegates every other call to an inner SQLite repo so
+    /// `start_manual` / `append_utterance` work normally; only
+    /// `close_session` is overridden. Optional `on_close_session`
+    /// callback runs *before* the failure is returned so the test
+    /// can inject the "concurrent start_manual claimed the slot"
+    /// race condition deterministically.
+    struct FailingCloseRepo {
+        inner: Arc<dyn MeetingSessionRepository>,
+        on_close_session: Option<Arc<dyn Fn() + Send + Sync>>,
+    }
+
+    #[async_trait::async_trait]
+    impl
+        crate::repository::Repository<
+            crate::meeting::MeetingSession,
+            crate::meeting::NewMeetingSession,
+            i64,
+        > for FailingCloseRepo
+    {
+        async fn list(&self) -> Result<Vec<crate::meeting::MeetingSession>> {
+            self.inner.list().await
+        }
+        async fn create(
+            &self,
+            new: crate::meeting::NewMeetingSession,
+        ) -> Result<crate::meeting::MeetingSession> {
+            self.inner.create(new).await
+        }
+        async fn update(&self, item: crate::meeting::MeetingSession) -> Result<()> {
+            self.inner.update(item).await
+        }
+        async fn delete(&self, id: i64) -> Result<()> {
+            self.inner.delete(id).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MeetingSessionRepository for FailingCloseRepo {
+        async fn close_session(&self, _id: i64) -> Result<()> {
+            if let Some(cb) = self.on_close_session.as_ref() {
+                cb();
+            }
+            Err(anyhow!("simulated close_session failure"))
+        }
+        async fn append_utterance(
+            &self,
+            new: crate::meeting::NewPersistedUtterance,
+        ) -> Result<crate::meeting::PersistedUtterance> {
+            self.inner.append_utterance(new).await
+        }
+        async fn list_utterances(
+            &self,
+            session_id: i64,
+        ) -> Result<Vec<crate::meeting::PersistedUtterance>> {
+            self.inner.list_utterances(session_id).await
+        }
+        async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()> {
+            self.inner.set_notes(id, notes).await
+        }
+        async fn get_by_id(&self, id: i64) -> Result<Option<crate::meeting::MeetingSession>> {
+            self.inner.get_by_id(id).await
+        }
+        async fn list_open_sessions(&self) -> Result<Vec<crate::meeting::MeetingSession>> {
+            self.inner.list_open_sessions().await
+        }
+        async fn search_sessions(
+            &self,
+            query: &str,
+        ) -> Result<Vec<crate::meeting::MeetingSession>> {
+            self.inner.search_sessions(query).await
+        }
+    }
+
+    /// #492: with no concurrent start in flight, a `close_session`
+    /// failure restores the session for retry — preserving the
+    /// pre-fix behaviour that #249 relies on. Slot ends up
+    /// `Active(old_id)` with `close_attempted = true`.
+    #[tokio::test]
+    async fn stop_manual_close_failure_restores_session_for_retry_when_idle() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let inner: Arc<dyn MeetingSessionRepository> =
+            Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+        let failing: Arc<dyn MeetingSessionRepository> = Arc::new(FailingCloseRepo {
+            inner: Arc::clone(&inner),
+            on_close_session: None,
+        });
+        let mgr = manager_with_repo(failing);
+
+        let session = mgr
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                Some("Zoom".into()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let err = mgr.stop_manual().await.expect_err("close fails by design");
+        assert!(format!("{err:#}").contains("simulated close_session failure"));
+
+        // Slot should now be Active(session.id) with close_attempted = true,
+        // ready for the user's retry.
+        let guard = mgr.state.lock().unwrap();
+        match &*guard {
+            SessionState::Active(a) => {
+                assert_eq!(a.id, session.id, "old session id preserved for retry");
+                assert!(
+                    a.close_attempted,
+                    "close_attempted should be set so retry skips pump teardown"
+                );
+            }
+            SessionState::Idle => panic!("expected Active(old) after close failure; got Idle"),
+            SessionState::Opening => {
+                panic!("expected Active(old) after close failure; got Opening")
+            }
+        }
+    }
+
+    /// #492 — the race the bug describes. While `stop_manual`
+    /// awaits `close_session`, a concurrent `start_manual` claims
+    /// the slot for a NEW session. Pre-fix the recovery path
+    /// would unconditionally overwrite that with `Active(<old id>)`,
+    /// silently dropping the new session. Post-fix the recovery
+    /// only fires when the slot is still `Idle` — when it's been
+    /// claimed by a new Opening/Active state, the close error
+    /// surfaces but the new session survives.
+    ///
+    /// Implementation: the failing repo's `close_session` callback
+    /// flips the slot to a synthetic `Active(<new id>)` state right
+    /// before returning Err, simulating the concurrent claim
+    /// without spawning real concurrent tasks.
+    #[tokio::test]
+    async fn stop_manual_close_failure_does_not_clobber_concurrent_start() {
+        use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+        use std::sync::OnceLock;
+
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let inner: Arc<dyn MeetingSessionRepository> =
+            Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+
+        // The slot-flip callback needs the manager's state mutex,
+        // but the manager is built with the failing repo — so the
+        // repo can't yet hold an Arc to a manager that doesn't
+        // exist. Sidestep with a `OnceLock<Arc<SessionManager>>`:
+        // build the failing repo with a callback that reads the
+        // OnceLock, build the manager wrapping that repo, then
+        // populate the OnceLock with the manager Arc.
+        const NEW_SESSION_ID: i64 = 999;
+        let mgr_slot: Arc<OnceLock<Arc<SessionManager>>> = Arc::new(OnceLock::new());
+        let callback_fired = Arc::new(AtomicI64::new(0));
+
+        let cb_fired = Arc::clone(&callback_fired);
+        let mgr_slot_for_cb = Arc::clone(&mgr_slot);
+        let on_close: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            // Simulate a concurrent `start_manual` claiming the
+            // slot during stop_manual's `close_session` await.
+            let mgr = mgr_slot_for_cb
+                .get()
+                .expect("mgr_slot populated before stop_manual runs");
+            let mut guard = mgr.state.lock().unwrap();
+            *guard = SessionState::Active(ActiveSession {
+                id: NEW_SESSION_ID,
+                started_at: std::time::Instant::now(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                pump_handle: Mutex::new(None),
+                close_attempted: false,
+            });
+            cb_fired.fetch_add(1, AtomicOrdering::Relaxed);
+        });
+
+        let failing: Arc<dyn MeetingSessionRepository> = Arc::new(FailingCloseRepo {
+            inner: Arc::clone(&inner),
+            on_close_session: Some(on_close),
+        });
+        let mgr = Arc::new(manager_with_repo(failing));
+        mgr_slot
+            .set(Arc::clone(&mgr))
+            .ok()
+            .expect("OnceLock populated exactly once");
+
+        // Start a session under the (now-failing) repo. That writes
+        // an open row to the DB (via inner) and parks the slot in
+        // Active(session.id).
+        let session = mgr
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                Some("Zoom".into()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Now stop. close_session will fail AND its callback will
+        // flip the slot to Active(NEW_SESSION_ID), simulating the
+        // race. The recovery path must NOT overwrite that.
+        let err = mgr.stop_manual().await.expect_err("close fails by design");
+        assert!(format!("{err:#}").contains("simulated close_session failure"));
+        assert_eq!(
+            callback_fired.load(AtomicOrdering::Relaxed),
+            1,
+            "the slot-flip callback must have fired during close_session"
+        );
+
+        // The slot should still be Active(NEW_SESSION_ID) — the
+        // pre-fix bug would have overwritten this with
+        // Active(session.id, close_attempted: true).
+        let guard = mgr.state.lock().unwrap();
+        match &*guard {
+            SessionState::Active(a) => {
+                assert_eq!(
+                    a.id, NEW_SESSION_ID,
+                    "new session must survive the close-failure recovery; \
+                     pre-#492 the old id ({}) clobbered it",
+                    session.id
+                );
+                assert!(
+                    !a.close_attempted,
+                    "close_attempted must stay false on the new session"
+                );
+            }
+            SessionState::Idle => {
+                panic!("expected Active(NEW_SESSION_ID) preserved; got Idle")
+            }
+            SessionState::Opening => {
+                panic!("expected Active(NEW_SESSION_ID) preserved; got Opening")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn append_if_active_returns_false_when_no_session() {
         let mgr = fresh_manager().await;
