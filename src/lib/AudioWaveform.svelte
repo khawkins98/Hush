@@ -88,23 +88,60 @@
     /// pill stays unchanged; the main window opts in.
     metering?: boolean;
     /// Amplification factor applied to the 0..1 RMS level before
-    /// mapping to bar height %. Default 400 keeps the historical
-    /// behaviour. The HUD passes 480 (~20% louder appearance) so
-    /// the compact 24 px bars reach the top on normal speech
-    /// without affecting the main window's 88 px waveform.
+    /// mapping to bar height %. Only used when `logScale` is false.
+    /// Default 400 keeps the historical linear behaviour.
     levelScale?: number;
     /// Minimum bar height in %. Default 6 — the "honest silence"
     /// baseline on the main window's 88 px stage. The HUD passes
     /// 15 so bars render as a thin flat line rather than
     /// disappearing during gaps between words.
     silenceFloorPct?: number;
+    /// Use a logarithmic (dBFS) scale for bar heights instead of
+    /// the linear `level * levelScale` mapping. Default true.
+    ///
+    /// Motivation: speech sits between −50 and −6 dBFS. Linear
+    /// amplitude at −38 dB is only ~1.3 % of full-scale, so even a
+    /// 400× multiplier yields a barely-visible ~5 % bar. The log
+    /// scale maps −60 dB → silenceFloorPct and −3 dB → 100 %, so
+    /// normal conversational speech (~−38 dB) renders at ~38 %
+    /// height — clearly visible without distorting the loud end.
+    logScale?: boolean;
   };
 
-  let { mode, active = true, metering = false, levelScale = 400, silenceFloorPct = 6 }: Props = $props();
+  let {
+    mode,
+    active = true,
+    metering = false,
+    levelScale = 400,
+    silenceFloorPct = 6,
+    logScale = true,
+  }: Props = $props();
 
   let effectiveMode = $derived<WaveformMode>(
     mode ?? (active ? "recording" : "idle"),
   );
+
+  // Logarithmic + adaptive scaling constants.
+  //
+  // DB_FLOOR: anything quieter than this maps to silenceFloorPct.
+  // DB_CEIL_DEFAULT: starting / maximum ceiling (very loud mic or
+  //   first few frames before the adaptive tracker has data).
+  // DB_CEIL_MIN: adaptive ceiling never goes below this, keeping
+  //   the scale sane even on extremely quiet sources (< -50 dBFS).
+  // ADAPTIVE_HEADROOM_DB: the ceiling sits this many dB above the
+  //   tracked signal peak so bars don't permanently rail at 100 %.
+  // ADAPTIVE_ATTACK: how quickly the ceiling rises to a new loud
+  //   level (per rAF frame at ~60 Hz; 0.15 ≈ 3-4 frames = ~60 ms).
+  // ADAPTIVE_RELEASE: how slowly the ceiling falls back during
+  //   silence (0.0015/frame ≈ 11 s from −6 to −60 dBFS). Slow
+  //   decay means a burst of loud speech doesn't shrink the scale
+  //   the moment the speaker pauses between words.
+  const DB_FLOOR = -70;
+  const DB_CEIL_DEFAULT = -3;
+  const DB_CEIL_MIN = -48;
+  const ADAPTIVE_HEADROOM_DB = 6;
+  const ADAPTIVE_ATTACK = 0.15;
+  const ADAPTIVE_RELEASE = 0.0015;
 
   // 14 bars × 80 ms push interval = ~1.1 s visible window.
   const BAR_COUNT = 14;
@@ -145,6 +182,11 @@
   let flashing = $state(false);
   let peak = $state(0);
   let clipping = $state(false);
+  // Adaptive ceiling tracker. Initialised to 0.01 (≈ −40 dBFS) so
+  // the first frame of speech doesn't rail the bars, then adapts
+  // within ~60 ms to whatever level the mic or system audio is
+  // actually delivering.
+  let adaptivePeak = $state(0.01);
 
   let unlistenLevel: UnlistenFn | null = null;
   let raf: number | undefined;
@@ -211,6 +253,19 @@
 
       const coeff = target > displayLevel ? ATTACK : RELEASE;
       displayLevel += (target - displayLevel) * coeff;
+
+      // Adaptive ceiling — only updated during recording so a long
+      // silence between sessions doesn't quietly shrink the scale.
+      if (logScale && effectiveMode === "recording") {
+        if (displayLevel > adaptivePeak) {
+          adaptivePeak += (displayLevel - adaptivePeak) * ADAPTIVE_ATTACK;
+        } else {
+          adaptivePeak = Math.max(
+            0.001,
+            adaptivePeak + (displayLevel - adaptivePeak) * ADAPTIVE_RELEASE,
+          );
+        }
+      }
 
       const now = Date.now();
       if (now - lastWaveformPush >= WAVEFORM_INTERVAL_MS) {
@@ -296,7 +351,18 @@
   role="presentation"
 >
   {#each waveform as level, i (i)}
-    {@const heightPct = Math.min(100, Math.max(silenceFloorPct, level * levelScale))}
+    {@const heightPct = (() => {
+      if (!logScale) return Math.min(100, Math.max(silenceFloorPct, level * levelScale));
+      if (level <= 0.001) return silenceFloorPct;
+      const db = 20 * Math.log10(level);
+      const adaptivePeakDb = 20 * Math.log10(adaptivePeak);
+      const dynamicCeil = Math.min(
+        DB_CEIL_DEFAULT,
+        Math.max(DB_CEIL_MIN, adaptivePeakDb + ADAPTIVE_HEADROOM_DB),
+      );
+      const normalized = (Math.max(DB_FLOOR, db) - DB_FLOOR) / (dynamicCeil - DB_FLOOR);
+      return Math.min(100, Math.max(silenceFloorPct, normalized * 100));
+    })()}
     <span class="audio-waveform-bar" style="height: {heightPct}%"></span>
   {/each}
   {#if currentDbLabel !== ""}
