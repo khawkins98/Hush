@@ -21,7 +21,7 @@ Free. No account. No cloud.
 - **A meeting transcription tool.** Click Record while you're in a call. Hush captures your mic and the system audio in parallel via macOS ScreenCaptureKit, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model.
 - **Both, in one app, sharing one history.** Most tools pick one lane. Hush is dictation **and** meetings, with the same model loaded once and the same on-disk history.
 
-The audio never leaves your machine. The audio never lands on disk either — it's processed in RAM ring buffers and gone within 30 seconds.
+The audio never leaves your machine. The audio never lands on disk either — it's processed in RAM (a 30-second rolling ring during meetings; for dictation, drained directly through the transcriber and dropped when the call returns) and is gone as soon as the transcript is on your clipboard.
 
 ---
 
