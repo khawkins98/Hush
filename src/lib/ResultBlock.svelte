@@ -75,7 +75,7 @@
 </script>
 
 <section class="result" aria-live="polite">
-  <h2>Transcription</h2>
+  <h2>Transcript</h2>
   {#if isEmpty}
     <p class="text empty-result">
       No audio detected. Try speaking closer to the mic, or check
