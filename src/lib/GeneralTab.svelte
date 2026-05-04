@@ -282,6 +282,20 @@
     }
   }
 
+  // Preview-cue button (#498). Bypasses the toggle gate
+  // entirely — the user is explicitly asking to hear the chime,
+  // so it should play regardless of master / sub-toggle state.
+  // Best-effort: a failed IPC logs but doesn't surface; the
+  // most likely failure is the no-default-audio-device path
+  // that's already silent for the production cue path.
+  async function onPreviewCue(kind: "start" | "done") {
+    try {
+      await invoke("preview_sound_cue", { kind });
+    } catch (e) {
+      console.warn("[hush] preview_sound_cue failed", e);
+    }
+  }
+
   async function onSoundCueCompleteToggle(e: Event) {
     const checked = (e.target as HTMLInputElement).checked;
     soundCueCompleteBusy = true;
@@ -519,37 +533,57 @@
     class:is-disabled={!soundCuesEnabled}
     aria-label="Per-event audio cues"
   >
-    <label class="toggle-row toggle-row-sub">
-      <input
-        type="checkbox"
-        data-testid="settings-sound-cue-start-toggle"
-        disabled={!soundCuesEnabled || soundCueStartBusy}
-        checked={soundCueStartEnabled}
-        onchange={onSoundCueStartToggle}
-      />
-      <span class="toggle-label">
-        <span class="toggle-name">Recording-start cue</span>
-        <span class="toggle-desc">
-          Plays a chime the moment the mic goes hot.
+    <div class="toggle-row toggle-row-sub">
+      <label class="toggle-row-inner">
+        <input
+          type="checkbox"
+          data-testid="settings-sound-cue-start-toggle"
+          disabled={!soundCuesEnabled || soundCueStartBusy}
+          checked={soundCueStartEnabled}
+          onchange={onSoundCueStartToggle}
+        />
+        <span class="toggle-label">
+          <span class="toggle-name">Recording-start cue</span>
+          <span class="toggle-desc">
+            Plays a chime the moment the mic goes hot.
+          </span>
         </span>
-      </span>
-    </label>
-    <label class="toggle-row toggle-row-sub">
-      <input
-        type="checkbox"
-        data-testid="settings-sound-cue-complete-toggle"
-        disabled={!soundCuesEnabled || soundCueCompleteBusy}
-        checked={soundCueCompleteEnabled}
-        onchange={onSoundCueCompleteToggle}
-      />
-      <span class="toggle-label">
-        <span class="toggle-name">Transcription-complete cue</span>
-        <span class="toggle-desc">
-          Plays a chime once the transcript is on the clipboard
-          — the "safe to paste" signal.
+      </label>
+      <button
+        type="button"
+        class="cue-preview-btn"
+        data-testid="settings-cue-preview-start"
+        onclick={() => onPreviewCue("start")}
+        aria-label="Preview the recording-start cue"
+        title="Preview the recording-start cue"
+      >▶</button>
+    </div>
+    <div class="toggle-row toggle-row-sub">
+      <label class="toggle-row-inner">
+        <input
+          type="checkbox"
+          data-testid="settings-sound-cue-complete-toggle"
+          disabled={!soundCuesEnabled || soundCueCompleteBusy}
+          checked={soundCueCompleteEnabled}
+          onchange={onSoundCueCompleteToggle}
+        />
+        <span class="toggle-label">
+          <span class="toggle-name">Transcription-complete cue</span>
+          <span class="toggle-desc">
+            Plays a chime once the transcript is on the clipboard
+            — the "safe to paste" signal.
+          </span>
         </span>
-      </span>
-    </label>
+      </label>
+      <button
+        type="button"
+        class="cue-preview-btn"
+        data-testid="settings-cue-preview-done"
+        onclick={() => onPreviewCue("done")}
+        aria-label="Preview the transcription-complete cue"
+        title="Preview the transcription-complete cue"
+      >▶</button>
+    </div>
   </div>
   {#if soundCueSubError}
     <p class="settings-error">{soundCueSubError}</p>

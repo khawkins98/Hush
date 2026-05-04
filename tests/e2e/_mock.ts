@@ -58,6 +58,12 @@ export async function installMocks(
       set_sound_cue_start_enabled: () => undefined,
       get_sound_cue_complete_enabled: () => true,
       set_sound_cue_complete_enabled: () => undefined,
+      // Preview-cue button (#498). Default no-op — specs that
+      // don't exercise the preview button just need the IPC to
+      // be present so the Playwright mock-completeness check
+      // passes. The real handler bypasses the toggle gate and
+      // calls `audio_cues::play_bytes` directly.
+      preview_sound_cue: () => undefined,
       // Whisper inference threads (Settings → General → Performance,
       // #255). Default 4 mirrors the backend default.
       get_inference_threads: () => 4,

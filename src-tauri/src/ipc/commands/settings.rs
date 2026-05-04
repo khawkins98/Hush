@@ -159,6 +159,39 @@ pub async fn set_sound_cue_complete_enabled(
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Play one of the audio cues immediately, ignoring the master /
+/// per-event toggles (#498). Wires the per-cue `▶` preview
+/// buttons in Settings → General → Audio cues so a user can hear
+/// the chime without enabling the cue first, starting a
+/// dictation, and then stopping it. Falls through to
+/// `audio_cues::play_bytes` directly — same playback path as the
+/// dictation hot path, same debounce gate, but bypassing the
+/// toggle check because the user is explicitly asking for the
+/// preview.
+///
+/// Wire shape: `kind` is the kebab-case discriminator
+/// `"start"` (Tink → recording-start cue) or `"done"` (Glass →
+/// transcription-complete cue). Anything else returns
+/// `IpcError::Settings("unknown cue kind")` so a renderer typo
+/// is loud rather than silent.
+#[tauri::command]
+pub async fn preview_sound_cue(kind: String) -> IpcResult<()> {
+    let bytes = match kind.as_str() {
+        "start" => crate::audio_cues::CUE_RECORDING_START,
+        "done" => crate::audio_cues::CUE_TRANSCRIPTION_READY,
+        other => {
+            return Err(IpcError::Settings(format!(
+                "unknown cue kind: {other:?} (expected \"start\" or \"done\")"
+            )))
+        }
+    };
+    // Bypass the toggle check (the user is explicitly asking for
+    // the preview) but still honour the in-flight debounce so a
+    // mashed preview button doesn't spawn parallel rodio sinks.
+    crate::audio_cues::play_if_enabled(true, bytes);
+    Ok(())
+}
+
 /// Read the diarization-enabled flag (#111). Settings → Meeting reads
 /// this on mount so the toggle renders the persisted value. Defaults
 /// to `false` when the row is absent — diarization is opt-in until
