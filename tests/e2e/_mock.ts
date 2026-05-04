@@ -70,6 +70,9 @@ export async function installMocks(
       set_inference_threads: () => undefined,
       get_mic_gain_db: () => 0,
       set_mic_gain_db: () => undefined,
+      // Debug log console (#532). Default returns empty array so
+      // the DebugTab renders an empty (but valid) log view.
+      get_log_entries: () => [],
       // Meeting auto-start mode (Settings → Meeting). Default
       // matches the backend's "off" default; specs that exercise
       // the dropdown override per-test.
@@ -108,6 +111,8 @@ export async function installMocks(
         kind: "upToDate",
         current: "0.1.0",
       }),
+      // App version string for the debug issue-report generator.
+      get_app_version: () => "0.0.0-test",
       // Auto-update install (#10). Default to the typed
       // not-configured gate-error (#497) so specs that don't
       // override see the friendly fallback copy + manual

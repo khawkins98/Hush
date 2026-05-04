@@ -96,4 +96,10 @@ export const Events = {
   /// already-open windows. Canonical helpers live in
   /// `lib/status-line.ts`.
   StatusLine: "hush:status-line",
+  /// Backend → settings window (debug tab): a new backend log
+  /// entry is available. Payload is a `LogEntry` object. The
+  /// DebugConsole component appends it to the in-page list.
+  /// Subscribe *before* calling `get_log_entries` to guarantee no
+  /// events are lost across the snapshot / live-stream gap (#532).
+  LogEvent: "log:event",
 } as const;

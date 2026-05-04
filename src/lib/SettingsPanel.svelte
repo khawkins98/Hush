@@ -25,6 +25,7 @@
   import { SvelteMap } from "svelte/reactivity";
 
   import AboutTab from "./AboutTab.svelte";
+  import DebugTab from "./DebugTab.svelte";
   import GeneralTab from "./GeneralTab.svelte";
   import MeetingTab from "./MeetingTab.svelte";
   import ModelPickerPanel from "./ModelPickerPanel.svelte";
@@ -38,6 +39,7 @@
   } from "./errors";
   import { Events } from "./events";
   import { formatMb } from "./format";
+  import { readDebugConsoleEnabled } from "./debug-console";
   import type {
     DiarizerModelStatus,
     DownloadProgress,
@@ -53,7 +55,8 @@
     | "replacements"
     | "meeting"
     | "permissions"
-    | "about";
+    | "about"
+    | "debug";
 
   type Props = {
     /// Which tab is showing. Bindable so the parent can deep-link
@@ -64,7 +67,22 @@
 
   let { activeTab = $bindable("general") }: Props = $props();
 
-  const tabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
+  // Debug tab is conditionally shown: only when the developer
+  // console toggle (Settings → General → Advanced → Developer
+  // console) is on. Read localStorage on mount so the tab
+  // persists across Settings opens within the same session.
+  let debugConsoleEnabled = $state(false);
+
+  function onDebugConsoleChange(enabled: boolean) {
+    debugConsoleEnabled = enabled;
+    if (!enabled && activeTab === "debug") {
+      activeTab = "general";
+    }
+  }
+
+  // Compute visible tabs reactively so the Debug tab appears /
+  // disappears without a page reload.
+  const baseTabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
     { key: "general", label: "General", testId: "settings-tab-general" },
     { key: "model", label: "Model", testId: "settings-tab-model" },
     { key: "vocabulary", label: "Vocabulary", testId: "settings-tab-vocabulary" },
@@ -72,7 +90,12 @@
     { key: "meeting", label: "Meeting", testId: "settings-tab-meeting" },
     { key: "permissions", label: "Permissions", testId: "settings-tab-permissions" },
     { key: "about", label: "About", testId: "settings-tab-about" },
+    { key: "debug", label: "Debug", testId: "settings-tab-debug" },
   ];
+
+  let tabs = $derived(
+    debugConsoleEnabled ? baseTabs : baseTabs.filter((t) => t.key !== "debug"),
+  );
 
   type ModelFetch = {
     models: ModelCard[];
@@ -241,12 +264,14 @@
         target === "replacements" ||
         target === "meeting" ||
         target === "permissions" ||
-        target === "about"
+        target === "about" ||
+        (target === "debug" && debugConsoleEnabled)
       ) {
         activeTab = target;
       }
     });
 
+    debugConsoleEnabled = readDebugConsoleEnabled();
     await loadModels();
   });
 
@@ -279,7 +304,7 @@
 
   <section class="tab-body" aria-live="polite">
     {#if activeTab === "general"}
-      <GeneralTab />
+      <GeneralTab {onDebugConsoleChange} />
     {:else if activeTab === "model"}
       <ModelPickerPanel
         models={modelFetch.models}
@@ -304,6 +329,8 @@
       <PermissionsTab />
     {:else if activeTab === "about"}
       <AboutTab />
+    {:else if activeTab === "debug"}
+      <DebugTab />
     {/if}
   </section>
 </div>
