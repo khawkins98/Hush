@@ -94,6 +94,47 @@
 }
 .toggle-row.toggle-row-sub {
   padding: 0.45rem 0.75rem;
+  /* Two columns now (#498) — the (label + checkbox) on the left,
+     the preview-cue button on the right. Pre-#498 the row was a
+     single label; now it's a div wrapping the label + a sibling
+     button so the label still has full clickable area. */
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.toggle-row.toggle-row-sub .toggle-row-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+/* Small ▶ preview button — sits flush to the row's right edge.
+   Quiet visual treatment; the user only notices it once they're
+   curious about what the cue sounds like. The cue itself bypasses
+   the master / sub-toggle gate so the preview works even when
+   audio cues are off. */
+.cue-preview-btn {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  border: 1px solid var(--border, #d1d1d6);
+  background-color: var(--bg-surface, #fff);
+  color: var(--text-secondary, #555);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+.cue-preview-btn:hover {
+  background-color: var(--accent, #7c6ff7);
+  border-color: var(--accent, #7c6ff7);
+  color: var(--text-on-accent, #fff);
+}
+.cue-preview-btn:focus-visible {
+  outline: 2px solid var(--accent, #7c6ff7);
+  outline-offset: 2px;
 }
 .sound-cue-subtoggles.is-disabled {
   opacity: 0.5;

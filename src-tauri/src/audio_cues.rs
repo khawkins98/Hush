@@ -59,14 +59,58 @@ pub fn play_if_enabled(enabled: bool, bytes: &'static [u8]) {
     play_bytes(bytes);
 }
 
+/// Concurrency gate (#498). When the dictation hotkey is mashed
+/// quickly (post-#477's click-record + meeting-pump unification
+/// can fire cues on toggle transitions), every press would
+/// otherwise spawn a fresh `OutputStream` + `Sink` + thread —
+/// each holding the default audio device for ~250–320 ms. CPAL
+/// handles the contention on macOS but the Rust thread cost is
+/// real, audio output stutters when many sinks share the device,
+/// and some Linux ALSA setups click on each open/close cycle.
+///
+/// The atomic flips to true on play_bytes entry and back to false
+/// in the spawned thread's exit path. Subsequent calls observe
+/// `true` and short-circuit without spawning. Net effect: one cue
+/// at a time, drops are silent (a dropped cue is a UX papercut,
+/// not a correctness issue).
+static CUE_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Spawn the actual playback. Detached thread because rodio's
 /// `OutputStream` must outlive the playback (when it drops, audio
 /// cuts off), and we don't want to block the caller. The
 /// `Sink::sleep_until_end` call inside the thread keeps the stream
 /// alive until the cue finishes; the thread then exits and the
 /// stream drops cleanly.
+///
+/// Debounced (#498) — see [`CUE_IN_FLIGHT`]. A new cue request
+/// while one is still playing is dropped silently.
 fn play_bytes(bytes: &'static [u8]) {
+    use std::sync::atomic::Ordering;
+    // `compare_exchange` so the "claim the slot or bail" race is
+    // a single atomic op; otherwise two threads racing on
+    // load+store could both see false and both spawn.
+    if CUE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        // A cue is already playing. Drop this request silently.
+        return;
+    }
     std::thread::spawn(move || {
+        // Reset the gate on every exit path — early returns
+        // (no audio device, sink failure, decoder failure) plus
+        // the success path. A panic here would leak the gate
+        // forever; that's an acceptable risk because the
+        // synthesised WAVs are constant input and the rodio
+        // pipeline is well-tested.
+        struct GateGuard;
+        impl Drop for GateGuard {
+            fn drop(&mut self) {
+                CUE_IN_FLIGHT.store(false, Ordering::Release);
+            }
+        }
+        let _guard = GateGuard;
+
         let (_stream, handle) = match rodio::OutputStream::try_default() {
             Ok(pair) => pair,
             Err(e) => {

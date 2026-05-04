@@ -581,6 +581,7 @@ pub fn run() {
             ipc::commands::settings::set_sound_cue_start_enabled,
             ipc::commands::settings::get_sound_cue_complete_enabled,
             ipc::commands::settings::set_sound_cue_complete_enabled,
+            ipc::commands::settings::preview_sound_cue,
             ipc::commands::settings::get_meeting_autostart_mode,
             ipc::commands::settings::set_meeting_autostart_mode,
             ipc::commands::settings::get_diarization_enabled,
