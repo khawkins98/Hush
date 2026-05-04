@@ -73,6 +73,7 @@
           data-testid="sidebar-nav-{item.id}"
           onclick={() => handleClick(item.id)}
         >
+          <span class="sidebar-nav-icon-label-stack">
           <span class="sidebar-nav-icon" aria-hidden="true">
             {#if item.id === "dictation"}
               <!-- Microphone -->
@@ -99,6 +100,8 @@
               <span class="sidebar-nav-recording-dot" aria-hidden="true"></span>
             {/if}
           </span>
+          <span class="sidebar-nav-label">{item.label}</span>
+          </span>
         </button>
       </li>
     {/each}
@@ -107,7 +110,14 @@
 
 <style>
   .sidebar-nav {
-    width: 56px;
+    /* Pre-#494 the column was 56 px (icon-only with native title=
+       tooltips). The tooltips had ~500 ms show-delay and zero touch
+       support — a first-time user couldn't tell the clock-with-arrow
+       apart from "schedule" without hovering. Bumped to 72 px so a
+       small label fits under each icon for at-a-glance
+       discoverability while keeping the Panic-style left-chrome
+       aesthetic. */
+    width: 72px;
     flex-shrink: 0;
     background: var(--bg-sidebar);
     border-right: 1px solid var(--border-subtle);
@@ -136,7 +146,11 @@
     border: none;
     border-left: 3px solid transparent;
     margin: 0;
-    padding: 0.6rem 0;
+    /* Tighter vertical padding now that each item carries a
+       label below the icon — the visual weight of icon+label
+       stack is taller than icon-only, so the rhythm needs
+       slightly less per-item padding to stay balanced. */
+    padding: 0.45rem 0;
     width: 100%;
     display: flex;
     align-items: center;
@@ -144,6 +158,23 @@
     color: var(--text-muted);
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease;
+  }
+  /* Inner stack: icon on top, label below. Centred horizontally;
+     the column-flex layout matches the Panic / Audio Hijack /
+     Loop pattern where every item announces its own name. */
+  .sidebar-nav-icon-label-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+  }
+  .sidebar-nav-label {
+    font-size: 0.65rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    line-height: 1;
+    color: inherit;
+    user-select: none;
   }
   .sidebar-nav-item:hover {
     color: var(--text-primary);
