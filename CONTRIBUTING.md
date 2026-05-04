@@ -48,6 +48,24 @@ The `whisper` feature is **default-on** as of 2026-04-26 so a vanilla `npm run t
 
 ---
 
+## Dev workflow: which command to run
+
+| What you're trying to do | Command |
+|---|---|
+| Iterate on UI or Rust logic — the normal dev loop | `npm run tauri dev` |
+| Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
+| Test Screen Recording / Microphone TCC permission prompts | `npm run tauri:bundle` (macOS only) |
+| Build a release `.dmg` to smoke-test the installer locally | `npm run tauri:dmg` (macOS only) |
+| Run Rust unit tests | `cd src-tauri && cargo test --lib` |
+| Run frontend type check | `npm run check` |
+| Run frontend e2e tests | `npm run test:e2e` |
+
+**`npm run tauri dev` vs `tauri:bundle`:** The dev binary is unsigned; macOS TCC attributes mic/keyboard access to the parent terminal, so those permissions behave differently than in a real app. `tauri:bundle` produces a proper `.app` that TCC treats like a user-installed app. Use it when verifying permission flows or system-audio capture — not as your day-to-day iteration tool (it's 30 s–2 min per build).
+
+**`tauri:dmg`:** Only needed when you want to test the installer experience (drag-to-Applications, Gatekeeper prompt, app-opens-from-Downloads). Not needed for normal feature work.
+
+---
+
 ## Issues and labels
 
 Labels are applied by the maintainer during triage. When opening an issue you don't need to apply them yourself — but mentioning the affected area in the body helps.
