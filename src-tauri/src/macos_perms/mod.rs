@@ -191,6 +191,33 @@ pub fn read_all() -> PermissionStatuses {
     }
 }
 
+/// Synchronous Input-Monitoring TCC prompt (#511). Blocks the
+/// caller until the user clicks Allow / Deny on the system
+/// dialog. `true` = granted by the call (or already-granted
+/// reading without a prompt). No-op stub returns `true` on
+/// non-macOS where the per-app TCC layer doesn't exist.
+pub fn request_input_monitoring_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::request_input_monitoring()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Asynchronous Microphone TCC prompt (#511). Returns immediately
+/// after firing the system dialog; the user's choice surfaces via
+/// the existing `read_all()` poll cadence the frontend already
+/// runs. No-op on non-macOS — there's no per-app mic TCC there.
+pub fn request_microphone_permission() {
+    #[cfg(target_os = "macos")]
+    {
+        macos::request_microphone();
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use super::PermissionStatus;
@@ -284,6 +311,13 @@ mod macos {
     #[link(name = "IOKit", kind = "framework")]
     extern "C" {
         fn IOHIDCheckAccess(request_type: u32) -> u32;
+        // `IOHIDRequestAccess` fires the synchronous Input
+        // Monitoring TCC prompt and blocks until the user responds.
+        // Returns `true` (1) on grant, `false` (0) on denial /
+        // dismiss. Used by the first-run wizard's Allow button
+        // (#511) so the user grants permissions inline without
+        // having to open System Settings manually.
+        fn IOHIDRequestAccess(request_type: u32) -> u8;
     }
 
     pub fn input_monitoring_status() -> PermissionStatus {
@@ -294,6 +328,37 @@ mod macos {
                 2 => PermissionStatus::Denied,
                 _ => PermissionStatus::NotDetermined,
             }
+        }
+    }
+
+    /// Fire the macOS Input Monitoring TCC prompt synchronously
+    /// (#511). Returns `true` if the user granted on this call,
+    /// `false` if they denied or dismissed. Already-granted
+    /// installs return `true` immediately without a prompt.
+    pub fn request_input_monitoring() -> bool {
+        unsafe { IOHIDRequestAccess(K_IO_HID_REQUEST_TYPE_LISTEN_EVENT) != 0 }
+    }
+
+    /// Fire the macOS Microphone TCC prompt asynchronously (#511).
+    /// `AVCaptureDevice requestAccessForMediaType:completionHandler:`
+    /// returns immediately and shows the system dialog; the user
+    /// responds at their leisure. We pass a NULL completion handler
+    /// because the frontend polls `get_permission_health` to
+    /// observe the resulting state — wiring a block-based callback
+    /// would require an extra dependency (`block2`) for no
+    /// behavioural gain over the polling shape that's already
+    /// established for the Settings → Permissions tab.
+    pub fn request_microphone() {
+        unsafe {
+            let cls = match AnyClass::get(c"AVCaptureDevice") {
+                Some(c) => c,
+                None => return,
+            };
+            let _: () = msg_send![
+                cls,
+                requestAccessForMediaType: AVMediaTypeAudio,
+                completionHandler: std::ptr::null::<std::ffi::c_void>()
+            ];
         }
     }
 }

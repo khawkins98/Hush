@@ -1,31 +1,53 @@
-<!--
-  First-run welcome modal. Static content (no fetches behind it),
-  shown once per install on the very first launch and dismissed via
-  the Got It button or Escape. The two permission sections deep-
-  link into System Settings on macOS via `open_macos_privacy_pane`;
-  on Linux / Windows that command is a no-op and the user can
-  still proceed cleanly.
+&lt;!--
+  First-run setup wizard (#511 — was a single-card permission
+  briefing pre-rewrite). Two-step shell:
 
-  A11y plumbing (closes #48):
-  - Backdrop carries `role="dialog"` + `aria-modal="true"` so
-    assistive tech treats it as a modal.
-  - Escape dismisses (window-level keydown, gated on `show`).
-  - Tab cycles within the modal — focus cannot escape to the page
-    behind the backdrop.
-  - Auto-focus lands on the first action button on open; on
-    dismiss focus restores to whatever was focused before.
+  - Step 1 (Welcome): privacy framing + audio pipeline diagram.
+  - Step 2 (Permissions): compact card rows for Microphone /
+    Input Monitoring / Screen Recording. Each row has a direct
+    Allow button that fires the OS prompt inline (mic + input
+    monitoring) or opens System Settings (screen recording, since
+    SCK can't be requested programmatically). Rows reflect live
+    grant status and dim with a ✓ once granted.
 
-  Extracted from `+page.svelte` (#156 follow-up) so the welcome
-  modal owns its own focus trap, keydown handler, and styles
-  rather than living as ~120 LOC of inline markup + script in the
-  parent page.
--->
+  Continue is never hard-blocked — Hush is usable without every
+  permission (no-mic = can't record but everything else still
+  works; no-IM = lose PTT but the toggle hotkey is fine; no-SCK
+  = system-audio-meeting-mode unavailable but mic-only meetings
+  + dictation still work). A soft warning surfaces under
+  Continue when the mic is ungranted because that's the one
+  permission the dictation hot path actually needs.
+
+  A11y plumbing (preserved from #48):
+  - `role="dialog"` + `aria-modal="true"` on the backdrop.
+  - Window-level Escape dismisses.
+  - Tab cycles within the card; auto-focus the first focusable
+    element on open and on each step transition.
+  - Focus restores to whatever was focused before the modal
+    opened on dismiss.
+
+  Polling cadence (#511): on open + every 1500 ms while step 2
+  is visible, refresh the permission diagnostic so the OS prompt
+  the user just clicked Allow on flips the row's UI without a
+  page refresh. Stops when the modal closes.
+--&gt;
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
+  import { onDestroy } from "svelte";
+
   import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
+  import type {
+    MacosPermissionDiagnostic,
+    PermissionStatus,
+  } from "./types";
 
   type Props = {
     show: boolean;
     onDismiss: () => void | Promise<void>;
+    /// Settings-deep-link fallback for users who can't grant
+    /// inline (e.g. they denied an earlier prompt and need to
+    /// flip the System Settings toggle manually). The backend
+    /// `open_macos_privacy_pane` call is a no-op on non-macOS.
     onOpenPrivacyPane: (
       target: "microphone" | "input-monitoring" | "screen-recording",
     ) => void | Promise<void>;
@@ -33,25 +55,117 @@
 
   let { show, onDismiss, onOpenPrivacyPane }: Props = $props();
 
-  // Modal element ref + the focused-element-before-modal stash. The
-  // ref backs the focus trap (so Tab cycles within the modal instead
-  // of escaping to the rest of the page); the stash lets us restore
-  // focus to whatever the user was on before the welcome appeared
-  // when they dismiss it.
+  type Step = "welcome" | "permissions";
+  let step = $state<Step>("welcome");
+
   let cardEl: HTMLElement | undefined = $state();
   let previousFocus: HTMLElement | null = null;
 
-  // Selector for the focusable elements we cycle between in the
-  // modal. Excludes elements with `tabindex="-1"` so the dialog
-  // wrapper itself (which is not focusable by users) does not enter
-  // the rotation.
+  // Live permission state. `null` while the first poll is in
+  // flight or the call failed (which `diagnose_macos_permissions`
+  // signals via NotApplicable on non-macOS, so a real `null` is
+  // genuinely "haven't checked yet" rather than "denied").
+  let diagnostic = $state<MacosPermissionDiagnostic | null>(null);
+  let pollHandle: ReturnType<typeof setInterval> | null = null;
+
+  // Per-row "Allow click in flight" guards so a user mashing the
+  // button doesn't fire two OS prompts back-to-back. Cleared once
+  // the resulting status is observed via the next poll tick.
+  let micRequesting = $state(false);
+  let imRequesting = $state(false);
+  let screenRequesting = $state(false);
+
   const FOCUSABLE_SELECTOR =
     'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-  // Trap Tab cycling inside the modal (closes #48 focus trap). Tab
-  // from the last focusable wraps to the first; Shift+Tab from the
-  // first wraps to the last. Escape dismisses (per WAI-ARIA guidance
-  // for `role="dialog"` `aria-modal="true"`).
+  async function pollDiagnostic() {
+    try {
+      const next = await invoke<MacosPermissionDiagnostic>(
+        "diagnose_macos_permissions",
+      );
+      diagnostic = next;
+    } catch (e) {
+      // Non-fatal — show whatever we last had. The next poll will
+      // try again. On non-macOS the IPC returns NotApplicable for
+      // every permission, which renders as already-granted-style
+      // ✓ states (Linux + Windows don't have per-app TCC for
+      // these, so "not applicable" reads as "doesn't apply, you're
+      // fine").
+      console.warn("[hush] diagnose_macos_permissions failed", e);
+    }
+  }
+
+  function statusFor(
+    key: "microphone" | "screenRecording" | "inputMonitoring",
+  ): PermissionStatus | null {
+    return diagnostic?.statuses[key] ?? null;
+  }
+
+  function isGranted(
+    key: "microphone" | "screenRecording" | "inputMonitoring",
+  ): boolean {
+    const s = statusFor(key);
+    // `not-applicable` (Linux / Windows) reads as granted in the
+    // wizard so the row shows the ✓ and the user moves on. The
+    // permissions don't apply on those platforms; nothing to grant.
+    return s === "granted" || s === "not-applicable";
+  }
+
+  async function requestMicrophone() {
+    if (micRequesting) return;
+    micRequesting = true;
+    try {
+      await invoke("request_microphone_permission");
+    } catch (e) {
+      console.warn("[hush] request_microphone_permission failed", e);
+    }
+    // The OS dialog is async — the user's response surfaces via
+    // the next poll tick; release the in-flight guard after a
+    // short window so a mistaken second-click doesn't re-fire.
+    setTimeout(() => {
+      micRequesting = false;
+      void pollDiagnostic();
+    }, 400);
+  }
+
+  async function requestInputMonitoring() {
+    if (imRequesting) return;
+    imRequesting = true;
+    try {
+      // Synchronous prompt: the IPC awaits the user's choice and
+      // returns the resulting bool. We don't actually need the
+      // return value — the diagnostic poll picks up the new
+      // state — but awaiting the IPC means the UI's spinner /
+      // disabled state stays visible during the prompt rather
+      // than flickering off after a tick.
+      await invoke<boolean>("request_input_monitoring_permission");
+    } catch (e) {
+      console.warn("[hush] request_input_monitoring_permission failed", e);
+    }
+    imRequesting = false;
+    void pollDiagnostic();
+  }
+
+  async function requestScreenRecording() {
+    if (screenRequesting) return;
+    screenRequesting = true;
+    try {
+      // SCK can't be requested programmatically — even the
+      // existing prime_screen_recording_permission only enrolls
+      // Hush in the System Settings list. The actual grant has
+      // to happen via the user toggling the row in the privacy
+      // pane. Prime first (so the row exists), then deep-link.
+      await invoke("prime_screen_recording_permission");
+      await onOpenPrivacyPane("screen-recording");
+    } catch (e) {
+      console.warn("[hush] request_screen_recording chain failed", e);
+    }
+    setTimeout(() => {
+      screenRequesting = false;
+      void pollDiagnostic();
+    }, 600);
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (!show) return;
     if (event.key === "Escape") {
@@ -75,125 +189,237 @@
   }
 
   async function dismiss() {
-    // Restore focus to whatever the user was on before the modal
-    // opened. Defensive: the previously-focused element may have
-    // been removed from the DOM, in which case `.focus()` is a no-op
-    // and the browser falls back to body, which is fine.
     previousFocus?.focus();
     previousFocus = null;
     await onDismiss();
   }
 
-  // Auto-focus the first focusable element when the modal opens, and
-  // remember what was focused before so we can restore it on
-  // dismiss. Runs whenever `show` flips — including back to false —
-  // but only acts on the open transition.
+  // Restart polling whenever the modal opens or the step
+  // changes. Welcome step doesn't need the poll (no permission
+  // rows on that step), so only run the interval on the
+  // permissions step. Stop the interval on close to avoid
+  // leaking a tick that fires after dismiss.
   $effect(() => {
     if (show && cardEl) {
       previousFocus =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      // Focus the first action button so a keyboard-only user lands
-      // on something useful (the "Open Microphone settings" button)
-      // rather than the dialog wrapper.
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      // Auto-focus the first focusable element on open / each
+      // step transition.
       const first = cardEl.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
       first?.focus();
     }
   });
+
+  $effect(() => {
+    // Tear down any prior interval on every reactivity tick — we
+    // recreate it below if the conditions still warrant polling.
+    if (pollHandle !== null) {
+      clearInterval(pollHandle);
+      pollHandle = null;
+    }
+    if (show && step === "permissions") {
+      void pollDiagnostic();
+      pollHandle = setInterval(() => void pollDiagnostic(), 1500);
+    }
+  });
+
+  onDestroy(() => {
+    if (pollHandle !== null) {
+      clearInterval(pollHandle);
+      pollHandle = null;
+    }
+  });
 </script>
 
-<!--
-  Window-level keydown so Escape works regardless of whether the
-  active element is inside the modal — the listener is gated on
-  `show`, so it is a no-op when the modal isn't visible.
--->
 <svelte:window onkeydown={handleKeydown} />
 
 {#if show}
-  <div class="first-run-backdrop" role="dialog" aria-modal="true" aria-labelledby="first-run-heading">
+  <div
+    class="first-run-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="first-run-heading"
+  >
     <article class="first-run-card" bind:this={cardEl} tabindex="-1">
-      <header>
-        <h2 id="first-run-heading">Welcome to Hush</h2>
-        <p class="first-run-tagline">
-          Local, private voice-to-text. Here's what to know about
-          permissions and privacy before you start.
-        </p>
-        <!--
-          Audio pipeline diagram (#427 Item 3). Sits as a visual
-          lead-in so a user immediately sees the chain — mic /
-          system audio → Whisper → transcript — before reading
-          the permissions sections below. The caption ("Audio
-          stays on your device end-to-end") seeds the privacy
-          framing the modal's footer reinforces.
-        -->
-        <AudioPipelineDiagram />
-      </header>
+      <!-- Step indicator. Two dots; the active one fills, the
+           inactive one stays outlined. Read aloud as "Step 1 of 2"
+           via aria-label so screen readers get the position too. -->
+      <div
+        class="wizard-steps"
+        role="progressbar"
+        aria-label={`Step ${step === "welcome" ? 1 : 2} of 2`}
+        aria-valuemin="1"
+        aria-valuemax="2"
+        aria-valuenow={step === "welcome" ? 1 : 2}
+      >
+        <span class="wizard-step-dot" class:active={step === "welcome"}></span>
+        <span class="wizard-step-dot" class:active={step === "permissions"}></span>
+      </div>
 
-      <section class="first-run-section">
-        <h3>Microphone</h3>
-        <p>
-          Hush records audio only while you've explicitly started a
-          dictation session. The first time you record, your OS will
-          ask you to grant Hush microphone access. Without it, the
-          dictation pipeline can't capture what you say.
-        </p>
-        <button class="ghost" onclick={() => onOpenPrivacyPane("microphone")}>
-          Open Microphone settings
-        </button>
-      </section>
+      {#if step === "welcome"}
+        <header>
+          <h2 id="first-run-heading">Welcome to Hush</h2>
+          <p class="first-run-tagline">
+            Local, private voice-to-text. Audio stays on your machine
+            end-to-end.
+          </p>
+          <AudioPipelineDiagram />
+        </header>
 
-      <section class="first-run-section">
-        <h3>Input Monitoring (macOS — push-to-talk)</h3>
-        <p>
-          Push-to-talk (hold <kbd>Right ⌘</kbd> while you speak) is
-          <strong>on by default</strong>; macOS will prompt for
-          Input Monitoring the first time the listener spawns. If
-          you'd rather not, disable it in Settings → General →
-          Hotkeys. The toggle hotkey
-          (<kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>) and the
-          on-screen Start button work either way.
+        <p class="welcome-body">
+          Hush captures your microphone for dictation and (on macOS)
+          your call's system audio for meeting transcription. Both
+          stay on your device — no upload, no account, no telemetry.
+          The next step is granting the OS permissions Hush needs to
+          do its job.
         </p>
-        <button class="ghost" onclick={() => onOpenPrivacyPane("input-monitoring")}>
-          Open Input Monitoring settings
-        </button>
-      </section>
 
-      <!--
-        Screen Recording — required for Meeting Mode (#269). Without
-        this section, users hit an unexpected TCC prompt the first
-        time they try Meeting Mode and many reflexively dismiss it,
-        silently breaking system-audio capture with no clear error.
-        The copy explicitly addresses the counterintuitive name —
-        macOS bundles system-audio capture under "Screen Recording"
-        even though Hush captures no pixels.
-      -->
-      <section class="first-run-section">
-        <h3>Screen Recording (macOS — system audio for Meeting Mode)</h3>
-        <p>
-          Meeting Mode records the other side of a Zoom / Teams /
-          Meet call alongside your microphone. macOS bundles
-          system-audio capture under the <em>Screen Recording</em>
-          permission category — despite the name, Hush
-          <strong>never captures pixels</strong>; only audio. The
-          prompt fires the first time you start a Meeting Mode
-          session with system audio enabled, or when you click
-          <em>Grant in Settings…</em> on the Permissions tab.
-          Microphone-only Meeting Mode sessions (and dictation)
-          don't need this — only the system-audio capture path
-          does.
-        </p>
-        <button class="ghost" onclick={() => onOpenPrivacyPane("screen-recording")}>
-          Open Screen Recording settings
-        </button>
-      </section>
+        <footer class="first-run-footer">
+          <p class="first-run-meta">
+            Hush makes no other network requests except when you
+            click Download on a model card.
+          </p>
+          <div class="footer-actions">
+            <button class="ghost" onclick={dismiss}>Skip setup</button>
+            <button
+              class="primary"
+              data-testid="wizard-continue-welcome"
+              onclick={() => (step = "permissions")}
+            >
+              Continue
+            </button>
+          </div>
+        </footer>
+      {:else}
+        <header>
+          <h2 id="first-run-heading">Permissions</h2>
+          <p class="first-run-tagline">
+            Three OS permissions Hush asks for. You can skip any of
+            them — Hush stays usable, just with the matching feature
+            disabled.
+          </p>
+        </header>
 
-      <footer class="first-run-footer">
-        <p class="first-run-meta">
-          Hush makes no other network requests except when you click
-          Download on a model card. No telemetry, no cloud transcription,
-          no analytics.
-        </p>
-        <button class="primary" onclick={dismiss}>Got it</button>
-      </footer>
+        <ul class="wizard-perm-list" aria-label="Permissions">
+          <li
+            class="wizard-perm-row"
+            class:granted={isGranted("microphone")}
+            data-testid="wizard-perm-microphone"
+          >
+            <div class="wizard-perm-icon" aria-hidden="true">🎙</div>
+            <div class="wizard-perm-text">
+              <span class="wizard-perm-title">Microphone</span>
+              <span class="wizard-perm-why">
+                Required to record your voice for dictation and
+                meetings.
+              </span>
+            </div>
+            {#if isGranted("microphone")}
+              <span class="wizard-perm-badge" aria-label="Granted">✓</span>
+            {:else}
+              <button
+                class="primary wizard-allow-btn"
+                disabled={micRequesting}
+                data-testid="wizard-allow-microphone"
+                onclick={requestMicrophone}
+              >
+                {micRequesting ? "Asking…" : "Allow"}
+              </button>
+            {/if}
+          </li>
+
+          <li
+            class="wizard-perm-row"
+            class:granted={isGranted("inputMonitoring")}
+            class:dimmed={!isGranted("microphone")}
+            data-testid="wizard-perm-input-monitoring"
+          >
+            <div class="wizard-perm-icon" aria-hidden="true">⌨️</div>
+            <div class="wizard-perm-text">
+              <span class="wizard-perm-title">Input Monitoring</span>
+              <span class="wizard-perm-why">
+                Required for push-to-talk to detect the hotkey while
+                you're in another app.
+              </span>
+            </div>
+            {#if isGranted("inputMonitoring")}
+              <span class="wizard-perm-badge" aria-label="Granted">✓</span>
+            {:else}
+              <button
+                class="primary wizard-allow-btn"
+                disabled={imRequesting || !isGranted("microphone")}
+                data-testid="wizard-allow-input-monitoring"
+                title={!isGranted("microphone")
+                  ? "Grant Microphone first"
+                  : undefined}
+                onclick={requestInputMonitoring}
+              >
+                {imRequesting ? "Asking…" : "Allow"}
+              </button>
+            {/if}
+          </li>
+
+          <li
+            class="wizard-perm-row"
+            class:granted={isGranted("screenRecording")}
+            data-testid="wizard-perm-screen-recording"
+          >
+            <div class="wizard-perm-icon" aria-hidden="true">🖥</div>
+            <div class="wizard-perm-text">
+              <span class="wizard-perm-title">Screen Recording</span>
+              <span class="wizard-perm-why">
+                Optional — only used to capture system audio for
+                Meeting Mode. Hush never captures pixels. Skip if you
+                won't use meetings.
+              </span>
+            </div>
+            {#if isGranted("screenRecording")}
+              <span class="wizard-perm-badge" aria-label="Granted">✓</span>
+            {:else}
+              <button
+                class="ghost wizard-allow-btn"
+                disabled={screenRequesting}
+                data-testid="wizard-allow-screen-recording"
+                onclick={requestScreenRecording}
+              >
+                {screenRequesting ? "Opening…" : "Open Settings"}
+              </button>
+            {/if}
+          </li>
+        </ul>
+
+        <footer class="first-run-footer">
+          <p class="first-run-meta">
+            {#if !isGranted("microphone")}
+              <strong>Heads up:</strong> dictation needs Microphone
+              access — without it, the Record button stays disabled.
+              You can grant it now or later from Settings →
+              Permissions.
+            {:else}
+              No telemetry, no cloud transcription, no analytics.
+              Settings → Permissions has detailed status if you ever
+              need to revisit.
+            {/if}
+          </p>
+          <div class="footer-actions">
+            <button
+              class="ghost"
+              onclick={() => (step = "welcome")}
+            >
+              Back
+            </button>
+            <button
+              class="primary"
+              data-testid="wizard-finish"
+              onclick={dismiss}
+            >
+              Finish
+            </button>
+          </div>
+        </footer>
+      {/if}
     </article>
   </div>
 {/if}
@@ -214,7 +440,7 @@
   background-color: #ffffff;
   border-radius: 12px;
   padding: 1.5rem 1.75rem;
-  max-width: 30rem;
+  max-width: 32rem;
   width: 100%;
   max-height: calc(100vh - 3rem);
   overflow-y: auto;
@@ -229,36 +455,107 @@
 }
 
 .first-run-tagline {
-  margin: 0 0 1.25rem;
+  margin: 0 0 1rem;
   color: #555;
   font-size: 0.95rem;
 }
 
-.first-run-section {
-  margin-bottom: 1.25rem;
-  padding-bottom: 1.25rem;
-  /* Walkthrough round flagged the previous `#eee` divider as
-     barely visible on the white card — easy to miss the section
-     break. Slightly stronger grey reads as a deliberate boundary
-     without turning into a hard rule. */
-  border-bottom: 1px solid #d8d8d8;
+/* Step indicator. Two dots; the active one fills with the
+   accent colour, the inactive one stays outlined. Quiet visual
+   weight so the focus stays on the step content below. */
+.wizard-steps {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  margin: 0 0 1rem;
+}
+.wizard-step-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background-color: transparent;
+  border: 1.5px solid var(--accent, #7c6ff7);
+  transition: background-color 0.15s;
+}
+.wizard-step-dot.active {
+  background-color: var(--accent, #7c6ff7);
 }
 
-.first-run-section:last-of-type {
-  border-bottom: none;
+.welcome-body {
+  margin: 0 0 1rem;
+  color: #444;
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
-.first-run-section h3 {
-  margin: 0 0 0.35rem;
-  font-size: 1rem;
+/* Compact permission rows (#511). Three columns: icon, text
+   block, action. Granted rows dim slightly + show a ✓ badge
+   instead of the Allow button. The dimmed class on Input
+   Monitoring drives the "ungrantable until Mic is granted"
+   sequencing — the row is still visible, the button is just
+   disabled. */
+.wizard-perm-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.wizard-perm-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.7rem 0.9rem;
+  background-color: #f7f7f8;
+  border: 1px solid #e1e1e6;
+  border-radius: 10px;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+.wizard-perm-row.granted {
+  opacity: 0.7;
+  background-color: #f0f7f1;
+  border-color: #cfe5d3;
+}
+.wizard-perm-row.dimmed {
+  opacity: 0.55;
+}
+.wizard-perm-icon {
+  font-size: 1.4rem;
+  text-align: center;
+  user-select: none;
+}
+.wizard-perm-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.wizard-perm-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+.wizard-perm-why {
+  font-size: 0.82rem;
+  color: #5a5a5a;
+  line-height: 1.4;
+}
+.wizard-perm-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background-color: #2a6b3c;
+  color: white;
+  font-size: 0.95rem;
   font-weight: 600;
 }
-
-.first-run-section p {
-  margin: 0 0 0.6rem;
-  font-size: 0.9rem;
-  color: #444;
-  line-height: 1.5;
+.wizard-allow-btn {
+  white-space: nowrap;
 }
 
 .first-run-footer {
@@ -269,7 +566,6 @@
   justify-content: space-between;
   flex-wrap: wrap;
 }
-
 .first-run-meta {
   flex: 1;
   margin: 0;
@@ -277,16 +573,16 @@
   color: #6a6a6a;
   line-height: 1.45;
 }
+.footer-actions {
+  display: flex;
+  gap: 0.5rem;
+}
 
-/* Mirrors the parent page's base button + .ghost / .primary
-   variants. Svelte's scoped styles don't inherit the page-level
-   rules into this component, so we duplicate the visible
-   attributes here. Keep in sync with `+page.svelte`. */
 button {
   border-radius: 8px;
   border: 1px solid #d1d1d1;
-  padding: 0.7em 1.2em;
-  font-size: 1em;
+  padding: 0.6em 1.1em;
+  font-size: 0.9rem;
   font-family: inherit;
   color: #0f0f0f;
   background-color: #ffffff;
@@ -296,34 +592,33 @@ button {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  transition: border-color 0.15s, background-color 0.15s;
+  transition: border-color 0.15s, background-color 0.15s, opacity 0.15s;
 }
-
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 button:hover:not(:disabled) {
   border-color: var(--accent-hover);
 }
-
 button.ghost {
-  padding: 0.3em 0.75em;
-  font-size: 0.8rem;
+  padding: 0.45em 0.85em;
+  font-size: 0.85rem;
   font-weight: 500;
   background-color: transparent;
   border: 1px solid #d1d1d1;
 }
-
 button.ghost:hover:not(:disabled) {
   background-color: #f0f0f0;
 }
-
 button.primary {
   background-color: var(--accent);
   color: white;
   border-color: var(--accent);
 }
-
 button.primary:hover:not(:disabled) {
-  background-color: #4a6cd0;
-  border-color: #4a6cd0;
+  background-color: var(--accent-hover, #5c4fd4);
+  border-color: var(--accent-hover, #5c4fd4);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -336,12 +631,23 @@ button.primary:hover:not(:disabled) {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   }
   .first-run-tagline,
-  .first-run-section p,
+  .welcome-body,
   .first-run-meta {
     color: #c0c0c0;
   }
-  .first-run-section {
-    border-bottom-color: #2e2e2e;
+  .wizard-perm-row {
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  .wizard-perm-row.granted {
+    background-color: #1f3a25;
+    border-color: #2c4a35;
+  }
+  .wizard-perm-title {
+    color: #f0f0f0;
+  }
+  .wizard-perm-why {
+    color: #b0b0b0;
   }
   button {
     color: #f0f0f0;
