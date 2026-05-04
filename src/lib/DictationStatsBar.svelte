@@ -93,18 +93,18 @@
   .dictation-stats {
     margin: 0 0 1.25rem;
     padding: 0.85rem 1rem;
-    background-color: #f8f9fc;
-    border: 1px solid #e1e1e6;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
     border-radius: 10px;
   }
   .stats-hero {
     margin: 0 0 0.75rem;
     font-size: 0.95rem;
-    color: #333;
+    color: var(--text-primary);
     line-height: 1.4;
   }
   .stats-hero strong {
-    color: #1a1a1a;
+    color: var(--text-primary);
     font-weight: 600;
   }
   .stats-tiles {
@@ -120,52 +120,41 @@
     flex-direction: column;
     gap: 0.1rem;
     padding: 0.5rem 0.65rem;
-    background-color: white;
-    border: 1px solid #e7e7ec;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
     border-radius: 6px;
   }
   .tile-value {
     font-size: 1.15rem;
     font-weight: 600;
-    color: #1a1a1a;
+    color: var(--text-primary);
     line-height: 1.15;
   }
   .tile-label {
     font-size: 0.75rem;
     font-weight: 600;
-    color: #666;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     margin-top: 0.05rem;
   }
   .tile-sub {
     font-size: 0.72rem;
-    color: #888;
+    color: var(--text-muted);
     line-height: 1.3;
   }
   @media (prefers-color-scheme: dark) {
-    .dictation-stats {
-      background-color: #1f1f22;
-      border-color: #38383b;
-    }
-    .stats-hero {
+    :root:not([data-theme="light"]) .stats-hero {
       color: #d8d8d8;
     }
-    .stats-hero strong {
-      color: #f0f0f0;
-    }
-    .stats-tile {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-    }
-    .tile-value {
-      color: #f0f0f0;
-    }
-    .tile-label {
+    :root:not([data-theme="light"]) .tile-label {
       color: #a8a8a8;
     }
-    .tile-sub {
-      color: #888;
-    }
+  }
+  :root[data-theme="dark"] .stats-hero {
+    color: #d8d8d8;
+  }
+  :root[data-theme="dark"] .tile-label {
+    color: #a8a8a8;
   }
 </style>

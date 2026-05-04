@@ -85,9 +85,9 @@
     color: #2a6b3c;
   }
   .meeting-copy-notice[data-kind="failure"] {
-    background-color: #fff7e6;
-    border-color: #ffd591;
-    color: #8a5a00;
+    background-color: var(--warning-bg);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
   }
   .meeting-copy-notice-icon {
     font-weight: 700;
@@ -117,16 +117,16 @@
     opacity: 1;
   }
   @media (prefers-color-scheme: dark) {
-    .meeting-copy-notice[data-kind="success"] {
+    :root:not([data-theme="light"]) .meeting-copy-notice[data-kind="success"] {
       background-color: rgba(46, 170, 83, 0.15);
       border-color: #2a6b3c;
       color: #b6e5c5;
     }
-    .meeting-copy-notice[data-kind="failure"] {
-      background-color: rgba(255, 193, 7, 0.12);
-      border-color: #6b5300;
-      color: #ffd591;
-    }
+  }
+  :root[data-theme="dark"] .meeting-copy-notice[data-kind="success"] {
+    background-color: rgba(46, 170, 83, 0.15);
+    border-color: #2a6b3c;
+    color: #b6e5c5;
   }
 </style>
 

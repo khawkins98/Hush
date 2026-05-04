@@ -205,7 +205,7 @@
   cursor: pointer;
   font-weight: 500;
   font-size: 0.9rem;
-  color: #444;
+  color: var(--text-secondary);
   user-select: none;
 }
 .macos-diag-why[open] summary {
@@ -214,28 +214,46 @@
 
 .macos-diag-doc-pointer {
   font-size: 0.85rem;
-  color: #555;
+  color: var(--text-secondary);
 }
 
 @media (prefers-color-scheme: dark) {
-  .macos-diagnostic details {
+  :root:not([data-theme="light"]) .macos-diagnostic details {
     border-color: #3a3a3a;
     background-color: rgba(255, 255, 255, 0.03);
   }
-  .macos-diag-bundle code,
-  .macos-diag-bundle-list code {
+  :root:not([data-theme="light"]) .macos-diag-bundle code,
+  :root:not([data-theme="light"]) .macos-diag-bundle-list code {
     background-color: rgba(255, 255, 255, 0.08);
   }
-  .macos-diag-doc-pointer {
+  :root:not([data-theme="light"]) .macos-diag-doc-pointer {
     color: #aaa;
   }
-  .macos-diag-why {
+  :root:not([data-theme="light"]) .macos-diag-why {
     border-color: #3a3a3a;
     background-color: rgba(255, 255, 255, 0.03);
   }
-  .macos-diag-why summary {
+  :root:not([data-theme="light"]) .macos-diag-why summary {
     color: #ccc;
   }
+}
+:root[data-theme="dark"] .macos-diagnostic details {
+  border-color: #3a3a3a;
+  background-color: rgba(255, 255, 255, 0.03);
+}
+:root[data-theme="dark"] .macos-diag-bundle code,
+:root[data-theme="dark"] .macos-diag-bundle-list code {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .macos-diag-doc-pointer {
+  color: #aaa;
+}
+:root[data-theme="dark"] .macos-diag-why {
+  border-color: #3a3a3a;
+  background-color: rgba(255, 255, 255, 0.03);
+}
+:root[data-theme="dark"] .macos-diag-why summary {
+  color: #ccc;
 }
 
 button {
@@ -244,8 +262,8 @@ button {
   padding: 0.7em 1.2em;
   font-size: 1em;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   cursor: pointer;
   font-weight: 600;
   display: inline-flex;
@@ -268,33 +286,46 @@ button.danger {
   /* Quiet destructive — outlined red, not filled — so it reads
      as "this is the last resort" rather than "click me." */
   background-color: transparent;
-  color: #b03030;
-  border-color: #e1b8b8;
+  color: var(--danger);
+  border-color: var(--danger-border);
   font-weight: 500;
 }
 
 button.danger:hover:not(:disabled) {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
 }
 
 @media (prefers-color-scheme: dark) {
-  button {
-    color: #f0f0f0;
+  :root:not([data-theme="light"]) button {
     background-color: #2a2a2a;
     border-color: #3a3a3a;
   }
-  button:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button:hover:not(:disabled) {
     border-color: var(--accent);
   }
-  button.danger {
+  :root:not([data-theme="light"]) button.danger {
     background-color: transparent;
     color: #ff9090;
-    border-color: #5a2020;
   }
-  button.danger:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.danger:hover:not(:disabled) {
     background-color: #3a1818;
     border-color: var(--danger);
   }
+}
+:root[data-theme="dark"] button {
+  background-color: #2a2a2a;
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+:root[data-theme="dark"] button.danger {
+  background-color: transparent;
+  color: #ff9090;
+}
+:root[data-theme="dark"] button.danger:hover:not(:disabled) {
+  background-color: #3a1818;
+  border-color: var(--danger);
 }
 </style>

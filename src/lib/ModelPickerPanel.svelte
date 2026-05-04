@@ -234,7 +234,7 @@
 .models {
   margin-top: 2.5rem;
   text-align: left;
-  border-left: 3px solid #e1e1e1;
+  border-left: 3px solid var(--border);
   padding-left: 1rem;
   padding-bottom: 0.25rem;
 }
@@ -255,7 +255,7 @@
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .panel-tag {
@@ -267,8 +267,8 @@
   border-radius: 5px;
   font-size: 0.75em;
   font-weight: 700;
-  background-color: #e8e8e8;
-  color: #444;
+  background-color: var(--bg-sidebar);
+  color: var(--text-secondary);
   margin-right: 0.5rem;
 }
 .panel-tag-models {
@@ -278,12 +278,12 @@
 
 button {
   border-radius: 8px;
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border-input);
   padding: 0.7em 1.2em;
   font-size: 1em;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   cursor: pointer;
   font-weight: 600;
   display: inline-flex;
@@ -307,25 +307,25 @@ button.ghost {
   font-size: 0.8rem;
   font-weight: 500;
   background-color: transparent;
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border-input);
 }
 
 button.ghost:hover:not(:disabled) {
-  background-color: #f0f0f0;
+  background-color: var(--bg-app);
 }
 
 button.ghost.danger {
-  color: #b03030;
-  border-color: #e1b8b8;
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
 
 button.ghost.danger:hover:not(:disabled) {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
 }
 /* Confirming state — armed first click, awaiting the second one. */
 button.ghost.danger.confirming {
-  background-color: #fbeaea;
+  background-color: var(--danger-bg);
   border-color: var(--danger);
   color: #8a0000;
   font-weight: 600;
@@ -333,20 +333,20 @@ button.ghost.danger.confirming {
 
 button.ghost.primary {
   border-color: var(--accent);
-  color: #2c3e8f;
+  color: var(--info-text);
 }
 
 button.ghost.primary:hover:not(:disabled) {
-  background-color: #eef2ff;
+  background-color: var(--info-bg);
   border-color: #4a6cd0;
 }
 
 .loading-skeleton {
   margin: 0.5rem 0;
   padding: 1rem;
-  background-color: #fafafa;
+  background-color: var(--bg-surface);
   border-radius: 6px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 0.9rem;
   text-align: center;
   font-style: italic;
@@ -355,12 +355,13 @@ button.ghost.primary:hover:not(:disabled) {
 .hint-prose {
   margin: 0 0 1rem;
   font-size: 0.85rem;
-  color: #555;
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
 .hint-prose code {
-  background-color: #eef2ff;
+  background-color: var(--info-bg);
+  color: var(--info-text);
   padding: 0.05em 0.4em;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -368,7 +369,8 @@ button.ghost.primary:hover:not(:disabled) {
 }
 
 .path-hint {
-  background-color: #eef2ff;
+  background-color: var(--info-bg);
+  color: var(--info-text);
   padding: 0.05em 0.4em;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -395,9 +397,9 @@ button.ghost.primary:hover:not(:disabled) {
 }
 
 .notice-warn {
-  background-color: #fef3c7;
-  border-color: #fcd34d;
-  color: #92400e;
+  background-color: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-text);
 }
 
 .model-grid {
@@ -411,8 +413,8 @@ button.ghost.primary:hover:not(:disabled) {
 
 .model-card {
   border-radius: 12px;
-  background-color: white;
-  border: 1px solid #e1e1e1;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
   transition: border-color 0.15s, background-color 0.15s;
 }
 
@@ -464,8 +466,8 @@ button.ghost.primary:hover:not(:disabled) {
   font-weight: 500;
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
-  background-color: #c7d2fe;
-  color: #2c3e8f;
+  background-color: var(--info-border);
+  color: var(--info-text);
 }
 
 .model-card-current {
@@ -479,7 +481,7 @@ button.ghost.primary:hover:not(:disabled) {
   gap: 1rem;
   margin: 0.5rem 0 0.4rem;
   font-size: 0.8rem;
-  color: #555;
+  color: var(--text-muted);
   align-items: center;
 }
 
@@ -498,7 +500,7 @@ button.ghost.primary:hover:not(:disabled) {
   width: 5px;
   height: 9px;
   border-radius: 1px;
-  background-color: #d8d8d8;
+  background-color: var(--border-input);
   display: inline-block;
 }
 
@@ -509,7 +511,7 @@ button.ghost.primary:hover:not(:disabled) {
 .model-desc {
   margin: 0;
   font-size: 0.85rem;
-  color: #444;
+  color: var(--text-secondary);
   line-height: 1.45;
 }
 
@@ -525,7 +527,7 @@ button.ghost.primary:hover:not(:disabled) {
   flex: 1;
   min-width: 6rem;
   height: 6px;
-  background-color: #e8e8e8;
+  background-color: var(--bg-sidebar);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -538,7 +540,7 @@ button.ghost.primary:hover:not(:disabled) {
 
 .download-progress-text {
   font-size: 0.8rem;
-  color: #555;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -547,7 +549,7 @@ button.ghost.primary:hover:not(:disabled) {
   flex: 1;
   margin: 0;
   padding: 0.4rem 0.6rem;
-  background-color: #fee;
+  background-color: var(--danger-bg);
   border: 1px solid var(--danger);
   border-radius: 4px;
   color: #8a0000;
@@ -555,107 +557,95 @@ button.ghost.primary:hover:not(:disabled) {
 }
 
 @media (prefers-color-scheme: dark) {
-  button {
-    color: #f0f0f0;
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  button:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button:hover:not(:disabled) {
     border-color: var(--accent);
   }
-  button.ghost {
-    border-color: #3a3a3a;
-    color: #f0f0f0;
-  }
-  button.ghost:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
     background-color: #353535;
   }
-  button.ghost.danger {
+  :root:not([data-theme="light"]) button.ghost.danger {
     color: #ff9090;
-    border-color: #5a2020;
   }
-  button.ghost.danger:hover:not(:disabled) {
+  :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
     border-color: var(--danger);
   }
-  button.ghost.danger.confirming {
+  :root:not([data-theme="light"]) button.ghost.danger.confirming {
     background-color: #3a1818;
     border-color: var(--danger);
     color: #ffb0b0;
   }
-  button.ghost.primary {
-    border-color: var(--accent);
-    color: #c0d0ff;
-  }
-  button.ghost.primary:hover:not(:disabled) {
-    background-color: #1e2a4a;
-  }
-  .history-header h2 {
-    color: #d8d8d8;
-  }
-  .restart-notice {
+  :root:not([data-theme="light"]) .restart-notice {
     background-color: #1a3a1a;
     border-color: #2a5a2a;
     color: #c8e8c8;
   }
-  .notice-loaded {
+  :root:not([data-theme="light"]) .notice-loaded {
     background-color: #14532d;
     border-color: #166534;
     color: #bbf7d0;
   }
-  .notice-warn {
-    background-color: #422006;
-    border-color: #92400e;
-    color: #fde68a;
-  }
-  .hint-prose {
-    color: #aaa;
-  }
-  .hint-prose code {
-    background-color: #1e2a4a;
-    color: #c0d0ff;
-  }
-  .path-hint {
-    background-color: #1e2a4a;
-    color: #c0d0ff;
-  }
-  .model-card {
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  .model-card.selected {
+  :root:not([data-theme="light"]) .model-card.selected {
     background-color: #2a3050;
     border-color: var(--accent);
   }
-  .model-stats {
-    color: #aaa;
-  }
-  .model-desc {
-    color: #d0d0d0;
-  }
-  .bars span {
-    background-color: #3a3a3a;
-  }
-  .bars span.on {
+  :root:not([data-theme="light"]) .bars span.on {
     background-color: #8aa0ff;
   }
-  .badge {
-    background-color: #3a4a7a;
-    color: #d0d8ff;
-  }
-  .download-progress {
+  :root:not([data-theme="light"]) .download-progress {
     background-color: #3a3a3a;
   }
-  .download-progress-bar {
+  :root:not([data-theme="light"]) .download-progress-bar {
     background-color: #8aa0ff;
   }
-  .download-progress-text {
-    color: #aaa;
-  }
-  .model-failure {
+  :root:not([data-theme="light"]) .model-failure {
     background-color: #4a1a1a;
-    border-color: var(--danger);
     color: #ffd0d0;
   }
+}
+:root[data-theme="dark"] button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+:root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+  background-color: #353535;
+}
+:root[data-theme="dark"] button.ghost.danger {
+  color: #ff9090;
+}
+:root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
+  background-color: #3a1818;
+  border-color: var(--danger);
+}
+:root[data-theme="dark"] button.ghost.danger.confirming {
+  background-color: #3a1818;
+  border-color: var(--danger);
+  color: #ffb0b0;
+}
+:root[data-theme="dark"] .restart-notice {
+  background-color: #1a3a1a;
+  border-color: #2a5a2a;
+  color: #c8e8c8;
+}
+:root[data-theme="dark"] .notice-loaded {
+  background-color: #14532d;
+  border-color: #166534;
+  color: #bbf7d0;
+}
+:root[data-theme="dark"] .model-card.selected {
+  background-color: #2a3050;
+  border-color: var(--accent);
+}
+:root[data-theme="dark"] .bars span.on {
+  background-color: #8aa0ff;
+}
+:root[data-theme="dark"] .download-progress {
+  background-color: #3a3a3a;
+}
+:root[data-theme="dark"] .download-progress-bar {
+  background-color: #8aa0ff;
+}
+:root[data-theme="dark"] .model-failure {
+  background-color: #4a1a1a;
+  color: #ffd0d0;
 }
 </style>
