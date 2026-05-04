@@ -681,6 +681,7 @@
     border-radius: 50%;
     background-color: var(--text-muted);
     flex-shrink: 0;
+    margin-top: 0.2rem;
   }
   .record-mode-badge[data-health="stale"] .record-mode-badge-dot {
     background-color: #e0a020;

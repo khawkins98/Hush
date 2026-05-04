@@ -2,8 +2,10 @@
   Settings → Debug tab (#532).
 
   Two sections:
-  1. Live backend log console — a scrolling view of the Rust
-     `tracing` event stream, rendered by `DebugConsole.svelte`.
+  1. Debug window launcher — opens the floating debug-console
+     palette (the "debug" Tauri window) via `open_debug_window`.
+     The live log is displayed there so it can float above the
+     main app while the user clicks around.
   2. Issue report generator — collects version, OS, and the last
      50 log entries into a pre-formatted block for filing a GitHub
      issue. The block is copyable and there's a direct "Open issue"
@@ -16,7 +18,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { version as osVersion } from "@tauri-apps/plugin-os";
   import { onMount } from "svelte";
-  import DebugConsole from "./DebugConsole.svelte";
   import "./settings-tab.css";
 
   type LogEntry = {
@@ -106,10 +107,16 @@
 <section class="settings-group" aria-labelledby="debug-log-heading">
   <h2 id="debug-log-heading" class="group-heading">Backend log</h2>
   <p class="settings-row-note">
-    Live view of the Rust backend's <code>tracing</code> log stream.
-    Hover to pause auto-scroll.
+    Open the floating debug console to watch the live Rust
+    <code>tracing</code> log stream while clicking around the app.
   </p>
-  <DebugConsole />
+  <button
+    type="button"
+    class="ghost"
+    onclick={() => invoke("open_debug_window")}
+  >
+    Open Debug Console ↗
+  </button>
 </section>
 
 <section class="settings-group" aria-labelledby="debug-report-heading">
@@ -157,14 +164,14 @@
   }
 
   .report-block {
-    background: var(--bg-code, #1a1a1a);
+    background: #141414;
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.75rem;
     font-family: "SF Mono", "Fira Code", monospace;
     font-size: 0.72rem;
     line-height: 1.5;
-    color: var(--text-primary);
+    color: #e6edf3;
     white-space: pre-wrap;
     word-break: break-all;
     overflow-y: auto;

@@ -24,7 +24,6 @@
   import { onDestroy, onMount } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
 
-  import AboutTab from "./AboutTab.svelte";
   import DebugTab from "./DebugTab.svelte";
   import GeneralTab from "./GeneralTab.svelte";
   import MeetingTab from "./MeetingTab.svelte";
@@ -55,7 +54,6 @@
     | "replacements"
     | "meeting"
     | "permissions"
-    | "about"
     | "debug";
 
   type Props = {
@@ -95,7 +93,6 @@
     { key: "replacements", label: "Replacements", testId: "settings-tab-replacements" },
     { key: "meeting", label: "Meeting", testId: "settings-tab-meeting" },
     { key: "permissions", label: "Permissions", testId: "settings-tab-permissions" },
-    { key: "about", label: "About", testId: "settings-tab-about" },
     { key: "debug", label: "Debug", testId: "settings-tab-debug" },
   ];
 
@@ -273,7 +270,6 @@
         target === "replacements" ||
         target === "meeting" ||
         target === "permissions" ||
-        target === "about" ||
         (target === "debug" && debugConsoleEnabled)
       ) {
         activeTab = target;
@@ -336,8 +332,6 @@
       <MeetingTab />
     {:else if activeTab === "permissions"}
       <PermissionsTab />
-    {:else if activeTab === "about"}
-      <AboutTab />
     {:else if activeTab === "debug"}
       <DebugTab />
     {/if}

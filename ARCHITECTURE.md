@@ -18,28 +18,30 @@ Primary target: **macOS 26+ on Apple Silicon.** Linux and Windows compile cleanl
 
 ---
 
-## Three windows
+## Three windows (two production + two developer/overlay)
 
 ```
-┌─────────────────────┐    ┌─────────────────────┐    ┌──────────────┐
-│  main               │    │  settings           │    │  hud         │
-│  ─────              │    │  ─────              │    │  ───         │
-│  Sidebar nav:       │    │  Model picker       │    │  Borderless  │
-│   • Dictation       │    │  Vocabulary         │    │  transparent │
-│   • Meetings        │    │  Replacements       │    │  always-on-  │
-│   • History         │    │  TCC diagnostic     │    │  top pill    │
-│  Loads /            │    │  PTT editor         │    │  Loads /hud  │
-│                     │    │  Loads /settings    │    │              │
-└─────────────────────┘    └─────────────────────┘    └──────────────┘
+┌─────────────────────┐    ┌──────────────┐    ┌───────────────┐    ┌───────────────┐
+│  main               │    │  hud         │    │  menu-bar     │    │  debug        │
+│  ─────              │    │  ───         │    │  ─────────    │    │  ─────        │
+│  Sidebar nav:       │    │  Borderless  │    │  Compact      │    │  Always-on-   │
+│   • Dictation       │    │  transparent │    │  popover for  │    │  top palette  │
+│   • History         │    │  always-on-  │    │  start/stop + │    │  showing live │
+│   • Settings        │    │  top pill    │    │  "Open Hush"  │    │  tracing log  │
+│   • About           │    │  Loads /hud  │    │  Loads        │    │  Loads /debug │
+│  Loads /            │    │              │    │  /menu-bar    │    │  (dev only)   │
+└─────────────────────┘    └──────────────┘    └───────────────┘    └───────────────┘
 ```
 
-Each window has its own capability file in `src-tauri/capabilities/` (`default.json`, `settings.json`, `hud.json`). Adding a permission to a window is deliberate — every grant widens that window's blast radius.
+Each window has its own capability file in `src-tauri/capabilities/` (`default.json`, `hud.json`, `menu-bar.json`, `debug.json`). Adding a permission to a window is deliberate — every grant widens that window's blast radius.
 
-**Lifecycle.** `main` and `settings` intercept `WindowEvent::CloseRequested` and call `window.hide()` instead of letting Tauri destroy. The tray icon stays alive; ⌘Q (or tray Quit) actually exits. The `hud` uses the standard show/hide pair.
+**Settings is inline** (since #479). The standalone settings window was merged into the main window as a sidebar panel. Settings is no longer a separate `tauri::WebviewWindow` — it's a Svelte component that renders inside `routes/+page.svelte`. The native menu's "Settings…" and tray's "Open Settings…" emit `settings:goto-tab` which the main page handles.
+
+**Lifecycle.** `main` intercepts `WindowEvent::CloseRequested` and calls `window.hide()` instead of letting Tauri destroy. The tray icon stays alive; ⌘Q (or tray Quit) actually exits. The `hud`, `menu-bar`, and `debug` windows use the standard show/hide pair.
 
 **Background launch.** The autostart plugin registers Hush with `--background`; on login the setup hook hides the main window and switches activation policy to `Accessory` (no Dock icon). User-initiated launches don't pass the flag and show the main window normally.
 
-**Native menu bar (macOS).** `src-tauri/src/app_menu/` — `Hush → Settings…` (⌘,), `View → Dictation/Meetings/History` (⌘1/⌘2/⌘3). Menu events emit `menu:goto-section` to `main` or call `settings_window::show` directly.
+**Native menu bar (macOS).** `src-tauri/src/app_menu/` — `Hush → Settings…` (⌘,), `View → Dictation/History` (⌘1/⌘2). Menu events emit `settings:goto-tab` or `menu:goto-section` to the main window.
 
 ---
 
@@ -166,7 +168,6 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain) |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
-| `settings_window/` | `show()` / `hide()` for the standalone Settings window |
 | `app_menu/` | Native macOS menu bar (no-op elsewhere) |
 | `tray/` | Status-bar / system-tray icon (cross-platform) |
 | `macos_perms/` | Programmatic TCC reads via AVFoundation / CoreGraphics / IOKit |
@@ -176,9 +177,10 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 
 | Path | Responsibility |
 |---|---|
-| `routes/+page.svelte` | Main window — Dictation / Meetings / History sections |
-| `routes/settings/+page.svelte` | Settings window — model picker, vocab, replacements, diagnostics |
+| `routes/+page.svelte` | Main window — Dictation / History / Settings / About sections |
 | `routes/hud/+page.svelte` | HUD pill |
+| `routes/menu-bar/+page.svelte` | Menu-bar quick-access popover |
+| `routes/debug/+page.svelte` | Floating debug console palette (developer only) |
 | `lib/*.svelte` | Svelte 5 component library (panels, sidebar, error display, PTT editor) |
 | `lib/types.ts` | TS shapes mirroring backend serde structs (camelCase) |
 | `lib/errors.ts` | `IpcError` → `ErrorDisplay` mapping |

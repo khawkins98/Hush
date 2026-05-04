@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "debug",
+  "description": "Capability for the floating debug-console window. Scoped to the minimum the debug window needs: `core:event:default` for the `log:event` listener that streams log entries into the console, and `clipboard-manager:allow-write-text` for the Copy / Copy All buttons. Custom `#[tauri::command]` functions (get_log_entries, open_debug_window) don't need permission entries. Every grant widens this window's blast radius — add deliberately.",
+  "windows": ["debug"],
+  "permissions": [
+    "core:event:default",
+    "clipboard-manager:allow-write-text"
+  ]
+}

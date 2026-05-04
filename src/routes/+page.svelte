@@ -16,6 +16,7 @@
   import { motionDuration } from "$lib/motion";
   import { joinUtterances } from "$lib/transcript-format";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
+  import AboutTab from "$lib/AboutTab.svelte";
   import FirstRunModal from "$lib/FirstRunModal.svelte";
   import MeetingSection, {
     type MeetingCopyNotice,
@@ -288,7 +289,7 @@
     },
     {
       id: "settings.about",
-      label: "Open Settings: About",
+      label: "Show About",
       group: "Settings",
       run: () => openSettingsTab("about"),
     },
@@ -439,6 +440,11 @@
     // means the two reactive paths converge cleanly.
     unlistenSettingsGoto = await listen<string>(Events.SettingsGotoTab, (e) => {
       const tab = e.payload;
+      if (tab === "about") {
+        // About is now a top-level sidebar section, not a Settings tab.
+        activeSection = "about";
+        return;
+      }
       if (
         tab === "general"
         || tab === "model"
@@ -446,7 +452,6 @@
         || tab === "replacements"
         || tab === "meeting"
         || tab === "permissions"
-        || tab === "about"
       ) {
         settingsActiveTab = tab;
       }
@@ -1460,6 +1465,10 @@
   // and emitted `Events.SettingsGotoTab`; the in-app version
   // sidesteps the window-mount + emit-race entirely.
   function openSettingsTab(tab: string) {
+    if (tab === "about") {
+      activeSection = "about";
+      return;
+    }
     if (
       tab === "general"
       || tab === "model"
@@ -1467,7 +1476,6 @@
       || tab === "replacements"
       || tab === "meeting"
       || tab === "permissions"
-      || tab === "about"
     ) {
       settingsActiveTab = tab;
     }
@@ -1629,6 +1637,12 @@
   {#if activeSection === "settings"}
     <SettingsPanel bind:activeTab={settingsActiveTab} onModelLoaded={handleModelLoaded} />
   {/if}
+
+  {#if activeSection === "about"}
+    <div class="about-panel">
+      <AboutTab />
+    </div>
+  {/if}
 </main>
 </div>
 
@@ -1696,14 +1710,14 @@
   min-width: 0;
 }
 
-/* Pre-sidebar `.page-section` had `max-width: 36rem` + `margin: 0
-   auto` so the single-column page didn't sprawl on wide windows.
-   With #479 slice 1 the sidebar shell already constrains the
-   layout horizontally, and history rows benefit from filling the
-   column. The Dictation section opts back into a `max-width:
-   52rem` cap via its own `:global(#dictation-section)` rule
-   (declared in `DictationSection.svelte`) so the centerpiece
-   composition stays bounded. */
+/* About as a standalone sidebar section. AboutTab's own
+   .tab-title gives the "About" heading; just add breathing room
+   to match the Settings panel's visual top-padding. */
+.about-panel {
+  padding-top: 1.5rem;
+  max-width: 44rem;
+}
+
 .page-section {
   padding-top: 2.5rem;
 }
