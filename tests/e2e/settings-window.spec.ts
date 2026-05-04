@@ -654,6 +654,124 @@ test.describe("settings window — About tab", () => {
     ).toBeVisible();
   });
 
+  test("Install flow — success path walks idle → installing → pending (#497)", async ({
+    page,
+  }) => {
+    // Drives the auto-update install state machine through its
+    // happy-path branches so a regression in the listener wiring
+    // (the chunkLen accumulator, the install-pending handoff,
+    // the formatInstallProgress branches) fails this spec rather
+    // than passing silently. Pre-#497 only the unavailable-gate
+    // branch was covered.
+    //
+    // The install_pending_update IPC is mocked to "succeed silently"
+    // (returns undefined). Real success would relaunch the app, so
+    // we don't try to assert the post-relaunch state — only that
+    // the UI walks through installing → pending while the events
+    // we drive arrive in order.
+    await installMocks(page, {
+      check_for_updates: () => ({
+        kind: "updateAvailable",
+        current: "0.1.0",
+        latest: "0.2.0",
+        releaseUrl: "https://github.com/khawkins98/Hush/releases/tag/v0.2.0",
+      }),
+      // Per-test override: a Promise that never resolves. In
+      // production the IPC doesn't return until the install
+      // completes (which relaunches the app), so the
+      // `installState = "idle"` reset on Promise.resolve never
+      // fires. A sync `() => undefined` would resolve instantly
+      // and flip the UI back to idle before the test can drive
+      // the events. The pending-forever Promise pins the state
+      // machine in `installing` so the listener-driven
+      // transitions are observable.
+      install_pending_update: () => new Promise(() => {}),
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator('[data-testid="settings-check-updates"]').click();
+
+    // Click Install — this fires the IPC (which silently
+    // succeeds in the mock) and flips the UI to `installing`.
+    await page.locator('[data-testid="about-install-update"]').click();
+
+    // Drive a download-progress event with a known chunk size so
+    // the accumulator visibly increments.
+    await page.evaluate(() => {
+      const bus = (
+        window as unknown as {
+          __hush_e2e_event_bus?: {
+            fire: (n: string, p: unknown) => void;
+          };
+        }
+      ).__hush_e2e_event_bus;
+      bus?.fire("updater:download-progress", {
+        chunkLen: 524_288,
+        total: 5_242_880,
+      });
+    });
+
+    // Progress readout shows the accumulated bytes as a percent
+    // when total is known. 524_288 / 5_242_880 = 10%.
+    await expect(
+      page.locator('[data-testid="about-install-progress"]'),
+    ).toContainText(/Downloading.*10%/);
+
+    // Drive the install-pending handoff event — UI swaps to the
+    // "Hush will relaunch" copy.
+    await page.evaluate(() => {
+      const bus = (
+        window as unknown as {
+          __hush_e2e_event_bus?: {
+            fire: (n: string, p: unknown) => void;
+          };
+        }
+      ).__hush_e2e_event_bus;
+      bus?.fire("updater:install-pending", { version: "0.2.0" });
+    });
+
+    await expect(
+      page.locator('[data-testid="about-install-pending"]'),
+    ).toContainText(/Installing.*relaunch/);
+  });
+
+  test("Install flow — version mismatch surfaces the rotated version (#497)", async ({
+    page,
+  }) => {
+    // Pin the TOCTOU defence: the IPC refuses to install when
+    // the plugin's check resolves to a different version than the
+    // user agreed to. The frontend renders the Internal error via
+    // ErrorDisplay so the user sees what happened.
+    await installMocks(page, {
+      check_for_updates: () => ({
+        kind: "updateAvailable",
+        current: "0.1.0",
+        latest: "0.2.0",
+        releaseUrl: "https://github.com/khawkins98/Hush/releases/tag/v0.2.0",
+      }),
+      install_pending_update: () => {
+        throw {
+          kind: "internal",
+          message:
+            "update version mismatch: you agreed to install 0.2.0, " +
+            "but the latest is now 0.2.1 — please re-check",
+        };
+      },
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator('[data-testid="settings-tab-about"]').click();
+    await page.locator('[data-testid="settings-check-updates"]').click();
+    await page.locator('[data-testid="about-install-update"]').click();
+
+    const failed = page.locator('[data-testid="about-install-failed"]');
+    await expect(failed).toBeVisible();
+    // ErrorDisplay surfaces the message via the `.error-headline`
+    // / `.error-details-body` shape (#199 pattern).
+    await expect(failed).toContainText(/version mismatch/i);
+  });
+
   test("Check for updates — failed branch surfaces the reason", async ({
     page,
   }) => {

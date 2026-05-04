@@ -40,9 +40,14 @@
   import { onDestroy, onMount } from "svelte";
 
   import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
+  import ErrorDisplay from "./ErrorDisplay.svelte";
   import { openExternal } from "./openExternal";
   import { Events } from "./events";
-  import { formatErrorMessage } from "./errors";
+  import {
+    formatErrorDisplay,
+    formatErrorMessage,
+    type ErrorDisplay as ErrorDisplayShape,
+  } from "./errors";
   import "./settings-tab.css";
 
   // Tauri runtime version + the app's productName / version, all
@@ -73,7 +78,12 @@
   type InstallState = "idle" | "installing" | "pending" | "failed";
   let installState = $state<InstallState>("idle");
   let installProgress = $state<{ downloaded: number; total: number | null } | null>(null);
-  let installError = $state<string | null>(null);
+  // Routed through `formatErrorDisplay` so the failed-install
+  // pane gets the same headline + hint + collapsible technical
+  // details treatment as the rest of the app's error surfaces
+  // (#199 / #497). Pre-#497 this was a bare string rendered into
+  // a single paragraph.
+  let installError = $state<ErrorDisplayShape | null>(null);
   let installUnavailable = $state(false);
 
   let unlistenUpdaterResult: UnlistenFn | null = null;
@@ -135,8 +145,17 @@
     installProgress = null;
     installError = null;
     installUnavailable = false;
+    // Pin the version the user is consenting to install. The IPC
+    // refuses if the plugin's check resolves to a different
+    // version — closes the TOCTOU gap where a release rotation
+    // between "Check for updates" and "Install" would otherwise
+    // install a different version silently (#497).
+    const expectedVersion =
+      updateCheck?.kind === "updateAvailable" ? updateCheck.latest : null;
     try {
-      await invoke<void>("install_pending_update");
+      await invoke<void>("install_pending_update", {
+        expectedVersion,
+      });
       // The plugin relaunches the app on success, so this branch
       // is rarely observed in production. Still — if we ever do
       // return cleanly without a relaunch (e.g. a race where the
@@ -152,7 +171,7 @@
       if (ipc.kind === "updater-unavailable") {
         installUnavailable = true;
       } else {
-        installError = formatErrorMessage(e);
+        installError = formatErrorDisplay(e);
       }
       installState = "failed";
     }
@@ -367,14 +386,11 @@
                 >Open release notes</a>
               </p>
             {:else}
-              <p
-                class="about-update-result about-update-failed"
-                data-testid="about-install-failed"
-                role="status"
-              >
-                <strong>Install failed.</strong>
-                {installError ?? "Something went wrong."}
-              </p>
+              {#if installError}
+                <div data-testid="about-install-failed">
+                  <ErrorDisplay error={installError} scope="Update" />
+                </div>
+              {/if}
               <div class="about-install-actions">
                 <button
                   type="button"
