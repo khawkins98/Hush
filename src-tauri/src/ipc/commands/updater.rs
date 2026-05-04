@@ -87,16 +87,34 @@ const EVENT_INSTALL_PENDING: &str = "updater:install-pending";
 /// Errors:
 /// - Plugin not registered (Steps 1–4 of the spec not yet done):
 ///   `IpcError::Internal("auto-update is not configured for this build")`.
+/// `expected_version` is the version string the user agreed to
+/// install — typically the `latest` field of the
+/// `UpdateCheckResult` the manual probe returned and the AboutTab
+/// rendered. The IPC compares it against the version the plugin's
+/// own `check()` resolves to and refuses to install on a mismatch
+/// (TOCTOU defence): the user's consent was for X, but a release
+/// rotated to Y between Check and Install would otherwise install
+/// Y silently. Pass `None` to skip the version check (preserves
+/// the pre-#497 behaviour for callers that don't track a version
+/// pre-click).
+///
 /// - No update available at install time (race with the manual
 ///   probe — between "check" and "install" the GitHub release
 ///   could have been replaced or the user's version bumped via a
 ///   manual install): returns Ok — the relaunch step is skipped
 ///   silently. The frontend re-runs the check on next mount.
+/// - **Version mismatch** (the plugin resolves a different version
+///   than the user agreed to): `IpcError::Internal(<msg>)`. The
+///   frontend re-fetches the check on retry so the user sees the
+///   new version and can re-confirm.
 /// - Network / signature / install-write failure:
 ///   `IpcError::Internal(<plugin error chain>)`. The user can
 ///   retry or fall back to the "Open release notes" manual link.
 #[tauri::command]
-pub async fn install_pending_update(app: AppHandle) -> IpcResult<()> {
+pub async fn install_pending_update(
+    app: AppHandle,
+    expected_version: Option<String>,
+) -> IpcResult<()> {
     let updater = app.updater().map_err(|_| IpcError::UpdaterUnavailable)?;
 
     let maybe_update = updater
@@ -112,6 +130,16 @@ pub async fn install_pending_update(app: AppHandle) -> IpcResult<()> {
         // an error would be noisier than the situation deserves.
         return Ok(());
     };
+
+    if let Some(expected) = expected_version.as_deref() {
+        if update.version != expected {
+            return Err(IpcError::Internal(format!(
+                "update version mismatch: you agreed to install {expected}, \
+                 but the latest is now {} — please re-check",
+                update.version
+            )));
+        }
+    }
 
     let version = update.version.clone();
     let app_for_progress = app.clone();
