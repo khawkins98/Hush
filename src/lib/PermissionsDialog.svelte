@@ -277,34 +277,63 @@
     border-color: #4a6cd0;
   }
   @media (prefers-color-scheme: dark) {
-    .perm-dialog-backdrop {
+    :root:not([data-theme="light"]) .perm-dialog-backdrop {
       background-color: rgba(0, 0, 0, 0.65);
     }
-    .perm-dialog-card {
+    :root:not([data-theme="light"]) .perm-dialog-card {
       background-color: #1f1f1f;
       color: #f0f0f0;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     }
-    .perm-dialog-intro {
+    :root:not([data-theme="light"]) .perm-dialog-intro {
       color: #b8b8b8;
     }
-    .perm-dialog-loading {
+    :root:not([data-theme="light"]) .perm-dialog-loading {
       color: #a8a8a8;
     }
-    .perm-dialog-error {
+    :root:not([data-theme="light"]) .perm-dialog-error {
       background: #3d1d1d;
       color: #f0a0a0;
     }
-    button {
+    :root:not([data-theme="light"]) button {
       color: #f0f0f0;
       background-color: #2a2a2a;
       border-color: #3a3a3a;
     }
-    button.ghost {
+    :root:not([data-theme="light"]) button.ghost {
       background-color: transparent;
     }
-    button.ghost:hover:not(:disabled) {
+    :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
       background-color: #353535;
     }
+  }
+  :root[data-theme="dark"] .perm-dialog-backdrop {
+    background-color: rgba(0, 0, 0, 0.65);
+  }
+  :root[data-theme="dark"] .perm-dialog-card {
+    background-color: #1f1f1f;
+    color: #f0f0f0;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+  :root[data-theme="dark"] .perm-dialog-intro {
+    color: #b8b8b8;
+  }
+  :root[data-theme="dark"] .perm-dialog-loading {
+    color: #a8a8a8;
+  }
+  :root[data-theme="dark"] .perm-dialog-error {
+    background: #3d1d1d;
+    color: #f0a0a0;
+  }
+  :root[data-theme="dark"] button {
+    color: #f0f0f0;
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  :root[data-theme="dark"] button.ghost {
+    background-color: transparent;
+  }
+  :root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+    background-color: #353535;
   }
 </style>

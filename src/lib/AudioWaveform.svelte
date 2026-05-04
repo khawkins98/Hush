@@ -152,6 +152,21 @@
   let clipTimer: ReturnType<typeof setTimeout> | null = null;
   let peakSetAt = 0;
 
+  // Fun loudness-context labels keyed by dBFS thresholds.
+  // Ranges are intentionally coarse — the goal is a smile,
+  // not metrological accuracy.
+  function dbContext(db: number): string {
+    if (db < -50) return "near silence 🤫";
+    if (db < -40) return "rustling leaves 🍃";
+    if (db < -30) return "quiet library 📚";
+    if (db < -20) return "soft whisper 🌬️";
+    if (db < -12) return "normal conversation 💬";
+    if (db <  -6) return "raised voice 📣";
+    if (db <  -3) return "lawnmower 🌿";
+    if (db <  -1) return "baby crying 👶";
+    return "rock concert 🎸";
+  }
+
   // Map a 0..1 linear level to a peak-dB string. Floor at -60 dB
   // because anything below that is effectively silence and the
   // numeric value isn't useful in a tooltip.
@@ -224,8 +239,9 @@
         if (now - lastDbLabelUpdateMs >= 200) {
           lastDbLabelUpdateMs = now;
           const db = 20 * Math.log10(Math.max(displayLevel, 0.001));
+          const dbInt = Math.max(-60, db);
           currentDbLabel = displayLevel > 0.001
-            ? `${Math.max(-60, db).toFixed(0)} dB`
+            ? `${dbInt.toFixed(0)} dB · ${dbContext(dbInt)}`
             : "";
         }
       } else {
@@ -353,15 +369,14 @@
     transition: background 80ms linear, opacity 80ms linear;
   }
 
-  /* dB readout — compact current-level label overlaid in the
-     top-right corner. A semi-transparent dark pill gives enough
-     contrast against the bar gradient in both light and dark
-     themes without leaking into the peak-hold line area.
-     Only rendered while metering + recording + signal > floor. */
+  /* dB readout — compact current-level label overlaid below the
+     waveform bars. Positioned at the bottom so the wider context
+     string doesn't overlap the bars; left-anchored so it reads
+     naturally and grows rightward into open space. */
   .audio-waveform-db {
     position: absolute;
-    top: 4px;
-    right: 4px;
+    bottom: -1.35rem;
+    left: 0;
     font-size: 0.65rem;
     font-variant-numeric: tabular-nums;
     line-height: 1;
