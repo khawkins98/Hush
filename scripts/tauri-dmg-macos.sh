@@ -57,6 +57,15 @@ if [[ -z "$DMG_PATH" ]]; then
     exit 1
 fi
 
+# Re-sign the release .app bundle for the same reason as tauri-bundle-macos.sh:
+# Tauri's unsigned build leaves a linker-signed binary with a hash-based
+# identifier; re-signing binds Info.plist so TCC uses io.github.khawkins98.hush.
+RELEASE_APP="src-tauri/target/release/bundle/macos/Hush.app"
+if [[ -d "$RELEASE_APP" ]]; then
+    echo "[hush tauri:dmg] re-signing release bundle to bind Info.plist…"
+    codesign --force --deep --sign - "$RELEASE_APP"
+fi
+
 echo "[hush tauri:dmg] DMG ready: $DMG_PATH"
 open "$(dirname "$DMG_PATH")"
 

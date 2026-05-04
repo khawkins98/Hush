@@ -48,6 +48,17 @@ if [[ ! -d "$APP_PATH" ]]; then
     exit 1
 fi
 
+# Re-sign with ad-hoc codesign to bind Info.plist and fix the identifier.
+#
+# Tauri's debug build leaves a linker-signed binary whose code-signing
+# identifier is a binary-hash like `hush-44ac88ddc8db2594`, NOT the bundle ID
+# `io.github.khawkins98.hush`. TCC keys permission entries to this identifier,
+# so `tccutil reset io.github.khawkins98.hush` becomes a no-op and grants
+# appear to vanish on the next rebuild. Forcing a fresh ad-hoc signature after
+# the bundle is assembled corrects the identifier and binds Info.plist.
+echo "[hush tauri:bundle] re-signing bundle to bind Info.plist (fixes TCC identifier)…"
+codesign --force --deep --sign - "$APP_PATH"
+
 echo "[hush tauri:bundle] opening $APP_PATH"
 open "$APP_PATH"
 

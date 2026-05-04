@@ -128,6 +128,8 @@ The short version: `cargo tauri dev` builds an unsigned binary that TCC attribut
 
     npm run tauri:bundle
 
+**Important:** Tauri's debug build leaves a linker-signed binary with a hash-based code-signing identifier (`hush-<hash>`), not `io.github.khawkins98.hush`. `tauri-bundle-macos.sh` now runs `codesign --force --deep --sign -` automatically after build to fix this. If you ever build with `cargo tauri build --debug` directly, run the codesign step manually or TCC grants won't stick. See `learnings.md` 2026-05-04 for full details.
+
 Stale `Hush.app` rows after rebuilds are recovered via Settings → Permissions → Reset permissions inside Hush, then `−` on the System Settings rows, then relaunch.
 
 The full reasoning, symptom-by-symptom recovery recipes, and the "Dev-loop: stale Hush.app rows after a re-bundle" recipe live in [`docs/macos-permissions.md`](./docs/macos-permissions.md). `learnings.md` 2026-04-27 has the original investigation.
