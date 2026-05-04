@@ -18,7 +18,7 @@
 //! text + timestamps.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -221,6 +221,10 @@ pub struct SessionManager {
     /// the source-derived `"mic"` / `"system"` tag from
     /// `AudioSource::speaker_tag()`.
     pub(super) diarize: Arc<dyn crate::diarization::Diarize>,
+    /// Live microphone gain in dB (#531). Shared Arc from `RuntimeFlags`.
+    /// Passed to `PumpContext` at session start so the pump can apply
+    /// the current gain value each tick without a session restart.
+    pub(super) mic_gain_db: Arc<AtomicU32>,
 }
 
 /// Lifecycle state for the manager's session slot. Three-valued
@@ -317,6 +321,7 @@ impl SessionManager {
         event_emitter: Arc<dyn crate::events::EventEmitter>,
         diarize: Arc<dyn crate::diarization::Diarize>,
         app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
+        mic_gain_db: Arc<AtomicU32>,
     ) -> Self {
         Self {
             repo,
@@ -328,6 +333,7 @@ impl SessionManager {
             partials: Arc::new(RwLock::new(HashMap::new())),
             event_emitter,
             diarize,
+            mic_gain_db,
         }
     }
 
@@ -375,7 +381,15 @@ impl SessionManager {
             Arc::new(crate::diarization::NoopDiarizer);
         let app_overrides: Arc<dyn super::MeetingAppOverrideRepository> =
             Arc::new(NoOpAppOverrides);
-        Self::new(repo, audio, transcribe, emitter, diarize, app_overrides)
+        Self::new(
+            repo,
+            audio,
+            transcribe,
+            emitter,
+            diarize,
+            app_overrides,
+            Arc::new(AtomicU32::new(0f32.to_bits())),
+        )
     }
 
     // `start_manual`, `stop_manual`, and `append_if_active` live in
@@ -526,7 +540,15 @@ mod tests {
             Arc::new(crate::diarization::NoopDiarizer);
         let app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
             Arc::new(NoOpAppOverrides);
-        SessionManager::new(repo, audio, transcribe, emitter, diarize, app_overrides)
+        SessionManager::new(
+            repo,
+            audio,
+            transcribe,
+            emitter,
+            diarize,
+            app_overrides,
+            Arc::new(AtomicU32::new(0f32.to_bits())),
+        )
     }
 
     #[tokio::test]

@@ -699,6 +699,8 @@ pub fn run() {
             ipc::commands::settings::set_diarization_enabled,
             ipc::commands::settings::get_inference_threads,
             ipc::commands::settings::set_inference_threads,
+            ipc::commands::settings::get_mic_gain_db,
+            ipc::commands::settings::set_mic_gain_db,
             ipc::commands::diarizer::get_diarizer_model_status,
             ipc::commands::diarizer::download_diarizer_model,
             ipc::commands::diarizer::remove_diarizer_model,

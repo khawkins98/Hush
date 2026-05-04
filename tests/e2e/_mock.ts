@@ -68,6 +68,8 @@ export async function installMocks(
       // #255). Default 4 mirrors the backend default.
       get_inference_threads: () => 4,
       set_inference_threads: () => undefined,
+      get_mic_gain_db: () => 0,
+      set_mic_gain_db: () => undefined,
       // Meeting auto-start mode (Settings → Meeting). Default
       // matches the backend's "off" default; specs that exercise
       // the dropdown override per-test.

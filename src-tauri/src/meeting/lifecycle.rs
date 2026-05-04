@@ -303,6 +303,7 @@ impl SessionManager {
             cancel: Arc::clone(&cancel),
             event_emitter: Arc::clone(&self.event_emitter),
             diarize: Arc::clone(&self.diarize),
+            mic_gain_db: Arc::clone(&self.mic_gain_db),
         }));
 
         // Commit Active. The slot has been Opening since the start

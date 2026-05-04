@@ -7,6 +7,24 @@
 //! mono, the cpal capture format is host-native, the resample step
 //! bridges them).
 
+/// Apply a gain (in dB) to a slice of f32 PCM samples in place.
+///
+/// `gain_db` is the desired boost or attenuation: 0.0 = unity, +6 ≈ double
+/// amplitude, –6 ≈ half. The linear multiplier is clamped so every output
+/// sample stays in `[–1.0, 1.0]` — no silent clipping.
+///
+/// A no-op fast path skips the multiply when `gain_db` rounds to 0 dB
+/// (avoids floating-point churn on the common default setting).
+pub fn apply_mic_gain(samples: &mut [f32], gain_db: f32) {
+    if gain_db == 0.0 || samples.is_empty() {
+        return;
+    }
+    let linear = 10f32.powf(gain_db / 20.0);
+    for s in samples.iter_mut() {
+        *s = (*s * linear).clamp(-1.0, 1.0);
+    }
+}
+
 /// Average channel-interleaved samples down to a single mono channel.
 ///
 /// `samples` is a flat slice of frames where each frame contains `channels`
@@ -84,5 +102,47 @@ mod tests {
     #[test]
     fn empty_input_returns_empty() {
         assert!(downmix_to_mono(&[], 2).is_empty());
+    }
+
+    #[test]
+    fn apply_mic_gain_zero_db_is_identity() {
+        let original = vec![0.5, -0.5, 0.25];
+        let mut samples = original.clone();
+        apply_mic_gain(&mut samples, 0.0);
+        assert_eq!(samples, original);
+    }
+
+    #[test]
+    fn apply_mic_gain_positive_boosts_amplitude() {
+        // +20 dB ≈ ×10 linear — a 0.05 sample becomes ~0.5.
+        let mut samples = vec![0.05_f32];
+        apply_mic_gain(&mut samples, 20.0);
+        let expected = (0.05_f32 * 10.0).clamp(-1.0, 1.0);
+        assert!((samples[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn apply_mic_gain_clamps_at_unity() {
+        // A large gain on a near-full-scale sample should not exceed ±1.0.
+        let mut samples = vec![0.9_f32, -0.9_f32];
+        apply_mic_gain(&mut samples, 20.0);
+        assert_eq!(samples[0], 1.0);
+        assert_eq!(samples[1], -1.0);
+    }
+
+    #[test]
+    fn apply_mic_gain_negative_attenuates() {
+        // –20 dB ≈ ×0.1 linear.
+        let mut samples = vec![1.0_f32];
+        apply_mic_gain(&mut samples, -20.0);
+        let expected = (1.0_f32 * 0.1).clamp(-1.0, 1.0);
+        assert!((samples[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn apply_mic_gain_empty_slice_is_noop() {
+        let mut samples: Vec<f32> = vec![];
+        apply_mic_gain(&mut samples, 10.0); // must not panic
+        assert!(samples.is_empty());
     }
 }

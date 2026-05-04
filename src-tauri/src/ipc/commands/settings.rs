@@ -270,6 +270,39 @@ pub(crate) async fn set_inference_threads_inner(state: &AppState, threads: i32) 
         .map_err(|e| IpcError::Settings(e.to_string()))
 }
 
+/// Read the current mic gain in dB (0–20). The Settings → General tab
+/// calls this on mount so the slider renders the persisted value.
+#[tauri::command]
+pub fn get_mic_gain_db(state: State<'_, AppState>) -> IpcResult<f32> {
+    Ok(f32::from_bits(
+        state
+            .runtime_flags
+            .mic_gain_db
+            .load(std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
+/// Persist the mic gain in dB. Clamped to [0.0, 20.0]. Updates both the
+/// in-memory atomic the audio paths read and the settings row used at
+/// next-launch boot.
+#[tauri::command]
+pub async fn set_mic_gain_db(state: State<'_, AppState>, gain_db: f32) -> IpcResult<()> {
+    set_mic_gain_db_inner(&state, gain_db).await
+}
+
+pub(crate) async fn set_mic_gain_db_inner(state: &AppState, gain_db: f32) -> IpcResult<()> {
+    let clamped = gain_db.clamp(0.0, 20.0);
+    state
+        .runtime_flags
+        .mic_gain_db
+        .store(clamped.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    state
+        .settings
+        .set(crate::settings::keys::MIC_GAIN_DB, &clamped.to_string())
+        .await
+        .map_err(|e| IpcError::Settings(e.to_string()))
+}
+
 /// Read the current Meeting-Mode auto-start mode. The Settings
 /// → Meeting tab calls this on mount so the dropdown renders the
 /// persisted value.
