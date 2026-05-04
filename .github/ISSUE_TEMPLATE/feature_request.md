@@ -4,6 +4,10 @@ about: Suggest an idea for Hush
 labels: enhancement
 ---
 
+<!-- Please read CONTRIBUTING.md before filing — especially the "Issues and labels" section.
+     Area / status / priority labels are applied by the maintainer during triage.
+     Mention the affected area in your description if it's obvious (audio, UI, release, testing). -->
+
 **Problem / motivation**
 What problem does this solve, or what job does it help you do?
 

@@ -48,6 +48,38 @@ The `whisper` feature is **default-on** as of 2026-04-26 so a vanilla `npm run t
 
 ---
 
+## Issues and labels
+
+Labels are applied by the maintainer during triage. When opening an issue you don't need to apply them yourself — but mentioning the affected area in the body helps.
+
+### Area labels
+
+| Label | Covers |
+|---|---|
+| `area: audio` | Audio capture, transcription, diarization, meeting pipeline |
+| `area: ui/ux` | UI components, visual design, layout, discoverability |
+| `area: release` | Updater, signing, distribution, CI/CD |
+| `area: testing` | Test infrastructure, E2E, integration tests |
+
+Apply one per issue; apply two for issues that genuinely span areas (e.g. a diarization integration test is both `area: audio` and `area: testing`).
+
+### Status labels
+
+- `status: blocked` — cannot move forward without an external prerequisite (upstream library support, a maintainer keypair step, a platform SDK gap, etc.). Always add a comment explaining what's blocking and what would unblock it.
+
+### Priority labels
+
+- `priority: quick-win` — completable in under an hour. Add only when the scope is genuinely small — it's most useful for grabbing something when time is short.
+
+### Type labels
+
+- `bug` — something isn't working as documented or expected
+- `enhancement` — new feature or improvement to existing behaviour
+- `documentation` — docs-only change
+- `question` — needs more information before it can be triaged
+
+---
+
 ## Branching
 
 - `main` is the only long-lived branch. Direct pushes are blocked.
