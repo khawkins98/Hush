@@ -204,6 +204,15 @@ for launch_agent in \
   fi
 done
 
+# ── 7. ~/Applications dev install ────────────────────────────────────────────
+# npm run tauri:bundle now installs to ~/Applications/Hush.app for reliable
+# TCC behaviour. Remove it so a fresh launch starts with no prior state.
+DEV_APP="$TARGET_HOME/Applications/Hush.app"
+if [[ -d "$DEV_APP" ]]; then
+  rm -rf "$DEV_APP"
+  echo "  removed dev install: $DEV_APP"
+fi
+
 echo ""
 echo "[dev-reset] done. Next launch of Hush will behave as a first-ever install."
 echo "            Note: Screen Recording rows from previous builds may still appear"
