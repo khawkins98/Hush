@@ -468,7 +468,7 @@
      primary action reads first. The Cancel button below it stays
      in the default ghost-danger styling. */
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
   color: #8a0000;
 }
 
@@ -517,7 +517,7 @@
   }
   .clear-confirm-yes {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
     color: #ff9090;
   }
 }
@@ -576,7 +576,7 @@ button.ghost.danger {
 
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
 }
 
 .empty-history {
@@ -689,7 +689,7 @@ button.ghost.danger:hover:not(:disabled) {
   }
   button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
   }
   .empty-history {
     background-color: #1f1f1f;
