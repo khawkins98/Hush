@@ -836,7 +836,7 @@ impl AppStateBuilder {
             }),
             debug_log: self
                 .debug_log
-                .unwrap_or_else(crate::debug_log::DebugLogState::new),
+                .unwrap_or_default(),
             runtime_flags: RuntimeFlags {
                 hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
                     self.hud_enabled.unwrap_or(true),
