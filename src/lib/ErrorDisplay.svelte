@@ -34,7 +34,7 @@
   margin: 0.75rem 0;
   padding: 0.85rem 1rem;
   background-color: #fee;
-  border: 1px solid #d83a3a;
+  border: 1px solid var(--danger);
   border-radius: 8px;
   color: #8a0000;
   text-align: left;
@@ -101,7 +101,7 @@
 @media (prefers-color-scheme: dark) {
   .error-card {
     background-color: #4a1a1a;
-    border-color: #d83a3a;
+    border-color: var(--danger);
     color: #ffd0d0;
   }
   .error-hint {

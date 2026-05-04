@@ -221,12 +221,12 @@ button.ghost.danger {
 
 button.ghost.danger:hover:not(:disabled) {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
 }
 
 button.ghost.danger.confirming {
   background-color: #fbeaea;
-  border-color: #d83a3a;
+  border-color: var(--danger);
   color: #8a0000;
   font-weight: 600;
 }
@@ -356,7 +356,7 @@ button.ghost.danger.confirming {
   }
   button.ghost.danger:hover:not(:disabled) {
     background-color: #3a1818;
-    border-color: #d83a3a;
+    border-color: var(--danger);
   }
   .history-header h2 {
     color: #d8d8d8;
