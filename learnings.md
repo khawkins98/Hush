@@ -1279,7 +1279,7 @@ Components that only implemented the `@media` block fail when the user forces da
 
 ---
 
-### 2026-05-XX — AudioWaveform: log scale + adaptive gain for waveform sensitivity
+### 2026-05-04 — AudioWaveform: log scale + adaptive gain for waveform sensitivity
 
 **Problem:** Linear `level × levelScale` mapping made the waveform nearly flat for quiet-to-normal speech. At −38 dBFS (typical conversational level) the linear amplitude is ~1.3 % of full scale, giving a ~5 % bar height that's visually indistinguishable from silence. Different microphones and system-audio boost levels compounded this — a quiet USB mic with no software gain looked dead while a heavily boosted system capture railed.
 
@@ -1329,7 +1329,7 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 
 ---
 
-### 2026-05-XX — About moved to top-level sidebar section (not a Settings tab)
+### 2026-05-04 — About moved to top-level sidebar section (not a Settings tab)
 
 **Decision:** About was previously one of many Settings tabs (`settings-tab-about`). Moved to a fourth top-level sidebar section (`sidebar-nav-about`) so it's reachable in ~one click from anywhere in the app.
 
