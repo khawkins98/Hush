@@ -95,20 +95,24 @@ cd src-tauri && cargo test --lib --features diarization-onnx   # plus diarizer-g
 cd src-tauri && cargo test --lib audio::tests::name_of_test
 cd src-tauri && cargo test --lib meeting::
 
-# Integration tests (#[ignore]'d by default — need a Whisper model file)
+# Integration tests (#[ignore]'d by default — need external resources)
 # HUSH_TEST_AUDIO defaults to the bundled jfk.wav; only HUSH_TEST_MODEL is required.
 HUSH_TEST_MODEL=/path/to/ggml-base.bin \
   cd src-tauri && cargo test --features whisper --test audio_fixture -- --ignored
 
-# Meeting pump fixture test — exercises the full SessionManager → pump →
-# WhisperTranscription path through the AudioCapture seam. Requires the
-# `test-utils` feature (WavFileAudioCapture) and `whisper`.
+# Streaming + meeting pump integration tests (also #[ignore]'d)
+HUSH_TEST_MODEL=/path/to/ggml-base.bin \
+  cd src-tauri && cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
 HUSH_TEST_MODEL=/path/to/ggml-base.bin \
   cd src-tauri && cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
 
-# Streaming fixture test — exercises the streaming transcription session.
-HUSH_TEST_MODEL=/path/to/ggml-base.bin \
-  cd src-tauri && cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
+# Diarization integration test (two-speaker assertion + cluster stability)
+# Requires wespeaker ONNX model and two short WAV clips with distinct voices.
+# Download model: huggingface-cli download Wespeaker/wespeaker-voxceleb-resnet34-LM voxceleb_resnet34_LM.onnx
+HUSH_DIARIZATION_MODEL_PATH=/path/to/voxceleb_resnet34_LM.onnx \
+HUSH_TEST_SPEAKER1_WAV=/path/to/speaker1.wav \
+HUSH_TEST_SPEAKER2_WAV=/path/to/speaker2.wav \
+  cd src-tauri && cargo test --features diarization-onnx --test diarization_fixture -- --ignored --nocapture
 
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check

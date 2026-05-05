@@ -52,10 +52,76 @@ file-backed `AudioCapture` / `AudioSession` impl that serves
 pre-loaded WAV samples to the meeting pump in 500 ms chunks, matching
 the `PUMP_TICK` cadence the production path uses.
 
-`WavFileAudioCapture` lives in `src/audio/file_source.rs` and is
-compiled only when the `test-utils` Cargo feature is enabled. This
-keeps it out of production binaries while making it accessible from
-integration tests in `tests/`.
+## Diarization integration test (`tests/diarization_fixture.rs`)
+
+This test exercises the full `AudioRollingBuffer → OnnxDiarizer → speaker_label` path — the
+same pipeline the meeting pump uses in production. It is `#[ignore]`'d and gated on
+`--features diarization-onnx`.
+
+### Required env vars
+
+| Env var | Points at | Notes |
+|---|---|---|
+| `HUSH_DIARIZATION_MODEL_PATH` | wespeaker ONNX model file | required by all diarization tests |
+| `HUSH_TEST_SPEAKER1_WAV` | WAV with speaker 1's voice (~5 s) | required by `two_speakers_get_distinct_labels` |
+| `HUSH_TEST_SPEAKER2_WAV` | WAV with a **different** speaker's voice (~5 s) | required by `two_speakers_get_distinct_labels` |
+
+Download the model:
+
+```bash
+huggingface-cli download Wespeaker/wespeaker-voxceleb-resnet34-LM voxceleb_resnet34_LM.onnx
+```
+
+Speaker WAVs are BYO — any ~5 s PCM WAV at any sample rate. `AudioRollingBuffer` handles
+resampling. LibriVox and Mozilla Common Voice are good sources for distinct single-speaker clips.
+
+### Run
+
+```bash
+HUSH_DIARIZATION_MODEL_PATH=/path/to/voxceleb_resnet34_LM.onnx \
+HUSH_TEST_SPEAKER1_WAV=/path/to/speaker1.wav \
+HUSH_TEST_SPEAKER2_WAV=/path/to/speaker2.wav \
+  cargo test --features diarization-onnx --test diarization_fixture -- --ignored --nocapture
+```
+
+`short_audio_leaves_speaker_label_unchanged` only needs `HUSH_DIARIZATION_MODEL_PATH` — it
+uses a synthesized 100 ms silence clip.
+
+## Meeting pump integration test (`tests/meeting_fixture.rs`)
+
+`tests/meeting_fixture.rs` exercises the full `SessionManager → pump → WhisperTranscription →
+SQLite` path via the `AudioCapture` seam. Requires `--features whisper,test-utils` and
+`HUSH_TEST_MODEL`. See [`WavFileAudioCapture`](#wavfileaudiocapture-test-utils-feature) below.
+
+```bash
+HUSH_TEST_MODEL=/path/to/ggml-base.bin \
+  cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
+```
+
+## `WavFileAudioCapture` (`test-utils` feature)
+
+`src/audio/file_source.rs` is compiled when `--features test-utils` is enabled. It provides:
+
+- **`WavFileAudioCapture`** — implements `AudioCapture`, serving pre-loaded WAV samples to the
+  meeting pump in configurable-size chunks.
+- **`WavFileAudioSession`** — implements `AudioSession`. Uses `AtomicUsize` position tracking so
+  `drain_into` is lock-free.
+
+The `test-utils` feature is never enabled by default and does not affect production builds.
+
+
+If you want to point `HUSH_TEST_AUDIO` at something other than the
+bundled clip:
+
+- **LibriVox snippets** — public-domain audiobook recordings. Pick
+  any clip with a known canonical text. Set
+  `HUSH_TEST_EXPECTED_WORDS` to a few words from the clip.
+- **Mozilla Common Voice (CC-0)** — short clips with shipped
+  transcripts. Convenient because the transcript travels with the
+  audio.
+
+The test resamples and downmixes whatever it gets, so any sample
+rate / channel count / PCM-int-or-float WAV works.
 
 ## Why the model is still not committed
 
