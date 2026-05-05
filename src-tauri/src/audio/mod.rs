@@ -693,12 +693,21 @@ impl AudioCapture for CpalAudioCapture {
                 .map_err(|_| anyhow!("sck session lock poisoned"))?;
             if let Some(session) = guard.take() {
                 let format = session.format();
-                let samples = session.stop()?;
+                // Capture the result before decrementing so the decrement
+                // is unconditional: if stop() errors the session is already
+                // consumed and Drop won't clean up the counter (inner is None
+                // for the handle path; the raw session has no handle-level
+                // Drop). Without this the refcount leaks and is_recording()
+                // returns true indefinitely — see #555.
+                let result = session.stop();
                 self.active_sessions.fetch_sub(1, Ordering::Release);
                 if self.active_sessions.load(Ordering::Acquire) == 0 {
                     self.level.store(0_f32.to_bits(), Ordering::Relaxed);
                 }
-                return Ok(CapturedAudio { samples, format });
+                return Ok(CapturedAudio {
+                    samples: result?,
+                    format,
+                });
             }
         }
         self.dispatch(Cmd::Stop)
@@ -922,12 +931,18 @@ impl AudioSession for SckSessionHandle {
             .take()
             .ok_or_else(|| anyhow!("sck session already stopped"))?;
         let format = session.format();
-        let samples = session.stop()?;
+        // Capture result first; decrement unconditionally. After take()
+        // self.inner is None, so Drop won't decrement — if we used `?`
+        // directly, a stop() failure would leak the refcount (#555).
+        let result = session.stop();
         self.active_sessions.fetch_sub(1, Ordering::Release);
         if self.active_sessions.load(Ordering::Acquire) == 0 {
             self.level.store(0_f32.to_bits(), Ordering::Relaxed);
         }
-        Ok(CapturedAudio { samples, format })
+        Ok(CapturedAudio {
+            samples: result?,
+            format,
+        })
     }
 }
 
