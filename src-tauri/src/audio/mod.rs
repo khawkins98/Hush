@@ -704,7 +704,10 @@ impl AudioCapture for CpalAudioCapture {
                 if self.active_sessions.load(Ordering::Acquire) == 0 {
                     self.level.store(0_f32.to_bits(), Ordering::Relaxed);
                 }
-                return Ok(CapturedAudio { samples: result?, format });
+                return Ok(CapturedAudio {
+                    samples: result?,
+                    format,
+                });
             }
         }
         self.dispatch(Cmd::Stop)
@@ -936,7 +939,10 @@ impl AudioSession for SckSessionHandle {
         if self.active_sessions.load(Ordering::Acquire) == 0 {
             self.level.store(0_f32.to_bits(), Ordering::Relaxed);
         }
-        Ok(CapturedAudio { samples: result?, format })
+        Ok(CapturedAudio {
+            samples: result?,
+            format,
+        })
     }
 }
 
