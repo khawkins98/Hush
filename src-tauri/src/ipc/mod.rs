@@ -1032,6 +1032,8 @@ impl AppState {
         models_dir: PathBuf,
         debug_log: crate::debug_log::DebugLogState,
     ) -> Result<Self> {
+        let t_start = std::time::Instant::now();
+        tracing::info!("app state: build_default started");
         let audio: Arc<dyn AudioCapture> = Arc::new(CpalAudioCapture::new());
 
         let db = SqliteDatabase::open(db_path)
@@ -1052,6 +1054,10 @@ impl AppState {
         );
         let meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
             Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db));
+        tracing::info!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "app state: database and repositories ready"
+        );
         // Inference thread count (#255). Read the persisted value
         // from settings, clamp to the supported range, build the
         // shared Arc that AppState + WhisperTranscription + the IPC
@@ -1096,20 +1102,33 @@ impl AppState {
         // weights on disk. Both instances share the same
         // `inference_threads_arc` so the slider in Settings (#255)
         // takes effect on every inference call regardless of slot.
-        let transcribe_dictation = build_transcriber(
-            &settings,
-            &models_dir,
-            &inference_threads_arc,
-            &mic_gain_db_arc,
-        )
-        .await;
-        let transcribe_meeting = build_transcriber(
-            &settings,
-            &models_dir,
-            &inference_threads_arc,
-            &mic_gain_db_arc,
-        )
-        .await;
+        let transcribe_dictation;
+        let transcribe_meeting;
+        // Load both whisper contexts in parallel (#561). The two loads are
+        // independent and each blocks while mmapping the model file;
+        // running them concurrently halves the sequential cost. Each
+        // `build_transcriber` call wraps `WhisperTranscription::new` in
+        // `spawn_blocking`, so both blocking loads start before either one
+        // completes and run on separate tokio blocking threads.
+        (transcribe_dictation, transcribe_meeting) = tokio::join!(
+            build_transcriber(
+                &settings,
+                &models_dir,
+                &inference_threads_arc,
+                &mic_gain_db_arc,
+            ),
+            build_transcriber(
+                &settings,
+                &models_dir,
+                &inference_threads_arc,
+                &mic_gain_db_arc,
+            ),
+        );
+
+        tracing::info!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "app state: whisper contexts loaded"
+        );
 
         // Wrap each instance in its own `Arc<Mutex<...>>` so
         // `model_select` can hot-swap independently. SessionManager
@@ -1150,6 +1169,10 @@ impl AppState {
         // post-download swap propagates to the meeting pump on the
         // next tick — no restart needed.
         let diarize_inner_initial = build_diarizer_inner(&models_dir);
+        tracing::info!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "app state: diarizer ready"
+        );
         let diarize_slot: crate::diarization::DiarizeSlot =
             Arc::new(std::sync::RwLock::new(diarize_inner_initial));
         let diarize_fallback: Arc<dyn crate::diarization::Diarize> =
@@ -1256,7 +1279,7 @@ impl AppState {
                 .as_deref(),
         );
 
-        AppStateBuilder::new()
+        let state = AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
             .transcribe_meeting_arc(transcribe_meeting_shared)
@@ -1281,7 +1304,12 @@ impl AppState {
             .inference_threads_arc(inference_threads_arc)
             .mic_gain_db_arc(mic_gain_db_arc)
             .debug_log(debug_log)
-            .build()
+            .build();
+        tracing::info!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "app state: build_default complete"
+        );
+        state
     }
 }
 
@@ -1372,6 +1400,21 @@ pub fn load_transcriber_for_model(
     }
 }
 
+/// Load a Whisper model from disk on a blocking thread (#561).
+///
+/// `WhisperTranscription::new` mmaps the GGUF file and initialises the
+/// whisper.cpp context — typically 1–2 s for large models. Wrapping it in
+/// `spawn_blocking` frees the tokio executor thread so `tokio::join!` can
+/// drive two concurrent loads on separate blocking threads.
+#[cfg(feature = "whisper")]
+async fn load_whisper_model(
+    path: std::path::PathBuf,
+) -> anyhow::Result<crate::transcription::WhisperTranscription> {
+    tokio::task::spawn_blocking(move || crate::transcription::WhisperTranscription::new(&path))
+        .await
+        .map_err(|e| anyhow::anyhow!("whisper model load task panicked: {e}"))?
+}
+
 /// Resolve the active transcriber backend. Pulled out so a test or a
 /// future "reload model" command can call it without rebuilding the
 /// rest of `AppState`.
@@ -1397,11 +1440,12 @@ async fn build_transcriber(
             if let Some(meta) = catalog::find_by_id(id) {
                 let path = models_dir.join(&meta.filename);
                 if path.exists() {
-                    match crate::transcription::WhisperTranscription::new(&path) {
+                    let path_display = path.display().to_string();
+                    match load_whisper_model(path).await {
                         Ok(t) => {
                             tracing::info!(
                                 model_id = %meta.id,
-                                path = %path.display(),
+                                path = %path_display,
                                 "loaded selected whisper model"
                             );
                             return Some(Arc::new(
@@ -1412,7 +1456,7 @@ async fn build_transcriber(
                         Err(e) => {
                             tracing::error!(
                                 error = ?e,
-                                path = %path.display(),
+                                path = %path_display,
                                 "selected model failed to load; falling back"
                             );
                         }
@@ -1438,11 +1482,12 @@ async fn build_transcriber(
             let default_meta = catalog::default_model();
             let default_path = models_dir.join(&default_meta.filename);
             if default_path.exists() {
-                match crate::transcription::WhisperTranscription::new(&default_path) {
+                let path_display = default_path.display().to_string();
+                match load_whisper_model(default_path).await {
                     Ok(t) => {
                         tracing::info!(
                             model_id = %default_meta.id,
-                            path = %default_path.display(),
+                            path = %path_display,
                             "loaded catalog-default whisper model (no explicit selection)"
                         );
                         return Some(Arc::new(
@@ -1453,7 +1498,7 @@ async fn build_transcriber(
                     Err(e) => {
                         tracing::error!(
                             error = ?e,
-                            path = %default_path.display(),
+                            path = %path_display,
                             "catalog-default model failed to load; falling back"
                         );
                     }
@@ -1463,11 +1508,12 @@ async fn build_transcriber(
 
         // 2) Legacy dev path. Removed once the picker is mature enough
         //    that we can ask users to migrate.
-        if let Ok(path) = std::env::var("HUSH_MODEL_PATH") {
-            let path = std::path::PathBuf::from(path);
-            match crate::transcription::WhisperTranscription::new(&path) {
+        if let Ok(path_str) = std::env::var("HUSH_MODEL_PATH") {
+            let path = std::path::PathBuf::from(path_str);
+            let path_display = path.display().to_string();
+            match load_whisper_model(path).await {
                 Ok(t) => {
-                    tracing::info!(path = %path.display(), "loaded HUSH_MODEL_PATH whisper model");
+                    tracing::info!(path = %path_display, "loaded HUSH_MODEL_PATH whisper model");
                     return Some(Arc::new(
                         t.with_inference_threads(Arc::clone(inference_threads))
                             .with_mic_gain_db(Arc::clone(mic_gain_db)),
@@ -1476,7 +1522,7 @@ async fn build_transcriber(
                 Err(e) => {
                     tracing::error!(
                         error = ?e,
-                        path = %path.display(),
+                        path = %path_display,
                         "HUSH_MODEL_PATH failed to load"
                     );
                 }
