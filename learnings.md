@@ -4,6 +4,18 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-05 — CI rustfmt version differs from local toolchain
+
+**Problem:** CI uses `dtolnay/rust-toolchain` pinned to a January 2026 stable SHA (rustfmt 1.7.x). Local development typically runs a newer stable (e.g. 1.8.0). The two versions produce different output for borderline-length macro invocations (`anyhow!(...)`, `tracing::info!(...)`, function calls with 3+ args near the 100-char `max_width`). The result: `cargo fmt --all -- --check` passes locally but fails on CI after a push.
+
+**Symptoms:** CI `rustfmt check` job fails with a diff showing the exact wrapping it expects. The diff is reliable — applying it manually always produces a passing run.
+
+**Workaround:** When the CI fmt check fails, read the exact diff from the CI job log (`gh run list --branch <branch>`, then `gh run view <id> --log`) and apply those changes directly to the file. Do not rely on local `cargo fmt --all` to find these differences — it won't because the version differs.
+
+**Long-term fix:** Pin the local toolchain to match CI (add a `rust-toolchain.toml` at the repo root), or keep the CI pin moving in sync with local. Deferred because it would require all contributors to re-install the pinned toolchain.
+
+---
+
 ## 2026-05-05 — Meeting pump diarizer buffer drift on drain failure (#553)
 
 **Problem:** In `meeting/pump.rs`, when `drain_into` fails for a tick (e.g. transient SCK interruption), `tick_formats[i]` stays `None` and the diarizer's `AudioRollingBuffer` receives no samples for that tick. The streaming transcription session continues advancing its internal timeline, so the diarizer buffer falls behind. When utterance finals arrive with `[started_at_ms, ended_at_ms)` timestamps, `audio_buffer.slice_ms()` returns stale or misaligned audio, degrading speaker-labelling quality for the rest of the session.
