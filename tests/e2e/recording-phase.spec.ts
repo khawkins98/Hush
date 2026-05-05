@@ -167,7 +167,7 @@ test("stopping → recording: stop failure with live session restores recording 
     // Dynamic: reads from the Node-side closure via exposeFunction so we can
     // change the response after recording starts without a new addInitScript.
     meeting_active_session: async () => {
-      return await (window as Record<string, () => unknown>)["hushGetActiveSession"]();
+      return await (window as unknown as Record<string, () => unknown>)["hushGetActiveSession"]();
     },
   });
   await page.goto("/");
@@ -201,7 +201,7 @@ test("stopping → idle: stop failure with gone session clears to idle", async (
       throw { kind: "unknown", message: "stop failed" };
     },
     meeting_active_session: async () => {
-      return await (window as Record<string, () => unknown>)["hushGetActiveSession"]();
+      return await (window as unknown as Record<string, () => unknown>)["hushGetActiveSession"]();
     },
   });
   await page.goto("/");
