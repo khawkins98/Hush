@@ -94,3 +94,63 @@ test.describe("HUD timer reset across sessions (#481)", () => {
     await expect(elapsed).toHaveCount(0);
   });
 });
+
+// Transcription progress indicator (#566): the label shows "Processing…"
+// without a percentage until the first `transcription:progress` event
+// arrives, then updates to "Processing… N%". Progress resets between
+// recording cycles so back-to-back sessions don't show a stale percentage.
+test.describe("HUD transcription progress indicator (#566)", () => {
+  async function bootstrap(page: Parameters<typeof installMocks>[0]) {
+    await installMocks(page);
+    await page.goto("/hud");
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
+    // Drive into processing state (the only state where the label is visible).
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: Date.now(),
+    });
+    await fireEvent(page, "hud:state", { state: "processing" });
+  }
+
+  test("shows 'Processing…' before any progress event", async ({ page }) => {
+    await bootstrap(page);
+    await expect(page.locator(".hud-label")).toHaveText("Processing…");
+  });
+
+  test("updates label to 'Processing… N%' on transcription:progress event", async ({
+    page,
+  }) => {
+    await bootstrap(page);
+    await fireEvent(page, "transcription:progress", 42);
+    await expect(page.locator(".hud-label")).toHaveText("Processing… 42%");
+  });
+
+  test("label updates as progress increases", async ({ page }) => {
+    await bootstrap(page);
+    await fireEvent(page, "transcription:progress", 25);
+    await expect(page.locator(".hud-label")).toHaveText("Processing… 25%");
+    await fireEvent(page, "transcription:progress", 75);
+    await expect(page.locator(".hud-label")).toHaveText("Processing… 75%");
+    await fireEvent(page, "transcription:progress", 100);
+    await expect(page.locator(".hud-label")).toHaveText("Processing… 100%");
+  });
+
+  test("progress resets to 'Processing…' on next recording cycle", async ({
+    page,
+  }) => {
+    await bootstrap(page);
+    await fireEvent(page, "transcription:progress", 80);
+    await expect(page.locator(".hud-label")).toHaveText("Processing… 80%");
+
+    // New recording cycle — progress must clear so the next Processing
+    // transition starts clean rather than flashing the previous session's
+    // final percentage.
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      startedAtMs: Date.now(),
+    });
+    await fireEvent(page, "hud:state", { state: "processing" });
+    await expect(page.locator(".hud-label")).toHaveText("Processing…");
+  });
+});
+
