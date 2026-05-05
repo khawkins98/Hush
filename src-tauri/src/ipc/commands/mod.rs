@@ -37,8 +37,8 @@
 // `pub use` re-exports do not carry that symbol with them. See the
 // 2026-04-25 entry in `learnings.md`.
 pub mod debug;
-pub mod dictation;
 pub mod diarizer;
+pub mod dictation;
 pub mod dictionary;
 pub mod export;
 pub mod history;
@@ -295,7 +295,6 @@ pub const UPDATE_CHECK_TTL: std::time::Duration = std::time::Duration::from_secs
 // macOS-only commands (privacy-pane open / diagnose /
 // reset) live in `crate::ipc::commands::macos` —
 // extracted under #82.
-
 
 #[cfg(test)]
 mod tests {
@@ -625,9 +624,8 @@ mod tests {
 
         let sentinel: std::sync::Arc<dyn crate::diarization::Diarize> =
             std::sync::Arc::new(SwapSentinelDiarizer);
-        let slot: crate::diarization::DiarizeSlot = std::sync::Arc::new(
-            std::sync::RwLock::new(std::sync::Arc::clone(&sentinel)),
-        );
+        let slot: crate::diarization::DiarizeSlot =
+            std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::clone(&sentinel)));
 
         let res = super::diarizer::swap_diarizer_after_download(&slot, &path);
         assert!(res.is_err(), "swap should reject a non-wespeaker file");
