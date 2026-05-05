@@ -13,11 +13,12 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import type { Snippet } from "svelte";
-  import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
   import AudioWaveform from "./AudioWaveform.svelte";
   import StatusLine from "./StatusLine.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
+  import { Events } from "./events";
   import {
     listenForStatusLineChanges,
     readStatusLineEnabled,
@@ -105,6 +106,12 @@
   // the open main window updates without reload.
   let statusLineEnabled = $state(false);
   let unlistenStatusLine: UnlistenFn | null = null;
+  // Transcription progress 0–100 (#566). Non-null only while
+  // `transcribing` is true and the backend has fired at least one
+  // progress tick. Resets when `recording` flips back to true so
+  // back-to-back dictations each start with a clean bar.
+  let transcriptionProgress = $state<number | null>(null);
+  let unlistenProgress: UnlistenFn | null = null;
 
   // Recording-duration timer. Mirrors the HUD's pattern (#360):
   // wall-clock start stamp when `recording` flips true, rAF
@@ -129,6 +136,7 @@
     if (recording) {
       recordingStartedAt = Date.now();
       elapsedLabel = "00:00";
+      transcriptionProgress = null;
     } else {
       recordingStartedAt = null;
       elapsedLabel = "00:00";
@@ -139,6 +147,9 @@
     statusLineEnabled = readStatusLineEnabled();
     unlistenStatusLine = await listenForStatusLineChanges((next) => {
       statusLineEnabled = next;
+    });
+    unlistenProgress = await listen<number>(Events.TranscriptionProgress, (event) => {
+      transcriptionProgress = event.payload;
     });
     const tick = () => {
       if (recordingStartedAt !== null) {
@@ -152,6 +163,8 @@
   onDestroy(() => {
     unlistenStatusLine?.();
     unlistenStatusLine = null;
+    unlistenProgress?.();
+    unlistenProgress = null;
     if (raf !== undefined) {
       cancelAnimationFrame(raf);
       raf = undefined;
@@ -183,6 +196,20 @@
   <div class="record-waveform">
     <AudioWaveform mode={waveformMode} metering />
   </div>
+  {#if transcribing && transcriptionProgress !== null}
+    <!--
+      Thin progress bar shown while whisper.cpp is running (#566).
+      Only visible once the backend has fired at least one progress
+      tick so we don't flash a 0% bar on very short clips where
+      inference finishes before the first event arrives.
+    -->
+    <div class="transcription-progress-bar" aria-hidden="true">
+      <div
+        class="transcription-progress-fill"
+        style="width: {transcriptionProgress}%"
+      ></div>
+    </div>
+  {/if}
 
   <!--
     Three-column row: source picker on the left, the circular
@@ -739,5 +766,23 @@
     .spinner {
       animation: none;
     }
+  }
+
+  /* Thin progress bar shown under the waveform while whisper.cpp
+     is running (#566). Only rendered once the first progress tick
+     arrives so very short clips don't flash a 0% bar. */
+  .transcription-progress-bar {
+    width: 100%;
+    height: 3px;
+    background: var(--surface-raised, #e0e0e0);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: -0.5rem;
+  }
+  .transcription-progress-fill {
+    height: 100%;
+    background: var(--accent, #8b5cf6);
+    border-radius: 2px;
+    transition: width 0.3s ease;
   }
 </style>

@@ -39,7 +39,7 @@ use crate::transcription::streaming::{
     SlidingWindowConfig, SlidingWindowState, StreamSegment, StreamingTranscribeSession,
     WhisperLikeInferer,
 };
-use crate::transcription::{Transcribe, Utterance, WHISPER_SAMPLE_RATE};
+use crate::transcription::{ProgressHookSlot, Transcribe, Utterance, WHISPER_SAMPLE_RATE};
 
 /// Default thread count for whisper.cpp inference.
 ///
@@ -106,6 +106,12 @@ pub struct WhisperTranscription {
     /// inference call sees the current slider position without a
     /// model reload. 0.0 bits = unity (no boost).
     mic_gain_db: Arc<std::sync::atomic::AtomicU32>,
+    /// Optional callback fired by whisper.cpp during inference with an
+    /// integer percentage (0–100). Set by the IPC layer so the HUD can
+    /// show "Processing… N%" in real time (#566). Stored behind
+    /// `Arc<Mutex<...>>` so `set_progress_hook` can take `&self` while
+    /// the trait contract requires `Arc<dyn Transcribe>` usage.
+    progress_hook: ProgressHookSlot,
 }
 
 impl WhisperTranscription {
@@ -244,6 +250,7 @@ impl LoadedContext {
                 DEFAULT_INFERENCE_THREADS,
             )),
             mic_gain_db: Arc::new(std::sync::atomic::AtomicU32::new(0f32.to_bits())),
+            progress_hook: Arc::new(Mutex::new(None)),
         })
     }
 }
@@ -282,6 +289,23 @@ impl WhisperTranscription {
         // For M1 we always transcribe (never translate). Locale handling is
         // a settings concern that lands with the model picker.
         params.set_translate(false);
+
+        // Progress hook for "Processing… N%" in the HUD (#566). Clone the
+        // Arc under a short lock so the mutex is not held across the full
+        // inference call. The callback throttles to every 5 percentage
+        // points to keep event-bus traffic low on short clips.
+        let progress_hook = self
+            .progress_hook
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(hook) = progress_hook {
+            params.set_progress_callback_safe(move |progress: i32| {
+                if progress % 5 == 0 {
+                    (hook.as_ref())(progress);
+                }
+            });
+        }
 
         // Personal-dictionary vocabulary biasing. The empty-prompt path
         // is what `transcribe()` takes; the populated-prompt path is the
@@ -354,6 +378,10 @@ impl Transcribe for WhisperTranscription {
     /// effect on this backend.
     fn supports_prompt_biasing(&self) -> bool {
         true
+    }
+
+    fn set_progress_hook(&self, hook: Option<Arc<dyn Fn(i32) + Send + Sync + 'static>>) {
+        *self.progress_hook.lock().unwrap_or_else(|e| e.into_inner()) = hook;
     }
 
     fn model_label(&self) -> String {
