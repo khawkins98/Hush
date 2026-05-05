@@ -300,3 +300,61 @@ test("record-mode-badge shows with data-health=stale when Screen Recording is st
   await expect(badge).toHaveAttribute("data-health", "stale");
   await expect(badge).toContainText(/Screen Recording access expired/i);
 });
+
+test("live-transcript panel appears during recording when utterances are available", async ({
+  page,
+}) => {
+  // Simulate an active meeting session that has returned a spoken utterance.
+  // meeting_start_manual returns session id=99; the $effect in +page.svelte
+  // then calls meeting_session_get(99) which populates meetingActiveDetail.
+  // RecordPanel's liveTranscriptText derived becomes non-empty, triggering
+  // showLiveTranscript → the live-transcript section renders.
+  await installMocks(page, {
+    meeting_start_manual: () => ({
+      id: 99,
+      appName: "manual",
+      appKind: "other",
+      startedAt: "2026-05-05T10:00:00Z",
+      endedAt: null,
+      speakerCount: null,
+      utteranceCount: 0,
+      notes: null,
+      sources: ["mic"],
+    }),
+    meeting_session_get: () => ({
+      session: {
+        id: 99,
+        appName: "manual",
+        appKind: "other",
+        startedAt: "2026-05-05T10:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 1,
+        notes: null,
+      },
+      utterances: [
+        {
+          id: 1,
+          sessionId: 99,
+          startedAtMs: 0,
+          endedAtMs: 3000,
+          speakerLabel: "mic",
+          text: "Hello world.",
+          isFinal: true,
+        },
+      ],
+      currentPartials: [],
+    }),
+    meeting_active_session: () => ({ active: 99 }),
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Start recording" }).click();
+
+  // Phase is now recording; the $effect polls meeting_session_get and
+  // populates meetingActiveDetail. The live transcript panel should appear
+  // with the utterance text.
+  const livePanel = page.locator('[data-testid="live-transcript"]');
+  await expect(livePanel).toBeVisible();
+  await expect(livePanel).toContainText("Hello world.");
+});
