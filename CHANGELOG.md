@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `meeting pump: inference tick` now includes `elapsed_ms` for the feed+drain round-trip, making slow-inference diagnosis straightforward.
 - Added `whisper: inference complete` log at the whisper layer showing raw segment count before text-emptiness filtering.
 
+### Performance
+
+#### Parallel Whisper model loads at startup (#561)
+
+- The two `WhisperTranscription` contexts (dictation slot and meeting slot) are now loaded in parallel via `tokio::join!` with each model load on a `spawn_blocking` thread. On a warm filesystem this halves the sequential whisper load cost.
+- Added `tracing::info!` timestamps at each phase of `build_default` (`database ready`, `whisper contexts loaded`, `diarizer ready`, `build_default complete`) so startup time can be profiled with `RUST_LOG=info npm run tauri dev`.
+
 
 - Push-to-talk and the record button no longer drop the final word. A 500 ms trailing-silence buffer holds the audio pipeline open after the user releases the PTT key or clicks Stop, giving Whisper's in-flight chunk time to accumulate before teardown.
 - Rapid accidental PTT taps (< 100 ms) no longer start a recording. A minimum-hold guard arms a 100 ms timer on key-down; releasing before the timer fires discards the tap entirely.
