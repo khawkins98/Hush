@@ -104,6 +104,10 @@
   // released, and to detect the stuck-recording race (key released while
   // start IPC was in-flight).
   let pttIsDown = false;
+  // True only when PTT itself started the current recording. Guards the
+  // release handler from stopping a recording that was started by the UI
+  // button or the toggle hotkey.
+  let pttOwnedRecording = false;
   // Non-null while the minimum-hold guard timer is running (before we
   // commit to starting a recording). Cancelled on early key-up.
   let pttPressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -355,10 +359,14 @@
         // Key may have been released before the timer fired (short tap).
         if (!pttIsDown || dictation.busy || dictation.recording) return;
         void dictation.start().then(() => {
-          // Stuck-recording race fix: if the key was released while the
-          // start IPC was in-flight, the release handler saw busy=true
-          // and skipped stop(). Detect that here and call stop().
-          if (!pttIsDown && dictation.recording && !dictation.busy) {
+          if (!dictation.recording || dictation.busy) return;
+          if (pttIsDown) {
+            // Normal case: key still held — mark this recording as PTT-owned
+            // so the release handler knows it's allowed to stop it.
+            pttOwnedRecording = true;
+          } else {
+            // Stuck-recording race: key was released while start IPC was
+            // in-flight. Release handler saw busy=true and skipped stop().
             void dictation.stop(TRAILING_SILENCE_MS);
           }
         });
@@ -375,7 +383,10 @@
       }
       // If start() is in-flight (busy=true, recording=false), the
       // post-start callback above will call stop() once it resolves.
-      if (!dictation.recording || dictation.busy) return;
+      // Only stop if PTT itself started this recording — don't interrupt
+      // a UI-button or toggle-hotkey recording on PTT key release.
+      if (!pttOwnedRecording || !dictation.recording || dictation.busy) return;
+      pttOwnedRecording = false;
       void dictation.stop(TRAILING_SILENCE_MS);
     });
 

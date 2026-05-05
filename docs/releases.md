@@ -32,11 +32,11 @@ The first wave of releases will surface those warnings to users. The README's "F
 
 ### 1. Bump versions
 
-Three files have to agree on the new version. They're not yet linked, so a stale one will silently produce a release where the binary reports an older version than the tag suggests.
+Three files have to agree on the new version. They're not yet linked, so a stale one will silently produce a release where the binary reports an older version than the tag suggests. CI checks all three and will fail the PR if any disagree.
 
 - [`src-tauri/Cargo.toml`](../src-tauri/Cargo.toml) — `[package].version = "0.2.0"`
 - [`src-tauri/tauri.conf.json`](../src-tauri/tauri.conf.json) — `"version": "0.2.0"`
-- [`src-tauri/Cargo.lock`](../src-tauri/Cargo.lock) — runs `cargo build` and re-commits; the lockfile entry for `hush` updates to match.
+- [`package.json`](../package.json) — `"version": "0.2.0"`
 
 ### 2. Update the changelog
 
@@ -46,7 +46,7 @@ Move `[Unreleased]` content to a new `[0.2.0] — YYYY-MM-DD` section in [`CHANG
 
 ```bash
 git checkout -b chore/release-0.2.0
-# edits + cargo build to update the lockfile
+# bump the three version files (Cargo.toml, tauri.conf.json, package.json)
 git commit -m "chore(release): v0.2.0"
 gh pr create
 # merge once CI is green
