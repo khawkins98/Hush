@@ -233,3 +233,60 @@ Before merging anything that touches the dictation hot path, run through the man
 ### Type check (`npm run check`)
 
 Runs `svelte-check` across the full frontend including `vite.config.js`. Required clean for every PR; CI runs the same command.
+
+---
+
+## Diagnosing meeting mode (0 utterances)
+
+When meeting mode transcribes nothing, the logs distinguish three failure modes. First, enable debug logging:
+
+```bash
+RUST_LOG=hush=debug npm run tauri:bundle && open ~/Applications/Hush.app
+```
+
+Then start a meeting session and watch the console output (Tauri dev console, or the in-app Debug tab). You should see lines like:
+
+```
+meeting pump: inference tick  session_id=1 source_kind=microphone utterances=0 elapsed_ms=47
+streaming tick: inference ran  raw_segments=2 non_empty_segments=0 window_ms=3000
+whisper: inference complete  n_segments=2 window_samples=48000
+```
+
+### Failure mode 1 — Audio not flowing (`samples = 0`)
+
+```
+meeting pump: inference tick  utterances=0 elapsed_ms=1
+```
+
+... and every tick shows `elapsed_ms` near 0 with no `"streaming tick: inference ran"` lines from `streaming.rs`.
+
+**Means:** The ring buffer is empty. The audio capture source isn't pushing samples. Check ScreenCaptureKit permissions (`npm run tauri:bundle` first) and microphone TCC grants.
+
+### Failure mode 2 — Whisper no-speech filtering
+
+```
+streaming tick: inference ran  raw_segments=2 non_empty_segments=0
+whisper: inference complete  n_segments=2 window_samples=48000
+```
+
+**Means:** Whisper ran and produced segments, but they were all suppressed by `no_speech_thold` (0.6). Common with compressed call audio (Opus/AAC artefacts raise the no-speech token probability). The fix is not to lower the threshold without evidence — see `learnings.md` "2026-05-06" — but to verify the input is actually human speech at an expected level.
+
+### Failure mode 3 — Inference gate never opened
+
+```
+meeting pump: inference tick  utterances=0 elapsed_ms=47
+```
+
+... and there are **no** `"streaming tick: inference ran"` lines at all (only `"interval gate not open"` or `"waiting for min-first audio threshold"` at `trace!` level, visible with `RUST_LOG=hush=trace`).
+
+**Means:** Audio is flowing but the streaming policy never opens the gate. Check whether `total_samples_fed` is growing (add a temporary `RUST_LOG=hush=trace` session to see the trace-level ticks) and that `infer_interval_ms` / `min_first_inference_ms` are configured as expected.
+
+### Reading the log cross-layer
+
+| Log line | Location | Signal |
+|----------|----------|--------|
+| `"streaming tick: inference ran"` | `streaming.rs` `tick()` | Gate opened; `raw_segments` vs `non_empty_segments` distinguishes filter vs speech |
+| `"streaming finish: tail flush inference ran"` | `streaming.rs` `finish()` | Session-end flush |
+| `"whisper: inference complete"` | `whisper.rs` `infer()` | What Whisper saw before text post-processing |
+| `"meeting pump: inference tick"` | `pump.rs` | Top-level utterance count; `elapsed_ms` distinguishes slow inference from empty-gate |
+| `"transcription slot is None"` (WARN) | `pump.rs` | Model not loaded |

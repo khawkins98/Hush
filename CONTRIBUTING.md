@@ -238,18 +238,42 @@ Buttons that delete user data (clear history, delete a session, remove a vocabul
 
 When adding a new destructive surface, mirror the pattern: a `pendingConfirmId` (or `pendingConfirm` boolean) `$state`, a `setTimeout` to clear it, and matching aria copy ("Confirm deletion" vs "Delete"). Voice should be consistent — short, plain ("Delete it?", not "Are you absolutely sure you wish to proceed?").
 
-## Code comments
+## Code comments and documentation
 
 - Public Rust APIs carry `///` doc comments with a one-line summary.
-- Comments explain *why*, not *what*.
+- Comments explain *why*, not *what*. Non-obvious constraints, design tradeoffs, and intent deserve a comment; mechanical steps don't.
 - Where a module's design was directly inspired by VoiceInk, the module header says so: `// Concept inspired by VoiceInk's <feature>. Reimplemented from observed public behaviour, no source code referenced. See §13.8.`
 - Untagged TODOs (`// TODO:` without an issue number) **fail CI lint**. Use `// TODO(#NNN):` or `// FIXME(#NNN):`.
+
+### Keep the docs current
+
+Your PR touches code — keep the docs honest too:
+
+| Changed | Update |
+|---------|--------|
+| User-visible behaviour | `CHANGELOG.md` under `## [Unreleased]` |
+| Non-obvious architectural decision | `learnings.md` entry |
+| Developer workflow, commands, or new gotcha | `docs/developing.md` |
+| New module or seam added/removed | `ARCHITECTURE.md` module map |
+
+`docs/developing.md` is the live reference contributors reach for first. If a new feature adds a flag, a command variant, a required env-var, a workaround for a platform quirk, or a debugging technique — it belongs there, not just in commit messages or PR descriptions.
+
+### Diagnostic logging (Rust audio/transcription code)
+
+New Rust code in the audio capture → transcription pipeline should be observable via `RUST_LOG=hush=debug` without ad-hoc print statements. Use `tracing::debug!` for one-per-event signals (inference ran, tick result), `tracing::trace!` for per-poll noise. Prefer named structured fields over string interpolation so log lines are grep-friendly:
+
+```rust
+// ✓
+tracing::debug!(raw_segments, non_empty_segments, window_ms, "inference ran");
+// ✗
+tracing::debug!("inference ran: {raw} raw, {ne} non-empty");
+```
+
+See `docs/developing.md` → "Diagnosing meeting mode" and `learnings.md` "2026-05-06" for the full conventions.
 
 ---
 
 ## PR checklist
-
-Each PR template renders the checklist below. The short version:
 
 - [ ] CI is green (clippy, rustfmt, cargo test, frontend type check, e2e)
 - [ ] Conventional commit title
