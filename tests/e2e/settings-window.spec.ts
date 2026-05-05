@@ -173,6 +173,45 @@ test.describe("settings window — General tab", () => {
     await expect(label).toHaveText("8");
   });
 
+  test("mic-gain-db slider mounts at 0 and shows 'Off (0 dB)' label (#535)", async ({
+    page,
+  }) => {
+    // Default mock already returns 0 for get_mic_gain_db.
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    // Mic boost lives behind the Advanced disclosure, same as inference threads.
+    await page
+      .locator('[data-testid="settings-general-advanced-toggle"]')
+      .click();
+
+    const slider = page.locator('[data-testid="settings-mic-gain-db-slider"]');
+    await expect(slider).toBeVisible();
+    await expect(slider).toHaveValue("0");
+
+    const label = page.locator('[data-testid="settings-mic-gain-db-value"]');
+    await expect(label).toHaveText("Off (0 dB)");
+  });
+
+  test("mic-gain-db slider mounts at persisted non-zero value and shows '+N dB' label (#535)", async ({
+    page,
+  }) => {
+    await installMocks(page, { get_mic_gain_db: () => 6 });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    await page
+      .locator('[data-testid="settings-general-advanced-toggle"]')
+      .click();
+
+    const slider = page.locator('[data-testid="settings-mic-gain-db-slider"]');
+    await expect(slider).toHaveValue("6");
+
+    const label = page.locator('[data-testid="settings-mic-gain-db-value"]');
+    await expect(label).toHaveText("+6 dB");
+  });
+
   test("first-run reset button shows confirmation copy after click", async ({
     page,
   }) => {
