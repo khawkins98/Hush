@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Diarization pipeline integration test scaffold (`diarization-onnx` feature, #314)
+
+- Added `tests/diarization_fixture.rs`: two `#[ignore]`'d integration tests that exercise the full `AudioRollingBuffer → OnnxDiarizer → speaker_label` pipeline — the exact path the meeting pump uses in production.
+  - `two_speakers_get_distinct_labels` — asserts that two WAVs with distinct voices land in different `speaker_label` clusters, and that a third utterance from speaker 1 maps back to the same cluster (1-NN stability test for #316).
+  - `short_audio_leaves_speaker_label_unchanged` — asserts that audio below the `MIN_FRAMES_FOR_EMBEDDING` floor (synthesized 100 ms silence) leaves `speaker_label` as `None` rather than panicking or assigning a spurious ID.
+- Updated `docs/developing.md` and `tests/fixtures/README.md` with env var documentation, download instructions for the wespeaker ONNX model, and run commands.
+
 ### Fixed
 
 #### Diarizer timeline drift on transient drain failure now corrected (#553)

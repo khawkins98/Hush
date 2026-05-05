@@ -41,7 +41,63 @@ var. The clip is small enough to fit comfortably in the repo (~344
 KB) and its license (public domain) carries no redistribution
 constraints.
 
-## Other fixtures (BYO)
+## Diarization integration test (`tests/diarization_fixture.rs`)
+
+This test exercises the full `AudioRollingBuffer → OnnxDiarizer → speaker_label` path — the
+same pipeline the meeting pump uses in production. It is `#[ignore]`'d and gated on
+`--features diarization-onnx`.
+
+### Required env vars
+
+| Env var | Points at | Notes |
+|---|---|---|
+| `HUSH_DIARIZATION_MODEL_PATH` | wespeaker ONNX model file | required by all diarization tests |
+| `HUSH_TEST_SPEAKER1_WAV` | WAV with speaker 1's voice (~5 s) | required by `two_speakers_get_distinct_labels` |
+| `HUSH_TEST_SPEAKER2_WAV` | WAV with a **different** speaker's voice (~5 s) | required by `two_speakers_get_distinct_labels` |
+
+Download the model:
+
+```bash
+huggingface-cli download Wespeaker/wespeaker-voxceleb-resnet34-LM voxceleb_resnet34_LM.onnx
+```
+
+Speaker WAVs are BYO — any ~5 s PCM WAV at any sample rate. `AudioRollingBuffer` handles
+resampling. LibriVox and Mozilla Common Voice are good sources for distinct single-speaker clips.
+
+### Run
+
+```bash
+HUSH_DIARIZATION_MODEL_PATH=/path/to/voxceleb_resnet34_LM.onnx \
+HUSH_TEST_SPEAKER1_WAV=/path/to/speaker1.wav \
+HUSH_TEST_SPEAKER2_WAV=/path/to/speaker2.wav \
+  cargo test --features diarization-onnx --test diarization_fixture -- --ignored --nocapture
+```
+
+`short_audio_leaves_speaker_label_unchanged` only needs `HUSH_DIARIZATION_MODEL_PATH` — it
+uses a synthesized 100 ms silence clip.
+
+## Meeting pump integration test (`tests/meeting_fixture.rs`)
+
+`tests/meeting_fixture.rs` exercises the full `SessionManager → pump → WhisperTranscription →
+SQLite` path via the `AudioCapture` seam. Requires `--features whisper,test-utils` and
+`HUSH_TEST_MODEL`. See [`WavFileAudioCapture`](#wavfileaudiocapture-test-utils-feature) below.
+
+```bash
+HUSH_TEST_MODEL=/path/to/ggml-base.bin \
+  cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
+```
+
+## `WavFileAudioCapture` (`test-utils` feature)
+
+`src/audio/file_source.rs` is compiled when `--features test-utils` is enabled. It provides:
+
+- **`WavFileAudioCapture`** — implements `AudioCapture`, serving pre-loaded WAV samples to the
+  meeting pump in configurable-size chunks.
+- **`WavFileAudioSession`** — implements `AudioSession`. Uses `AtomicUsize` position tracking so
+  `drain_into` is lock-free.
+
+The `test-utils` feature is never enabled by default and does not affect production builds.
+
 
 If you want to point `HUSH_TEST_AUDIO` at something other than the
 bundled clip:
