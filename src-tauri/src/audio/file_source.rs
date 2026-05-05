@@ -128,7 +128,9 @@ impl AudioCapture for WavFileAudioCapture {
 
     fn stop(&self) -> Result<CapturedAudio> {
         if !self.recording.swap(false, Ordering::AcqRel) {
-            return Err(anyhow!("WavFileAudioCapture: stop called while not recording"));
+            return Err(anyhow!(
+                "WavFileAudioCapture: stop called while not recording"
+            ));
         }
         Ok(CapturedAudio {
             samples: (*self.samples).clone(),
