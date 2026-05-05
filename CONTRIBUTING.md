@@ -308,7 +308,7 @@ Add a one-line entry to `learnings.md` with the date, the PRs in scope, and the 
 
 ## Cutting a release
 
-Release engineering lives in [`docs/releases.md`](./docs/releases.md). Short version: bump the three version files (`Cargo.toml`, `tauri.conf.json`, `Cargo.lock`), move `[Unreleased]` content to a dated section in `CHANGELOG.md`, push a `v*` tag, review the draft GitHub Release, click Publish. The actual cross-platform build runs in `.github/workflows/release.yml` via `tauri-action`.
+Release engineering lives in [`docs/releases.md`](./docs/releases.md). Short version: bump the three version files (`Cargo.toml`, `tauri.conf.json`, `package.json`), move `[Unreleased]` content to a dated section in `CHANGELOG.md`, push a `v*` tag, review the draft GitHub Release, click Publish. The actual cross-platform build runs in `.github/workflows/release.yml` via `tauri-action`.
 
 To smoke the release pipeline without cutting a real tag: `gh workflow run release.yml` (or "Run workflow" in the Actions UI). It publishes to a `dispatch-<run-id>` draft you can delete after inspection.
 

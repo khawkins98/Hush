@@ -82,8 +82,12 @@ npm run tauri:bundle
 # Gatekeeper prompt). Not needed for normal feature work.
 npm run tauri:dmg
 
-# Rust unit tests — fast (~100 ms total), no real audio device needed.
+# Rust unit tests.
+# Default features include `whisper` + `diarization-onnx`, so the
+# default build needs cmake and pulls ORT binaries on first run.
+# For a lightweight path (no cmake, no ORT), use --no-default-features.
 cd src-tauri && cargo test --lib
+cd src-tauri && cargo test --lib --no-default-features        # fast, no cmake needed
 cd src-tauri && cargo test --lib --features whisper            # plus whisper-gated paths
 cd src-tauri && cargo test --lib --features diarization-onnx   # plus diarizer-gated paths
 
@@ -91,8 +95,10 @@ cd src-tauri && cargo test --lib --features diarization-onnx   # plus diarizer-g
 cd src-tauri && cargo test --lib audio::tests::name_of_test
 cd src-tauri && cargo test --lib meeting::
 
-# Integration tests (#[ignore]'d by default — need external resources)
-cd src-tauri && HUSH_TEST_AUDIO=/path/to/sample.wav cargo test --features whisper -- --ignored
+# Integration tests (#[ignore]'d by default — need a Whisper model file)
+# HUSH_TEST_AUDIO defaults to the bundled jfk.wav; only HUSH_TEST_MODEL is required.
+HUSH_TEST_MODEL=/path/to/ggml-base.bin \
+  cd src-tauri && cargo test --features whisper --test audio_fixture -- --ignored
 
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check
@@ -191,9 +197,10 @@ The check is cheap: launch, wait for the "starting Hush" trace log, confirm no p
 
 ### Rust unit tests (`cargo test --lib`)
 
-Pure-logic tests at the trait + module boundaries. Fast (~100 ms total), run on every PR via CI on Linux + macOS.
+Pure-logic tests at the trait + module boundaries. No real audio device needed. The default build (features `whisper` + `diarization-onnx`) needs cmake and pulls ORT binaries; for a fast no-cmake pass use `--no-default-features`.
 
-- **Default features** — no cmake required; covers most paths.
+- **`--no-default-features`** — no cmake required; covers most paths. Fast (~100 ms total).
+- **Default features** — same tests, but also exercises feature-gated code. Needs cmake + ORT.
 - **`--features whisper`** — adds whisper-gated paths. Needs cmake.
 - **`--features diarization-onnx`** — adds diarizer-gated paths.
 - **Hand-rolled mocks** at every trait seam (`Noop*`, `Mem*` impls in `src-tauri/src/ipc/mod.rs`) — preferred over `mockall` for clearer test failure messages.
