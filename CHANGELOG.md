@@ -9,7 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-#### PTT last-word clipping and stuck-recording race (#548)
+#### Toggle hotkey and command palette stop now apply trailing-silence buffer (#560)
+
+- The toggle hotkey ("press to start, press to stop") and command palette "Stop dictation" entry previously called `dictation.stop()` with no trailing-silence delay, so the last word was silently clipped. All four stop paths (PTT key-up, record button, toggle hotkey, command palette) now consistently apply the 500 ms buffer.
+
+#### Frontend recording lifecycle replaced with discriminated-union state machine (#558, #560)
+
+- Replaced 7 interdependent flat `$state` variables with a single `RecordingPhase` discriminated union (`idle | starting | recording | stopping | transcribing`). Illegal state combinations are structurally impossible.
+- Fixed the `transcribing` spinner: the previous `$derived` expression was always `false` because `busy` cleared in `finally` before the `setTimeout` fired. The spinner now correctly shows during result hydration after meeting stop.
+- Eliminated 300 ms / 350 ms `setTimeout` delays in the stop path: `meeting_stop_manual` awaits pump drain before returning, so the result can be hydrated with a direct `await`.
+- Stop-failure recovery now queries `meeting_active_session` directly rather than relying on `meeting.activeId` which could be stale after a failed `refresh()`.
+- `meeting_session_get` is now called once on stop, with the result shared for both clipboard copy and the result block (previously called twice).
+
 
 - Push-to-talk and the record button no longer drop the final word. A 500 ms trailing-silence buffer holds the audio pipeline open after the user releases the PTT key or clicks Stop, giving Whisper's in-flight chunk time to accumulate before teardown.
 - Rapid accidental PTT taps (< 100 ms) no longer start a recording. A minimum-hold guard arms a 100 ms timer on key-down; releasing before the timer fires discards the tap entirely.

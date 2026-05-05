@@ -2,10 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 
 // How long (ms) to hold the capture pipeline open after the user signals
 // stop, so Whisper's in-flight chunk has time to accumulate the final word.
-// Applied by callers that represent "natural end of speech" (PTT key-up,
-// record-button tap) but NOT by callers that mean "stop right now"
-// (toggle hotkey, command palette). 500 ms matches the conventional PTT
-// trailing buffer used by voice apps (Discord, Mumble, etc.).
+// Applied by all callers that represent "natural end of speech": PTT key-up,
+// record-button tap, toggle hotkey stop, and command palette stop.
+// 500 ms matches the conventional PTT trailing buffer used by voice apps
+// (Discord, Mumble, etc.).
 export const TRAILING_SILENCE_MS = 500;
 
 import {
@@ -67,7 +67,10 @@ let error = $state<ErrorDisplay | null>(null);
 let models = $state<ModelCard[]>([]);
 let modelsLoaded = $state(false);
 let appProfileNotice = $state<string | null>(null);
-let appProfileNoticeTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+// Timer handle for the app-profile notice auto-dismiss. Not reactive — only
+// used internally so the previous timer can be cancelled when a new notice
+// arrives. Plain let is sufficient; $state would fire unnecessary updates.
+let appProfileNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPermissionsDialogIntro = $state<string | null>(null);
 
 let recording = $derived(phase.tag === "recording");
