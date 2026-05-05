@@ -258,8 +258,28 @@ export const dictation = {
       );
     } catch (e) {
       error = formatErrorDisplay(e);
-      recording = false;
-      recordMode = null;
+      if (meetingId !== null) {
+        // meeting_stop_manual failed — re-sync from backend before clearing
+        // UI state. The session may still be live on the backend (#552).
+        try {
+          await meeting.refresh();
+        } catch {
+          // meeting.refresh() handles its own errors internally; this
+          // outer catch is a belt-and-suspenders guard only.
+        }
+        if (meeting.activeId !== meetingId) {
+          // Backend confirms the session is gone (or replaced by another).
+          // Safe to clear frontend recording state.
+          recording = false;
+          recordMode = null;
+          lastMeetingId = null;
+          lastRecordingStartedAtMs = null;
+        }
+        // Else: session still active — leave recording=true so user can retry.
+      } else {
+        recording = false;
+        recordMode = null;
+      }
     } finally {
       busy = false;
     }
