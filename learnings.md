@@ -4,6 +4,16 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-05 — Meeting pump diarizer buffer drift on drain failure (#553)
+
+**Problem:** In `meeting/pump.rs`, when `drain_into` fails for a tick (e.g. transient SCK interruption), `tick_formats[i]` stays `None` and the diarizer's `AudioRollingBuffer` receives no samples for that tick. The streaming transcription session continues advancing its internal timeline, so the diarizer buffer falls behind. When utterance finals arrive with `[started_at_ms, ended_at_ms)` timestamps, `audio_buffer.slice_ms()` returns stale or misaligned audio, degrading speaker-labelling quality for the rest of the session.
+
+**Fix:** Cache the last successful `CaptureFormat` per source in `last_known_formats`. On drain failure, if a format is known, compute `(sample_rate * PUMP_TICK_secs * channels) as usize` zero samples and append them to `audio_buffers[i]`. This keeps the diarizer timeline aligned with the tick cadence without introducing artificial speech content (zeros are silence and don't trigger embedding drift).
+
+**Lesson:** Any rolling audio buffer that must stay wall-clock aligned needs compensation for missed ticks. The rule: *if a consumer has a time-indexed view of the audio stream, every tick must advance that index even if no real samples arrived.*
+
+---
+
 ## 2026-05-05 — PTT trailing-silence buffer and minimum-hold guard (#548)
 
 **Problem:** Two related PTT/recording UX bugs:

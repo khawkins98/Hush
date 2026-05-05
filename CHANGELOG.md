@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Diarizer timeline drift on transient drain failure now corrected (#553)
+
+- When a `drain_into` call fails for a tick, the pump now zero-fills the diarizer's rolling audio buffer for the expected tick duration, keeping its timeline aligned with the transcription session's internal clock. Previously, a failed drain left a gap in the buffer, causing `slice_ms()` to return stale or misaligned audio for subsequent utterances and degrading speaker-labelling quality for the rest of the session.
+
 #### Toggle hotkey and command palette stop now apply trailing-silence buffer (#560)
 
 - The toggle hotkey ("press to start, press to stop") and command palette "Stop dictation" entry previously called `dictation.stop()` with no trailing-silence delay, so the last word was silently clipped. All four stop paths (PTT key-up, record button, toggle hotkey, command palette) now consistently apply the 500 ms buffer.
