@@ -238,56 +238,42 @@ Buttons that delete user data (clear history, delete a session, remove a vocabul
 
 When adding a new destructive surface, mirror the pattern: a `pendingConfirmId` (or `pendingConfirm` boolean) `$state`, a `setTimeout` to clear it, and matching aria copy ("Confirm deletion" vs "Delete"). Voice should be consistent — short, plain ("Delete it?", not "Are you absolutely sure you wish to proceed?").
 
-## Code comments
+## Code comments and documentation
 
 - Public Rust APIs carry `///` doc comments with a one-line summary.
-- Comments explain *why*, not *what*.
+- Comments explain *why*, not *what*. Non-obvious constraints, design tradeoffs, and intent deserve a comment; mechanical steps don't.
 - Where a module's design was directly inspired by VoiceInk, the module header says so: `// Concept inspired by VoiceInk's <feature>. Reimplemented from observed public behaviour, no source code referenced. See §13.8.`
 - Untagged TODOs (`// TODO:` without an issue number) **fail CI lint**. Use `// TODO(#NNN):` or `// FIXME(#NNN):`.
 
+### Keep the docs current
+
+Your PR touches code — keep the docs honest too:
+
+| Changed | Update |
+|---------|--------|
+| User-visible behaviour | `CHANGELOG.md` under `## [Unreleased]` |
+| Non-obvious architectural decision | `learnings.md` entry |
+| Developer workflow, commands, or new gotcha | `docs/developing.md` |
+| New module or seam added/removed | `ARCHITECTURE.md` module map |
+
+`docs/developing.md` is the live reference contributors reach for first. If a new feature adds a flag, a command variant, a required env-var, a workaround for a platform quirk, or a debugging technique — it belongs there, not just in commit messages or PR descriptions.
+
+### Diagnostic logging (Rust audio/transcription code)
+
+New Rust code in the audio capture → transcription pipeline should be observable via `RUST_LOG=hush=debug` without ad-hoc print statements. Use `tracing::debug!` for one-per-event signals (inference ran, tick result), `tracing::trace!` for per-poll noise. Prefer named structured fields over string interpolation so log lines are grep-friendly:
+
+```rust
+// ✓
+tracing::debug!(raw_segments, non_empty_segments, window_ms, "inference ran");
+// ✗
+tracing::debug!("inference ran: {raw} raw, {ne} non-empty");
+```
+
+See `docs/developing.md` → "Diagnosing meeting mode" and `learnings.md` "2026-05-06" for the full conventions.
+
 ---
 
-## Diagnostic logging
-
-Every audio-pipeline module must carry logs that make the three main failure modes distinguishable without adding ad-hoc print statements.
-
-### Log levels
-
-| Level | Use |
-|-------|-----|
-| `tracing::warn!` | Something wrong enough to surface in normal runs (transcriber slot None, source panic). Always present in `RUST_LOG=hush=warn`. |
-| `tracing::debug!` | One event per inference cycle — "inference ran", "meeting pump tick". The **actionable** level: `RUST_LOG=hush=debug` should tell you which of the three failure modes you're in. |
-| `tracing::trace!` | Per-tick noise that fires on every poll interval (interval gate not open, window empty). Use `RUST_LOG=hush=trace` only when debugging gate logic. |
-
-### Structured fields (not string interpolation)
-
-Always use named fields rather than embedding values in the message string:
-
-```rust
-// ✓ — fields are queryable by log sinks / structured log parsers
-tracing::debug!(raw_segments, non_empty_segments, window_ms, "streaming tick: inference ran");
-
-// ✗ — human-readable only, hard to grep
-tracing::debug!("inference ran: {} raw, {} non-empty, {}ms window", raw, ne, w);
-```
-
-### The raw/non-empty pattern
-
-When passing Whisper output through a filter, always log both counts:
-
-```rust
-let raw_segments = segments.len();
-let non_empty_segments = segments.iter().filter(|s| !s.text.trim().is_empty()).count();
-tracing::debug!(raw_segments, non_empty_segments, "streaming tick: inference ran");
-```
-
-`raw_segments > 0` but `non_empty_segments = 0` means Whisper ran and produced tokens but they were all filtered by `no_speech_thold`. This is the primary diagnostic signal for the "meeting mode produces 0 utterances" class of bug.
-
-### PR expectation
-
-If your PR touches the audio capture → transcription → utterance pipeline, it must carry `tracing::debug!` coverage for every non-trivial branch so that `RUST_LOG=hush=debug` can identify which stage is dropping audio. See `learnings.md` ("2026-05-06 — Meeting pump diagnostic logging") for the rationale.
-
-Each PR template renders the checklist below. The short version:
+## PR checklist
 
 - [ ] CI is green (clippy, rustfmt, cargo test, frontend type check, e2e)
 - [ ] Conventional commit title
