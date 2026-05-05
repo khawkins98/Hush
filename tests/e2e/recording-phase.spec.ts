@@ -249,3 +249,54 @@ test("recording guard: start button replaced by stop when recording", async ({ p
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Start recording" })).toHaveCount(0);
 });
+
+test("record-mode-badge hidden when Screen Recording health is not-applicable (default)", async ({
+  page,
+}) => {
+  // Default mock returns screenRecording: "not-applicable"; badge must be absent.
+  await installMocks(page);
+  await page.goto("/");
+  await expect(
+    page.locator('[data-testid="record-mode-badge"]'),
+  ).toHaveCount(0);
+});
+
+test("record-mode-badge shows with data-health=not-granted when Screen Recording is not-granted", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    get_permission_health: () => ({
+      health: {
+        microphone: "confirmed",
+        screenRecording: "not-granted",
+        inputMonitoring: "not-applicable",
+      },
+    }),
+  });
+  await page.goto("/");
+
+  const badge = page.locator('[data-testid="record-mode-badge"]');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute("data-health", "not-granted");
+  await expect(badge).toContainText(/grant Screen Recording/i);
+});
+
+test("record-mode-badge shows with data-health=stale when Screen Recording is stale", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    get_permission_health: () => ({
+      health: {
+        microphone: "confirmed",
+        screenRecording: "stale",
+        inputMonitoring: "not-applicable",
+      },
+    }),
+  });
+  await page.goto("/");
+
+  const badge = page.locator('[data-testid="record-mode-badge"]');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute("data-health", "stale");
+  await expect(badge).toContainText(/Screen Recording access expired/i);
+});
