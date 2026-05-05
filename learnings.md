@@ -4,6 +4,26 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-05 — PTT trailing-silence buffer and minimum-hold guard (#548)
+
+**Problem:** Two related PTT/recording UX bugs:
+
+1. **Last word clipped.** Whisper processes audio in chunks. When `stop_dictation` / `meeting_stop_manual` is called immediately on PTT key-up or record-button click, audio buffered in the last ~500 ms hasn't flushed into the current chunk yet and is silently discarded. The final word gets dropped.
+
+2. **Stuck-recording race.** A PTT key tap shorter than the time it takes for the start IPC to complete (`start_dictation` ≈ 5–50 ms) means: press fires `dictation.start()` (sets `busy=true`); release arrives while IPC is in-flight; release handler sees `busy=true, recording=false` and returns without stopping; start resolves to `recording=true`; user is stuck recording.
+
+**Fixes implemented (frontend-only):**
+
+1. `dictation.stop()` now accepts a `trailingMs` parameter (default `0`). PTT release and the record-button `onStop` callback pass `TRAILING_SILENCE_MS = 500`. The toggle hotkey and command palette pass `0` (explicit stop-now semantics). During the trailing window the state machine holds `busy=true, recording=true`, blocking re-entry from any other stop path.
+
+2. PTT press/release handlers now run a **PTT state machine** with two additions:
+   - `PTT_MIN_HOLD_MS = 100` guard: a timer arms on press; if key-up arrives before the timer fires, the tap is discarded. This eliminates accidental taps and OS key-bounce.
+   - `pttIsDown` flag: set on every press, cleared on every release. The timer callback checks it before calling `start()`, preventing starts for keys already released. After `start()` resolves, the callback checks `!pttIsDown` again and calls `stop()` if needed — this closes the stuck-recording race.
+
+**Thresholds:** 500 ms trailing silence and 100 ms minimum hold are empirically chosen starting points, matching PTT conventions in Discord / Mumble. Tuning may be needed based on real-world chunk sizes once the whisper streaming path matures.
+
+---
+
 ## 2026-05-05 — Apple Developer ID signing deferred; ad-hoc stale-row UX mitigated instead (#520)
 
 **Decision:** Signing Hush with an Apple Developer ID (which would stabilise the `csreq` hash across builds and eliminate stale TCC rows permanently) requires an Apple Developer Program membership at $99/year. As a solo hobby project, this was deemed not worth the cost at this time.
