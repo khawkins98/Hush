@@ -586,25 +586,15 @@ pub fn register_ptt_listener<R: Runtime>(
             let mut matcher = ComboMatcher::default();
 
             let result = listen(move |event: Event| {
-                // Runtime gating. The Settings UI flips this flag
-                // when the user toggles Enabled — events are still
-                // delivered to us by the OS, but we drop them
-                // silently when off. The matcher state stays
-                // updated either way so toggling back on doesn't
-                // need a clean held-set (rare edge: combo keys
-                // physically held during a toggle just re-engage
-                // on the next press).
-                if !active_for_thread.load(std::sync::atomic::Ordering::SeqCst) {
-                    return;
-                }
                 let combo = match combo_for_thread.read() {
                     Ok(c) => c.clone(),
                     Err(_) => return,
                 };
-                match matcher.observe(&event, &combo) {
-                    ComboTransition::Pressed => emit(&app_handle, EVENT_PTT_PRESS),
-                    ComboTransition::Released => emit(&app_handle, EVENT_PTT_RELEASE),
-                    ComboTransition::None => {}
+                let active = active_for_thread.load(std::sync::atomic::Ordering::SeqCst);
+                match handle_ptt_event(&event, &combo, active, &mut matcher) {
+                    Some(ComboTransition::Pressed) => emit(&app_handle, EVENT_PTT_PRESS),
+                    Some(ComboTransition::Released) => emit(&app_handle, EVENT_PTT_RELEASE),
+                    _ => {}
                 }
             });
 
@@ -693,6 +683,35 @@ fn ptt_enablement(persisted_active: bool) -> PttEnablement {
     let disable = std::env::var(ENV_PTT_DISABLE).ok();
     let enable = std::env::var(ENV_PTT_ENABLE).ok();
     resolve_enablement(disable.as_deref(), enable.as_deref(), persisted_active)
+}
+
+/// Process a single rdev event through the combo matcher and active gate.
+///
+/// Always calls [`ComboMatcher::observe`] so the held-set stays current
+/// regardless of the active flag. Skipping observe while inactive would leave
+/// the matcher latched after a mid-hold disable: the held-set stays dirty, and
+/// the next press after re-enabling returns `None` instead of `Pressed` until
+/// the user performs a full release/press reset cycle (#554).
+///
+/// Only returns a [`ComboTransition`] when `active` is true, so no events are
+/// emitted while PTT is disabled.
+///
+/// Extracted from the `listen` closure so unit tests can verify the
+/// active-gating behaviour without spawning a listener thread.
+fn handle_ptt_event(
+    event: &Event,
+    combo: &PttCombo,
+    active: bool,
+    matcher: &mut ComboMatcher,
+) -> Option<ComboTransition> {
+    let transition = matcher.observe(event, combo);
+    if !active {
+        return None;
+    }
+    match transition {
+        ComboTransition::None => None,
+        t => Some(t),
+    }
 }
 
 /// Emit a Tauri event, swallowing failures with a warning. Same posture
@@ -983,6 +1002,55 @@ mod tests {
         assert_eq!(
             resolve_enablement(None, Some(""), false),
             PttEnablement::DisabledByPreference
+        );
+    }
+
+    // -- handle_ptt_event active-gating (#554) ---------------------------
+
+    #[test]
+    fn ptt_handler_observe_during_inactive_clears_latch() {
+        // Regression test for #554: handle_ptt_event must call observe()
+        // even when inactive. Without the fix (early return before observe),
+        // the held-set would stay dirty after a release-while-inactive and
+        // the next press after re-enabling would return None (latch) instead
+        // of Pressed — requiring the user to do a full release/press reset.
+        let combo = PttCombo::single(PttKey::RightMeta);
+        let mut m = ComboMatcher::default();
+        // Press while active → Pressed emitted.
+        assert_eq!(
+            handle_ptt_event(&mk_press(Key::MetaRight), &combo, true, &mut m),
+            Some(ComboTransition::Pressed)
+        );
+        // Release while inactive → no emission, but held-set must be cleared.
+        assert_eq!(
+            handle_ptt_event(&mk_release(Key::MetaRight), &combo, false, &mut m),
+            None
+        );
+        // Re-enable: next press fires Pressed, not None.
+        assert_eq!(
+            handle_ptt_event(&mk_press(Key::MetaRight), &combo, true, &mut m),
+            Some(ComboTransition::Pressed)
+        );
+    }
+
+    #[test]
+    fn ptt_handler_no_phantom_press_when_reenabled_while_held() {
+        // Re-enabling PTT while the key is already physically held must not
+        // emit a phantom Pressed. The press already fired; re-enabling only
+        // flips the emission gate — it creates no new edge transition.
+        let combo = PttCombo::single(PttKey::RightMeta);
+        let mut m = ComboMatcher::default();
+        // Key pressed while active — fires Pressed.
+        handle_ptt_event(&mk_press(Key::MetaRight), &combo, true, &mut m);
+        // PTT disabled, key still held: auto-repeat arrives while inactive.
+        assert_eq!(
+            handle_ptt_event(&mk_press(Key::MetaRight), &combo, false, &mut m),
+            None
+        );
+        // PTT re-enabled, key still held: no phantom Pressed.
+        assert_eq!(
+            handle_ptt_event(&mk_press(Key::MetaRight), &combo, true, &mut m),
+            None
         );
     }
 }
