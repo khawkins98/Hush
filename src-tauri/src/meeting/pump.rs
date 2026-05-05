@@ -284,6 +284,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             // Result<Vec<Utterance>>). The buffer round-trips so we
             // can put it back into `drain_buffers[i]` to keep its
             // capacity warm for the next tick.
+            let infer_start = std::time::Instant::now();
             let join =
                 tokio::task::spawn_blocking(
                     move || -> (
@@ -302,6 +303,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                     },
                 )
                 .await;
+            let infer_elapsed_ms = infer_start.elapsed().as_millis();
 
             let (returned_session, returned_buf, drain_result) = match join {
                 Ok(triple) => triple,
@@ -340,6 +342,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                         session_id,
                         source_kind = source_label,
                         utterances = u.len(),
+                        elapsed_ms = infer_elapsed_ms,
                         "meeting pump: inference tick"
                     );
                     u

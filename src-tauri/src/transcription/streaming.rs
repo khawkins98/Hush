@@ -260,10 +260,44 @@ impl SlidingWindowState {
     /// state machine is decoupled from whisper-rs so the policy can be
     /// unit-tested with a scripted mock.
     pub fn tick(&mut self, inferer: &mut dyn WhisperLikeInferer) -> Result<Vec<Utterance>> {
-        if !self.should_infer() {
+        // Inline the should_infer gates so we can log *why* inference was
+        // skipped rather than emitting a blank "utterances = 0" at the call
+        // site.
+        if self.window.is_empty() {
+            tracing::trace!("streaming tick: window empty, skipping inference");
             return Ok(Vec::new());
         }
+        let total_ms = samples_to_ms(self.total_samples_fed as usize, self.sample_rate);
+        if total_ms < self.config.min_first_inference_ms {
+            tracing::debug!(
+                total_ms,
+                min_first_ms = self.config.min_first_inference_ms,
+                "streaming tick: waiting for min-first audio threshold"
+            );
+            return Ok(Vec::new());
+        }
+        let interval_samples = ms_to_samples(self.config.infer_interval_ms, self.sample_rate);
+        if self.samples_since_last_inference < interval_samples {
+            tracing::trace!(
+                samples_since = self.samples_since_last_inference,
+                need_samples = interval_samples,
+                "streaming tick: interval gate not open, skipping"
+            );
+            return Ok(Vec::new());
+        }
+
         let segments = inferer.infer(&self.window)?;
+        let raw_segments = segments.len();
+        let non_empty_segments = segments
+            .iter()
+            .filter(|s| !s.text.trim().is_empty())
+            .count();
+        tracing::debug!(
+            raw_segments,
+            non_empty_segments,
+            window_ms = samples_to_ms(self.window.len(), self.sample_rate),
+            "streaming tick: inference ran"
+        );
         self.samples_since_last_inference = 0;
 
         let window_duration_ms = samples_to_ms(self.window.len(), self.sample_rate);
@@ -380,6 +414,17 @@ impl SlidingWindowState {
             return Ok(Vec::new());
         }
         let segments = inferer.infer(&self.window)?;
+        let raw_segments = segments.len();
+        let non_empty_segments = segments
+            .iter()
+            .filter(|s| !s.text.trim().is_empty())
+            .count();
+        tracing::debug!(
+            raw_segments,
+            non_empty_segments,
+            window_ms = samples_to_ms(self.window.len(), self.sample_rate),
+            "streaming finish: tail flush inference ran"
+        );
         let mut out = Vec::new();
         for seg in segments {
             let text = seg.text.trim();
@@ -404,18 +449,6 @@ impl SlidingWindowState {
         self.window.clear();
         self.last_partial_text = None;
         Ok(out)
-    }
-
-    fn should_infer(&self) -> bool {
-        if self.window.is_empty() {
-            return false;
-        }
-        let total_ms = samples_to_ms(self.total_samples_fed as usize, self.sample_rate);
-        if total_ms < self.config.min_first_inference_ms {
-            return false;
-        }
-        let interval_samples = ms_to_samples(self.config.infer_interval_ms, self.sample_rate);
-        self.samples_since_last_inference >= interval_samples
     }
 }
 
