@@ -127,6 +127,27 @@ pub(super) struct PumpContext {
 /// from the spawn point's perspective, and a transient drain or
 /// inference failure shouldn't tear down the user's session.
 pub(super) async fn run_pump(mut ctx: PumpContext) {
+    tracing::info!(
+        session_id = ctx.session_id,
+        sources = ?ctx.sources.iter().map(|s| s.kind_label()).collect::<Vec<_>>(),
+        streaming_sources = ctx.streaming_sessions.iter().filter(|s| s.is_some()).count(),
+        "meeting pump: starting"
+    );
+
+    // Log once if any source has no streaming session — this is the
+    // first thing to check when utterances are 0. Happens when the
+    // transcription backend is unavailable at start time.
+    for (i, session) in ctx.streaming_sessions.iter().enumerate() {
+        if session.is_none() {
+            tracing::warn!(
+                session_id = ctx.session_id,
+                source_kind = ctx.sources[i].kind_label(),
+                "meeting pump: no streaming transcription session for source; \
+                 audio will be drained but not transcribed"
+            );
+        }
+    }
+
     // Per-source scratch buffer reused across ticks. Sized at first
     // drain; subsequent drains amortize the capacity. Indexed
     // parallel to `handles` / `sources`.
@@ -182,7 +203,15 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             let buf = &mut drain_buffers[i];
             buf.clear();
             match handle.drain_into(buf) {
-                Ok(format) => tick_formats[i] = Some(format),
+                Ok(format) => {
+                    tracing::debug!(
+                        session_id = ctx.session_id,
+                        source_kind = ctx.sources[i].kind_label(),
+                        samples = buf.len(),
+                        "meeting pump: drained"
+                    );
+                    tick_formats[i] = Some(format);
+                }
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
@@ -306,7 +335,15 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             drain_buffers[i] = returned_buf;
 
             let utterances = match drain_result {
-                Ok(u) => u,
+                Ok(u) => {
+                    tracing::debug!(
+                        session_id,
+                        source_kind = source_label,
+                        utterances = u.len(),
+                        "meeting pump: inference tick"
+                    );
+                    u
+                }
                 Err(e) => {
                     let reason = format!("{e}");
                     tracing::warn!(
@@ -430,6 +467,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     if let Ok(mut guard) = ctx.partials.write() {
         guard.remove(&ctx.session_id);
     }
+    tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
 }
 
 /// One source's worth of utterances for the merge-sort-label-split
