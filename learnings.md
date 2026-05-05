@@ -1370,3 +1370,21 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 2. Ensure all windows you want in the ⌘\` cycle are at `NSWindowLevelNormal` (no `alwaysOnTop: true`)
 
 **Alternative for ID:** Use `SubmenuBuilder::with_id(app, WINDOW_SUBMENU_ID, "Window")` — Tauri's automatic path then finds and registers it. Prefer the explicit call because it's self-documenting and doesn't depend on the magic string staying stable across Tauri releases.
+
+---
+
+### 2026-05-05 — Frontend recording state machine: design decisions (#558 / #560)
+
+**What:** Replaced 7 flat interdependent `$state` variables in `dictation.svelte.ts` with a `RecordingPhase` discriminated union (`idle | starting | recording | stopping | transcribing`). Decomposed `stop()` into `_stopDictation()` and `_stopMeeting()`.
+
+**Why a union, not separate booleans:** The flat-var approach made illegal combinations representable (`recording && busy && transcribing` simultaneously). A discriminated union makes illegal states structurally impossible and exhaustive pattern matching catches unhandled phases at compile time.
+
+**Two start paths must be preserved:**  `start_dictation` (hotkey/PTT) applies vocabulary prompt biasing, replacements, and backend clipboard write. `meeting_start_manual` (UI button) adds system-audio capture. Consolidating to one path would silently regress transcription quality and clipboard reliability for unfocused windows. Always thread both paths through any future lifecycle changes.
+
+**`setTimeout` delays removed safely:** `meeting_stop_manual` awaits pump drain before returning (confirmed in `meeting/lifecycle.rs::stop_manual()`). The session is fully finalised in SQLite at return time. Direct `await` is safe; no additional delay is needed.
+
+**`appProfileNoticeTimer` is plain `let`, not `$state`:** Timer handles are implementation details — they're never read reactively in a template. Using `$state` for them fires unnecessary Svelte reactive updates on every set/clear. Keep timer handles and other non-UI implementation state as plain `let`.
+
+**Trailing silence applies to ALL stop paths:** PTT key-up, record button, toggle hotkey, and command palette stop are all "natural end of speech". Only a hypothetical "cancel/abort" action would skip the buffer. Don't add a stop caller that omits `TRAILING_SILENCE_MS` unless it explicitly means "discard this recording".
+
+**Gap not yet addressed:** The state machine has no dedicated unit tests — the Playwright e2e suite validates external behaviour but not the transition graph itself (e.g. failed `start_dictation` → idle, stop during `starting` is ignored). Tracked in #562.

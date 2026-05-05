@@ -133,7 +133,7 @@
       group: "Dictation",
       enabled: dictation.recording,
       run: () => {
-        void dictation.stop();
+        void dictation.stop(TRAILING_SILENCE_MS);
       },
     },
     {
@@ -318,7 +318,7 @@
 
     unlistenToggle = await listen(Events.HotkeyToggle, () => {
       if (dictation.busy) return;
-      if (dictation.recording) void dictation.stop();
+      if (dictation.recording) void dictation.stop(TRAILING_SILENCE_MS);
       else void dictation.start();
     });
 
