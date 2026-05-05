@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Microphone Boost slider e2e test coverage (#535)
+
+- Added two Playwright specs to `tests/e2e/settings-window.spec.ts` covering the Microphone Boost slider under Settings → General → Advanced:
+  - `mic-gain-db slider mounts at 0 and shows 'Off (0 dB)' label` — verifies default state and label copy when gain is 0.
+  - `mic-gain-db slider mounts at persisted non-zero value and shows '+N dB' label` — verifies that a persisted value (e.g. 6 dB) is reflected in both slider position and the inline label.
+
 #### Diarization pipeline integration test scaffold (`diarization-onnx` feature, #314)
 
 - Added `tests/diarization_fixture.rs`: two `#[ignore]`'d integration tests that exercise the full `AudioRollingBuffer → OnnxDiarizer → speaker_label` pipeline — the exact path the meeting pump uses in production.
