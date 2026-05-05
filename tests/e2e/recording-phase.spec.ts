@@ -358,3 +358,57 @@ test("live-transcript panel appears during recording when utterances are availab
   await expect(livePanel).toBeVisible();
   await expect(livePanel).toContainText("Hello world.");
 });
+
+test("export-picker appears in ResultBlock after successful single-source stop", async ({
+  page,
+}) => {
+  // Single-source (mic only, no screen recording confirmed) → mode = "dictation"
+  // → result is hydrated from the session utterances after meeting_stop_manual.
+  // NOTE: mock functions are serialised via toString() and rebuilt in the page
+  // context — they cannot close over module-level variables like DEFAULT_SESSION_ID.
+  // All values inside mock functions must be literals.
+  await installMocks(page, {
+    meeting_session_get: () => ({
+      session: {
+        id: 1,
+        appName: "manual",
+        appKind: "other",
+        startedAt: "2026-04-26T15:00:00Z",
+        endedAt: "2026-04-26T15:01:00Z",
+        speakerCount: null,
+        utteranceCount: 1,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [
+        {
+          id: 1,
+          sessionId: 1,
+          startedAtMs: 0,
+          endedAtMs: 2000,
+          speakerLabel: null,
+          text: "Hello Playwright.",
+          isFinal: true,
+        },
+      ],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Start recording" }).click();
+  await page.getByRole("button", { name: "Stop recording and transcribe" }).click();
+
+  // Wait for idle: result block renders with the transcript text.
+  await expect(page.getByRole("button", { name: "Start recording" })).toBeEnabled();
+
+  // ResultBlock: export-picker group visible with at least one format button.
+  const picker = page.locator('[data-testid="export-picker"]');
+  await expect(picker).toBeVisible();
+  // "Copy as:" label and the Plain format button should be present.
+  await expect(picker).toContainText("Copy as:");
+  await expect(
+    picker.locator('[data-testid="export-format-plain"]'),
+  ).toBeVisible();
+});
