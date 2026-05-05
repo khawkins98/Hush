@@ -39,6 +39,9 @@ mod format;
 #[cfg(target_os = "macos")]
 mod screencapturekit;
 
+#[cfg(feature = "test-utils")]
+pub mod file_source;
+
 pub use format::{apply_mic_gain, downmix_to_mono};
 #[cfg(target_os = "macos")]
 pub use screencapturekit::{

@@ -180,6 +180,14 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migr
 # never-ending edge-case sweep.
 csv = "1"
 
+# WAV reader for `WavFileAudioCapture` in `src/audio/file_source.rs`.
+# Optional: pulled in only when the `test-utils` feature is enabled, so
+# production binaries don't carry the hound dep. `hound` is also a
+# dev-dependency (for audio_fixture.rs / streaming_fixture.rs) — the two
+# entries are independent; this one gates in-tree source code, the other
+# gates test files.
+hound = { version = "3.5", optional = true }
+
 # Async-trait shim for `async fn` in object-safe traits. Native async-fn-
 # in-trait works since Rust 1.75 but is awkward to use behind `dyn` —
 # `async-trait` keeps the existing `Arc<dyn HistoryRepository>` test seam
@@ -251,20 +259,20 @@ whisper = ["dep:whisper-rs"]
 # faster build that doesn't pull ~50 MB of vendored ORT libs.
 diarization-onnx = ["dep:ort", "dep:ndarray", "dep:realfft"]
 
+# Exposes deterministic test helpers: [`audio::file_source::WavFileAudioCapture`]
+# (WAV-backed AudioCapture/AudioSession for meeting-pump integration tests)
+# and enables the `hound` WAV-parsing dependency. Not included in default builds;
+# enable with `--features test-utils` when running fixture integration tests.
+# Gated off default to avoid a hound build-dep in production binaries.
+test-utils = ["dep:hound"]
+
 [dev-dependencies]
 tempfile = "3"
-# Local HTTP mock server for the auto-download test suite. The download
-# orchestrator is tested against deterministic fixtures (success,
-# SHA-mismatch, cancel) rather than ever round-tripping to Hugging Face
-# in CI.
+# Local HTTP mock server for the auto-download test suite.
 wiremock = "0.6"
-# WAV reader for the audio test fixture (#34). Only used in the
-# `tests/audio_fixture.rs` integration test that loads a contributor-
-# supplied WAV and runs it end-to-end through the transcription
-# pipeline. Hand-rolling a PCM-WAV parser would be 30 lines but
-# `hound` handles every variant whisper-rs's contributors might
-# throw at us (24-bit, IEEE-float, etc.) and is mature enough that
-# the dep cost is justified for a dev-only test.
+# WAV reader used by existing audio_fixture / streaming_fixture integration
+# tests. Still here for those tests; the `test-utils` feature pulls in the
+# optional dep below for `WavFileAudioCapture` in `src/audio/file_source.rs`.
 hound = "3.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
