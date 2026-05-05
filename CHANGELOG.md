@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop-failure recovery now queries `meeting_active_session` directly rather than relying on `meeting.activeId` which could be stale after a failed `refresh()`.
 - `meeting_session_get` is now called once on stop, with the result shared for both clipboard copy and the result block (previously called twice).
 
+#### Meeting mode zero-utterance diagnosis: enhanced debug logging (#533)
+
+- Added structured debug logs that distinguish the three root causes of "0 utterances" in meeting mode: model not loaded, audio not flowing, and Whisper no-speech filtering silently rejecting all segments.
+- `streaming tick: inference ran` now logs `raw_segments` and `non_empty_segments` so Whisper no-speech suppression (`no_speech_thold`) is visible without recompiling.
+- `meeting pump: inference tick` now includes `elapsed_ms` for the feed+drain round-trip, making slow-inference diagnosis straightforward.
+- Added `whisper: inference complete` log at the whisper layer showing raw segment count before text-emptiness filtering.
+
 
 - Push-to-talk and the record button no longer drop the final word. A 500 ms trailing-silence buffer holds the audio pipeline open after the user releases the PTT key or clicks Stop, giving Whisper's in-flight chunk time to accumulate before teardown.
 - Rapid accidental PTT taps (< 100 ms) no longer start a recording. A minimum-hold guard arms a 100 ms timer on key-down; releasing before the timer fires discards the tap entirely.

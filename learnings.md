@@ -1388,3 +1388,28 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 **Trailing silence applies to ALL stop paths:** PTT key-up, record button, toggle hotkey, and command palette stop are all "natural end of speech". Only a hypothetical "cancel/abort" action would skip the buffer. Don't add a stop caller that omits `TRAILING_SILENCE_MS` unless it explicitly means "discard this recording".
 
 **Gap not yet addressed:** The state machine has no dedicated unit tests — the Playwright e2e suite validates external behaviour but not the transition graph itself (e.g. failed `start_dictation` → idle, stop during `starting` is ignored). Tracked in #562.
+
+---
+
+### 2026-05-06 — Meeting pump diagnostic logging: distinguishing 0-utterance failure modes (#533)
+
+**Symptom:** Meeting mode reports 0 utterances after 1-2 minutes of real speech; both mic and system-audio sources affected simultaneously.
+
+**Why both sources fail together:** Both `WhisperStreamingSession` instances (one per source) clone the *same* `Arc<Mutex<WhisperContext>>` from the meeting transcriber snapshot taken at session start (`lifecycle.rs::start_manual`). The pump processes sources sequentially (not concurrently) so there is no lock contention, but a performance regression in one inference run delays the other.
+
+**Three ranked failure modes:**
+1. **Transcriber slot None at start** — user hasn't loaded a model yet, or model load failed. Already logged as `WARN meeting pump: no streaming transcription session for source`.
+2. **Audio not flowing** — SCK not capturing virtual-device call audio (Teams/Zoom route audio through a virtual driver that SCK's display-level capture misses), or mic device error. Shows as `samples = 0` on every "meeting pump: drained" debug line.
+3. **Whisper no-speech filtering** — Whisper runs but all segments have empty text because `no_speech_thold` (default 0.6) rejects compressed call audio. Previously invisible; now surfaced by `raw_segments` vs `non_empty_segments` in the "streaming tick: inference ran" debug log.
+
+**Logging gaps filled (commit accompanying this entry):**
+- `streaming tick: inference ran` → `raw_segments`, `non_empty_segments`, `window_ms` at DEBUG level. If `raw_segments > 0` but `non_empty_segments = 0` for every inference, no-speech filtering is the culprit.
+- `streaming tick: interval gate not open` at TRACE level per tick.
+- `streaming tick: waiting for min-first audio threshold` at DEBUG level for first ~3 ticks.
+- `streaming finish: tail flush inference ran` → same segment counts for the stop-time flush.
+- `whisper: inference complete` → `n_segments`, `window_samples` at DEBUG (whisper-feature only).
+- `meeting pump: inference tick` now also logs `elapsed_ms` for the full feed+drain round-trip.
+
+**How to use these logs to diagnose:** Run `RUST_LOG=hush=debug npm run tauri:bundle && open ~/Applications/Hush.app`. Start a meeting recording, speak for 30+ seconds, then check the Tauri dev console or attach `cargo tauri dev` output. Look for: (a) `samples = 0` every tick → audio not flowing; (b) `inference ran` lines appearing every ~3 s → inference is working; (c) `raw_segments > 0, non_empty_segments = 0` → no-speech filtering; (d) no `inference ran` lines at all → something upstream.
+
+**Ring buffer is not a concern:** SCK ring buffer is sized at `48_000 × 2 × 120 = 11.5 M` f32 samples (120 s). Even if inference takes several seconds, audio accumulates without overflow.
