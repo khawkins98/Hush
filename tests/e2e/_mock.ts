@@ -12,6 +12,25 @@
 
 import type { Page } from "@playwright/test";
 
+import type { DiarizerModelStatus, UpdateCheckResult } from "../../src/lib/types";
+
+const DEFAULT_DIARIZER_MODEL_STATUS = {
+  downloaded: true,
+  displayName: "wespeaker ResNet34-LM",
+  sizeMb: 26,
+  sha256:
+    "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
+  expectedPath:
+    "/Users/test/Library/Application Support/com.hush.dev/models/voxceleb_resnet34_LM.onnx",
+  sourceUrl:
+    "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM",
+} satisfies DiarizerModelStatus;
+
+const DEFAULT_UPDATE_CHECK_RESULT = {
+  kind: "upToDate",
+  current: "0.1.0",
+} satisfies UpdateCheckResult;
+
 export interface InvokeOverrides {
   [cmd: string]: (args: Record<string, unknown> | undefined) => unknown;
 }
@@ -37,8 +56,17 @@ export async function installMocks(
     ([k, v]) => [k, v.toString()],
   );
 
-  await page.addInitScript((overrideStrings) => {
-    const defaults: Record<string, (args?: unknown) => unknown> = {
+  await page.addInitScript(
+    ({
+      overrideStrings,
+      defaultDiarizerModelStatus,
+      defaultUpdateCheckResult,
+    }: {
+      overrideStrings: Array<[string, string]>;
+      defaultDiarizerModelStatus: DiarizerModelStatus;
+      defaultUpdateCheckResult: UpdateCheckResult;
+    }) => {
+      const defaults: Record<string, (args?: unknown) => unknown> = {
       // ---- first-run / settings ----
       get_first_run_completed: () => true,
       mark_first_run_completed: () => undefined,
@@ -89,17 +117,7 @@ export async function installMocks(
       // affordance flip this to `downloaded: false`. Field shape
       // mirrors `DiarizerModelStatus` in `src/lib/types.ts` —
       // keep them in sync per the four-place IPC sync rule.
-      get_diarizer_model_status: () => ({
-        downloaded: true,
-        displayName: "wespeaker ResNet34-LM",
-        sizeMb: 26,
-        sha256:
-          "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
-        expectedPath:
-          "/Users/test/Library/Application Support/com.hush.dev/models/voxceleb_resnet34_LM.onnx",
-        sourceUrl:
-          "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM",
-      }),
+      get_diarizer_model_status: () => ({ ...defaultDiarizerModelStatus }),
       download_diarizer_model: () => undefined,
       // Remove the installed model (#351). No-op default; specs
       // that exercise the click override per-test.
@@ -107,10 +125,7 @@ export async function installMocks(
       // Manual update probe (#223). Default to "up to date" so
       // specs that don't override get a stable result if the
       // user clicks the button.
-      check_for_updates: () => ({
-        kind: "upToDate",
-        current: "0.1.0",
-      }),
+      check_for_updates: () => ({ ...defaultUpdateCheckResult }),
       // App version string for the debug issue-report generator.
       get_app_version: () => "0.0.0-test",
       // Auto-update install (#10). Default to the typed
@@ -421,7 +436,13 @@ export async function installMocks(
     (window as unknown as { __hush_e2e: { invoke: typeof wrapped } }).__hush_e2e = {
       invoke: wrapped,
     };
-  }, overrideEntries);
+    },
+    {
+      overrideStrings: overrideEntries,
+      defaultDiarizerModelStatus: DEFAULT_DIARIZER_MODEL_STATUS,
+      defaultUpdateCheckResult: DEFAULT_UPDATE_CHECK_RESULT,
+    },
+  );
 }
 
 /**
