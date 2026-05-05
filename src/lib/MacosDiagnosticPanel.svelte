@@ -7,6 +7,18 @@
     macosDiagnosticOpen: boolean;
     macosResetMessage: string | null;
     macosResetting: boolean;
+    /// When true, show the step-by-step stale-row removal guide
+    /// below the reset result. Set by PermissionsTab after a
+    /// successful reset_macos_permissions call.
+    showResetGuide?: boolean;
+    /// Deep-link only (no SCK priming) — used by the recovery
+    /// guide's convenience buttons for Microphone and Input
+    /// Monitoring panes. Screen Recording was opened automatically
+    /// on reset; these let the user reach the other two without
+    /// hunting in System Settings.
+    onDeepLinkPrivacyPane?: (
+      target: "microphone" | "input-monitoring" | "screen-recording",
+    ) => void | Promise<void>;
     onReset: () => void | Promise<void>;
   };
 
@@ -15,6 +27,8 @@
     macosDiagnosticOpen = $bindable(),
     macosResetMessage,
     macosResetting,
+    showResetGuide = false,
+    onDeepLinkPrivacyPane,
     onReset,
   }: Props = $props();
 </script>
@@ -70,6 +84,46 @@
         <p class="macos-diag-reset-result" role="status">
           {macosResetMessage}
         </p>
+      {/if}
+
+      {#if showResetGuide}
+        <!--
+          Guided stale-row removal walkthrough. Shown after a
+          successful tccutil reset. Screen Recording was opened
+          automatically; Microphone and Input Monitoring buttons
+          let the user reach the other two panes without hunting.
+
+          Critical copy: the reset only takes effect on next
+          launch — say "Quit and reopen Hush" not "click Refresh"
+          to avoid the user getting confused by a state that won't
+          change in the running session.
+        -->
+        <div class="macos-reset-guide" role="status">
+          <p class="macos-reset-guide-intro">
+            System Settings has been opened to Screen Recording.
+            Remove any stale Hush rows for each permission:
+          </p>
+          <ol class="macos-reset-guide-steps">
+            <li>Find any <strong>Hush</strong> row in the list</li>
+            <li>Select it and click the <strong>−</strong> button to remove it</li>
+            <li>Repeat for Microphone and Input Monitoring (buttons below)</li>
+            <li><strong>Quit and reopen Hush</strong> — the reset takes effect on next launch</li>
+          </ol>
+          {#if onDeepLinkPrivacyPane}
+            <div class="macos-reset-guide-actions">
+              <button
+                type="button"
+                class="guide-pane-btn"
+                onclick={() => onDeepLinkPrivacyPane?.("microphone")}
+              >Open Microphone Settings</button>
+              <button
+                type="button"
+                class="guide-pane-btn"
+                onclick={() => onDeepLinkPrivacyPane?.("input-monitoring")}
+              >Open Input Monitoring Settings</button>
+            </div>
+          {/if}
+        </div>
       {/if}
 
       <details class="macos-diag-why">
@@ -194,6 +248,59 @@
   font-size: 0.9rem;
 }
 
+.macos-reset-guide {
+  padding: 0.75rem 0.9rem;
+  background-color: #fdf6e3;
+  border: 1px solid #e0a020;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.macos-reset-guide-intro {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #5a3e00;
+}
+
+.macos-reset-guide-steps {
+  margin: 0;
+  padding-left: 1.3rem;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: #5a3e00;
+}
+
+.macos-reset-guide-steps li {
+  margin-bottom: 0.15rem;
+}
+
+.macos-reset-guide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.guide-pane-btn {
+  padding: 0.3em 0.75em;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: 1px solid #c08000;
+  background-color: #fff8e6;
+  border-radius: 5px;
+  cursor: pointer;
+  color: #5a3e00;
+  transition: background-color 0.1s, border-color 0.1s;
+  font-family: inherit;
+}
+
+.guide-pane-btn:hover {
+  background-color: #ffedc0;
+  border-color: #a06000;
+}
+
 .macos-diag-why {
   margin-top: 0.25rem;
   padding: 0.4rem 0.65rem;
@@ -236,6 +343,23 @@
   :root:not([data-theme="light"]) .macos-diag-why summary {
     color: #ccc;
   }
+  :root:not([data-theme="light"]) .macos-reset-guide {
+    background-color: #2a2200;
+    border-color: #7a5500;
+  }
+  :root:not([data-theme="light"]) .macos-reset-guide-intro,
+  :root:not([data-theme="light"]) .macos-reset-guide-steps {
+    color: #f0c878;
+  }
+  :root:not([data-theme="light"]) .guide-pane-btn {
+    background-color: #2a2200;
+    border-color: #7a5500;
+    color: #f0c878;
+  }
+  :root:not([data-theme="light"]) .guide-pane-btn:hover {
+    background-color: #3a3000;
+    border-color: #c08000;
+  }
 }
 :root[data-theme="dark"] .macos-diagnostic details {
   border-color: #3a3a3a;
@@ -254,6 +378,23 @@
 }
 :root[data-theme="dark"] .macos-diag-why summary {
   color: #ccc;
+}
+:root[data-theme="dark"] .macos-reset-guide {
+  background-color: #2a2200;
+  border-color: #7a5500;
+}
+:root[data-theme="dark"] .macos-reset-guide-intro,
+:root[data-theme="dark"] .macos-reset-guide-steps {
+  color: #f0c878;
+}
+:root[data-theme="dark"] .guide-pane-btn {
+  background-color: #2a2200;
+  border-color: #7a5500;
+  color: #f0c878;
+}
+:root[data-theme="dark"] .guide-pane-btn:hover {
+  background-color: #3a3000;
+  border-color: #c08000;
 }
 
 button {

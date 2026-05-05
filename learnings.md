@@ -4,6 +4,22 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-05 — Apple Developer ID signing deferred; ad-hoc stale-row UX mitigated instead (#520)
+
+**Decision:** Signing Hush with an Apple Developer ID (which would stabilise the `csreq` hash across builds and eliminate stale TCC rows permanently) requires an Apple Developer Program membership at $99/year. As a solo hobby project, this was deemed not worth the cost at this time.
+
+**Root cause of stale permissions:** TCC keyed grants on `(service, client_bundle_id, csreq)`. With ad-hoc signing, `csreq` is derived from the binary content hash — every rebuild gets a new hash, orphaning the previous grant row. `tccutil reset` only removes rows matching the *current* build's `csreq`; older rows survive and accumulate.
+
+**Mitigation implemented:**
+1. **Stale banner** — `+page.svelte` derives `anyPermsStale` from `get_permission_health`; an amber banner appears at the top of the main content area when any permission is stale, linking directly to Settings → Permissions. Hidden when the user is already on the Permissions tab.
+2. **Guided recovery flow** — After "Reset permissions" succeeds, `PermissionsTab.svelte` automatically opens System Settings → Screen Recording (deep-link only, *no* SCK priming) and `MacosDiagnosticPanel.svelte` shows a step-by-step walkthrough to remove stale rows and quit/reopen Hush.
+
+**Why deep-link-only after reset (no SCK priming):** `openPrivacyPane("screen-recording")` normally calls `prime_screen_recording_permission()` first (to ensure Hush appears in the list before the user arrives). After a `tccutil reset`, the user is removing rows, not granting fresh — priming there would fire an unwanted TCC prompt. The fix is to call `invoke("open_macos_privacy_pane", { target: "screen-recording" })` directly after reset, bypassing the priming step.
+
+**Why "Quit and reopen" not "click Refresh":** `tccutil reset` only takes effect on next launch. A Refresh button in the same session would show the same stale state, confusing the user into thinking the reset failed.
+
+**If Developer ID signing ever happens:** Track on #10. It would eliminate this entire class of UX friction — stale rows would never accumulate, `tccutil reset` would clean all grants in one shot, and the Gatekeeper bypass step on first launch would disappear too.
+
 ## 2026-05-03 — Drag on macOS borderless windows needs explicit `setMovable: YES` via objc2 (#427 Item 1)
 
 **TL;DR:** Tauri 2's `data-tauri-drag-region` + `startDragging()` don't work on a `decorations: false` + `transparent: true` + `alwaysOnTop: true` window on macOS. `resizable: true` doesn't fix drag — it just makes the window user-resizable, which is a separate (unwanted) regression. The actually-working path is to call `[NSWindow setMovable: YES]` + `[NSWindow setMovableByWindowBackground: YES]` via objc2 from the `setup` hook. After that, `data-tauri-drag-region` starts working as documented.
