@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Sound cues and dictation stats bar e2e test coverage (#292, #293)
+
+- Added four Playwright specs to `tests/e2e/settings-window.spec.ts` covering:
+  - Sound cues master toggle mounts unchecked (off by default) with sub-toggles disabled.
+  - Enabling the master toggle un-disables the start and complete sub-toggles.
+  - Dictation stats bar renders tiles (sessions, words, keystrokes, time-saved) when `sessionCount > 0`.
+  - Dictation stats bar is absent when `sessionCount === 0` (empty-state contract).
+
+#### Record-mode-badge e2e test coverage
+
+- Added three Playwright specs to `tests/e2e/recording-phase.spec.ts` covering:
+  - Badge absent when `screenRecording` health is `not-applicable` (default state).
+  - Badge visible with `data-health="not-granted"` when Screen Recording permission is not granted.
+  - Badge visible with `data-health="stale"` (expired) copy when Screen Recording permission is stale.
+
 #### Microphone Boost slider e2e test coverage (#535)
 
 - Added two Playwright specs to `tests/e2e/settings-window.spec.ts` covering the Microphone Boost slider under Settings → General → Advanced:
