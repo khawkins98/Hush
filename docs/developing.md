@@ -102,7 +102,7 @@ HUSH_TEST_MODEL=/path/to/ggml-base.bin \
 
 # Streaming + meeting pump integration tests (also #[ignore]'d)
 HUSH_TEST_MODEL=/path/to/ggml-base.bin \
-  cd src-tauri && cargo test --features whisper --test streaming_fixture -- --ignored
+  cd src-tauri && cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
 HUSH_TEST_MODEL=/path/to/ggml-base.bin \
   cd src-tauri && cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
 

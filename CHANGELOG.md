@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `short_audio_leaves_speaker_label_unchanged` — asserts that audio below the `MIN_FRAMES_FOR_EMBEDDING` floor (synthesized 100 ms silence) leaves `speaker_label` as `None` rather than panicking or assigning a spurious ID.
 - Updated `docs/developing.md` and `tests/fixtures/README.md` with env var documentation, download instructions for the wespeaker ONNX model, and run commands.
 
+#### Meeting pump `AudioCapture` seam integration test (`test-utils` feature, #559)
+
+- Added `WavFileAudioCapture` / `WavFileAudioSession` in `src/audio/file_source.rs` (compiled under `--features test-utils`) — a deterministic file-backed `AudioCapture` / `AudioSession` implementation that serves pre-loaded WAV samples to the meeting pump in configurable-size chunks.
+- Added `tests/meeting_fixture.rs`: an `#[ignore]`d integration test that exercises the full `SessionManager → pump → WhisperTranscription → DB` path through the seam boundary, using an in-memory SQLite database. Run with `HUSH_TEST_MODEL=... cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture`.
+- Updated `docs/developing.md`, `src-tauri/tests/fixtures/README.md`, and `src-tauri/Cargo.toml` with `test-utils` feature documentation and updated fixture test run commands.
+
 ### Fixed
 
 #### Diarizer timeline drift on transient drain failure now corrected (#553)
