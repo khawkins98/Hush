@@ -540,6 +540,11 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         tracing::debug!(
             n_segments,
             window_samples = mono_16k_pcm.len(),
+            // Cross-check for the streaming layer: if this is 0 but the
+            // calling layer reports samples flowing, no_speech_thold (0.6)
+            // is suppressing the audio. Compare with raw_segments in
+            // streaming.rs to distinguish "whisper ran but filtered" from
+            // "whisper never ran".
             "whisper: inference complete"
         );
 

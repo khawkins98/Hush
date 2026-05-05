@@ -280,10 +280,11 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                 audio_buffers[i].append(&samples, format);
             }
 
-            // Spawn-blocking: returns (session, samples_buf,
-            // Result<Vec<Utterance>>). The buffer round-trips so we
-            // can put it back into `drain_buffers[i]` to keep its
-            // capacity warm for the next tick.
+            // spawn_blocking isolates whisper inference from the tokio
+            // worker pool. infer_start/elapsed_ms are recorded here so
+            // the "inference tick" log can distinguish "pump ran, whisper
+            // was slow" (elapsed_ms large) from "pump ran, gate never
+            // opened" (no "inference ran" lines in streaming.rs at all).
             let infer_start = std::time::Instant::now();
             let join =
                 tokio::task::spawn_blocking(
@@ -343,6 +344,11 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                         source_kind = source_label,
                         utterances = u.len(),
                         elapsed_ms = infer_elapsed_ms,
+                        // utterances = 0 here + "inference ran" in streaming.rs
+                        // means the gate opened but produced nothing. Cross with
+                        // raw_segments from streaming.rs to distinguish "whisper
+                        // filtered via no_speech_thold" from "streaming gate
+                        // never opened".
                         "meeting pump: inference tick"
                     );
                     u

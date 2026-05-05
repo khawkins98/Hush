@@ -260,15 +260,21 @@ impl SlidingWindowState {
     /// state machine is decoupled from whisper-rs so the policy can be
     /// unit-tested with a scripted mock.
     pub fn tick(&mut self, inferer: &mut dyn WhisperLikeInferer) -> Result<Vec<Utterance>> {
-        // Inline the should_infer gates so we can log *why* inference was
-        // skipped rather than emitting a blank "utterances = 0" at the call
-        // site.
+        // Inline the inference gates so each skip reason is individually
+        // logged. This makes RUST_LOG=hush=debug output diagnostic: seeing
+        // only "utterances = 0" at the pump level without any "inference ran"
+        // line here means the gate never opened — telling you *why* is the
+        // first step toward picking the right fix.
         if self.window.is_empty() {
+            // Normal at startup before any audio flows.
             tracing::trace!("streaming tick: window empty, skipping inference");
             return Ok(Vec::new());
         }
         let total_ms = samples_to_ms(self.total_samples_fed as usize, self.sample_rate);
         if total_ms < self.config.min_first_inference_ms {
+            // Whisper produces noise on very short buffers; this gate fires
+            // for the first ~3 ticks (min_first_inference_ms = 1500 ms,
+            // tick = 500 ms).
             tracing::debug!(
                 total_ms,
                 min_first_ms = self.config.min_first_inference_ms,
@@ -278,6 +284,8 @@ impl SlidingWindowState {
         }
         let interval_samples = ms_to_samples(self.config.infer_interval_ms, self.sample_rate);
         if self.samples_since_last_inference < interval_samples {
+            // Normal steady-state: fires every tick between inferences
+            // (infer_interval_ms = 3000 ms, tick = 500 ms → 5 of 6 ticks).
             tracing::trace!(
                 samples_since = self.samples_since_last_inference,
                 need_samples = interval_samples,
@@ -292,6 +300,10 @@ impl SlidingWindowState {
             .iter()
             .filter(|s| !s.text.trim().is_empty())
             .count();
+        // Key diagnostic signal for bug #533: if raw_segments > 0 but
+        // non_empty_segments = 0, Whisper ran but its no_speech_thold
+        // silently rejected all output. Common with compressed call audio
+        // (Opus/AAC artefacts push up the no-speech token probability).
         tracing::debug!(
             raw_segments,
             non_empty_segments,
@@ -419,6 +431,10 @@ impl SlidingWindowState {
             .iter()
             .filter(|s| !s.text.trim().is_empty())
             .count();
+        // Same raw/non-empty distinction as tick(): if raw > 0 but
+        // non_empty = 0 here, the tail was audio-only (no speech, or all
+        // no_speech_thold-filtered). Expected at the very end of a session
+        // that ends mid-silence; unexpected if the user was still talking.
         tracing::debug!(
             raw_segments,
             non_empty_segments,
