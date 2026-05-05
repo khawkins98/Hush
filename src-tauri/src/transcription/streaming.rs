@@ -288,7 +288,10 @@ impl SlidingWindowState {
 
         let segments = inferer.infer(&self.window)?;
         let raw_segments = segments.len();
-        let non_empty_segments = segments.iter().filter(|s| !s.text.trim().is_empty()).count();
+        let non_empty_segments = segments
+            .iter()
+            .filter(|s| !s.text.trim().is_empty())
+            .count();
         tracing::debug!(
             raw_segments,
             non_empty_segments,
@@ -412,7 +415,10 @@ impl SlidingWindowState {
         }
         let segments = inferer.infer(&self.window)?;
         let raw_segments = segments.len();
-        let non_empty_segments = segments.iter().filter(|s| !s.text.trim().is_empty()).count();
+        let non_empty_segments = segments
+            .iter()
+            .filter(|s| !s.text.trim().is_empty())
+            .count();
         tracing::debug!(
             raw_segments,
             non_empty_segments,
@@ -444,7 +450,6 @@ impl SlidingWindowState {
         self.last_partial_text = None;
         Ok(out)
     }
-
 }
 
 impl Drop for SlidingWindowState {
