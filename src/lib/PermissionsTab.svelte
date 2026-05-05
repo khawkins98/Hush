@@ -51,6 +51,9 @@
   let diagnosticOpen = $state(true);
   let resetMessage = $state<string | null>(null);
   let resetting = $state(false);
+  // Set true after a successful reset to show the guided
+  // stale-row removal walkthrough in MacosDiagnosticPanel.
+  let showResetGuide = $state(false);
   // Track whether a refresh is in flight so the manual Refresh
   // button can show a "Checking…" affordance and disable while
   // the IPC is round-tripping. AVFoundation / CoreGraphics /
@@ -113,11 +116,22 @@
   async function runReset() {
     resetting = true;
     resetMessage = null;
+    showResetGuide = false;
     try {
       const res = await invoke<MacosPermissionResetResult>(
         "reset_macos_permissions",
       );
       resetMessage = res.summary;
+      showResetGuide = true;
+      // Open Screen Recording pane directly — no SCK priming.
+      // Priming is correct for "Grant in Settings…" (row hasn't
+      // enrolled yet), but wrong here: we just ran tccutil reset
+      // and the user needs to remove stale rows, not trigger a
+      // fresh TCC prompt. Call the IPC directly to bypass the
+      // priming step in openPrivacyPane().
+      void invoke("open_macos_privacy_pane", {
+        target: "screen-recording",
+      }).catch((e) => console.warn("[hush] open pane after reset:", e));
     } catch (e) {
       resetMessage = formatErrorMessage(e);
     } finally {
@@ -185,6 +199,8 @@
     bind:macosDiagnosticOpen={diagnosticOpen}
     macosResetMessage={resetMessage}
     macosResetting={resetting}
+    {showResetGuide}
+    onDeepLinkPrivacyPane={openPrivacyPane}
     onReset={runReset}
   />
 {:else}

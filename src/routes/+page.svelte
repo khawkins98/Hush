@@ -63,6 +63,23 @@
         || permStatuses.inputMonitoring === "denied"),
   );
 
+  // Stale-banner: at least one permission was previously granted
+  // but macOS no longer recognises it (common after ad-hoc rebuilds
+  // where the csreq hash changes). Show a dismissable amber banner
+  // to surface the issue proactively rather than waiting for the
+  // user to notice the Settings → Permissions traffic-light.
+  let anyPermsStale = $derived(
+    macosCapable
+      && !!permissionHealth
+      && (permissionHealth.microphone === "stale"
+        || permissionHealth.screenRecording === "stale"
+        || permissionHealth.inputMonitoring === "stale"),
+  );
+  // Session-only dismiss — not persisted. The stale state is
+  // tied to the running build's csreq, so a new launch (new build
+  // or after granting fresh) re-evaluates it naturally.
+  let staleBannerDismissed = $state(false);
+
   // Reusable permissions dialog (#232).
   let showPermissionsDialog = $state(false);
   let permissionsDialogIntro: string | undefined = $state(undefined);
@@ -418,6 +435,31 @@
 
 <main class="app-main" data-active-section={nav.activeSection}>
   <!--
+    Stale-permission banner (#520). Shown when get_permission_health
+    returns Stale for any permission — common after an ad-hoc signed
+    rebuild where the csreq hash changes. Hidden when the user is
+    already on Settings → Permissions (they can see the rows directly)
+    or has dismissed it for this session.
+  -->
+  {#if anyPermsStale && !staleBannerDismissed && !(nav.activeSection === "settings" && nav.settingsActiveTab === "permissions")}
+  <div class="stale-perm-banner" role="alert">
+    <span class="stale-perm-banner-text">
+      ⚠️ A macOS permission may need to be re-granted — this can happen after updating Hush.
+    </span>
+    <button
+      type="button"
+      class="stale-perm-banner-btn"
+      onclick={() => nav.openSettingsTab("permissions")}
+    >Open Permissions</button>
+    <button
+      type="button"
+      class="stale-perm-banner-dismiss"
+      aria-label="Dismiss"
+      onclick={() => (staleBannerDismissed = true)}
+    >✕</button>
+  </div>
+  {/if}
+  <!--
     Dictation section markup extracted into a leaf (#432 slice
     3/3). Action functions + hotkey listeners stay in this
     orchestrator because they touch a sprawl of cross-section
@@ -588,6 +630,103 @@
   overflow-y: auto;
   box-sizing: border-box;
   min-width: 0;
+}
+
+/* Stale-permission banner (#520). Amber warning bar that appears
+   when any permission health is "stale" (csreq mismatch after
+   a rebuild). Lives at the top of .app-main so it's visible
+   regardless of which section is active. */
+.stale-perm-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  margin: 0.75rem 0 0;
+  background-color: #fdf6e3;
+  border: 1px solid #e0a020;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.stale-perm-banner-text {
+  flex: 1;
+  min-width: 0;
+  color: #5a3e00;
+  line-height: 1.4;
+}
+
+.stale-perm-banner-btn {
+  padding: 0.25em 0.7em;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1px solid #c08000;
+  background-color: #fff8e6;
+  border-radius: 5px;
+  cursor: pointer;
+  color: #5a3e00;
+  white-space: nowrap;
+  font-family: inherit;
+  transition: background-color 0.1s;
+}
+
+.stale-perm-banner-btn:hover {
+  background-color: #ffedc0;
+}
+
+.stale-perm-banner-dismiss {
+  padding: 0.2em 0.5em;
+  font-size: 0.78rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #7a5500;
+  border-radius: 4px;
+  font-family: inherit;
+  transition: background-color 0.1s;
+}
+
+.stale-perm-banner-dismiss:hover {
+  background-color: rgba(0, 0, 0, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .stale-perm-banner {
+    background-color: #2a2200;
+    border-color: #7a5500;
+  }
+  :root:not([data-theme="light"]) .stale-perm-banner-text {
+    color: #f0c878;
+  }
+  :root:not([data-theme="light"]) .stale-perm-banner-btn {
+    background-color: #2a2200;
+    border-color: #7a5500;
+    color: #f0c878;
+  }
+  :root:not([data-theme="light"]) .stale-perm-banner-btn:hover {
+    background-color: #3a3000;
+  }
+  :root:not([data-theme="light"]) .stale-perm-banner-dismiss {
+    color: #c08000;
+  }
+}
+:root[data-theme="dark"] .stale-perm-banner {
+  background-color: #2a2200;
+  border-color: #7a5500;
+}
+:root[data-theme="dark"] .stale-perm-banner-text {
+  color: #f0c878;
+}
+:root[data-theme="dark"] .stale-perm-banner-btn {
+  background-color: #2a2200;
+  border-color: #7a5500;
+  color: #f0c878;
+}
+:root[data-theme="dark"] .stale-perm-banner-btn:hover {
+  background-color: #3a3000;
+}
+:root[data-theme="dark"] .stale-perm-banner-dismiss {
+  color: #c08000;
 }
 
 /* About as a standalone sidebar section. AboutTab's own
