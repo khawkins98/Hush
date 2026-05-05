@@ -161,11 +161,11 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 
 | Module | Responsibility |
 |---|---|
-| `audio/` | cpal mic + SCK system-audio + the `AudioSession` handle trait |
+| `audio/` | cpal mic + SCK system-audio + `AudioSession` handle trait; `WavFileAudioCapture` test seam under `--features test-utils` |
 | `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
 | `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
 | `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides |
-| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain) |
+| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); parallel whisper context load at startup via `tokio::join!` |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
 | `app_menu/` | Native macOS menu bar (no-op elsewhere) |
@@ -181,9 +181,73 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `routes/hud/+page.svelte` | HUD pill |
 | `routes/menu-bar/+page.svelte` | Menu-bar quick-access popover |
 | `routes/debug/+page.svelte` | Floating debug console palette (developer only) |
+| `lib/state/dictation.svelte.ts` | Recording lifecycle state machine (see below) |
+| `lib/state/audio.svelte.ts` | Audio source selection + session state |
+| `lib/state/history.svelte.ts` | Dictation history list + refresh |
+| `lib/state/meeting-sessions.svelte.ts` | Meeting session list, active session, notices |
 | `lib/*.svelte` | Svelte 5 component library (panels, sidebar, error display, PTT editor) |
 | `lib/types.ts` | TS shapes mirroring backend serde structs (camelCase) |
 | `lib/errors.ts` | `IpcError` → `ErrorDisplay` mapping |
+
+---
+
+## Frontend recording lifecycle
+
+`lib/state/dictation.svelte.ts` owns the recording lifecycle as a discriminated-union state machine:
+
+```
+type RecordingPhase =
+  | { tag: 'idle' }
+  | { tag: 'starting' }
+  | { tag: 'recording'; mode: RecordMode; meetingId: number | null; startedAtMs: number }
+  | { tag: 'stopping'; mode: RecordMode; meetingId: number | null; startedAtMs: number }
+  | { tag: 'transcribing' }
+```
+
+`recording`, `busy`, `transcribing`, and `recordMode` are `$derived` from `phase`; illegal combinations (e.g. `recording && transcribing`) are structurally impossible.
+
+**Two start paths, one stop path:**
+
+- `start()` — uses `start_dictation` / `stop_dictation`. Applies vocabulary biasing, text replacements, and backend clipboard write. Used by toggle hotkey and PTT.
+- `startRecord(screenRecordingLive)` — uses `meeting_start_manual` / `meeting_stop_manual`. Adds system-audio when SCK permission is confirmed. Used by the UI record button.
+- `stop(trailingMs?)` — shared stop path, guards on `phase.tag === 'recording'`. Applies the trailing-silence buffer (500 ms by default) then delegates to `_stopDictation()` or `_stopMeeting()`.
+
+**Stop helpers:**
+
+- `_stopDictation()` — calls `stop_dictation`, receives the result directly, transitions to `idle`.
+- `_stopMeeting()` — calls `meeting_stop_manual` (which awaits pump drain before returning), then transitions through `transcribing` while fetching `meeting_session_get` once — the result is shared for both clipboard copy and the result block.
+
+**Stop-failure recovery:** if `_stopMeeting` throws, the catch block calls `meeting_active_session` directly. If the session is gone on the backend → `idle`. If still live → restore to `recording` so the user can retry.
+
+**Import path:** `.svelte.ts` modules must be imported via the `.svelte` path (e.g. `import { dictation } from '$lib/state/dictation.svelte'`), not `.ts`.
+
+---
+
+## Testing infrastructure
+
+### Rust unit tests
+
+Standard `cargo test --lib`. No audio device needed. The trait-seam pattern means every IPC command can be tested with in-memory stubs for `AudioCapture`, `Transcribe`, `Diarize`, `HistoryRepository`, and `MeetingSessionRepository`.
+
+### Rust integration tests (`src-tauri/tests/`)
+
+Two categories of `#[ignore]`'d integration tests that require real external resources:
+
+| Test file | Feature flag | Env vars required | What it tests |
+|---|---|---|---|
+| `tests/meeting_fixture.rs` | `test-utils,whisper` | `HUSH_TEST_MODEL`, `HUSH_TEST_AUDIO` | Full `SessionManager → pump → WhisperTranscription → SQLite` path via `WavFileAudioCapture` |
+| `tests/diarization_fixture.rs` | `diarization-onnx` | `HUSH_DIARIZER_MODEL`, `HUSH_TEST_SPEAKER1_AUDIO`, `HUSH_TEST_SPEAKER2_AUDIO` | `AudioRollingBuffer → OnnxDiarizer → speaker_label` pipeline: two-speaker distinctness + sub-threshold passthrough |
+
+Run commands and download instructions are in [`src-tauri/tests/fixtures/README.md`](./src-tauri/tests/fixtures/README.md).
+
+**`WavFileAudioCapture`** (in `audio/file_source.rs`, compiled under `--features test-utils`) is a deterministic file-backed `AudioCapture` / `AudioSession` implementation that replays pre-loaded WAV samples to the meeting pump in configurable-size chunks. It serves as the seam between the live hardware path and the test path.
+
+### Frontend e2e tests
+
+Two paths, both in `tests/`:
+
+- **Path A** (`tests/e2e/`, `npm run test:e2e`) — Playwright with mocked Tauri IPC (`tests/e2e/_mock.ts`). Fast, no real binary needed. Mocks are serialised via `toString()` and rebuilt in the page context; they cannot capture closure variables — per-test counters must go through `page.exposeFunction`.
+- **Path B** (`tests/e2e-tauri/`, `npm run test:e2e:tauri`) — tauri-driver + WebdriverIO against a real debug binary. CI integration deferred until tauri-driver's macOS path stabilises.
 
 ---
 
