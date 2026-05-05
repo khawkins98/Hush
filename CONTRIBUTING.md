@@ -247,7 +247,45 @@ When adding a new destructive surface, mirror the pattern: a `pendingConfirmId` 
 
 ---
 
-## PR checklist
+## Diagnostic logging
+
+Every audio-pipeline module must carry logs that make the three main failure modes distinguishable without adding ad-hoc print statements.
+
+### Log levels
+
+| Level | Use |
+|-------|-----|
+| `tracing::warn!` | Something wrong enough to surface in normal runs (transcriber slot None, source panic). Always present in `RUST_LOG=hush=warn`. |
+| `tracing::debug!` | One event per inference cycle — "inference ran", "meeting pump tick". The **actionable** level: `RUST_LOG=hush=debug` should tell you which of the three failure modes you're in. |
+| `tracing::trace!` | Per-tick noise that fires on every poll interval (interval gate not open, window empty). Use `RUST_LOG=hush=trace` only when debugging gate logic. |
+
+### Structured fields (not string interpolation)
+
+Always use named fields rather than embedding values in the message string:
+
+```rust
+// ✓ — fields are queryable by log sinks / structured log parsers
+tracing::debug!(raw_segments, non_empty_segments, window_ms, "streaming tick: inference ran");
+
+// ✗ — human-readable only, hard to grep
+tracing::debug!("inference ran: {} raw, {} non-empty, {}ms window", raw, ne, w);
+```
+
+### The raw/non-empty pattern
+
+When passing Whisper output through a filter, always log both counts:
+
+```rust
+let raw_segments = segments.len();
+let non_empty_segments = segments.iter().filter(|s| !s.text.trim().is_empty()).count();
+tracing::debug!(raw_segments, non_empty_segments, "streaming tick: inference ran");
+```
+
+`raw_segments > 0` but `non_empty_segments = 0` means Whisper ran and produced tokens but they were all filtered by `no_speech_thold`. This is the primary diagnostic signal for the "meeting mode produces 0 utterances" class of bug.
+
+### PR expectation
+
+If your PR touches the audio capture → transcription → utterance pipeline, it must carry `tracing::debug!` coverage for every non-trivial branch so that `RUST_LOG=hush=debug` can identify which stage is dropping audio. See `learnings.md` ("2026-05-06 — Meeting pump diagnostic logging") for the rationale.
 
 Each PR template renders the checklist below. The short version:
 
