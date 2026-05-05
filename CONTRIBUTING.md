@@ -68,6 +68,7 @@ Apply one per issue; apply two for issues that genuinely span areas (e.g. a diar
 ### Status labels
 
 - `status: blocked` — cannot move forward without an external prerequisite (upstream library support, a maintainer keypair step, a platform SDK gap, etc.). Always add a comment explaining what's blocking and what would unblock it.
+- `status: deferred` — out of scope or not currently feasible (see [Deferred issues](#deferred-issues) below). Applied when closing an issue that is real but won't be picked up in the near term.
 
 ### Priority labels
 
@@ -79,6 +80,32 @@ Apply one per issue; apply two for issues that genuinely span areas (e.g. a diar
 - `enhancement` — new feature or improvement to existing behaviour
 - `documentation` — docs-only change
 - `question` — needs more information before it can be triaged
+
+---
+
+## Deferred issues
+
+Some issues are closed with `status: deferred` rather than simply deleted. This means the work is real, but it is **not feasible or in scope right now** — typically because:
+
+- it requires a platform (Linux, Windows) that no current maintainer regularly tests, or
+- it depends on an upstream library that isn't stable enough to build on, or
+- it is a deliberate scope decision to keep the product focused while the core matures.
+
+Deferred issues are **closed** so they don't clutter the active backlog, but they are **not abandoned**. All deferred issues are grouped in the [deferred work tracker (#545)](https://github.com/khawkins98/Hush/issues/545), which records each item, its reason, and the condition that would reopen it.
+
+### Deferring an issue
+
+1. Label it `status: deferred`.
+2. Close it with a comment that explains *why* it's deferred and *what would unblock it*.
+3. Add a row to the relevant table in [issue #545](https://github.com/khawkins98/Hush/issues/545).
+
+### Reopening a deferred issue
+
+When the reopen condition is met:
+
+1. Reopen the original issue and remove the `status: deferred` label.
+2. Leave a comment on [issue #545](https://github.com/khawkins98/Hush/issues/545) noting the date and what changed.
+3. If the scope has shifted materially since the issue was filed, close the original and open a fresh issue instead — then update #545 accordingly.
 
 ---
 

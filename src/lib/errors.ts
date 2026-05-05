@@ -19,7 +19,7 @@
 // **details** for users who want to dig deeper. The `ErrorDisplay`
 // Svelte component renders the details collapsed by default.
 
-import type { IpcError } from "./types";
+import type { IpcError, KnownIpcError, KnownIpcErrorKind } from "./types";
 
 /// Discriminated tag the parent screen can map to a concrete
 /// callback when rendering an actionable error. Keeping it a string
@@ -47,6 +47,36 @@ export type ErrorDisplay = {
   actionLabel?: string;
 };
 
+const KNOWN_IPC_ERROR_KINDS = new Set<KnownIpcErrorKind>([
+  "audio",
+  "transcription",
+  "transcription-unavailable",
+  "clipboard",
+  "settings",
+  "history",
+  "replacements",
+  "meeting-sessions",
+  "permission-denied",
+  "updater-unavailable",
+  "internal",
+]);
+
+function isIpcError(e: unknown): e is IpcError {
+  return typeof e === "object" && e !== null && "kind" in e;
+}
+
+function isKnownIpcError(ipc: IpcError): ipc is KnownIpcError {
+  return KNOWN_IPC_ERROR_KINDS.has(ipc.kind as KnownIpcErrorKind);
+}
+
+function ipcMessage(ipc: IpcError): string {
+  return "message" in ipc ? (ipc.message ?? "") : "";
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled IPC error kind: ${String(value)}`);
+}
+
 /// Check whether a thrown value is a permission-shaped IPC error
 /// (#232, refined in #386).
 ///
@@ -57,24 +87,22 @@ export type ErrorDisplay = {
 /// classifier, the substring fallback below can be retired.
 ///
 /// Fallback: substring match against the chained message string
-/// for any IPC variant that hasn't been updated yet (today the
-/// dictation start path is still wrapping permission errors as
-/// \`audio: ...\`). Same patterns the Rust \`classify_permission_error\`
-/// helper uses, so the two surfaces stay coherent.
+/// for any IPC variant that hasn't been updated yet. Same patterns
+/// the Rust \`classify_permission_error\` helper uses, so the two
+/// surfaces stay coherent.
 ///
 /// Callers use this to decide whether to pop the PermissionsDialog
 /// (#232) alongside the error chip — putting the next click on a
 /// button that opens System Settings rather than buried in the
 /// hint copy. Returns false for non-IPC throwables.
 export function isPermissionShapedError(e: unknown): boolean {
-  if (typeof e !== "object" || e === null || !("kind" in e)) {
+  if (!isIpcError(e)) {
     return false;
   }
-  const ipc = e as IpcError;
-  if (ipc.kind === "permission-denied") {
+  if (e.kind === "permission-denied") {
     return true;
   }
-  const lower = (ipc.message ?? "").toLowerCase();
+  const lower = ipcMessage(e).toLowerCase();
   return (
     lower.includes("screen recording") ||
     lower.includes("declined tccs") ||
@@ -123,9 +151,6 @@ function formatPermissionDenied(
         details,
       };
     default:
-      // An unknown permission name from the typed path falls
-      // through to a generic message rather than crashing or
-      // silently dropping the error.
       return {
         headline: "Permission needed",
         hint: `Hush couldn't access ${permission}. Open System Settings → Privacy & Security to grant access.`,
@@ -134,52 +159,10 @@ function formatPermissionDenied(
   }
 }
 
-/// Map an unknown thrown value into the rich display shape. The
-/// frontend's catch blocks pass `unknown`; the function inspects
-/// the IpcError tag + message to pick the friendliest copy.
-export function formatErrorDisplay(e: unknown): ErrorDisplay {
-  // Plain string / Error fallback — most often a frontend-side
-  // failure (clipboard, navigation) that didn't go through Tauri.
-  if (typeof e !== "object" || e === null || !("kind" in e)) {
-    return {
-      headline: "Something went wrong",
-      details: e instanceof Error ? e.message : String(e),
-    };
-  }
-
-  const ipc = e as IpcError;
-  const message = ipc.message ?? "";
-
-  // Typed permission-denied (#386). Backend's
-  // `classify_permission_error` runs once at the IPC boundary and
-  // promotes the chain to `kind: "permission-denied"` with the
-  // permission name in `message`. Frontend dispatches on the
-  // permission name to render the same tailored copy the
-  // pre-typed-variant heuristic produced.
-  if (ipc.kind === "permission-denied") {
-    return formatPermissionDenied(message);
-  }
-
-  // Substring fallback. Any IPC variant that hasn't been updated
-  // to use `classify_permission_error` (today: the dictation
-  // start path's `audio:` wrap) still surfaces the chain message
-  // verbatim, so we keep this branch as a safety net. The
-  // patterns mirror the Rust classifier.
-  const lower = message.toLowerCase();
-  if (lower.includes("screen recording") || lower.includes("declined tccs")) {
-    return formatPermissionDenied("screen-recording", message);
-  }
-  if (lower.includes("microphone") && lower.includes("not authorized")) {
-    return formatPermissionDenied("microphone", message);
-  }
-  if (lower.includes("input monitoring")) {
-    return formatPermissionDenied("input-monitoring", message);
-  }
-
-  // Per-kind defaults. Each branch picks a friendly headline and a
-  // recovery hint where one is obvious; falls through to surfacing
-  // the raw message if neither is.
+function formatKnownIpcError(ipc: KnownIpcError): ErrorDisplay {
   switch (ipc.kind) {
+    case "permission-denied":
+      return formatPermissionDenied(ipc.message);
     case "transcription-unavailable":
       return {
         headline: "No transcription model loaded",
@@ -196,7 +179,7 @@ export function formatErrorDisplay(e: unknown): ErrorDisplay {
           "Check your selected input source and that the mic is " +
           "plugged in. On macOS, also check System Settings → " +
           "Privacy & Security → Microphone for Hush.",
-        details: message,
+        details: ipc.message,
       };
     case "transcription":
       return {
@@ -204,7 +187,7 @@ export function formatErrorDisplay(e: unknown): ErrorDisplay {
         hint:
           "The selected model may be incompatible — try a smaller / " +
           "different one in Settings → Model.",
-        details: message,
+        details: ipc.message,
       };
     case "clipboard":
       return {
@@ -212,24 +195,24 @@ export function formatErrorDisplay(e: unknown): ErrorDisplay {
         hint:
           "The transcript was generated but the clipboard write " +
           "failed. Open History to copy it manually.",
-        details: message,
+        details: ipc.message,
       };
     case "settings":
       return {
         headline: "Settings update failed",
-        details: message,
+        details: ipc.message,
       };
     case "history":
       return {
         headline: "History update failed",
         hint: "The action didn't go through. Try again in a moment.",
-        details: message,
+        details: ipc.message,
       };
     case "replacements":
       return {
         headline: "Replacements update failed",
         hint: "The change wasn't saved. Try again in a moment.",
-        details: message,
+        details: ipc.message,
       };
     case "meeting-sessions":
       return {
@@ -237,22 +220,62 @@ export function formatErrorDisplay(e: unknown): ErrorDisplay {
         hint:
           "Try again, or fall back to a single-source recording " +
           "(microphone only).",
-        details: message,
+        details: ipc.message,
+      };
+    case "updater-unavailable":
+      return {
+        headline: "Automatic install unavailable",
+        hint:
+          "Check the latest release notes instead. This build can still download updates manually.",
       };
     case "internal":
       return {
         headline: "Internal error",
         hint: "Restart Hush. If it keeps happening, file an issue.",
-        details: message,
+        details: ipc.message,
       };
     default:
-      // Unknown kind — surface what we have so a future variant
-      // doesn't render as a confusingly-empty box.
-      return {
-        headline: ipc.kind || "Something went wrong",
-        details: message || undefined,
-      };
+      return assertNever(ipc);
   }
+}
+
+/// Map an unknown thrown value into the rich display shape. The
+/// frontend's catch blocks pass `unknown`; the function inspects
+/// the IpcError tag + message to pick the friendliest copy.
+export function formatErrorDisplay(e: unknown): ErrorDisplay {
+  if (!isIpcError(e)) {
+    return {
+      headline: "Something went wrong",
+      details: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  const message = ipcMessage(e);
+
+  // Substring fallback. Any IPC variant that hasn't been updated
+  // to use `classify_permission_error` still surfaces the chain
+  // message verbatim, so we keep this branch as a safety net.
+  const lower = message.toLowerCase();
+  if (lower.includes("screen recording") || lower.includes("declined tccs")) {
+    return formatPermissionDenied("screen-recording", message);
+  }
+  if (lower.includes("microphone") && lower.includes("not authorized")) {
+    return formatPermissionDenied("microphone", message);
+  }
+  if (lower.includes("input monitoring")) {
+    return formatPermissionDenied("input-monitoring", message);
+  }
+
+  if (isKnownIpcError(e)) {
+    return formatKnownIpcError(e);
+  }
+
+  // Unknown kind — surface what we have so a future variant
+  // doesn't render as a confusingly-empty box.
+  return {
+    headline: e.kind || "Something went wrong",
+    details: message || undefined,
+  };
 }
 
 /// String flavour of [`formatErrorDisplay`] for surfaces that

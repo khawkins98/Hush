@@ -44,7 +44,37 @@ export type DictationResult = {
   /// degenerate; never seen in practice.
   durationMs: number | null;
 };
-export type IpcError = { kind: string; message?: string };
+export type KnownIpcError =
+  | { kind: "audio"; message: string }
+  | { kind: "transcription"; message: string }
+  | { kind: "transcription-unavailable" }
+  | { kind: "clipboard"; message: string }
+  | { kind: "settings"; message: string }
+  | { kind: "history"; message: string }
+  | { kind: "replacements"; message: string }
+  | { kind: "meeting-sessions"; message: string }
+  | { kind: "permission-denied"; message: string }
+  | { kind: "updater-unavailable" }
+  | { kind: "internal"; message: string };
+
+// Keep an unknown-string fallback so the frontend still renders a
+// reasonable error box when a newer backend adds a kind this build
+// doesn't know yet.
+export type IpcError = KnownIpcError | { kind: string; message?: string };
+export type KnownIpcErrorKind = KnownIpcError["kind"];
+
+// Tagged result from the manual "Check for updates" probe. AboutTab
+// and the e2e mocks share this shape; keeping it here avoids the tab
+// drifting from the mock default.
+export type UpdateCheckResult =
+  | { kind: "upToDate"; current: string }
+  | {
+      kind: "updateAvailable";
+      current: string;
+      latest: string;
+      releaseUrl: string;
+    }
+  | { kind: "checkFailed"; reason: string };
 
 export type HistoryEntry = {
   id: number;
