@@ -166,6 +166,13 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             .map(|_| crate::meeting::audio_buffer::AudioRollingBuffer::new())
             .collect();
 
+    // Last successful drain format per source (#553). Used to zero-fill
+    // the diarizer buffer on drain failure so its timeline stays aligned
+    // with the transcription session's internal clock. Without this,
+    // transient drain failures cause `audio_buffer.slice_ms()` to return
+    // stale/misaligned audio when finals arrive, degrading speaker labelling.
+    let mut last_known_formats: Vec<Option<CaptureFormat>> = vec![None; ctx.handles.len()];
+
     // Per-tick scratch for the merge-sort-label-split pattern (#206).
     // Accumulates `(source_label, utterances)` pairs from each
     // source's inference, then `diarize_and_dispatch_merged` runs the
@@ -211,6 +218,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                         "meeting pump: drained"
                     );
                     tick_formats[i] = Some(format);
+                    last_known_formats[i] = Some(format);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -219,6 +227,26 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                         session_id = ctx.session_id,
                         "meeting pump: drain_into failed for tick"
                     );
+                    // Zero-fill the diarizer buffer for this tick (#553).
+                    // The streaming transcription session continues advancing
+                    // its internal timeline even when drain fails, so without
+                    // a compensating append the diarizer buffer falls behind
+                    // and slice_ms() returns misaligned audio for subsequent
+                    // utterances. Silence is a better approximation than a gap.
+                    if let Some(fmt) = last_known_formats[i] {
+                        let zero_samples = (fmt.sample_rate as f64
+                            * PUMP_TICK.as_secs_f64()
+                            * fmt.channels as f64)
+                            as usize;
+                        let zeros = vec![0f32; zero_samples];
+                        audio_buffers[i].append(&zeros, fmt);
+                        tracing::debug!(
+                            session_id = ctx.session_id,
+                            source_kind = ctx.sources[i].kind_label(),
+                            zero_samples,
+                            "meeting pump: zero-filled diarizer buffer to compensate for drain failure"
+                        );
+                    }
                 }
             }
         }
