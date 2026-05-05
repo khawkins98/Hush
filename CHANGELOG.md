@@ -7,7 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-05
+
 ### Added
+
+#### Stale permission banner + guided recovery after reset (#547)
+
+- Hush now shows an amber stale-permission banner when macOS reports any permission row as `"stale"`, with a one-click jump to Settings → Permissions.
+- After a successful permission reset, the Permissions tab now walks the user through removing stale rows in System Settings, reopening Hush, and re-granting the required permissions.
+- The reset flow intentionally avoids re-priming Screen Recording immediately after `tccutil reset`, preventing an unwanted prompt during cleanup.
+
+#### In-app debug logging + issue-report plumbing (#537)
+
+- Backend logs are now captured in an in-app ring buffer and streamed to the frontend, so the debug UI can replay startup events and stay live as new entries arrive.
+- Settings → General → Advanced gained the Developer console toggle that exposes the log viewer without requiring a terminal.
+- New `get_log_entries` / `get_app_version` IPCs provide the data that the debug console and issue-report generator use.
+
+#### Microphone Boost slider in Settings (#535)
+
+- Settings → General → Advanced now includes a Microphone Boost slider from 0 dB to +20 dB for quiet input devices.
+- The gain is applied once per microphone path in both dictation and meeting transcription so boosted audio reaches Whisper and diarization consistently.
+- System-audio capture is unchanged; the boost only affects microphone input.
+
+#### Whisper Turbo in the model catalog (#519)
+
+- The model picker now offers Whisper Turbo, a distilled Large-v3 option that trades the ~1.5 GB download for near-large accuracy at much higher speed.
+- Existing download, SHA-256 verification, and auto-download plumbing work unchanged with the new catalog entry.
+- The default model remains Whisper Base.
+
+#### First-run permission wizard (#514)
+
+- First launch now opens a two-step setup wizard instead of a prose-heavy modal, with a Welcome step followed by a focused Permissions step.
+- Microphone and Input Monitoring can be requested inline from the wizard, while Screen Recording still deep-links to System Settings.
+- Permission rows update live while the wizard is open, and finishing setup is a soft gate rather than a hard block.
+
+#### Diarization on by default + first-run wespeaker download (#512)
+
+- Speaker diarization now defaults to on for fresh installs, while existing users keep any explicit off setting they already saved.
+- After a Whisper model download completes on first run, Hush now best-effort downloads the wespeaker diarizer model automatically.
+- Speaker labels are shown only when at least two distinct speakers are detected, keeping single-speaker transcripts clean.
+
+#### Audio-cue preview buttons + concurrent-cue debounce (#508)
+
+- Settings → General → Audio cues now has preview buttons beside the start and done cue toggles, so each sound can be tested on demand.
+- Preview playback bypasses the toggle gates because the user explicitly requested it, but still respects the one-cue-at-a-time debounce.
+- Cue playback now silently drops overlapping requests instead of stacking many simultaneous audio streams.
 
 #### Debug console floating window (#540)
 
@@ -22,6 +66,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - About is now a fourth sidebar navigation item (alongside Dictation, History, Settings) rather than a tab inside Settings. This makes it a ~one-click destination from anywhere in the app.
 - An info-circle icon in `SidebarNav.svelte` identifies the About section; the sidebar `SidebarSection` type now includes `"about"`.
 - The command palette "Show About" entry and the macOS native-menu "Check for Updates" event both route to the About section correctly.
+
+### Changed
+
+#### Dictation / Transcript / Transcription terminology (#518)
+
+- User-facing copy now consistently uses "Dictation" for the act, "Transcript" for the output, and "Transcription" for the engine underneath.
+- The History search placeholder, transcript headings, and replacements copy were updated to match the new terminology.
+
+#### Toggle-able sidebar with persisted state (#517)
+
+- The left sidebar now defaults to open on fresh installs, can be collapsed back to the icon rail, and remembers the user's choice in local storage.
+- The collapse/expand toggle includes the matching accessibility state, and reduced-motion users skip the width transition.
+
+#### Main page state split into focused modules (#546)
+
+- `src/routes/+page.svelte` was decomposed into five focused state modules for audio, history, navigation, meeting sessions, and dictation.
+- The main page dropped from 1,793 lines to 672 with no intended behavior change, making follow-up UI work safer.
+
+#### Architecture maintainability sweep (#544)
+
+- Dictation IPC commands were extracted into their own Rust module and continue to register via full module paths, reducing pressure on `ipc/commands/mod.rs`.
+- Frontend IPC error/update contracts were centralized, and Playwright mocks were tightened to reduce Rust↔TS drift.
+
+#### Developer workflow scripts + reference docs (#523, #507, #510)
+
+- `npm run dev-reset` now kills running Hush processes and wipes local app state for clean first-run and onboarding testing.
+- `npm run tauri:dmg` now ejects stale mounted Hush DMGs before building a new release artifact.
+- `docs/developing.md` is now the canonical human contributor guide for local setup, command selection, and test workflows.
 
 ### Fixed
 
@@ -42,6 +114,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `build_transcriber` now branches strictly on whether `SELECTED_MODEL_ID` is stored in settings. When the key is absent the catalog default (Whisper Base) is tried if its file exists; when the key is present only that model is attempted — no silent fallback to the catalog default for a broken explicit selection.
 - The stale "No transcription model loaded" error banner is now cleared immediately when the user successfully loads a model, even if the error was shown before the selection was made.
+
+#### Dark mode audit — replace hardcoded colours with design tokens (#534)
+
+- 21 Svelte surfaces now use the shared design tokens instead of hardcoded light-theme colours, fixing unreadable states across dark mode.
+- Component-specific dark overrides now exist in both the OS-driven `@media` path and the manual `data-theme="dark"` path, so the in-app theme toggle matches system dark mode.
+- Success, warning, and danger surfaces got missing dark overrides in About, History, model loading, and related panels.
+
+#### HUD/waveform polish, dB meter, dark mode fixes, and title-bar cleanup (#529)
+
+- The HUD waveform is taller, less cramped, and now shows a gentle flat line at silence instead of disappearing completely.
+- `AudioWaveform` gained an optional live dBFS meter, while the main window lost the redundant custom title bar and the disabled macOS zoom button.
+- Meeting-tab status cards, disclosures, and dark-mode tokens were cleaned up to match the rest of the app.
+
+#### TCC permission reliability for bundled dev builds (#528)
+
+- `npm run tauri:bundle` now re-signs Hush, installs it to `~/Applications/Hush.app`, and launches that copy so macOS TCC keys grants to the real bundle ID instead of a hash-based debug signature.
+- `npm run tauri:dmg` applies the same re-sign step for release artifacts, and `dev-reset` / `dev-cleanup` now clean up the installed app plus legacy bundle-id leftovers.
+- The macOS permissions docs were updated around the new one-command workflow for reliable permission testing.
+
+#### Live model-download state + no-model escape hatch (#527)
+
+- Cancelling or finishing a model download now updates the Settings UI immediately instead of waiting for an unrelated re-render.
+- The "No transcription model loaded" error now includes an action button that jumps straight to Settings → Model, matching the existing first-run recovery path.
+
+#### Bundle ID rename to io.github.khawkins98.hush (#526)
+
+- Hush now uses `io.github.khawkins98.hush` as its bundle identifier instead of `com.khawkins.hush`, matching the GitHub namespace.
+- Existing app data is migrated forward on first launch when possible, but old TCC grants do not carry across the rename and must be re-granted.
+
+#### Theme-token hygiene — manual dark sync + `var(--danger)` sweep (#522)
+
+- Manual Dark mode now uses the same calibrated surface tokens as OS-driven dark mode instead of an older drifting palette.
+- 31 hardcoded danger colours were replaced with `var(--danger)`, making delete/error controls consistent across themes.
+
+#### Updater polish — ErrorDisplay routing, version pinning, success-path tests (#506)
+
+- Update-install failures now render through `ErrorDisplay`, so users get the same headline / hint / detail treatment as the rest of the app.
+- The install flow now pins the expected version between Check and Install, preventing a silent version swap if the latest release changes underneath the user.
+- Playwright now covers the successful install-progress path as well as the unavailable gate.
+
+#### Meeting stop_manual close-failure race (#505)
+
+- If `stop_manual` hits a database close failure while a new meeting is starting, the recovery path no longer clobbers the newer session.
+- The old failed-close row is left for orphan-session reconciliation on next launch, preserving the retry behavior when no concurrent start happened.
 
 ## [0.3.0] - 2026-05-04
 
