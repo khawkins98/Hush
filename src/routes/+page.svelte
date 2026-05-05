@@ -25,7 +25,7 @@
     PermissionsHealth,
   } from "$lib/types";
   import { audio } from "$lib/state/audio.svelte";
-  import { dictation } from "$lib/state/dictation.svelte";
+  import { dictation, TRAILING_SILENCE_MS } from "$lib/state/dictation.svelte";
   import { history } from "$lib/state/history.svelte";
   import { meeting } from "$lib/state/meeting-sessions.svelte";
   import { nav } from "$lib/state/nav.svelte";
@@ -91,6 +91,22 @@
   let unlistenSettingsGoto: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenAppProfileActivated: UnlistenFn | null = null;
+
+  // PTT state machine.
+  //
+  // Minimum hold time (ms) before a PTT press is treated as intentional.
+  // Taps shorter than this are discarded as accidental. 100 ms is below
+  // deliberate-hold perception but clears OS key-bounce artifacts and
+  // rapid accidental taps.
+  const PTT_MIN_HOLD_MS = 100;
+  // Whether the PTT key is physically down right now. Used by the timer
+  // callback to avoid starting a recording after the key was already
+  // released, and to detect the stuck-recording race (key released while
+  // start IPC was in-flight).
+  let pttIsDown = false;
+  // Non-null while the minimum-hold guard timer is running (before we
+  // commit to starting a recording). Cancelled on early key-up.
+  let pttPressTimer: ReturnType<typeof setTimeout> | null = null;
 
   let meetingActivePollHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -330,12 +346,37 @@
     });
 
     unlistenPttPress = await listen(Events.HotkeyPttPress, () => {
+      pttIsDown = true;
       if (dictation.busy || dictation.recording) return;
-      void dictation.start();
+      // Ignore key-repeat events while the hold timer is already running.
+      if (pttPressTimer !== null) return;
+      pttPressTimer = setTimeout(() => {
+        pttPressTimer = null;
+        // Key may have been released before the timer fired (short tap).
+        if (!pttIsDown || dictation.busy || dictation.recording) return;
+        void dictation.start().then(() => {
+          // Stuck-recording race fix: if the key was released while the
+          // start IPC was in-flight, the release handler saw busy=true
+          // and skipped stop(). Detect that here and call stop().
+          if (!pttIsDown && dictation.recording && !dictation.busy) {
+            void dictation.stop(TRAILING_SILENCE_MS);
+          }
+        });
+      }, PTT_MIN_HOLD_MS);
     });
     unlistenPttRelease = await listen(Events.HotkeyPttRelease, () => {
+      pttIsDown = false;
+      if (pttPressTimer !== null) {
+        // Key released before the minimum hold elapsed — treat as an
+        // accidental tap. Cancel the timer; nothing starts or stops.
+        clearTimeout(pttPressTimer);
+        pttPressTimer = null;
+        return;
+      }
+      // If start() is in-flight (busy=true, recording=false), the
+      // post-start callback above will call stop() once it resolves.
       if (!dictation.recording || dictation.busy) return;
-      void dictation.stop();
+      void dictation.stop(TRAILING_SILENCE_MS);
     });
 
     window.addEventListener("keydown", handleGlobalKeydown);
@@ -349,6 +390,10 @@
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
+    if (pttPressTimer !== null) {
+      clearTimeout(pttPressTimer);
+      pttPressTimer = null;
+    }
     window.removeEventListener("keydown", handleGlobalKeydown);
     if (meetingActivePollHandle !== null) {
       clearInterval(meetingActivePollHandle);
@@ -488,7 +533,7 @@
     {anyPermsDenied}
     meetingActiveDetail={meeting.activeDetail}
     onStart={() => dictation.startRecord(screenRecordingLive)}
-    onStop={dictation.stop}
+    onStop={() => dictation.stop(TRAILING_SILENCE_MS)}
     onScrollToModelPicker={openModelSettings}
     onOpenPermissionsTab={() => nav.openSettingsTab("permissions")}
   />
