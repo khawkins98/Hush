@@ -212,4 +212,31 @@ test.describe("audio source picker", () => {
       )
       .toBe(true);
   });
+
+  test("source-picker-listbox is visible while the dropdown is open", async ({
+    page,
+  }) => {
+    // The listbox element (data-testid="source-picker-listbox") is only
+    // in the DOM when `open = true` inside Select.svelte. Before clicking
+    // the trigger it must be absent; after, it must be present.
+    await installMocks(page);
+    await page.goto("/");
+
+    const controls = page.locator("#dictation-section");
+    const trigger = controls.locator('[data-testid="source-picker-trigger"]');
+    await expect(trigger).toBeVisible();
+
+    // Listbox absent while closed.
+    await expect(
+      controls.locator('[data-testid="source-picker-listbox"]'),
+    ).toHaveCount(0);
+
+    // Open the dropdown.
+    await trigger.click();
+
+    // Listbox now present and visible.
+    await expect(
+      controls.locator('[data-testid="source-picker-listbox"]'),
+    ).toBeVisible();
+  });
 });

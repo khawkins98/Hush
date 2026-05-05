@@ -412,3 +412,116 @@ test("export-picker appears in ResultBlock after successful single-source stop",
     picker.locator('[data-testid="export-format-plain"]'),
   ).toBeVisible();
 });
+
+test("meeting-copy-notice appears after stop when utterances are present", async ({
+  page,
+}) => {
+  // After _stopMeeting completes, the state machine calls
+  // meeting.setNotice() from the clipboard write path. Whether
+  // navigator.clipboard.writeText succeeds or fails, one of the two
+  // notice variants appears. We mock it to succeed so the success
+  // variant renders deterministically.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: () => Promise.resolve() },
+      writable: true,
+      configurable: true,
+    });
+  });
+  await installMocks(page, {
+    meeting_session_get: () => ({
+      session: {
+        id: 1,
+        appName: "manual",
+        appKind: "other",
+        startedAt: "2026-04-26T15:00:00Z",
+        endedAt: "2026-04-26T15:01:00Z",
+        speakerCount: null,
+        utteranceCount: 1,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [
+        {
+          id: 1,
+          sessionId: 1,
+          startedAtMs: 0,
+          endedAtMs: 2000,
+          speakerLabel: null,
+          text: "This is a test transcript.",
+          isFinal: true,
+        },
+      ],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Start recording" }).click();
+  await page.getByRole("button", { name: "Stop recording and transcribe" }).click();
+
+  // Wait for the recording to complete.
+  await expect(page.getByRole("button", { name: "Start recording" })).toBeEnabled();
+
+  // MeetingSection (which renders the copy notice) lives inside the History
+  // section block ({#if nav.activeSection === "history"}), so we navigate
+  // there before asserting. The notice is already set by _stopMeeting before
+  // phase returns to idle, so it persists through the navigation.
+  await page.locator('[data-testid="sidebar-nav-history"]').click();
+
+  const notice = page.locator('[data-testid="meeting-copy-notice"]');
+  await expect(notice).toBeVisible();
+  // Success variant: confirms the copy went to clipboard.
+  await expect(notice).toContainText(/Copied to clipboard/);
+});
+
+test("perms-pill-ok renders when all macOS permissions are granted", async ({
+  page,
+}) => {
+  // MacosPermsPill shows the green pill when capable=true (canReset: true)
+  // and allGranted is derived from permStatuses (all three = "granted").
+  await installMocks(page, {
+    diagnose_macos_permissions: () => ({
+      bundleId: "io.github.khawkins98.hush",
+      microphoneHint: "",
+      inputMonitoringHint: "",
+      canReset: true,
+      statuses: {
+        microphone: "granted",
+        screenRecording: "granted",
+        inputMonitoring: "granted",
+      },
+    }),
+  });
+  await page.goto("/");
+
+  const pill = page.locator('[data-testid="perms-pill-ok"]');
+  await expect(pill).toBeVisible();
+  await expect(pill).toContainText(/permissions OK/i);
+});
+
+test("perms-hint-yellow renders when a macOS permission is denied", async ({
+  page,
+}) => {
+  // MacosPermsPill shows the yellow banner when capable=true and
+  // anyDenied (at least one permission status = "denied").
+  await installMocks(page, {
+    diagnose_macos_permissions: () => ({
+      bundleId: "io.github.khawkins98.hush",
+      microphoneHint: "",
+      inputMonitoringHint: "",
+      canReset: true,
+      statuses: {
+        microphone: "denied",
+        screenRecording: "not-determined",
+        inputMonitoring: "not-determined",
+      },
+    }),
+  });
+  await page.goto("/");
+
+  const banner = page.locator('[data-testid="perms-hint-yellow"]');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText(/Permission needed/i);
+});
