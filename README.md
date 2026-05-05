@@ -32,7 +32,7 @@ The table splits "Free?" (no-cost tier exists) from "Open source?" (source publi
 |  | Local? | Dictation? | Meetings? | Free? | Open source? | Platforms |
 |---|---|---|---|---|---|---|
 | **Hush** | ✅ | ✅ hotkey | ✅ mic + system audio in parallel | ✅ | ✅ Apache 2.0 | macOS · Linux · Windows |
-| [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ✅ | ✅ | ✅ auto-detect Zoom / Teams | ✅ | ✅ MIT | macOS · Linux · Windows |
+| [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ✅ | ✅ | ✅ auto-detect Zoom / Teams | ✅ local unlimited; cloud tier: 2k words/wk free, $8/mo Pro | ✅ MIT | macOS · Linux · Windows |
 | [Whispering](https://github.com/EpicenterHQ/epicenter) | ✅ | ✅ | — | ✅ | ✅ AGPLv3 | macOS · Linux · Windows |
 | [Buzz](https://github.com/chidiwilliams/buzz) | ✅ | partial (live mic, no PTT into other apps) | file import only | ✅ | ✅ MIT | macOS · Linux · Windows |
 | [Meetily](https://meetily.ai) | ✅ | — | ✅ system audio, no bot | ✅ | ✅ MIT | macOS · Linux · Windows |
@@ -42,7 +42,7 @@ The table splits "Free?" (no-cost tier exists) from "Open source?" (source publi
 | [Granola](https://www.granola.ai) | cloud LLM | — | ✅ | freemium | — | macOS · Windows |
 | [Otter](https://otter.ai) / [Fireflies](https://fireflies.ai) / [Fathom](https://fathom.video) | — | — | ✅ (cloud bot or web) | freemium | — | web |
 
-The cross-platform OSS rows are the closest competitors. Within them the niches differ: **Whispering** is dictation-only with a similar Tauri+Svelte stack; **Buzz** does live-mic + post-hoc file imports without a global push-to-talk hotkey; **Meetily** is meeting-only without dictation. **OpenWhispr** is the most direct overlap — local dictation + meetings, same three OSes, MIT-licensed; if Hush isn't to your taste it's worth a look.
+The cross-platform OSS rows are the closest competitors. Within them the niches differ: **Whispering** is dictation-only with a similar Tauri+Svelte stack; **Buzz** does live-mic + post-hoc file imports without a global push-to-talk hotkey; **Meetily** is meeting-only without dictation. **OpenWhispr** is the most direct overlap — local dictation + meetings, same three OSes, MIT-licensed; if Hush isn't to your taste it's worth a look. Note that their distributed builds include a cloud service (fastest transcription, no model download) with a freemium cap — **local processing is always unlimited**, but cloud transcription tops out at 2,000 words/week on the free tier ($8/month for unlimited). All features work fully offline with a downloaded model, no account required.
 
 Hush's wedge: dictation **and** parallel-source meeting capture in one app, sharing one whisper.cpp model load and one searchable history, with a verifiable privacy posture (see below). The closest macOS comparable, [VoiceInk](https://github.com/Beingpax/VoiceInk), is the project that inspired Hush — see [Acknowledgements](#acknowledgements) for the relationship.
 
