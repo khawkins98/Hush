@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### PTT last-word clipping and stuck-recording race (#548)
+
+- Push-to-talk and the record button no longer drop the final word. A 500 ms trailing-silence buffer holds the audio pipeline open after the user releases the PTT key or clicks Stop, giving Whisper's in-flight chunk time to accumulate before teardown.
+- Rapid accidental PTT taps (< 100 ms) no longer start a recording. A minimum-hold guard arms a 100 ms timer on key-down; releasing before the timer fires discards the tap entirely.
+- Fixed a stuck-recording race where a PTT key release arriving while the start IPC was in-flight was silently ignored, leaving the user recording indefinitely.
+
 ## [0.4.0] - 2026-05-05
 
 ### Added

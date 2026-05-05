@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
+// How long (ms) to hold the capture pipeline open after the user signals
+// stop, so Whisper's in-flight chunk has time to accumulate the final word.
+// Applied by callers that represent "natural end of speech" (PTT key-up,
+// record-button tap) but NOT by callers that mean "stop right now"
+// (toggle hotkey, command palette). 500 ms matches the conventional PTT
+// trailing buffer used by voice apps (Discord, Mumble, etc.).
+export const TRAILING_SILENCE_MS = 500;
+
 import {
   formatErrorDisplay,
   isPermissionShapedError,
@@ -189,11 +197,20 @@ export const dictation = {
       busy = false;
     }
   },
-  async stop() {
+  async stop(trailingMs = 0) {
+    // Re-entrancy guard: stop() is async and multiple callers (PTT release
+    // handler, post-start race callback, toggle hotkey) can race to call it.
+    // The first caller wins; subsequent ones are no-ops.
+    if (busy) return;
     busy = true;
     const meetingId = lastMeetingId;
     const modeAtStop = recordMode;
     try {
+      // Trailing-silence buffer: hold the pipeline open so Whisper's
+      // in-flight chunk can finish accumulating before teardown.
+      if (trailingMs > 0) {
+        await new Promise<void>((r) => setTimeout(r, trailingMs));
+      }
       if (meetingId !== null) {
         await invoke("meeting_stop_manual");
         recording = false;
