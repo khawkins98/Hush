@@ -537,6 +537,12 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             .full_n_segments()
             .map_err(|e| anyhow!("failed to read segment count: {e}"))?;
 
+        tracing::debug!(
+            n_segments,
+            window_samples = mono_16k_pcm.len(),
+            "whisper: inference complete"
+        );
+
         let mut out = Vec::with_capacity(n_segments as usize);
         for i in 0..n_segments {
             let text = state
