@@ -305,6 +305,90 @@ test.describe("settings window — General tab", () => {
       page.locator('[data-testid="autostart-path-stale-warning"]'),
     ).toBeVisible();
   });
+
+  test("sound-cues master toggle mounts unchecked (off by default) and sub-toggles are disabled (#292)", async ({
+    page,
+  }) => {
+    // Default mock returns false for get_sound_cues_enabled.
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    const master = page.locator('[data-testid="settings-sound-cues-toggle"]');
+    await expect(master).toBeVisible();
+    await expect(master).not.toBeChecked();
+
+    // Sub-toggles visible but disabled when master is off.
+    await expect(
+      page.locator('[data-testid="settings-sound-cue-start-toggle"]'),
+    ).toBeDisabled();
+    await expect(
+      page.locator('[data-testid="settings-sound-cue-complete-toggle"]'),
+    ).toBeDisabled();
+  });
+
+  test("enabling the sound-cues master toggle un-disables sub-toggles (#292)", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    const master = page.locator('[data-testid="settings-sound-cues-toggle"]');
+    await master.click();
+    await expect(master).toBeChecked();
+
+    // Sub-toggles are enabled once the master is on.
+    await expect(
+      page.locator('[data-testid="settings-sound-cue-start-toggle"]'),
+    ).toBeEnabled();
+    await expect(
+      page.locator('[data-testid="settings-sound-cue-complete-toggle"]'),
+    ).toBeEnabled();
+  });
+
+  test("dictation stats bar renders when session count is non-zero (#293)", async ({
+    page,
+  }) => {
+    // Provide non-zero stats so the bar becomes visible.
+    await installMocks(page, {
+      get_dictation_stats: () => ({
+        sessionCount: 5,
+        wordCount: 1200,
+        totalRecordingMs: 300000,
+        totalChars: 7200,
+      }),
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    // Stats bar is inside the General tab (default tab on open).
+    await expect(
+      page.locator('[data-testid="stats-sessions"]'),
+    ).toHaveText("5");
+    await expect(page.locator('[data-testid="stats-words"]')).toHaveText(
+      "1,200",
+    );
+    await expect(
+      page.locator('[data-testid="stats-keystrokes"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="stats-time-saved"]'),
+    ).toBeVisible();
+  });
+
+  test("dictation stats bar is hidden when session count is zero (#293)", async ({
+    page,
+  }) => {
+    // Default mock returns sessionCount: 0 — bar should be absent.
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    await expect(
+      page.locator('[data-testid="stats-sessions"]'),
+    ).toHaveCount(0);
+  });
 });
 
 test.describe("settings window — PTT editor", () => {
