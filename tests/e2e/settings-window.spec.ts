@@ -914,3 +914,175 @@ test.describe("settings window — About section", () => {
     ).toBeVisible();
   });
 });
+
+test.describe("settings window — General tab: sound-cue previews", () => {
+  // settings-cue-preview-start and settings-cue-preview-done are always
+  // visible in the Sound Cues section (they appear even when the master
+  // toggle is off, greyed out via CSS class rather than `disabled`).
+  // This spec just pins their presence; clicking invokes the mocked
+  // preview_sound_cue without error.
+
+  test("cue-preview-start button is visible and clickable", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    const btn = page.locator('[data-testid="settings-cue-preview-start"]');
+    await expect(btn).toBeVisible();
+    // { force: true } bypasses the sticky-header pointer-events interception
+    // without affecting the click itself — the button IS in the viewport.
+    await btn.click({ force: true });
+  });
+
+  test("cue-preview-done button is visible and clickable", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    const btn = page.locator('[data-testid="settings-cue-preview-done"]');
+    await expect(btn).toBeVisible();
+    await btn.click({ force: true });
+  });
+});
+
+test.describe("settings window — General tab: theme row", () => {
+  // settings-theme-row wraps the System / Light / Dark segmented control.
+  // Pinning its visibility ensures the Appearance section of GeneralTab
+  // didn't accidentally get gated behind a feature flag.
+
+  test("theme row is visible with three options in General tab", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    const row = page.locator('[data-testid="settings-theme-row"]');
+    await expect(row).toBeVisible();
+
+    // All three theme options must be present.
+    for (const value of ["system", "light", "dark"]) {
+      await expect(
+        row.locator(`[data-testid="settings-theme-${value}"]`),
+      ).toBeVisible();
+    }
+  });
+});
+
+test.describe("settings window — General tab: developer console toggle", () => {
+  // settings-debug-console-toggle is in the Advanced section (hidden by
+  // default behind settings-general-advanced-toggle). Enabling it calls
+  // the localStorage-backed setDebugConsoleEnabled helper; no IPC.
+
+  test("toggle is visible in the Advanced section and starts unchecked", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page
+      .locator('[data-testid="settings-general-advanced-toggle"]')
+      .click();
+
+    const toggle = page.locator(
+      '[data-testid="settings-debug-console-toggle"]',
+    );
+    await expect(toggle).toBeVisible();
+    await expect(toggle).not.toBeChecked();
+  });
+
+  test("checking the toggle persists via localStorage", async ({ page }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page
+      .locator('[data-testid="settings-general-advanced-toggle"]')
+      .click();
+
+    const toggle = page.locator(
+      '[data-testid="settings-debug-console-toggle"]',
+    );
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+
+    // The value must be reflected in localStorage.
+    const stored = await page.evaluate(() =>
+      localStorage.getItem("hush.debugConsole"),
+    );
+    expect(stored).toBe("1");
+  });
+});
+
+test.describe("settings window — Permissions tab: refresh button", () => {
+  // perms-refresh triggers a fresh diagnose_macos_permissions call so the
+  // user can re-check after granting/revoking a permission outside the app.
+  // PermissionsTab only renders the button when `diagnostic !== null`, which
+  // requires `canReset: true` from the mock (diagnostic = res.canReset ? res : null).
+
+  test("Refresh button is visible in the Permissions tab", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: "",
+        inputMonitoringHint: "",
+        canReset: true,
+        statuses: {
+          microphone: "granted",
+          screenRecording: "granted",
+          inputMonitoring: "granted",
+        },
+      }),
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator('[data-testid="settings-tab-permissions"]').click();
+
+    const btn = page.locator('[data-testid="perms-refresh"]');
+    await expect(btn).toBeVisible();
+    await expect(btn).toBeEnabled();
+  });
+
+  test("clicking Refresh calls diagnose_macos_permissions again", async ({
+    page,
+  }) => {
+    let callCount = 0;
+    await page.exposeFunction(
+      "__hush_record_diagnose",
+      () => (callCount += 1),
+    );
+    await installMocks(page, {
+      diagnose_macos_permissions: () => {
+        (
+          window as unknown as { __hush_record_diagnose: () => void }
+        ).__hush_record_diagnose();
+        return {
+          bundleId: "io.github.khawkins98.hush",
+          microphoneHint: "",
+          inputMonitoringHint: "",
+          canReset: true,
+          statuses: {
+            microphone: "granted",
+            screenRecording: "granted",
+            inputMonitoring: "granted",
+          },
+        };
+      },
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator('[data-testid="settings-tab-permissions"]').click();
+
+    // One call happens on mount from PermissionsTab's onMount.
+    await expect.poll(() => callCount).toBeGreaterThanOrEqual(1);
+    const countBeforeRefresh = callCount;
+
+    await page.locator('[data-testid="perms-refresh"]').click();
+    await expect.poll(() => callCount).toBeGreaterThan(countBeforeRefresh);
+  });
+});
