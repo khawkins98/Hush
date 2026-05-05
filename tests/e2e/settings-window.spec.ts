@@ -913,4 +913,13 @@ test.describe("settings window — About section", () => {
       page.locator('.about-meta a[href*="apache.org"]'),
     ).toBeVisible();
   });
+
+  test("audio-pipeline-diagram is visible in About tab", async ({ page }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-about"]').click();
+    await expect(
+      page.locator('[data-testid="audio-pipeline-diagram"]'),
+    ).toBeVisible();
+  });
 });
