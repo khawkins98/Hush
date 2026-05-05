@@ -85,7 +85,9 @@ Pre-built binaries: **[GitHub Releases](https://github.com/khawkins98/Hush/relea
 | **Linux** | `.AppImage` or `.deb` | Any distro / Debian + Ubuntu; CI-built, not hands-on tested |
 | **Windows** | `.msi` (recommended) or `.exe` | CI-built, not hands-on tested |
 
-Early releases are unsigned. macOS shows a Gatekeeper warning on first launch — right-click `Hush.app` → **Open** the first time, subsequent launches are silent. Windows shows a SmartScreen warning — click **More info** → **Run anyway**. Code-signing (Apple Developer ID + EV cert on Windows) is on the roadmap.
+Early releases are not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project and the membership fee doesn't make sense yet). On macOS, right-click `Hush.app` → **Open** on first launch to bypass the Gatekeeper warning; subsequent launches are silent. After an update, one or more permissions (Microphone, Screen Recording, Input Monitoring) may show "Was granted — now revoked" in Settings → Permissions — this is a macOS TCC side-effect of ad-hoc signing. Re-grant each one in System Settings or use the Reset button in Settings → Permissions. Full troubleshooting steps are in [`docs/macos-permissions.md`](./docs/macos-permissions.md). Code-signing would eliminate this entirely; if you'd like to sponsor it, GitHub Sponsors is at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
+
+Windows shows a SmartScreen warning — click **More info** → **Run anyway**. A Windows EV cert is also on the roadmap.
 
 Hush does **not** check for updates automatically. To check manually: **Settings → About → Check for updates**, or on macOS the **Hush** menu.
 
