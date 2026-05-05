@@ -15,6 +15,7 @@ import {
 } from "$lib/errors";
 import { joinUtterances } from "$lib/transcript-format";
 import type {
+  ActiveMeetingSession,
   AudioSourceListing,
   DictationResult,
   MeetingSession,
@@ -25,20 +26,63 @@ import { audio } from "$lib/state/audio.svelte";
 import { history } from "$lib/state/history.svelte";
 import { meeting } from "$lib/state/meeting-sessions.svelte";
 
-let recording = $state(false);
-let busy = $state(false);
+// ---------------------------------------------------------------------------
+// Recording lifecycle state machine
+// ---------------------------------------------------------------------------
+// The five states form a linear flow with one branch and one recovery edge:
+//
+//   idle ──start──▶ starting ──IPC ok──▶ recording ──stop()──▶ stopping
+//                      │                                             │
+//                   IPC fail                              meeting_stop_manual ok
+//                      │                                             │
+//                      ▼                                        transcribing
+//                     idle ◀──────────────────────────────────── (always)
+//
+// On stop failure: recovery queries meeting_active_session. If the session is
+// gone → idle. If still live → restore to recording so the user can retry.
+
+export type RecordMode = "dictation" | "meeting";
+
+type RecordingPhase =
+  | { tag: "idle" }
+  | { tag: "starting" }
+  | {
+      tag: "recording";
+      mode: RecordMode;
+      // null for the start_dictation path (no meeting session ID).
+      meetingId: number | null;
+      startedAtMs: number;
+    }
+  | {
+      tag: "stopping";
+      mode: RecordMode;
+      meetingId: number | null;
+      startedAtMs: number;
+    }
+  | { tag: "transcribing" };
+
+let phase = $state<RecordingPhase>({ tag: "idle" });
 let result = $state<DictationResult | null>(null);
 let error = $state<ErrorDisplay | null>(null);
-let recordMode = $state<"dictation" | "meeting" | null>(null);
-let lastMeetingId = $state<number | null>(null);
-let lastRecordingStartedAtMs = $state<number | null>(null);
 let models = $state<ModelCard[]>([]);
 let modelsLoaded = $state(false);
 let appProfileNotice = $state<string | null>(null);
 let appProfileNoticeTimer = $state<ReturnType<typeof setTimeout> | null>(null);
 let pendingPermissionsDialogIntro = $state<string | null>(null);
 
-let transcribing = $derived(busy && !recording && !!result === false);
+let recording = $derived(phase.tag === "recording");
+let busy = $derived(
+  phase.tag === "starting" ||
+    phase.tag === "stopping" ||
+    phase.tag === "transcribing",
+);
+// True only during the window between meeting_stop_manual returning and result
+// hydration completing — previously this was always false because busy went
+// false before the 350 ms setTimeout fired.
+let transcribing = $derived(phase.tag === "transcribing");
+let recordMode = $derived<RecordMode | null>(
+  phase.tag === "recording" || phase.tag === "stopping" ? phase.mode : null,
+);
 let noModelInstalled = $derived(
   modelsLoaded && models.length > 0 && !models.some((m) => m.isDownloaded),
 );
@@ -47,18 +91,20 @@ let activeModel = $derived(
 );
 
 export const dictation = {
+  // ---- read-only derived state ----
   get recording() {
     return recording;
-  },
-  set recording(val: boolean) {
-    recording = val;
   },
   get busy() {
     return busy;
   },
-  set busy(val: boolean) {
-    busy = val;
+  get transcribing() {
+    return transcribing;
   },
+  get recordMode() {
+    return recordMode;
+  },
+  // ---- independently mutable state ----
   get result() {
     return result;
   },
@@ -70,24 +116,6 @@ export const dictation = {
   },
   set error(val: ErrorDisplay | null) {
     error = val;
-  },
-  get recordMode() {
-    return recordMode;
-  },
-  set recordMode(val: "dictation" | "meeting" | null) {
-    recordMode = val;
-  },
-  get lastMeetingId() {
-    return lastMeetingId;
-  },
-  set lastMeetingId(val: number | null) {
-    lastMeetingId = val;
-  },
-  get lastRecordingStartedAtMs() {
-    return lastRecordingStartedAtMs;
-  },
-  set lastRecordingStartedAtMs(val: number | null) {
-    lastRecordingStartedAtMs = val;
   },
   get models() {
     return models;
@@ -113,9 +141,7 @@ export const dictation = {
   set pendingPermissionsDialogIntro(val: string | null) {
     pendingPermissionsDialogIntro = val;
   },
-  get transcribing() {
-    return transcribing;
-  },
+  // ---- derived model helpers ----
   get noModelInstalled() {
     return noModelInstalled;
   },
@@ -140,24 +166,33 @@ export const dictation = {
       audio.sourcesLoaded = true;
     }
   },
+  // ---- recording lifecycle ----
+  //
+  // start() uses the start_dictation / stop_dictation IPC pair.
+  // That path applies vocabulary prompt biasing, replacements, and backend
+  // clipboard write — features the meeting pump doesn't replicate. Used by
+  // the toggle hotkey and PTT.
+  //
+  // startRecord() uses the meeting_start_manual / meeting_stop_manual pair.
+  // Adds system-audio capture (when SCK is confirmed). Used by the UI button.
   async start() {
+    if (phase.tag !== "idle") return;
     error = null;
     result = null;
-    busy = true;
+    phase = { tag: "starting" };
     try {
       await invoke("start_dictation", { source: audio.selectedAsAudioSource() });
-      recording = true;
-      recordMode = "dictation";
+      phase = { tag: "recording", mode: "dictation", meetingId: null, startedAtMs: Date.now() };
     } catch (e) {
       error = formatErrorDisplay(e);
-    } finally {
-      busy = false;
+      phase = { tag: "idle" };
     }
   },
   async startRecord(screenRecordingLive: boolean) {
+    if (phase.tag !== "idle") return;
     error = null;
     result = null;
-    busy = true;
+    phase = { tag: "starting" };
     const sourceShape = audio.selectedAsAudioSource();
     const sources =
       sourceShape === null
@@ -174,10 +209,12 @@ export const dictation = {
         sources,
         appName: null,
       });
-      recording = true;
-      recordMode = isMultiSource ? "meeting" : "dictation";
-      lastMeetingId = session.id;
-      lastRecordingStartedAtMs = Date.now();
+      phase = {
+        tag: "recording",
+        mode: isMultiSource ? "meeting" : "dictation",
+        meetingId: session.id,
+        startedAtMs: Date.now(),
+      };
       meeting.activeId = session.id;
       if (isMultiSource) {
         void invoke("confirm_permission", {
@@ -193,95 +230,51 @@ export const dictation = {
           (error.headline ?? "Screen Recording permission needed")
           + " — open System Settings below to grant access, then try Record again.";
       }
-    } finally {
-      busy = false;
+      phase = { tag: "idle" };
     }
   },
   async stop(trailingMs = 0) {
-    // Re-entrancy guard: stop() is async and multiple callers (PTT release
-    // handler, post-start race callback, toggle hotkey) can race to call it.
-    // The first caller wins; subsequent ones are no-ops.
-    if (busy) return;
-    busy = true;
-    const meetingId = lastMeetingId;
-    const modeAtStop = recordMode;
+    // Phase guard: only the recording state can transition to stopping.
+    // Replaces the old busy-flag re-entrancy guard — illegal transitions
+    // are structurally impossible rather than defended at runtime.
+    if (phase.tag !== "recording") return;
+    const snapshot = {
+      mode: phase.mode,
+      meetingId: phase.meetingId,
+      startedAtMs: phase.startedAtMs,
+    };
+    phase = { tag: "stopping", ...snapshot };
     try {
       // Trailing-silence buffer: hold the pipeline open so Whisper's
       // in-flight chunk can finish accumulating before teardown.
       if (trailingMs > 0) {
         await new Promise<void>((r) => setTimeout(r, trailingMs));
       }
-      if (meetingId !== null) {
-        await invoke("meeting_stop_manual");
-        recording = false;
-        recordMode = null;
-        meeting.activeId = null;
-        lastMeetingId = null;
-        setTimeout(() => void meeting.refresh(), 300);
-        setTimeout(() => void history.refresh(), 300);
-        const populateResult = modeAtStop === "dictation";
-        const recordedAt = lastRecordingStartedAtMs;
-        lastRecordingStartedAtMs = null;
-        setTimeout(async () => {
-          await meeting.copyToClipboard(meetingId);
-          if (populateResult) {
-            try {
-              const detail = await invoke<MeetingSessionDetail>(
-                "meeting_session_get",
-                { id: meetingId },
-              );
-              const finals = (detail.utterances ?? []).filter((u) => u.isFinal);
-              if (finals.length > 0) {
-                const text = joinUtterances(finals, "\n\n");
-                const durationMs =
-                  recordedAt !== null ? Date.now() - recordedAt : null;
-                result = { text, foreground: null, durationMs };
-              }
-            } catch (e) {
-              console.warn("[hush] failed to populate result block", e);
-            }
-          }
-        }, 350);
+      if (snapshot.meetingId !== null) {
+        await _stopMeeting({ ...snapshot, meetingId: snapshot.meetingId });
       } else {
-        result = await invoke<DictationResult>("stop_dictation");
-        recording = false;
-        recordMode = null;
-        setTimeout(() => void history.refresh(), 150);
-        if (meeting.activeId !== null) {
-          setTimeout(() => void meeting.refresh(), 200);
-        }
+        await _stopDictation();
       }
-      void invoke("confirm_permission", { permission: "microphone" }).catch(
-        (err) => {
-          console.warn("[hush] confirm_permission(mic) failed", err);
-        },
-      );
     } catch (e) {
       error = formatErrorDisplay(e);
-      if (meetingId !== null) {
-        // meeting_stop_manual failed — re-sync from backend before clearing
-        // UI state. The session may still be live on the backend (#552).
-        try {
-          await meeting.refresh();
-        } catch {
-          // meeting.refresh() handles its own errors internally; this
-          // outer catch is a belt-and-suspenders guard only.
+      if (snapshot.meetingId !== null) {
+        // meeting_stop_manual failed — query the backend directly to decide
+        // whether to restore recording state or clear it. Avoids the race
+        // where meeting.activeId is stale after a failed refresh() (#552).
+        const { active } = await invoke<ActiveMeetingSession>(
+          "meeting_active_session",
+        ).catch(() => ({ active: snapshot.meetingId }));
+        if (active !== snapshot.meetingId) {
+          // Session is gone on the backend — safe to clear UI state.
+          meeting.activeId = null;
+          phase = { tag: "idle" };
+        } else {
+          // Session still live — restore so the user can retry stop().
+          phase = { tag: "recording", ...snapshot };
         }
-        if (meeting.activeId !== meetingId) {
-          // Backend confirms the session is gone (or replaced by another).
-          // Safe to clear frontend recording state.
-          recording = false;
-          recordMode = null;
-          lastMeetingId = null;
-          lastRecordingStartedAtMs = null;
-        }
-        // Else: session still active — leave recording=true so user can retry.
       } else {
-        recording = false;
-        recordMode = null;
+        phase = { tag: "idle" };
       }
-    } finally {
-      busy = false;
     }
   },
   async refreshModels() {
@@ -352,3 +345,83 @@ export const dictation = {
     }
   },
 };
+
+// ---------------------------------------------------------------------------
+// Private stop helpers — called only from dictation.stop()
+// ---------------------------------------------------------------------------
+
+// Handles the start_dictation / stop_dictation lifecycle. The result is
+// returned synchronously from stop_dictation, so no transcribing phase is
+// needed here — phase goes directly to idle.
+async function _stopDictation(): Promise<void> {
+  const dictResult = await invoke<DictationResult>("stop_dictation");
+  result = dictResult;
+  phase = { tag: "idle" };
+  void history.refresh();
+  if (meeting.activeId !== null) {
+    void meeting.refresh();
+  }
+  void invoke("confirm_permission", { permission: "microphone" }).catch(
+    (err) => {
+      console.warn("[hush] confirm_permission(mic) failed", err);
+    },
+  );
+}
+
+// Handles the meeting_start_manual / meeting_stop_manual lifecycle.
+// Transitions through transcribing while fetching the completed session
+// detail — one fetch serves both clipboard copy and the result block.
+async function _stopMeeting(snapshot: {
+  mode: RecordMode;
+  meetingId: number;
+  startedAtMs: number;
+}): Promise<void> {
+  await invoke("meeting_stop_manual");
+  // meeting_stop_manual awaits pump drain before returning, so the session
+  // is fully finalised at this point — no setTimeout delay is needed.
+  phase = { tag: "transcribing" };
+  meeting.activeId = null;
+  try {
+    const detail = await invoke<MeetingSessionDetail>("meeting_session_get", {
+      id: snapshot.meetingId,
+    });
+    const finals = (detail.utterances ?? []).filter((u) => u.isFinal);
+    if (finals.length > 0) {
+      const text = joinUtterances(finals, "\n\n");
+      // Clipboard — one fetch serves both clipboard text and the result block.
+      try {
+        await navigator.clipboard.writeText(text);
+        meeting.setNotice({
+          kind: "success",
+          message: "Copied to clipboard — full transcript also saved to History below.",
+        });
+      } catch {
+        meeting.setNotice({
+          kind: "failure",
+          message:
+            "Couldn't auto-copy the transcript — open the History meeting row below to copy it manually.",
+        });
+      }
+      // Result block for single-source dictation via the meeting path.
+      if (snapshot.mode === "dictation") {
+        result = {
+          text,
+          foreground: null,
+          durationMs: Date.now() - snapshot.startedAtMs,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn("[hush] failed to hydrate result from meeting session", e);
+  } finally {
+    // Always clean up regardless of hydration success.
+    phase = { tag: "idle" };
+    void meeting.refresh();
+    void history.refresh();
+    void invoke("confirm_permission", { permission: "microphone" }).catch(
+      (err) => {
+        console.warn("[hush] confirm_permission(mic) failed", err);
+      },
+    );
+  }
+}
