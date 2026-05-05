@@ -1054,7 +1054,10 @@ impl AppState {
         );
         let meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
             Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db));
-        tracing::info!(elapsed_ms = t_start.elapsed().as_millis(), "app state: database and repositories ready");
+        tracing::info!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "app state: database and repositories ready"
+        );
         // Inference thread count (#255). Read the persisted value
         // from settings, clamp to the supported range, build the
         // shared Arc that AppState + WhisperTranscription + the IPC
@@ -1122,7 +1125,10 @@ impl AppState {
             ),
         );
 
-        tracing::info!(elapsed_ms = t_start.elapsed().as_millis(), "app state: whisper contexts loaded");
+        tracing::info!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "app state: whisper contexts loaded"
+        );
 
         // Wrap each instance in its own `Arc<Mutex<...>>` so
         // `model_select` can hot-swap independently. SessionManager
@@ -1163,7 +1169,10 @@ impl AppState {
         // post-download swap propagates to the meeting pump on the
         // next tick — no restart needed.
         let diarize_inner_initial = build_diarizer_inner(&models_dir);
-        tracing::info!(elapsed_ms = t_start.elapsed().as_millis(), "app state: diarizer ready");
+        tracing::info!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "app state: diarizer ready"
+        );
         let diarize_slot: crate::diarization::DiarizeSlot =
             Arc::new(std::sync::RwLock::new(diarize_inner_initial));
         let diarize_fallback: Arc<dyn crate::diarization::Diarize> =
