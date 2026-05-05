@@ -4,6 +4,20 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-06 — Parallel Whisper model loads at startup (#561)
+
+**Problem:** Startup took 2–4 s on typical hardware because `build_default` loaded two `WhisperTranscription` contexts sequentially. Each load mmaps the GGUF file and initialises a `whisper.cpp` context — ~1–2 s each for large models.
+
+**Why two contexts?** Dictation and meeting pump each own a private `WhisperContext` to avoid mutex contention on the single-threaded `whisper.cpp` inference path (#248). The RAM cost is minimal — `whisper-rs` mmaps the GGUF so the OS shares physical pages between the two contexts.
+
+**Fix:** Wrap `WhisperTranscription::new` in a `load_whisper_model` helper that calls `tokio::task::spawn_blocking`. Replace the two sequential `build_transcriber` calls with `tokio::join!`. Both blocking loads run on separate tokio blocking-pool threads, so the total cost is roughly max(load1, load2) rather than load1 + load2.
+
+**Why splashscreen is deferred:** The setup hook uses `tauri::async_runtime::block_on`, which blocks the macOS main thread. During that block the OS won't update any window — including a splashscreen. Showing a splash that updates while models load requires moving `build_default` off the blocking setup hook (deferred `app.manage()` after an async spawn + a frontend readiness signal). This is a larger refactor tracked separately.
+
+**Profiling:** `RUST_LOG=info npm run tauri dev` now emits timestamped trace events at each phase of `build_default`: `database and repositories ready`, `whisper contexts loaded`, `diarizer ready`, and `build_default complete`.
+
+---
+
 ## 2026-05-05 — CI rustfmt version differs from local toolchain
 
 **Problem:** CI uses `dtolnay/rust-toolchain` pinned to a January 2026 stable SHA (rustfmt 1.7.x). Local development typically runs a newer stable (e.g. 1.8.0). The two versions produce different output for borderline-length macro invocations (`anyhow!(...)`, `tracing::info!(...)`, function calls with 3+ args near the 100-char `max_width`). The result: `cargo fmt --all -- --check` passes locally but fails on CI after a push.
