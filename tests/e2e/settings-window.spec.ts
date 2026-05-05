@@ -557,6 +557,42 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await expect(rows.nth(1).locator(".override-name")).toHaveText("zebra.app");
   });
 
+  test("override-profile-row and override-audio-/override-model-{appName} selects render when audio sources and models are available", async ({
+    page,
+  }) => {
+    // override-profile-row renders only when onSetProfile is set AND
+    // (audioSources.length > 0 || models.length > 0).
+    // Default mock already returns one audio source and one model, so
+    // we only need to supply an existing override row.
+    await installMocks(page, {
+      meeting_app_override_list: () => [
+        {
+          appName: "Zoom",
+          kind: "meeting",
+          createdAt: "2026-04-28T00:00:00Z",
+          preferredAudioSource: null,
+          preferredModelId: null,
+        },
+      ],
+    });
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-settings"]').click();
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    // Profile row container
+    await expect(
+      page.locator('[data-testid="override-profile-row"]'),
+    ).toBeVisible();
+    // Per-app audio source select
+    await expect(
+      page.locator('[data-testid="override-audio-Zoom"]'),
+    ).toBeVisible();
+    // Per-app model select
+    await expect(
+      page.locator('[data-testid="override-model-Zoom"]'),
+    ).toBeVisible();
+  });
+
   test("built-in defaults disclosure renders Meeting + Media sections (#320)", async ({
     page,
   }) => {
