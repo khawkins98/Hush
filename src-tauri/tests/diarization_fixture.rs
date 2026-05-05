@@ -135,13 +135,24 @@ fn two_speakers_get_distinct_labels() {
 
     // Utterance 1: speaker 1
     let mut u1 = make_utterance(sp1_ms);
-    diarizer.label_utterances(std::slice::from_mut(&mut u1), std::slice::from_ref(&sp1_audio), CANONICAL_FORMAT);
+    diarizer.label_utterances(
+        std::slice::from_mut(&mut u1),
+        std::slice::from_ref(&sp1_audio),
+        CANONICAL_FORMAT,
+    );
 
     // Utterance 2: speaker 2 — should land in a different cluster
     let mut u2 = make_utterance(sp2_ms);
-    diarizer.label_utterances(std::slice::from_mut(&mut u2), &[sp2_audio], CANONICAL_FORMAT);
+    diarizer.label_utterances(
+        std::slice::from_mut(&mut u2),
+        &[sp2_audio],
+        CANONICAL_FORMAT,
+    );
 
-    eprintln!("u1 label={:?}, u2 label={:?}", u1.speaker_label, u2.speaker_label);
+    eprintln!(
+        "u1 label={:?}, u2 label={:?}",
+        u1.speaker_label, u2.speaker_label
+    );
 
     assert!(
         u1.speaker_label.is_some(),
@@ -158,7 +169,11 @@ fn two_speakers_get_distinct_labels() {
 
     // Utterance 3: speaker 1 again — cluster stability check (#316)
     let mut u3 = make_utterance(sp1_ms);
-    diarizer.label_utterances(std::slice::from_mut(&mut u3), &[sp1_audio], CANONICAL_FORMAT);
+    diarizer.label_utterances(
+        std::slice::from_mut(&mut u3),
+        &[sp1_audio],
+        CANONICAL_FORMAT,
+    );
 
     eprintln!("u3 (speaker1 repeat) label={:?}", u3.speaker_label);
 
