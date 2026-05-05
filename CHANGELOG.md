@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Meeting pump `AudioCapture` seam integration test (`test-utils` feature, #559)
+
+- Added `WavFileAudioCapture` / `WavFileAudioSession` in `src/audio/file_source.rs` (compiled under `--features test-utils`) — a deterministic file-backed `AudioCapture` / `AudioSession` implementation that serves pre-loaded WAV samples to the meeting pump in configurable-size chunks.
+- Added `tests/meeting_fixture.rs`: an `#[ignore]`d integration test that exercises the full `SessionManager → pump → WhisperTranscription → DB` path through the seam boundary, using an in-memory SQLite database. Run with `HUSH_TEST_MODEL=... cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture`.
+- Updated `docs/developing.md`, `src-tauri/tests/fixtures/README.md`, and `src-tauri/Cargo.toml` with `test-utils` feature documentation and updated fixture test run commands.
+
 ### Fixed
+
+#### Diarizer timeline drift on transient drain failure now corrected (#553)
+
+- When a `drain_into` call fails for a tick, the pump now zero-fills the diarizer's rolling audio buffer for the expected tick duration, keeping its timeline aligned with the transcription session's internal clock. Previously, a failed drain left a gap in the buffer, causing `slice_ms()` to return stale or misaligned audio for subsequent utterances and degrading speaker-labelling quality for the rest of the session.
 
 #### Toggle hotkey and command palette stop now apply trailing-silence buffer (#560)
 

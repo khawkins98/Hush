@@ -100,6 +100,16 @@ cd src-tauri && cargo test --lib meeting::
 HUSH_TEST_MODEL=/path/to/ggml-base.bin \
   cd src-tauri && cargo test --features whisper --test audio_fixture -- --ignored
 
+# Meeting pump fixture test — exercises the full SessionManager → pump →
+# WhisperTranscription path through the AudioCapture seam. Requires the
+# `test-utils` feature (WavFileAudioCapture) and `whisper`.
+HUSH_TEST_MODEL=/path/to/ggml-base.bin \
+  cd src-tauri && cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
+
+# Streaming fixture test — exercises the streaming transcription session.
+HUSH_TEST_MODEL=/path/to/ggml-base.bin \
+  cd src-tauri && cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
+
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check
 
