@@ -241,6 +241,8 @@ export async function installMocks(
       ],
 
       // ---- dictation lifecycle ----
+      // start_dictation / stop_dictation: toggle-hotkey and PTT path.
+      // meeting_start_manual / meeting_stop_manual: UI button path (below).
       start_dictation: () => undefined,
       stop_dictation: () => ({
         text: "hello world",
