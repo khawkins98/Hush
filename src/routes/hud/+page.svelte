@@ -50,6 +50,12 @@
   // the silence floor.
   let hudState = $state<"recording" | "processing" | null>(null);
 
+  // Transcription progress 0–100, set while hudState === "processing" (#566).
+  // Reset to null on each new recording cycle so back-to-back dictations
+  // start without a stale percentage. Null means "no progress yet" and
+  // keeps the label as plain "Processing…" until the first tick arrives.
+  let transcriptionProgress = $state<number | null>(null);
+
   // Recording-duration timer (#360). `recordingStartedAt` is set
   // when the backend emits `hud:state === "recording"`, freezes
   // when state flips to `processing`, and resets between cycles so
@@ -72,6 +78,7 @@
   // `AudioWaveform.svelte` along with the rest of the waveform
   // logic in #411 phase B.
   let unlistenState: UnlistenFn | null = null;
+  let unlistenProgress: UnlistenFn | null = null;
   let raf: number | undefined;
 
   // Format a millisecond duration as `M:SS` (under an hour) or
@@ -121,8 +128,18 @@
             // missing field is a defensive fallback.
             recordingStartedAt = payload.startedAtMs ?? Date.now();
             elapsedLabel = "0:00";
+            // Reset progress from previous cycle so we don't show
+            // a stale percentage on the next Processing transition.
+            transcriptionProgress = null;
           }
         }
+      },
+    );
+
+    unlistenProgress = await listen<number>(
+      Events.TranscriptionProgress,
+      (event) => {
+        transcriptionProgress = event.payload;
       },
     );
 
@@ -132,6 +149,8 @@
   onDestroy(() => {
     unlistenState?.();
     unlistenState = null;
+    unlistenProgress?.();
+    unlistenProgress = null;
     if (raf !== undefined) {
       cancelAnimationFrame(raf);
       raf = undefined;
@@ -173,7 +192,9 @@
   role="status"
   aria-live="polite"
   aria-label={hudState === "processing"
-    ? "Processing transcription"
+    ? transcriptionProgress !== null
+      ? `Processing transcription ${transcriptionProgress}%`
+      : "Processing transcription"
     : "Recording in progress"}
 >
   <!--
@@ -197,7 +218,11 @@
   </span>
   <span class="hud-dot"></span>
   <span class="hud-label">
-    {hudState === "processing" ? "Processing…" : "Recording"}
+    {hudState === "processing"
+      ? transcriptionProgress !== null
+        ? `Processing… ${transcriptionProgress}%`
+        : "Processing…"
+      : "Recording"}
   </span>
   {#if hudState === "recording"}
     <span class="hud-elapsed" data-testid="hud-elapsed" aria-hidden="true">

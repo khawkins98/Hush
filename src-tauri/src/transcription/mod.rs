@@ -66,10 +66,19 @@ pub use streaming::{
     WhisperLikeInferer,
 };
 
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::audio::{CaptureFormat, CapturedAudio};
+
+/// Shared, mutable progress hook type (#566).
+///
+/// Held inside `WhisperTranscription` and set by the IPC layer just
+/// before inference so the HUD can show "Processing… N%". Named to
+/// keep clippy's `type_complexity` lint quiet.
+pub type ProgressHookSlot = Arc<Mutex<Option<Arc<dyn Fn(i32) + Send + Sync + 'static>>>>;
 
 /// One transcribed utterance, the unit a streaming backend emits.
 ///
@@ -212,6 +221,17 @@ pub trait Transcribe: Send + Sync {
     fn model_label(&self) -> String {
         "unknown".to_owned()
     }
+
+    /// Register a progress callback for this transcription backend.
+    ///
+    /// Fires during inference with an integer percentage in 0–100. The
+    /// callback is best-effort — backends that don't support incremental
+    /// progress silently ignore it via this default no-op impl. Call with
+    /// `None` to clear a previously registered hook.
+    ///
+    /// The default no-op allows callers to use this method unconditionally
+    /// without checking whether the backend supports it.
+    fn set_progress_hook(&self, _hook: Option<Arc<dyn Fn(i32) + Send + Sync + 'static>>) {}
 
     /// Run inference incrementally over a stream of audio chunks and
     /// emit one or more [`Utterance`]s with timestamps.

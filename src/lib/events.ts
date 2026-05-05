@@ -102,4 +102,12 @@ export const Events = {
   /// Subscribe *before* calling `get_log_entries` to guarantee no
   /// events are lost across the snapshot / live-stream gap (#532).
   LogEvent: "log:event",
+  /// Backend → HUD window and main window: whisper.cpp inference
+  /// progress during dictation transcription (integer 0–100).
+  /// Throttled to every 5 percentage points in Rust to keep
+  /// event-bus traffic low. The HUD shows "Processing… N%" in
+  /// its label; the main window's RecordPanel renders a thin
+  /// progress bar under the waveform during the transcribing
+  /// phase (#566).
+  TranscriptionProgress: "transcription:progress",
 } as const;

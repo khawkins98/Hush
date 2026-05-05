@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter as _, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -360,13 +360,27 @@ pub async fn stop_dictation(
     // "Processing…" pill on screen (#291). The error itself is
     // surfaced normally to the frontend's structured-error
     // renderer.
+    //
+    // Register a progress hook so the HUD can show "Processing… N%"
+    // while whisper.cpp runs (#566). Cleared immediately after
+    // inference so the Arc<AppHandle> isn't held longer than needed.
+    let app_clone = app.clone();
+    transcriber.set_progress_hook(Some(Arc::new(move |progress: i32| {
+        if let Err(e) = app_clone.emit("transcription:progress", progress) {
+            tracing::warn!(error = ?e, "emit transcription:progress failed");
+        }
+    })));
     let utterances = match transcriber.transcribe_chunks(&[captured.samples], format, &prompt) {
         Ok(u) => u,
         Err(e) => {
+            transcriber.set_progress_hook(None);
             crate::hud::hide_async(&app);
             return Err(IpcError::Transcription(e.to_string()));
         }
     };
+    // Inference complete — unhook the progress callback so the
+    // Arc<AppHandle> is released promptly.
+    transcriber.set_progress_hook(None);
     // Concatenate the final utterances. The default impl emits
     // exactly one; a future streaming backend may emit several.
     // Skip non-final utterances — those are partial revisions
