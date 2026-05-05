@@ -1449,3 +1449,23 @@ At −38 dBFS with `DB_FLOOR = −70` and `dynamicCeil = −12` this yields ~43 
 **How to use these logs to diagnose:** Run `RUST_LOG=hush=debug npm run tauri:bundle && open ~/Applications/Hush.app`. Start a meeting recording, speak for 30+ seconds, then check the Tauri dev console or attach `cargo tauri dev` output. Look for: (a) `samples = 0` every tick → audio not flowing; (b) `inference ran` lines appearing every ~3 s → inference is working; (c) `raw_segments > 0, non_empty_segments = 0` → no-speech filtering; (d) no `inference ran` lines at all → something upstream.
 
 **Ring buffer is not a concern:** SCK ring buffer is sized at `48_000 × 2 × 120 = 11.5 M` f32 samples (120 s). Even if inference takes several seconds, audio accumulates without overflow.
+
+---
+
+### 2026-05-06 — e2e mock override closure-capture limitation
+
+**Bug:** Test override functions that reference module-level constants (e.g. `DEFAULT_SESSION_ID`) fail at runtime with `ReferenceError: <name> is not defined`, silently falling through to the catch block instead of setting the expected state.
+
+**Root cause:** `installMocks` serialises per-test overrides via `fn.toString()` and reconstructs them in the page context via `new Function(...)`. The reconstructed function executes in a fresh scope — no access to the originating module's top-level bindings. Any constant defined outside the arrow function is stripped away.
+
+**Fix / rule:** All values inside `installMocks` override functions must be **inline literals**, not references to variables or constants declared in the test file.
+
+```ts
+// ✅ OK — literal value inlined
+meeting_session_get: () => ({ session: { id: 1, ... } })
+
+// ❌ BAD — closure capture fails silently at test runtime
+meeting_session_get: () => ({ session: { id: DEFAULT_SESSION_ID, ... } })
+```
+
+If per-test counters or dynamic values are genuinely needed, use `page.exposeFunction` to bridge them across the serialisation boundary. This constraint is also documented with examples in `_mock.ts` alongside the `new Function` call.

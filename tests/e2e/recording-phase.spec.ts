@@ -249,3 +249,166 @@ test("recording guard: start button replaced by stop when recording", async ({ p
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Start recording" })).toHaveCount(0);
 });
+
+test("record-mode-badge hidden when Screen Recording health is not-applicable (default)", async ({
+  page,
+}) => {
+  // Default mock returns screenRecording: "not-applicable"; badge must be absent.
+  await installMocks(page);
+  await page.goto("/");
+  await expect(
+    page.locator('[data-testid="record-mode-badge"]'),
+  ).toHaveCount(0);
+});
+
+test("record-mode-badge shows with data-health=not-granted when Screen Recording is not-granted", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    get_permission_health: () => ({
+      health: {
+        microphone: "confirmed",
+        screenRecording: "not-granted",
+        inputMonitoring: "not-applicable",
+      },
+    }),
+  });
+  await page.goto("/");
+
+  const badge = page.locator('[data-testid="record-mode-badge"]');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute("data-health", "not-granted");
+  await expect(badge).toContainText(/grant Screen Recording/i);
+});
+
+test("record-mode-badge shows with data-health=stale when Screen Recording is stale", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    get_permission_health: () => ({
+      health: {
+        microphone: "confirmed",
+        screenRecording: "stale",
+        inputMonitoring: "not-applicable",
+      },
+    }),
+  });
+  await page.goto("/");
+
+  const badge = page.locator('[data-testid="record-mode-badge"]');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute("data-health", "stale");
+  await expect(badge).toContainText(/Screen Recording access expired/i);
+});
+
+test("live-transcript panel appears during recording when utterances are available", async ({
+  page,
+}) => {
+  // Simulate an active meeting session that has returned a spoken utterance.
+  // meeting_start_manual returns session id=99; the $effect in +page.svelte
+  // then calls meeting_session_get(99) which populates meetingActiveDetail.
+  // RecordPanel's liveTranscriptText derived becomes non-empty, triggering
+  // showLiveTranscript → the live-transcript section renders.
+  await installMocks(page, {
+    meeting_start_manual: () => ({
+      id: 99,
+      appName: "manual",
+      appKind: "other",
+      startedAt: "2026-05-05T10:00:00Z",
+      endedAt: null,
+      speakerCount: null,
+      utteranceCount: 0,
+      notes: null,
+      sources: ["mic"],
+    }),
+    meeting_session_get: () => ({
+      session: {
+        id: 99,
+        appName: "manual",
+        appKind: "other",
+        startedAt: "2026-05-05T10:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 1,
+        notes: null,
+      },
+      utterances: [
+        {
+          id: 1,
+          sessionId: 99,
+          startedAtMs: 0,
+          endedAtMs: 3000,
+          speakerLabel: "mic",
+          text: "Hello world.",
+          isFinal: true,
+        },
+      ],
+      currentPartials: [],
+    }),
+    meeting_active_session: () => ({ active: 99 }),
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Start recording" }).click();
+
+  // Phase is now recording; the $effect polls meeting_session_get and
+  // populates meetingActiveDetail. The live transcript panel should appear
+  // with the utterance text.
+  const livePanel = page.locator('[data-testid="live-transcript"]');
+  await expect(livePanel).toBeVisible();
+  await expect(livePanel).toContainText("Hello world.");
+});
+
+test("export-picker appears in ResultBlock after successful single-source stop", async ({
+  page,
+}) => {
+  // Single-source (mic only, no screen recording confirmed) → mode = "dictation"
+  // → result is hydrated from the session utterances after meeting_stop_manual.
+  // NOTE: mock functions are serialised via toString() and rebuilt in the page
+  // context — they cannot close over module-level variables like DEFAULT_SESSION_ID.
+  // All values inside mock functions must be literals.
+  await installMocks(page, {
+    meeting_session_get: () => ({
+      session: {
+        id: 1,
+        appName: "manual",
+        appKind: "other",
+        startedAt: "2026-04-26T15:00:00Z",
+        endedAt: "2026-04-26T15:01:00Z",
+        speakerCount: null,
+        utteranceCount: 1,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [
+        {
+          id: 1,
+          sessionId: 1,
+          startedAtMs: 0,
+          endedAtMs: 2000,
+          speakerLabel: null,
+          text: "Hello Playwright.",
+          isFinal: true,
+        },
+      ],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Start recording" }).click();
+  await page.getByRole("button", { name: "Stop recording and transcribe" }).click();
+
+  // Wait for idle: result block renders with the transcript text.
+  await expect(page.getByRole("button", { name: "Start recording" })).toBeEnabled();
+
+  // ResultBlock: export-picker group visible with at least one format button.
+  const picker = page.locator('[data-testid="export-picker"]');
+  await expect(picker).toBeVisible();
+  // "Copy as:" label and the Plain format button should be present.
+  await expect(picker).toContainText("Copy as:");
+  await expect(
+    picker.locator('[data-testid="export-format-plain"]'),
+  ).toBeVisible();
+});

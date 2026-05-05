@@ -423,6 +423,18 @@ export async function installMocks(
     // Rebuild override functions from their stringified source. The
     // double-arrow guards let test overrides be either `() => x` or
     // `function(args) { ... }` — `new Function` accepts both.
+    //
+    // ⚠️ CLOSURE CAPTURE LIMITATION: Override functions are serialised via
+    // `.toString()` before being sent across the Playwright bridge, then
+    // reconstructed with `new Function(...)` inside the page's JS context.
+    // This means they run in a completely fresh scope — any module-level
+    // constants or variables from the test file (e.g. `DEFAULT_SESSION_ID`)
+    // will NOT be defined when the function executes. All values inside
+    // override functions must be literals, not references to outer variables.
+    //
+    // ✅ OK:  meeting_session_get: () => ({ session: { id: 1, ... } })
+    // ❌ BAD: meeting_session_get: () => ({ session: { id: DEFAULT_SESSION_ID } })
+    //        → ReferenceError: DEFAULT_SESSION_ID is not defined (runtime failure)
     const overrides: Record<string, (args?: unknown) => unknown> = {};
     for (const [name, src] of overrideStrings as Array<[string, string]>) {
       // eslint-disable-next-line no-new-func
