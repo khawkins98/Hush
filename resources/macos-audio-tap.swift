@@ -5,6 +5,21 @@
 /// Recording TCC permission — only the standard microphone-style audio consent
 /// dialog (no pixels captured).
 ///
+/// ## Key design decisions (see learnings.md #593)
+///
+/// - `isExclusive = true`: required for `processes = []` to mean "capture
+///   everything." With `false`, the empty array means "tap no processes."
+/// - `AudioDeviceCreateIOProcIDWithBlock` instead of AVAudioEngine: every
+///   working open-source implementation (OpenWhispr, Korus, Atoll, yogurt)
+///   uses a direct IOProc. AVAudioEngine's AUHAL resolves the aggregate's
+///   main sub-device (output-only) and returns silence from its non-existent
+///   input channels.
+/// - Format is queried from the aggregate device input stream after the device
+///   becomes alive — before starting the IOProc — so the HUSH header is always
+///   written before any PCM arrives at the Rust reader.
+/// - stdout I/O is offloaded to a writer queue (semaphore-bounded) so the
+///   real-time IOProc callback is never blocked by a slow Rust reader.
+///
 /// Protocol:
 ///   stdout: 12-byte header (on successful start) followed by continuous PCM.
 ///   Header layout (little-endian):
@@ -13,16 +28,16 @@
 ///     bytes 8–11: channel_count as u32
 ///
 ///   stderr: human-readable diagnostic messages.
-///   Termination: SIGTERM causes clean shutdown (tap + aggregate device destroyed).
+///   Termination: SIGTERM causes clean shutdown (IOProc stopped, tap +
+///   aggregate device destroyed).
 ///
 /// Build (see src-tauri/build.rs::bundle_audio_tap_capture):
 ///   swiftc resources/macos-audio-tap.swift \
 ///       -framework CoreAudio -framework AudioToolbox \
-///       -framework AVFAudio -framework Foundation \
+///       -framework Foundation \
 ///       -o src-tauri/resources/hush-audio-tap-capture
 
 import AudioToolbox
-import AVFoundation
 import CoreAudio
 import Foundation
 
@@ -56,16 +71,20 @@ func defaultOutputDeviceUID() -> String? {
 }
 
 // ── 2. Process tap ───────────────────────────────────────────────────────────
+//
+// `isExclusive = true` with `processes = []` means "exclude no one from the
+// tap" — i.e. capture the whole system mix. With `false` the empty array
+// delivers silence. See learnings.md entry for #593.
 
 let tapUUID = UUID()
 let desc = CATapDescription()
 desc.name = "hush-capture"
 desc.uuid = tapUUID
-desc.processes = []      // capture all system audio
-desc.isMono = false      // stereo (downmixed by Whisper pipeline)
-desc.isExclusive = false // non-exclusive — does not mute the tapped app
-desc.isMixdown = true    // mix all process audio into one stream
-desc.isPrivate = true    // don't expose tap as a public device
+desc.processes = []       // capture all system audio
+desc.isMono = false       // stereo (downmixed by Whisper pipeline)
+desc.isExclusive = true   // required: empty processes + exclusive = capture all
+desc.isMixdown = true     // mix all process audio into one stream
+desc.isPrivate = true     // don't expose tap as a public device
 desc.muteBehavior = .unmuted
 
 var tapID = AudioObjectID(kAudioObjectUnknown)
@@ -76,24 +95,38 @@ guard tapStatus == noErr else {
 }
 
 // ── 3. Aggregate device with the tap ─────────────────────────────────────────
+//
+// Including the default output device in both SubDeviceList and as
+// MainSubDevice ties the aggregate's clock to the system output clock —
+// important for timestamp accuracy when mixing with microphone captures.
+// TapAutoStart=false because we call AudioDeviceStart explicitly after
+// writing the wire-protocol header.
 
 let tapUID = tapUUID.uuidString
 let aggUID = "io.github.khawkins98.hush.capture-\(UUID().uuidString)"
+let outputUID = defaultOutputDeviceUID()
 
-// The tap-list entry uses the tap's UUID as its UID; the aggregate
-// device wraps it so AVAudioEngine can address it like a real input.
+var subDeviceList: [[String: Any]] = []
+if let uid = outputUID {
+    subDeviceList = [[kAudioSubDeviceUIDKey as String: uid]]
+}
+
 var aggDesc: [String: Any] = [
     kAudioAggregateDeviceNameKey as String:      "HushCapture",
     kAudioAggregateDeviceUIDKey as String:       aggUID,
     kAudioAggregateDeviceIsPrivateKey as String: 1,
     kAudioAggregateDeviceIsStackedKey as String: 0,
-    kAudioAggregateDeviceTapListKey as String:   [[kAudioSubTapUIDKey as String: tapUID]],
+    // TapAutoStart=false: we start the device ourselves after writing the
+    // HUSH header so the Rust reader always sees the header before any PCM.
+    kAudioAggregateDeviceTapAutoStartKey as String: false,
+    kAudioAggregateDeviceSubDeviceListKey as String: subDeviceList,
+    kAudioAggregateDeviceTapListKey as String: [
+        [kAudioSubTapUIDKey as String: tapUID,
+         kAudioSubTapDriftCompensationKey as String: NSNumber(value: true)]
+    ],
 ]
-// Providing the default output device as main sub-device ties the
-// aggregate device's clock to the system output clock — important
-// for timestamp accuracy when mixing with microphone captures.
-if let outputUID = defaultOutputDeviceUID() {
-    aggDesc[kAudioAggregateDeviceMainSubDeviceKey as String] = outputUID
+if let uid = outputUID {
+    aggDesc[kAudioAggregateDeviceMainSubDeviceKey as String] = uid
 }
 
 var aggDeviceID = AudioObjectID(kAudioObjectUnknown)
@@ -104,100 +137,128 @@ guard aggStatus == noErr else {
     exit(1)
 }
 
-// ── 4. AVAudioEngine pointing at aggregate device ─────────────────────────────
+// ── 4. Wait for aggregate device to become alive ──────────────────────────────
+//
+// HAL registration is asynchronous; querying the format or starting the
+// IOProc before the device is alive can fail or return a degenerate format.
 
-let engine = AVAudioEngine()
-let inputNode = engine.inputNode
-guard let audioUnit = inputNode.audioUnit else {
+var aliveAddr = AudioObjectPropertyAddress(
+    mSelector: kAudioDevicePropertyDeviceIsAlive,
+    mScope: kAudioObjectPropertyScopeGlobal,
+    mElement: kAudioObjectPropertyElementMain)
+var isAlive: UInt32 = 0
+var aliveSize = UInt32(MemoryLayout<UInt32>.size)
+for _ in 0..<20 {  // up to 200 ms
+    AudioObjectGetPropertyData(aggDeviceID, &aliveAddr, 0, nil, &aliveSize, &isAlive)
+    if isAlive != 0 { break }
+    usleep(10_000)
+}
+if isAlive == 0 {
+    fputs("warning: aggregate device not alive after 200 ms; continuing anyway\n", stderr)
+}
+
+// ── 5. Query format from aggregate device input stream ────────────────────────
+//
+// The input scope of the aggregate device exposes the tap's stream. Querying
+// here (after the device is alive, before starting) gives us the sample rate
+// and channel count we need for the HUSH wire-protocol header.
+
+var streamFormatAddr = AudioObjectPropertyAddress(
+    mSelector: kAudioDevicePropertyStreamFormat,
+    mScope: kAudioObjectPropertyScopeInput,
+    mElement: kAudioObjectPropertyElementMain)
+var asbd = AudioStreamBasicDescription()
+var asbdSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+let fmtStatus = AudioObjectGetPropertyData(
+    aggDeviceID, &streamFormatAddr, 0, nil, &asbdSize, &asbd)
+
+guard fmtStatus == noErr, asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0 else {
     AudioHardwareDestroyAggregateDevice(aggDeviceID)
     AudioHardwareDestroyProcessTap(tapID)
-    fputs("error: no audioUnit on inputNode\n", stderr)
+    fputs("error: failed to query stream format: OSStatus=\(fmtStatus) sr=\(asbd.mSampleRate) ch=\(asbd.mChannelsPerFrame)\n", stderr)
     exit(1)
 }
 
-var deviceIDForProperty = aggDeviceID
-let setStatus = AudioUnitSetProperty(
-    audioUnit,
-    kAudioOutputUnitProperty_CurrentDevice,
-    kAudioUnitScope_Global,
-    0,
-    &deviceIDForProperty,
-    UInt32(MemoryLayout<AudioDeviceID>.size))
-guard setStatus == noErr else {
-    AudioHardwareDestroyAggregateDevice(aggDeviceID)
-    AudioHardwareDestroyProcessTap(tapID)
-    fputs("error: failed to set input device: OSStatus=\(setStatus)\n", stderr)
-    exit(1)
-}
+let sampleRate = UInt32(asbd.mSampleRate)
+let channelCount = asbd.mChannelsPerFrame
+// CoreAudio process taps deliver non-interleaved f32 (one buffer per channel).
+// We interleave in the IOProc before writing to stdout.
+let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
 
-// Prepare the engine so the input node's output format is resolved
-// before we install the tap or query sample rate / channel count.
-engine.prepare()
-let captureFormat = inputNode.outputFormat(forBus: 0)
-let sampleRate = UInt32(captureFormat.sampleRate)
-let channelCount = captureFormat.channelCount
+// ── 6. SIGPIPE guard + write queue ───────────────────────────────────────────
+//
+// Ignore SIGPIPE before any stdout writes so a force-killed Rust parent
+// doesn't terminate the helper before the DispatchSource cleanup runs.
+// The write queue decouples stdout I/O from the real-time IOProc callback;
+// a bounded semaphore (32 slots) drops chunks rather than blocking the
+// audio thread when the Rust reader is slow.
 
-// ── 5. Header ─────────────────────────────────────────────────────────────────
-
-// Ignore SIGPIPE before the first stdout write: if the Rust parent is
-// force-killed the next write would raise SIGPIPE and terminate the helper
-// before the SIGTERM cleanup block runs, leaking the tap and aggregate device.
-// The SIGPIPE DispatchSource below handles the cleanup path explicitly.
 signal(SIGPIPE, SIG_IGN)
-
-// Write header BEFORE installing the tap so the Rust reader always
-// sees the header first, with no risk of a race between the first
-// PCM dispatch and the header write.
 let stdout = FileHandle.standardOutput
-var header = Data(count: 12)
-header.withUnsafeMutableBytes { raw in
-    let p = raw.baseAddress!.assumingMemoryBound(to: UInt8.self)
-    // Magic
-    p[0] = 0x48; p[1] = 0x55; p[2] = 0x53; p[3] = 0x48  // "HUSH"
-    // sample_rate as u32 LE
-    var sr = sampleRate.littleEndian
-    withUnsafeBytes(of: &sr) { bytes in
-        for i in 0..<4 { p[4 + i] = bytes[i] }
-    }
-    // channel_count as u32 LE
-    var ch = channelCount.littleEndian
-    withUnsafeBytes(of: &ch) { bytes in
-        for i in 0..<4 { p[8 + i] = bytes[i] }
-    }
-}
-stdout.write(header)
-
-// ── 6. Audio tap callback ─────────────────────────────────────────────────────
-
-// The write queue decouples stdout I/O from the real-time audio callback.
-// A bounded semaphore (32 in-flight write slots) prevents unbounded queue
-// growth when the Rust reader is slow — tryWait(timeout:.now()) drops the
-// chunk rather than blocking the audio thread.
 let writeQueue = DispatchQueue(label: "hush.audio.writer", qos: .userInteractive)
 let semaphore = DispatchSemaphore(value: 32)
 var droppedChunks: Int = 0
 
-inputNode.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
-    guard let channelData = buffer.floatChannelData else { return }
-    let frameCount = Int(buffer.frameLength)
-    let chanCount = Int(buffer.format.channelCount)
-    guard frameCount > 0, chanCount > 0 else { return }
+// ── 7. Write protocol header ──────────────────────────────────────────────────
+//
+// Written BEFORE AudioDeviceStart so the Rust reader always sees the header
+// before any PCM arrives (wire-protocol invariant).
 
-    // Build interleaved f32 LE bytes on the audio thread. Allocation
-    // cost is ~10–30 µs for 2048 frames — acceptable on the audio
-    // thread since this path involves no system calls.
-    var bytes = Data(count: frameCount * chanCount * 4)
+var header = Data(count: 12)
+header.withUnsafeMutableBytes { raw in
+    let p = raw.baseAddress!.assumingMemoryBound(to: UInt8.self)
+    p[0] = 0x48; p[1] = 0x55; p[2] = 0x53; p[3] = 0x48  // "HUSH"
+    var sr = sampleRate.littleEndian
+    withUnsafeBytes(of: &sr) { bytes in for i in 0..<4 { p[4 + i] = bytes[i] } }
+    var ch = channelCount.littleEndian
+    withUnsafeBytes(of: &ch) { bytes in for i in 0..<4 { p[8 + i] = bytes[i] } }
+}
+stdout.write(header)
+
+// ── 8. IOProc callback ────────────────────────────────────────────────────────
+//
+// AudioDeviceCreateIOProcIDWithBlock delivers inInputData from the aggregate
+// device's input bus — which is the tap's PCM — regardless of whether the
+// main sub-device has a physical microphone. This is why every working
+// open-source implementation uses IOProc rather than AVAudioEngine.
+
+var ioProcID: AudioDeviceIOProcID? = nil
+let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
+    &ioProcID, aggDeviceID, nil
+) { _, inInputData, _, _, _ in
+    let buffers = UnsafeMutableAudioBufferListPointer(
+        UnsafeMutablePointer(mutating: inInputData))
+    guard !buffers.isEmpty,
+          let first = buffers.first,
+          let _ = first.mData,
+          first.mDataByteSize > 0 else { return }
+
+    let chanCount = Int(channelCount)
+    let framesPerBuffer = Int(first.mDataByteSize) / MemoryLayout<Float>.size /
+        (isNonInterleaved ? 1 : chanCount)
+    guard framesPerBuffer > 0 else { return }
+
+    // Interleave: non-interleaved has one AudioBuffer per channel; interleaved
+    // has one buffer with all channels packed. Either way we produce wire-
+    // format: interleaved f32 LE.
+    var bytes = Data(count: framesPerBuffer * chanCount * MemoryLayout<Float>.size)
     bytes.withUnsafeMutableBytes { raw in
-        let ptr = raw.baseAddress!.assumingMemoryBound(to: Float.self)
-        for frame in 0..<frameCount {
-            for ch in 0..<chanCount {
-                ptr[frame * chanCount + ch] = channelData[ch][frame]
+        let dst = raw.baseAddress!.assumingMemoryBound(to: Float.self)
+        if isNonInterleaved {
+            for (ch, buf) in buffers.enumerated() where ch < chanCount {
+                guard let data = buf.mData else { continue }
+                let src = data.assumingMemoryBound(to: Float.self)
+                for frame in 0..<framesPerBuffer {
+                    dst[frame * chanCount + ch] = src[frame]
+                }
             }
+        } else {
+            guard let data = buffers[0].mData else { return }
+            let src = data.assumingMemoryBound(to: Float.self)
+            for i in 0..<(framesPerBuffer * chanCount) { dst[i] = src[i] }
         }
     }
 
-    // Non-blocking acquire: if the queue is saturated, drop this chunk
-    // and log a running total via writeQueue (off the RT thread).
     if semaphore.wait(timeout: .now()) == .success {
         writeQueue.async {
             stdout.write(bytes)
@@ -214,27 +275,31 @@ inputNode.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
     }
 }
 
-// ── 7. Start engine ───────────────────────────────────────────────────────────
-
-do {
-    try engine.start()
-} catch {
-    inputNode.removeTap(onBus: 0)
+guard ioProcStatus == noErr, ioProcID != nil else {
     AudioHardwareDestroyAggregateDevice(aggDeviceID)
     AudioHardwareDestroyProcessTap(tapID)
-    fputs("error: engine start failed: \(error)\n", stderr)
+    fputs("error: IOProc creation failed: OSStatus=\(ioProcStatus)\n", stderr)
+    exit(1)
+}
+
+// ── 9. Start device ───────────────────────────────────────────────────────────
+
+let startStatus = AudioDeviceStart(aggDeviceID, ioProcID)
+guard startStatus == noErr else {
+    AudioDeviceDestroyIOProcID(aggDeviceID, ioProcID!)
+    AudioHardwareDestroyAggregateDevice(aggDeviceID)
+    AudioHardwareDestroyProcessTap(tapID)
+    fputs("error: AudioDeviceStart failed: OSStatus=\(startStatus)\n", stderr)
     exit(1)
 }
 
 fputs("hush-audio-tap: streaming (sr=\(sampleRate) ch=\(channelCount))\n", stderr)
 
-// ── 8. Signal handlers → clean shutdown ──────────────────────────────────────
+// ── 10. Signal handlers → clean shutdown ─────────────────────────────────────
 
-// Shared cleanup path used by SIGTERM (Rust parent sent stop) and SIGPIPE
-// (Rust parent force-killed; next stdout write would fail).
 func cleanup() {
-    inputNode.removeTap(onBus: 0)
-    engine.stop()
+    AudioDeviceStop(aggDeviceID, ioProcID)
+    if let proc = ioProcID { AudioDeviceDestroyIOProcID(aggDeviceID, proc) }
     writeQueue.sync {}  // flush any pending stdout writes
     AudioHardwareDestroyAggregateDevice(aggDeviceID)
     AudioHardwareDestroyProcessTap(tapID)
@@ -247,8 +312,8 @@ sigTermSource.setEventHandler { cleanup() }
 sigTermSource.resume()
 
 // SIGPIPE fires when the Rust parent is force-killed and the next write to
-// stdout fails.  signal(SIGPIPE, SIG_IGN) was installed above; this source
-// handles the explicit cleanup so the tap + aggregate device are destroyed.
+// stdout fails.  signal(SIGPIPE, SIG_IGN) above prevents the default handler;
+// this source runs the explicit cleanup so the tap + aggregate are destroyed.
 let sigPipeSource = DispatchSource.makeSignalSource(signal: SIGPIPE, queue: .main)
 sigPipeSource.setEventHandler { cleanup() }
 sigPipeSource.resume()
