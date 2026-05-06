@@ -43,11 +43,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows dropped from the matrix while we focus on the macOS/Linux
-        # core. The whisper.cpp build on Windows works but doubles total CI
-        # runtime, and we are not yet shipping Windows artefacts. Add
-        # `windows-latest` back here when Windows distribution lands (M6 per
-        # PRD §11) and we have a real reason to gate on it.
+        # Full Rust matrix runs on macOS (primary target) and Linux.
+        # Windows gets a lighter compile-only check in the `rust-windows`
+        # job below — the whisper.cpp build on Windows works but doubles
+        # total CI runtime when paired with clippy + tests, and we are
+        # not yet shipping Windows artefacts. Promote `windows-latest`
+        # into this matrix when Windows distribution lands (M6 per
+        # PRD §11) and the full check is worth the cost.
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -184,6 +186,43 @@ jobs:
       - name: cargo test (whisper feature)
         working-directory: src-tauri
         run: cargo test --features whisper
+
+  rust-windows:
+    name: Rust compile check (windows-latest)
+    runs-on: windows-latest
+    # Lightweight compile-only check: catches the class of regression
+    # where a contributor adds a macOS-specific dep without `cfg`-gating
+    # it, or a `target_os` arm that doesn't compile on Windows. Skips
+    # whisper.cpp entirely (`--no-default-features` excludes the
+    # `whisper` and `diarization-onnx` features) so we don't pay the
+    # cmake + msvc toolchain cost the original Windows-in-matrix
+    # decision rejected. When Windows distribution lands (M6 per
+    # PRD §11) this job's role merges into the main `rust` matrix and
+    # the lightweight version goes away.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-01)
+
+      - name: Cache Cargo registry and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-windows-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      # `--no-default-features` strips `whisper` and `diarization-onnx`
+      # so cmake / ONNX / whisper.cpp aren't required on Windows. We
+      # still verify that every cfg-gated arm compiles, the cross-
+      # platform glue links, and no macOS-only path slips through
+      # without `#[cfg(target_os = "macos")]`.
+      - name: cargo check (no default features)
+        working-directory: src-tauri
+        run: cargo check --no-default-features --all-targets
 
   supply-chain-pins:
     name: Supply-chain pin allowlist
