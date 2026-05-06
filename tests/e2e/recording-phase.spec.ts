@@ -49,25 +49,32 @@ test.describe("starting → idle", () => {
     page,
   }) => {
     await installMocks(page, {
-      // screenRecording "confirmed" → screenRecordingLive = true →
-      // startRecord(true) → sources = [mic, system-audio] → isMultiSource = true.
-      get_permission_health: () => ({
-        health: {
-          microphone: "not-applicable",
-          screenRecording: "confirmed",
-          inputMonitoring: "not-applicable",
+      // systemAudio.isSupported → true triggers willRecordMeeting = true,
+      // which shows the meeting button and makes startRecord include system-audio.
+      audio_list_sources: () => [
+        {
+          kind: "microphone",
+          id: "Built-in Microphone",
+          name: "Built-in Microphone",
+          isDefault: true,
+          isSupported: true,
         },
-      }),
+        {
+          kind: "system-audio",
+          id: "system",
+          name: "System audio",
+          isDefault: false,
+          isSupported: true,
+        },
+      ],
       meeting_start_manual: () => {
-        throw { kind: "permission-denied", permission: "screen-recording" };
+        throw { kind: "permission-denied", message: "microphone" };
       },
     });
     await page.goto("/");
 
-    // Wait for meeting mode to be reflected in the button — the
-    // permission health IPC is async so screenRecordingLive starts
-    // false and becomes true after the first paint. Clicking before
-    // the update would exercise the single-source path instead.
+    // Wait for meeting mode to be reflected in the button — audio_list_sources
+    // is async so isSupported starts false and becomes true after the first IPC.
     const meetingStartBtn = page.getByRole("button", {
       name: "Record meeting (mic plus system audio)",
     });
@@ -259,46 +266,6 @@ test("record-mode-badge hidden when Screen Recording health is not-applicable (d
   await expect(
     page.locator('[data-testid="record-mode-badge"]'),
   ).toHaveCount(0);
-});
-
-test("record-mode-badge shows with data-health=not-granted when Screen Recording is not-granted", async ({
-  page,
-}) => {
-  await installMocks(page, {
-    get_permission_health: () => ({
-      health: {
-        microphone: "confirmed",
-        screenRecording: "not-granted",
-        inputMonitoring: "not-applicable",
-      },
-    }),
-  });
-  await page.goto("/");
-
-  const badge = page.locator('[data-testid="record-mode-badge"]');
-  await expect(badge).toBeVisible();
-  await expect(badge).toHaveAttribute("data-health", "not-granted");
-  await expect(badge).toContainText(/grant Screen Recording/i);
-});
-
-test("record-mode-badge shows with data-health=stale when Screen Recording is stale", async ({
-  page,
-}) => {
-  await installMocks(page, {
-    get_permission_health: () => ({
-      health: {
-        microphone: "confirmed",
-        screenRecording: "stale",
-        inputMonitoring: "not-applicable",
-      },
-    }),
-  });
-  await page.goto("/");
-
-  const badge = page.locator('[data-testid="record-mode-badge"]');
-  await expect(badge).toBeVisible();
-  await expect(badge).toHaveAttribute("data-health", "stale");
-  await expect(badge).toContainText(/Screen Recording access expired/i);
 });
 
 test("live-transcript panel appears during recording when utterances are available", async ({

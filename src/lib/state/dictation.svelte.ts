@@ -10,6 +10,7 @@ export const TRAILING_SILENCE_MS = 500;
 
 import {
   formatErrorDisplay,
+  isPermissionShapedError,
   type ErrorDisplay,
 } from "$lib/errors";
 import { joinUtterances } from "$lib/transcript-format";
@@ -220,6 +221,11 @@ export const dictation = {
       meeting.activeId = session.id;
     } catch (e) {
       error = formatErrorDisplay(e);
+      if (isMultiSource && isPermissionShapedError(e)) {
+        pendingPermissionsDialogIntro =
+          (error.headline ?? "Permission needed")
+          + " — open System Settings below to grant access, then try Record again.";
+      }
       phase = { tag: "idle" };
     }
   },

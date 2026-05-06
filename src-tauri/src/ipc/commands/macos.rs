@@ -524,4 +524,3 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
         })
     }
 }
-

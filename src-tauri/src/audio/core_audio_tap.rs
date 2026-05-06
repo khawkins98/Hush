@@ -200,10 +200,9 @@ impl AudioSession for CoreAudioTapSession {
     }
 
     fn drain_into(&self, sink: &mut Vec<f32>) -> Result<CaptureFormat> {
-        let inner = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| anyhow!("CoreAudio tap session already stopped; drain_into unavailable"))?;
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            anyhow!("CoreAudio tap session already stopped; drain_into unavailable")
+        })?;
         let mut consumer = inner
             .consumer
             .lock()
