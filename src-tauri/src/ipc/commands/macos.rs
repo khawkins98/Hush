@@ -1,6 +1,6 @@
 //! macOS-only IPC commands (#82 extraction).
 //!
-//! Three commands all gated on `cfg(target_os = "macos")` for the
+//! Commands gated on `cfg(target_os = "macos")` for the
 //! interesting branch, with non-macOS fallthroughs that return
 //! "not applicable" so the frontend doesn't have to platform-
 //! branch every call site:
@@ -19,6 +19,14 @@
 //!   ScreenCapture, ListenEvent / Input Monitoring).
 //!   Accessibility was previously included but Hush never
 //!   requests it (#273).
+//! - [`prime_screen_recording_permission`] touches SCK so macOS
+//!   enrolls Hush in the System Audio TCC list, then spawns a
+//!   background watcher that emits
+//!   `permission:screen-recording-granted` once the grant is
+//!   confirmed via a real SCK probe (not just `CGPreflight`).
+//! - [`relaunch_app`] calls `AppHandle::restart()`. Exposed as an
+//!   IPC so the frontend relaunch banner can trigger it with a
+//!   single `invoke`.
 //!
 //! Extracted from `commands/mod.rs` under #82 to give the macOS
 //! permissions surface its own module — already cfg-gated by
@@ -39,6 +47,22 @@ use crate::ipc::AppState;
 // longer correct. The import is now ungated.
 use super::IpcError;
 use super::IpcResult;
+
+// The grant-watcher and relaunch helpers are macOS-only — the static
+// guard and its imports are gated accordingly to keep Linux/Windows
+// clean under `-D warnings`.
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+
+/// Guards against duplicate grant-watchers when the user clicks
+/// "Grant in Settings" multiple times before returning to Hush.
+/// Process-scoped (single-instance guarantee from
+/// `tauri-plugin-single-instance`), so a module-level atomic
+/// suffices without touching `AppState`.
+#[cfg(target_os = "macos")]
+static SCREEN_GRANT_WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Open the macOS System Settings pane the user needs to grant
 /// the named permission. Tauri's shell plugin can launch arbitrary
@@ -111,11 +135,11 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
     }
 }
 
-/// Touch ScreenCaptureKit so macOS adds Hush to the Screen
-/// Recording permission list (and fires the standard TCC prompt
-/// if not yet determined). Called from the Permissions tab's
-/// "Grant in Settings…" button on the Screen Recording row,
-/// immediately before deep-linking to System Settings.
+/// Touch ScreenCaptureKit so macOS adds Hush to the System Audio
+/// permission list (and fires the standard TCC prompt if not yet
+/// determined). Called from the Permissions tab's "Grant in
+/// Settings…" button on the System Audio row, immediately before
+/// deep-linking to System Settings.
 ///
 /// Without this priming step, a user who hasn't yet started a
 /// Meeting Mode session lands in the Screen & System Audio
@@ -125,23 +149,114 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
 /// `SCShareableContent::get()` and discards the result; the side
 /// effect is that the Hush row appears in the list.
 ///
+/// After priming, spawns a background watcher that polls for the
+/// grant and emits `permission:screen-recording-granted` when
+/// confirmed via a real SCK probe. At most one watcher runs at a
+/// time — duplicate calls within the same session are ignored.
+///
 /// No-op on non-macOS. Errors at the SCK layer (rare on a healthy
 /// system) surface as `IpcError::Internal` — but since the
 /// "permission denied" case is the very state we're priming, the
 /// underlying helper swallows it and returns `Ok(())`.
 #[tauri::command]
-pub async fn prime_screen_recording_permission() -> IpcResult<()> {
+pub async fn prime_screen_recording_permission(app: tauri::AppHandle) -> IpcResult<()> {
     #[cfg(target_os = "macos")]
     {
         crate::audio::prime_screen_recording_permission()
             .map_err(|e| IpcError::Internal(format!("prime SCK permission: {e:#}")))?;
+
+        // Spawn a grant-watcher only if one isn't already running.
+        if !SCREEN_GRANT_WATCHER_ACTIVE.swap(true, Ordering::SeqCst) {
+            tauri::async_runtime::spawn(watch_screen_recording_permission(app));
+        }
         Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = app;
         Ok(())
     }
+}
+
+/// Poll for a confirmed System Audio (Screen Recording TCC) grant
+/// and emit `permission:screen-recording-granted` to all windows.
+///
+/// # Why poll rather than rely on focus-refresh alone
+///
+/// The focus-refresh in `PermissionsTab` already re-runs
+/// `diagnose_macos_permissions` when the window regains focus.
+/// That handles the happy path. This watcher catches the case
+/// where the user grants the permission and returns to Hush
+/// without the Settings window being the focused one — e.g. the
+/// main window or no Hush window was in focus when they switched
+/// back. It also provides a more immediate signal (~1 s latency)
+/// than waiting for the next user focus event.
+///
+/// # Why validate rather than trust `CGPreflightScreenCaptureAccess`
+///
+/// Preflight can return true on cached TCC state while the real
+/// `SCShareableContent::get()` call still fails. The existing
+/// `get_permission_health` path already discovered this (#378).
+/// We run the same `validate_screen_recording_capability` probe
+/// before emitting so the frontend only sees a confirmed grant.
+#[cfg(target_os = "macos")]
+async fn watch_screen_recording_permission(app: tauri::AppHandle) {
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    const POLL_INTERVAL: Duration = Duration::from_secs(1);
+    const MAX_POLLS: u32 = 60;
+
+    for _ in 0..MAX_POLLS {
+        sleep(POLL_INTERVAL).await;
+
+        // Fast preflight check before paying the blocking probe cost.
+        let preflight_ok = unsafe {
+            #[link(name = "CoreGraphics", kind = "framework")]
+            extern "C" {
+                fn CGPreflightScreenCaptureAccess() -> u8;
+            }
+            CGPreflightScreenCaptureAccess() != 0
+        };
+        if !preflight_ok {
+            continue;
+        }
+
+        // Validate with a real SCK round-trip to rule out stale TCC
+        // cache (preflight=true while SCK is still denied).
+        let probe = tauri::async_runtime::spawn_blocking(
+            crate::audio::validate_screen_recording_capability,
+        )
+        .await;
+
+        if matches!(probe, Ok(Ok(()))) {
+            tracing::info!("permission watcher: System Audio grant confirmed; notifying frontend");
+            let _ = app.emit("permission:screen-recording-granted", ());
+            break;
+        }
+    }
+
+    // Release the guard so a future `prime_screen_recording_permission`
+    // call (e.g. after a `tccutil reset`) can spawn a fresh watcher.
+    SCREEN_GRANT_WATCHER_ACTIVE.store(false, Ordering::SeqCst);
+}
+
+/// Relaunch the app immediately via `AppHandle::restart()`.
+///
+/// Exposed as an IPC so the frontend's relaunch banner can trigger
+/// it with a single `invoke("relaunch_app")`. The call does not
+/// return — the process is replaced.
+///
+/// This is the correct fix after a System Audio (Screen Recording
+/// TCC) grant: macOS caches the TCC deny in `mediaserverd` /
+/// `coreaudiod` for the lifetime of the current process. Preflight
+/// flipping true is not enough — only a fresh process sees the
+/// grant take effect. The relaunch is unconditional once the user
+/// confirms it in the UI.
+#[tauri::command]
+pub async fn relaunch_app(app: tauri::AppHandle) -> IpcResult<()> {
+    app.restart();
 }
 
 /// Fire the macOS Microphone TCC prompt directly (#511).

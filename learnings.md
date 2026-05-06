@@ -1469,3 +1469,17 @@ meeting_session_get: () => ({ session: { id: DEFAULT_SESSION_ID, ... } })
 ```
 
 If per-test counters or dynamic values are genuinely needed, use `page.exposeFunction` to bridge them across the serialisation boundary. This constraint is also documented with examples in `_mock.ts` alongside the `new Function` call.
+
+---
+
+### 2026-05-06 — System Audio TCC grant requires a process relaunch; "Screen Recording" label is alarming (#579)
+
+**Root cause (from m13v's review):** The need to relaunch after granting the Screen Recording TCC isn't because `CGPreflightScreenCaptureAccess()` returns stale data — it's that `mediaserverd`/`coreaudiod` cached the deny for the current process before the grant landed. The grant takes effect only in a fresh process. Every ScreenCaptureKit app faces this constraint.
+
+**Proper fix vs chosen tradeoff:** The architecturally correct fix is a small helper process for SCK: on `TCCDeny`, kill and respawn the helper while the main app stays alive. This avoids any relaunch for the user. However, this is significant complexity for a once-per-install event. The chosen approach — auto-detect grant + prompt-relaunch — is the right cost/benefit tradeoff for production.
+
+**Detection: use real SCK probe, not just `CGPreflightScreenCaptureAccess`:** Preflight can return true on cached TCC state while a real `SCShareableContent::get()` call still fails (already documented in #378). The grant-watcher validates with `validate_screen_recording_capability()` before emitting the event. Don't trust preflight alone for user-facing "it worked" signals.
+
+**Duplicate-watcher guard:** The watcher is spawned by `prime_screen_recording_permission`. If the user clicks "Grant in Settings" multiple times, only one watcher should run. A process-scoped `static AtomicBool` (not an `AppState` field) is sufficient because `tauri-plugin-single-instance` guarantees a single Hush process — no shared state between processes needed.
+
+**"Screen Recording" label is alarming for users:** macOS's TCC category is `ScreenCapture`, but "Screen Recording" makes users think Hush is watching their screen. The same permission is labeled "System Audio (optional)" in OpenWhispr. Hush now uses "System Audio" in all user-visible copy (the internal `screenRecording` key in `PermissionStatuses` and the `ScreenCapture` TCC category remain unchanged). This is a framing change only — the underlying permission and how it's requested is identical.

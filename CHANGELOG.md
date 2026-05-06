@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### System Audio permission: auto-detect grant + relaunch prompt (#579)
+
+- **"System Audio" label throughout UI** — all user-visible copy in the Permissions tab, first-run wizard, and error messages now says "System Audio" instead of "Screen Recording". The underlying TCC category is still `ScreenCapture`; this is a framing change only, matching how apps like OpenWhispr present the same permission.
+- **Auto-detect grant and prompt relaunch** — after the user clicks "Grant in Settings" on the System Audio row (or the wizard equivalent), a background Rust watcher polls `CGPreflightScreenCaptureAccess()` every second (up to 60 s). When preflight flips true, the watcher validates the grant with a real `SCShareableContent::get()` probe before emitting `permission:screen-recording-granted`. The main window listens for this event and shows a green "System Audio permission granted — relaunch Hush to enable system audio in meetings" banner with a "Relaunch Now" button.
+- **`relaunch_app` IPC command** — thin wrapper around Tauri's `AppHandle::restart()`. Called by the relaunch banner. The relaunch is necessary because macOS caches the TCC deny in `mediaserverd`/`coreaudiod` for the lifetime of the current process; only a fresh process sees the grant take effect.
+
 #### Sound cues and dictation stats bar e2e test coverage (#292, #293)
 
 - Added four Playwright specs to `tests/e2e/settings-window.spec.ts` covering:
