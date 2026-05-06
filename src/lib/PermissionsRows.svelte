@@ -40,7 +40,7 @@
     {
       key: "screenRecording" as const,
       paneTarget: "screen-recording" as const,
-      label: "Screen Recording",
+      label: "System Audio",
       why: "Required for system-audio capture in meetings.",
     },
     {

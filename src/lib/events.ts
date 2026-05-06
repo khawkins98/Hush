@@ -110,4 +110,15 @@ export const Events = {
   /// progress bar under the waveform during the transcribing
   /// phase (#566).
   TranscriptionProgress: "transcription:progress",
+  /// Backend → all windows (broadcast): Hush's System Audio (Screen
+  /// Recording TCC) permission was just confirmed via a real SCK
+  /// probe after the user granted it in System Settings (#579).
+  /// The main window listens to show the relaunch banner; other
+  /// windows can use it to refresh permission state.
+  ///
+  /// Why a relaunch is needed: macOS caches the TCC deny in
+  /// `mediaserverd`/`coreaudiod` for the lifetime of the current
+  /// process — the grant takes effect only in a fresh process. See
+  /// `learnings.md` for the full explanation.
+  PermissionScreenRecordingGranted: "permission:screen-recording-granted",
 } as const;

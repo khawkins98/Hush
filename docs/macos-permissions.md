@@ -4,7 +4,7 @@ Hush needs three macOS permissions to work end-to-end:
 
 - **Microphone** — for `cpal` to open the input stream when you press Start. The OS prompts the first time recording begins.
 - **Input Monitoring** — for `rdev`'s low-level keyboard hook so push-to-talk works while a different app is focused. The OS prompts on first launch (PTT is on by default; the listener spawns at startup unless you disable it in Settings).
-- **Screen Recording** — for ScreenCaptureKit to capture system audio in Meeting Mode. The OS prompts when a meeting session asks for the system-audio source for the first time.
+- **System Audio** — for ScreenCaptureKit to capture system audio in Meeting Mode. macOS calls this permission "Screen Recording" internally (the TCC category is `ScreenCapture`), but Hush's UI labels it "System Audio" to clarify that Hush never captures pixels — only audio. The OS prompts when a meeting session asks for the system-audio source for the first time.
 
 This doc covers what to do when any of them gets into a stuck state. If you're authoring an issue, copy the symptom you're hitting from below and include the OS version + Hush commit SHA. Settings → Permissions inside Hush also surfaces a per-permission status snapshot (granted / denied / not-determined) and a one-click "reset Hush's TCC entries" button.
 
@@ -72,22 +72,29 @@ You press Start, Stop after a few seconds, and the result is the friendly "No au
 
 ---
 
-## Symptom: meeting session start fails with a Screen Recording error
+## Symptom: meeting session start fails with a System Audio permission error
 
-You start a meeting with system audio enabled and immediately see a "Screen Recording permission needed" card.
+You start a meeting with system audio enabled and immediately see a "System Audio permission needed" card.
 
-**Cause:** ScreenCaptureKit needs Screen Recording permission to enumerate shareable content; until granted, the system-audio source can't open.
+**Cause:** ScreenCaptureKit needs the Screen Recording TCC permission to enumerate shareable content; until granted, the system-audio source can't open.
 
 **Fix:**
 
-1. System Settings → Privacy & Security → **Screen Recording**. Confirm Hush is enabled.
-2. Reset and re-prompt:
+1. In Hush: Settings → Permissions → **System Audio** → **Grant in Settings…** (or the equivalent button in the first-run wizard). This opens System Settings → Privacy & Security → Screen & System Audio Recording.
+2. Toggle Hush on.
+3. Return to Hush. **A green banner will appear: "System Audio permission granted — relaunch Hush to enable system audio in meetings."** Click **Relaunch Now**.
+
+> **Why a relaunch is required:** macOS caches the permission deny in `mediaserverd`/`coreaudiod` for the lifetime of the current process. Even after you flip the toggle in System Settings, the running Hush process still sees "denied" — only a fresh launch picks up the grant. This is a macOS constraint that every ScreenCaptureKit app faces; the relaunch banner makes it a single click instead of a hidden manual step.
+
+If you miss the banner or dismiss it, you can relaunch manually (⌘Q then re-open) or via System Settings → Privacy & Security → Screen & System Audio Recording → confirm Hush is toggled on, then restart Hush.
+
+To reset and re-prompt:
    ```sh
    tccutil reset ScreenCapture io.github.khawkins98.hush
    ```
-3. Relaunch Hush. Start a meeting with system audio — the OS should prompt this time. Until it's granted, microphone-only meetings still work.
+   Relaunch Hush. Start a meeting with system audio — the OS should prompt this time. Until it's granted, microphone-only meetings still work.
 
-If you're running `cargo tauri dev` (an unsigned binary), Screen Recording typically can't be granted at all — the OS attributes the request to a parent process that's not the `.app` bundle. Use `npm run tauri:bundle` to validate the system-audio path.
+If you're running `cargo tauri dev` (an unsigned binary), System Audio typically can't be granted at all — the OS attributes the request to a parent process that's not the `.app` bundle. Use `npm run tauri:bundle` to validate the system-audio path.
 
 ---
 
@@ -114,7 +121,7 @@ The first time you run `cargo tauri dev`, the macOS Microphone or Input Monitori
 ```sh
 tccutil reset Microphone io.github.khawkins98.hush
 tccutil reset ListenEvent io.github.khawkins98.hush      # Input Monitoring
-tccutil reset ScreenCapture io.github.khawkins98.hush    # Screen Recording
+tccutil reset ScreenCapture io.github.khawkins98.hush    # System Audio (Screen Recording)
 tccutil reset Accessibility io.github.khawkins98.hush    # if the app ever asked
 ```
 
@@ -122,7 +129,7 @@ Followed by relaunch. Each permission re-prompts on the next trigger:
 
 - Microphone — the next time you click Start.
 - Input Monitoring — at app startup (the rdev listener spawns there when PTT is enabled).
-- Screen Recording — when a meeting session opens the system-audio source.
+- Screen Recording (System Audio): when a meeting session opens the system-audio source.
 
 The same recipe is wrapped behind a button in Settings → Permissions inside Hush.
 
@@ -164,7 +171,7 @@ When the active build's identity differs from the row that's currently switched 
 4. Run `npm run tauri:bundle` — this rebuilds, re-signs with the correct identifier, installs to `~/Applications/Hush.app`, and opens it.
    - Do **not** use `npm run tauri dev` — the unsigned dev binary has a different identity and won't receive Screen Recording permission from SCK.
 5. Input Monitoring auto-prompts when Hush registers the hotkey — click **OK**.
-6. Screen Recording: Settings → Permissions → "Grant in Settings…" deep-links to the right pane; toggle on the freshly-created Hush row.
+6. System Audio: Settings → Permissions → "Grant in Settings…" deep-links to the right pane; toggle on the freshly-created Hush row. When you return to Hush, the green relaunch banner appears — click **Relaunch Now**.
 7. macOS will now have a single row matching the current binary's CSReq.
 
 The same procedure applies any time you switch between dev (unsigned `npm run tauri dev`) and bundle (`npm run tauri:bundle`) builds — they sign differently and TCC sees them as different apps even though the bundle id is identical.
@@ -186,7 +193,7 @@ The Stale recovery recipe:
 
 1. Settings → Permissions → the yellow row's **Grant in Settings…** button (deep-links to the right pane).
 2. If multiple `Hush.app` rows appear in the pane, `-` delete the stale ones, then toggle Allow on the current row.
-3. Hush auto-detects the new grant on the next Settings tab open (or click Refresh).
+3. For the System Audio row: return to Hush and click **Relaunch Now** in the green banner. For Microphone and Input Monitoring, the existing process can detect the grant on focus; no relaunch needed.
 
 If the yellow dot reappears immediately after granting, you have the stale-rows problem — see "Dev-loop: stale Hush.app rows after a re-bundle" above.
 
@@ -194,6 +201,6 @@ If the yellow dot reappears immediately after granting, you have the stale-rows 
 
 ## What about Hush's first-run welcome modal?
 
-The welcome modal (the dismissible card on first launch) explains the permissions and links out to the right System Settings panes via the `open_macos_privacy_pane` IPC command. It does **not** trigger the prompts itself — it can't, macOS doesn't expose a programmatic "ask for X" API. The OS prompts already fire from the cpal / rdev / SCK call sites. The modal is an explainer, not a button to grant.
+The welcome modal (the dismissible card on first launch) explains the permissions and includes buttons for Microphone (inline OS prompt) and Input Monitoring (inline OS prompt). The **System Audio** row opens System Settings — macOS does not expose a programmatic prompt for the Screen Recording TCC category. After granting in System Settings, the green relaunch banner appears in the main window.
 
 If you dismissed the modal and want it back: Settings → General → "Show welcome on next launch."

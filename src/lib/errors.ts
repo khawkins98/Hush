@@ -126,11 +126,12 @@ function formatPermissionDenied(
   switch (permission) {
     case "screen-recording":
       return {
-        headline: "Screen Recording permission needed",
+        headline: "System Audio permission needed",
         hint:
-          "Grant Hush Screen Recording access in System Settings → " +
-          "Privacy & Security → Screen Recording, then try again. " +
-          "Until then, microphone-only recording still works.",
+          "Grant Hush System Audio access in System Settings → " +
+          "Privacy & Security → Screen Recording, then relaunch " +
+          "Hush to enable system-audio capture. " +
+          "Microphone-only recording still works without it.",
         details,
       };
     case "microphone":
