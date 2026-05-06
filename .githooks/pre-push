@@ -4,25 +4,88 @@
 # Installs automatically via `npm install` (the prepare script sets
 # core.hooksPath). To skip on an emergency push: git push --no-verify
 #
-# Checks run:
-#   1. cargo fmt --check     (CI pinned version differs slightly; close enough)
-#   2. cargo clippy (no-default-features, -D warnings)
-#   3. npm run check         (svelte-check, zero errors/warnings required)
+# Default checks (always run, fast — typically <30s on warm cache):
+#   1. cargo fmt --all -- --check
+#   2. cargo clippy --lib --no-default-features -- -D warnings
+#   3. npm run check  (svelte-check)
 #
-# cargo test is intentionally omitted — too slow for an interactive hook.
-# Run it manually before opening a PR: cd src-tauri && cargo test --lib
+# Opt-in slow checks (require HUSH_SLOW_HOOKS=1 — adds ~5–15s):
+#   4. cargo test --lib --no-default-features
+#
+# Set HUSH_SLOW_HOOKS=1 in your shell env before pushing a final
+# commit to a PR if you want the extra confidence. The default
+# omits cargo test so the hook stays interactive-friendly during
+# rapid iteration.
+#
+# Cross-platform notes: every step uses `--no-default-features`,
+# which excludes whisper.cpp + ONNX. The hook works identically on
+# macOS / Linux / Windows (any host where the contributor's
+# toolchain has cargo + clippy + rustfmt + Node.js). The full
+# whisper-feature build is reserved for CI's macOS + Linux jobs.
+#
+# rustfmt version gap (see learnings.md "2026-05-05 — CI rustfmt
+# version differs from local toolchain"): step 1 catches almost
+# everything but borderline line-wraps can still differ between
+# CI's pinned January-2026 stable and a contributor's newer local
+# stable. If CI fails after a push, copy the exact diff from the
+# CI log and apply it manually — not a local-toolchain bug.
 
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-echo "▶ pre-push: rustfmt check"
-(cd src-tauri && cargo fmt --all -- --check)
+# Track the failing step so the trap can name it on exit. Cleared
+# per-step on success.
+FAILED_STEP=""
+FAILED_HINT=""
 
-echo "▶ pre-push: clippy (no-default-features)"
-(cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings)
+cleanup() {
+    local rc=$?
+    if [[ $rc -ne 0 && -n "$FAILED_STEP" ]]; then
+        echo "" >&2
+        echo "✗ pre-push failed at: $FAILED_STEP" >&2
+        if [[ -n "$FAILED_HINT" ]]; then
+            echo "  $FAILED_HINT" >&2
+        fi
+        echo "" >&2
+        echo "  Re-run that command locally to see the full diagnostic." >&2
+        echo "  Or skip this hook for an emergency push: git push --no-verify" >&2
+    fi
+    exit $rc
+}
+trap cleanup EXIT
 
-echo "▶ pre-push: svelte-check"
-npm run check --silent
+run_step() {
+    local label="$1"
+    local hint="$2"
+    shift 2
+    FAILED_STEP="$label"
+    FAILED_HINT="$hint"
+    echo "▶ pre-push: $label"
+    "$@"
+    FAILED_STEP=""
+    FAILED_HINT=""
+}
+
+run_step "rustfmt check" \
+    "Fix: cd src-tauri && cargo fmt --all" \
+    bash -c "cd src-tauri && cargo fmt --all -- --check"
+
+run_step "clippy (no-default-features)" \
+    "Fix: address the warning, or scope a #[allow(...)] with rationale" \
+    bash -c "cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings"
+
+run_step "svelte-check" \
+    "Fix: address the type / accessibility warnings shown above" \
+    npm run check --silent
+
+# Opt-in slow step. Tests run in <2s for the lib but cold-cache
+# compile of test deps can be 5–15s on a fresh checkout — kept
+# off by default so the hook stays interactive on rapid commits.
+if [[ "${HUSH_SLOW_HOOKS:-0}" == "1" ]]; then
+    run_step "cargo test --lib (no-default-features)" \
+        "Fix: investigate the failing test (cd src-tauri && cargo test --lib --no-default-features <name>)" \
+        bash -c "cd src-tauri && cargo test --lib --no-default-features"
+fi
 
 echo "✓ pre-push checks passed"
