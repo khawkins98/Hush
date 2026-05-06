@@ -80,9 +80,13 @@ The load-bearing seams:
 
 `active_sessions: AtomicU32` refcounts in-flight captures so `is_recording()` returns `count > 0` whether the caller went through the singleton or handle path. `MAX_BUFFER_FRAMES` defends against runaway buffer growth in cpal callbacks.
 
-Both the cpal mic path and the ScreenCaptureKit system-audio path now hand audio to the consumer via an **`rtrb` SPSC ring** ([#251](https://github.com/khawkins98/Hush/issues/251)) — wait-free producer push from the realtime callback thread, wait-free consumer drain. SCK's callback signature takes `&self`, so the producer is wrapped in an `UnsafeCell<Producer<f32>>` + `unsafe impl Sync` whose SAFETY argument grounds in ScreenCaptureKit's serial-per-handler dispatch contract. See `learnings.md` 2026-04-30 entry.
+The cpal mic path hands audio to the consumer via an **`rtrb` SPSC ring** ([#251](https://github.com/khawkins98/Hush/issues/251)) — wait-free producer push from the realtime callback thread, wait-free consumer drain. See `learnings.md` 2026-04-30 entry.
 
-System-audio capture uses **ScreenCaptureKit** on macOS (linked unconditionally — no feature flag). Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)) impls are open issues.
+System-audio capture on macOS uses **`AudioHardwareCreateProcessTap`** (the CoreAudio process tap API, macOS 14.2+) via a small Swift helper binary at `resources/macos-audio-tap.swift`, compiled by `build.rs` to `src-tauri/resources/hush-audio-tap-capture` and bundled as a Tauri resource ([#588](https://github.com/khawkins98/Hush/issues/588), [#594](https://github.com/khawkins98/Hush/pull/594)). The Swift binary writes a 12-byte `HUSH` magic + sample-rate + channel-count header to stdout, then streams interleaved f32 LE PCM continuously. The Rust side (`audio/core_audio_tap.rs`) spawns that binary, reads the header, and pumps samples from the child's stdout into an `rtrb` ring that the meeting-pump drains per tick.
+
+This replaces an earlier ScreenCaptureKit path (removed in #588). The codec processing SCK applied internally was producing PCM that triggered Whisper's `no_speech_thold` gate to drop every segment as silence — a class of bug well-suited to direct PCM capture. The CoreAudio tap delivers raw, uncompressed audio with zero codec round-trip, and uses the `NSAudioCaptureUsageDescription` permission rather than the alarming `NSScreenCaptureUsageDescription` lock-icon dialog.
+
+Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107](https://github.com/khawkins98/Hush/issues/107)) impls are open issues; on those platforms `AudioSource::SystemAudio` returns an explicit "not yet implemented" error from the trait. The trait seam is in place — the second implementations are not.
 
 ---
 
@@ -117,7 +121,7 @@ System-audio capture uses **ScreenCaptureKit** on macOS (linked unconditionally 
 
 **State machine.** `Mutex<SessionState>` where `SessionState` is `Idle | Opening | Active(...)`. The `Opening` sentinel is held across the async DB / handle-open work so concurrent `meeting_start_manual` IPC calls can't race past the precondition.
 
-**Shutdown.** `stop_manual` sets the cancel flag, awaits the pump's final-chunk drain, writes `ended_at` on the session row. `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `SckSessionHandle` both have `Drop` impls that release their OS resources.
+**Shutdown.** `stop_manual` sets the cancel flag, awaits the pump's final-chunk drain, writes `ended_at` on the session row. `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `CoreAudioTapSession` both have `Drop` impls that release their OS resources (the tap session sends `SIGTERM` to the Swift helper, with a `SIGKILL` fallback after 1 s).
 
 **Privacy.** Audio is buffered in RAM (`AudioRollingBuffer`, ~30 s window) and never written to disk. Only the resulting transcript text is persisted.
 
@@ -161,7 +165,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 
 | Module | Responsibility |
 |---|---|
-| `audio/` | cpal mic + SCK system-audio + `AudioSession` handle trait; `WavFileAudioCapture` test seam under `--features test-utils` |
+| `audio/` | cpal mic + macOS CoreAudio process tap (via Swift helper at `resources/macos-audio-tap.swift`) + `AudioSession` handle trait; `WavFileAudioCapture` test seam under `--features test-utils` |
 | `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
 | `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
 | `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides |
@@ -209,7 +213,7 @@ type RecordingPhase =
 **Two start paths, one stop path:**
 
 - `start()` — uses `start_dictation` / `stop_dictation`. Applies vocabulary biasing, text replacements, and backend clipboard write. Used by toggle hotkey and PTT.
-- `startRecord(screenRecordingLive)` — uses `meeting_start_manual` / `meeting_stop_manual`. Adds system-audio when SCK permission is confirmed. Used by the UI record button.
+- `startRecord(includeSystemAudio)` — uses `meeting_start_manual` / `meeting_stop_manual`. Adds system-audio when the platform reports `is_supported = true` for the `system-audio` source listing (today: macOS only). The parameter name in the source is currently `screenRecordingLive` for historical reasons; system audio no longer requires Screen Recording permission post-#588. Used by the UI record button.
 - `stop(trailingMs?)` — shared stop path, guards on `phase.tag === 'recording'`. Applies the trailing-silence buffer (500 ms by default) then delegates to `_stopDictation()` or `_stopMeeting()`.
 
 **Stop helpers:**
