@@ -219,18 +219,11 @@ export const dictation = {
         startedAtMs: Date.now(),
       };
       meeting.activeId = session.id;
-      if (isMultiSource) {
-        void invoke("confirm_permission", {
-          permission: "screen-recording",
-        }).catch((err) => {
-          console.warn("[hush] confirm_permission(screen-recording) failed", err);
-        });
-      }
     } catch (e) {
       error = formatErrorDisplay(e);
       if (isMultiSource && isPermissionShapedError(e)) {
         pendingPermissionsDialogIntro =
-          (error.headline ?? "Screen Recording permission needed")
+          (error.headline ?? "Permission needed")
           + " — open System Settings below to grant access, then try Record again.";
       }
       phase = { tag: "idle" };

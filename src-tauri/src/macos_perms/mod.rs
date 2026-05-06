@@ -267,35 +267,15 @@ mod macos {
 
     // ---- Screen Recording ---------------------------------------------
     //
-    // `CGPreflightScreenCaptureAccess()` returns Apple's `Boolean`
-    // typedef — `unsigned char` on macOS, with only the low bit
-    // meaningful. Declaring the return as Rust `bool` is technically
-    // UB if the OS ever returns a value outside {0, 1}; in practice
-    // it always returns 0 or 1, but the type-correct form is `u8`
-    // with an explicit `!= 0` comparison.
-    //
-    // There is no "NotDetermined" variant exposed by this API — the
-    // OS returns false in both the "never asked" and "explicitly
-    // denied" cases. We map false to NotDetermined so the frontend
-    // hint copy can stay neutral ("not yet granted") rather than
-    // accusatory ("denied — fix it"). When the user actually starts
-    // a system-audio meeting and the prompt fires, that's where the
-    // determined-vs-undetermined distinction shows up — and by then
-    // the next read flips to Granted or Denied accurately.
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGPreflightScreenCaptureAccess() -> u8;
-    }
+    // Screen Recording TCC is no longer required since #600 switched
+    // system-audio capture to `AudioHardwareCreateProcessTap` (CoreAudio tap).
+    // The tap does not require Screen Recording permission on macOS 26+
+    // (confirmed by the probe in #585; see `learnings.md`).
+    // We always return `NotApplicable` so the frontend's permissions UI
+    // does not prompt the user to grant a permission Hush no longer needs.
 
     pub fn screen_recording_status() -> PermissionStatus {
-        unsafe {
-            if CGPreflightScreenCaptureAccess() != 0 {
-                PermissionStatus::Granted
-            } else {
-                PermissionStatus::NotDetermined
-            }
-        }
+        PermissionStatus::NotApplicable
     }
 
     // ---- Input Monitoring ---------------------------------------------

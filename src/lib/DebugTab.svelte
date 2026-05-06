@@ -35,6 +35,9 @@
   let reportText = $state<string>("");
   let copied = $state(false);
 
+  let audioTapResult = $state<string>("");
+  let audioTapRunning = $state(false);
+
   function formatTime(ms: number): string {
     return new Date(ms).toISOString();
   }
@@ -101,6 +104,18 @@
     window.open(url, "_blank");
   }
 
+  async function onProbeAudioTap() {
+    audioTapRunning = true;
+    audioTapResult = "";
+    try {
+      audioTapResult = await invoke<string>("probe_audio_tap_permission");
+    } catch (e) {
+      audioTapResult = `Error: ${typeof e === "object" ? JSON.stringify(e) : e}`;
+    } finally {
+      audioTapRunning = false;
+    }
+  }
+
   onMount(async () => {
     try {
       buildInfo = await invoke<BuildInfo>("get_build_info");
@@ -161,6 +176,28 @@
     </button>
   </div>
   <pre class="report-block">{reportText || "Generating…"}</pre>
+</section>
+
+<section class="settings-group" aria-labelledby="audio-tap-probe-heading">
+  <h2 id="audio-tap-probe-heading" class="group-heading">
+    CoreAudio tap probe (#585)
+  </h2>
+  <p class="settings-row-note">
+    Runs <code>AudioHardwareCreateProcessTap</code> from inside the Hush bundle.
+    Watch for which dialog appears — mic icon (good) or lock icon (Screen Recording).
+    Requires a signed bundle build (<code>npm run tauri:bundle</code>).
+  </p>
+  <button
+    type="button"
+    class="ghost"
+    disabled={audioTapRunning}
+    onclick={onProbeAudioTap}
+  >
+    {audioTapRunning ? "Running…" : "Run Audio Tap Probe"}
+  </button>
+  {#if audioTapResult}
+    <pre class="report-block" style="margin-top: 0.75rem">{audioTapResult}</pre>
+  {/if}
 </section>
 
 <style>

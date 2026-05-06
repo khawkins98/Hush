@@ -680,17 +680,17 @@ mod tests {
     /// Audio mock that surfaces a permission-shaped chain. Used to
     /// pin the classifier promotion in `start_dictation_inner`
     /// (#386 / #416 close-out): a chain containing
-    /// "Screen Recording permission" should land as the typed
-    /// `IpcError::PermissionDenied("screen-recording")` variant
+    /// "microphone not authorized" should land as the typed
+    /// `IpcError::PermissionDenied("microphone")` variant
     /// rather than a generic `IpcError::Audio(...)`.
-    struct AudioThatFailsWithScreenRecordingDenial;
+    struct AudioThatFailsWithMicrophoneDenial;
 
-    impl AudioCapture for AudioThatFailsWithScreenRecordingDenial {
+    impl AudioCapture for AudioThatFailsWithMicrophoneDenial {
         fn list_input_devices(&self) -> anyhow::Result<Vec<AudioDevice>> {
             Ok(vec![])
         }
         fn start(&self, _: Option<&str>) -> anyhow::Result<()> {
-            Err(anyhow!("query shareable content").context("Screen Recording permission required"))
+            Err(anyhow!("microphone access not authorized"))
         }
         fn stop(&self) -> anyhow::Result<CapturedAudio> {
             unreachable!("stop should not be called when start fails")
@@ -777,15 +777,12 @@ mod tests {
 
     #[test]
     fn start_dictation_promotes_permission_shaped_error_to_typed_variant() {
-        // #386 / #416 close-out: the classifier was added to the
-        // meeting_start_manual boundary first; this pins the same
-        // promotion at start_dictation. A permission-shaped chain
-        // from the audio layer (today: SCK rejection when the user
-        // picks the system-audio source as their dictation input)
-        // must surface as `IpcError::PermissionDenied(...)` so the
-        // frontend's PermissionsDialog launch heuristic can match
-        // on `kind` instead of substring-scraping.
-        let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatFailsWithScreenRecordingDenial);
+        // #386 / #416 close-out: a permission-shaped chain from the audio
+        // layer (e.g. microphone not authorized) must surface as
+        // `IpcError::PermissionDenied(...)` so the frontend's
+        // PermissionsDialog launch heuristic can match on `kind` instead
+        // of substring-scraping.
+        let audio: Arc<dyn AudioCapture> = Arc::new(AudioThatFailsWithMicrophoneDenial);
         let transcribe: Arc<dyn Transcribe> = Arc::new(OkTranscribe);
         let state = crate::ipc::AppStateBuilder::new()
             .audio(audio)
@@ -819,10 +816,10 @@ mod tests {
             .expect_err("audio.start fails with permission-shaped chain");
         match err {
             IpcError::PermissionDenied(perm) => {
-                assert_eq!(perm, "screen-recording");
+                assert_eq!(perm, "microphone");
             }
             other => {
-                panic!("expected IpcError::PermissionDenied(\"screen-recording\"), got: {other:?}")
+                panic!("expected IpcError::PermissionDenied(\"microphone\"), got: {other:?}")
             }
         }
     }

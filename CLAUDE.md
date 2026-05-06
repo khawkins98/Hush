@@ -83,6 +83,12 @@ npm run dev-reset
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo fmt --all
+
+# Cross-platform lint (required before every PR): simulates the Linux CI path.
+# macOS clippy misses errors in #[cfg(target_os = "macos")]-gated code, unused
+# imports that are only used behind a cfg, and new_without_default on constructors
+# whose signatures differ across platforms. Run this before committing Rust changes.
+cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings
 ```
 
 ScreenCaptureKit is now an unconditional macOS dependency (no feature flag). The crate's build script links libSwift_Concurrency at runtime. On a dev machine where the rpaths the build script bakes in (`/usr/lib/swift`, `/Library/Developer/CommandLineTools/...swift-5.5/macosx`) don't resolve, `cargo test --lib` aborts with a missing-dylib error. Workaround: `DYLD_FALLBACK_LIBRARY_PATH=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx cargo test --lib`. Production app bundles inherit the Swift runtime from the dyld shared cache and need no override; CI on `macos-latest` has the CommandLineTools path populated and doesn't either.

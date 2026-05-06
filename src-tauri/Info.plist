@@ -48,11 +48,19 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>Hush captures audio from your microphone to transcribe it locally with Whisper. Audio never leaves your device.</string>
 
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>Hush captures system audio (the other side of Zoom / Teams / Meet calls) via ScreenCaptureKit. macOS bundles audio-from-display under the Screen Recording permission, even though Hush captures no pixels — only audio. Audio never leaves your device.</string>
-
     <key>NSInputMonitoringUsageDescription</key>
     <string>Hush watches for the push-to-talk hotkey (Right Control by default) so you can hold-to-record without focusing the Hush window.</string>
+
+    <!--
+      NSAudioCaptureUsageDescription: required for AudioHardwareCreateProcessTap
+      (CoreAudio tap API, macOS 14.2+). Unlike NSScreenCaptureUsageDescription,
+      this key controls the text shown in the permission dialog — macOS shows a
+      microphone-style "Allow / Don't Allow" dialog rather than the alarming
+      "record this computer's screen and audio" Screen Recording lock-icon dialog.
+      Added on feat/core-audio-tap — see issue #585.
+    -->
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Hush captures system audio (the other side of Zoom / Teams / Meet calls) for meeting transcription. Audio is transcribed locally with Whisper and never leaves your device.</string>
 
     <!--
       Minimum supported macOS version (#272). The release pipeline

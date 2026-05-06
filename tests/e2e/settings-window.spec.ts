@@ -992,30 +992,6 @@ test.describe("settings window — Permissions tab — perm-action buttons", () 
     ).toBeVisible();
   });
 
-  test("perm-action-screenRecording is visible when screenRecording is not-determined", async ({
-    page,
-  }) => {
-    await installMocks(page, {
-      diagnose_macos_permissions: () => ({
-        bundleId: "io.github.khawkins98.hush",
-        microphoneHint: null,
-        inputMonitoringHint: null,
-        canReset: true,
-        statuses: {
-          microphone: "not-applicable",
-          screenRecording: "not-determined",
-          inputMonitoring: "not-applicable",
-        },
-      }),
-    });
-    await page.goto("/");
-    await page.locator('[data-testid="sidebar-nav-settings"]').click();
-    await page.locator('[data-testid="settings-tab-permissions"]').click();
-    await expect(
-      page.locator('[data-testid="perm-action-screenRecording"]'),
-    ).toBeVisible();
-  });
-
   test("perm-action-inputMonitoring is visible when inputMonitoring is granted", async ({
     page,
   }) => {

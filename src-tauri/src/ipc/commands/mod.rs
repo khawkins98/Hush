@@ -189,16 +189,13 @@ pub(super) fn poisoned<T>(_: PoisonError<T>) -> IpcError {
 }
 
 /// Inspect an error chain and, if it looks permission-shaped,
-/// return the permission name (`"screen-recording"`, `"microphone"`,
-/// or `"input-monitoring"`) so a caller can promote it to
-/// [`IpcError::PermissionDenied`] (#386). Uses the same substring
-/// patterns the frontend's pre-typed-variant heuristic used —
-/// just runs once at the IPC boundary instead of leaking the
-/// detection into UI code.
+/// return the permission name (`"microphone"` or `"input-monitoring"`)
+/// so a caller can promote it to [`IpcError::PermissionDenied`] (#386).
+/// Uses the same substring patterns the frontend's pre-typed-variant
+/// heuristic used — just runs once at the IPC boundary instead of
+/// leaking the detection into UI code.
 ///
 /// Patterns:
-/// - SCK / system-audio failures land with `"screen recording"` or
-///   `"declined tccs"` somewhere in the anyhow chain.
 /// - AVFoundation mic refusals land with `"microphone"` plus
 ///   `"not authorized"`.
 /// - rdev / IOKit Input Monitoring rejections include
@@ -209,9 +206,6 @@ pub(super) fn poisoned<T>(_: PoisonError<T>) -> IpcError {
 /// for the unrecognised case.
 pub(crate) fn classify_permission_error(err: &anyhow::Error) -> Option<&'static str> {
     let chain = format!("{err:#}").to_lowercase();
-    if chain.contains("screen recording") || chain.contains("declined tccs") {
-        return Some("screen-recording");
-    }
     if chain.contains("microphone") && chain.contains("not authorized") {
         return Some("microphone");
     }
@@ -337,18 +331,6 @@ mod tests {
     }
 
     // -- classify_permission_error (#386) --------------------------------
-
-    #[test]
-    fn classify_permission_screen_recording_chains() {
-        // SCK / system-audio failures wrap "screen recording" in
-        // their anyhow chain (the user-visible TCC string Apple
-        // surfaces on rejection).
-        let err = anyhow::anyhow!("ScreenCaptureKit: query shareable content")
-            .context("declined TCCs for application, window, display capture");
-        assert_eq!(classify_permission_error(&err), Some("screen-recording"));
-        let err2 = anyhow::anyhow!("Screen Recording permission required");
-        assert_eq!(classify_permission_error(&err2), Some("screen-recording"));
-    }
 
     #[test]
     fn classify_permission_microphone_requires_both_terms() {

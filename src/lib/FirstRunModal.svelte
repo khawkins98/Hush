@@ -49,7 +49,7 @@
     /// flip the System Settings toggle manually). The backend
     /// `open_macos_privacy_pane` call is a no-op on non-macOS.
     onOpenPrivacyPane: (
-      target: "microphone" | "input-monitoring" | "screen-recording",
+      target: "microphone" | "input-monitoring",
     ) => void | Promise<void>;
   };
 
@@ -73,7 +73,6 @@
   // the resulting status is observed via the next poll tick.
   let micRequesting = $state(false);
   let imRequesting = $state(false);
-  let screenRequesting = $state(false);
 
   const FOCUSABLE_SELECTOR =
     'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -144,26 +143,6 @@
     }
     imRequesting = false;
     void pollDiagnostic();
-  }
-
-  async function requestScreenRecording() {
-    if (screenRequesting) return;
-    screenRequesting = true;
-    try {
-      // SCK can't be requested programmatically — even the
-      // existing prime_screen_recording_permission only enrolls
-      // Hush in the System Settings list. The actual grant has
-      // to happen via the user toggling the row in the privacy
-      // pane. Prime first (so the row exists), then deep-link.
-      await invoke("prime_screen_recording_permission");
-      await onOpenPrivacyPane("screen-recording");
-    } catch (e) {
-      console.warn("[hush] request_screen_recording chain failed", e);
-    }
-    setTimeout(() => {
-      screenRequesting = false;
-      void pollDiagnostic();
-    }, 600);
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -361,33 +340,6 @@
             {/if}
           </li>
 
-          <li
-            class="wizard-perm-row"
-            class:granted={isGranted("screenRecording")}
-            data-testid="wizard-perm-screen-recording"
-          >
-            <div class="wizard-perm-icon" aria-hidden="true">🖥</div>
-            <div class="wizard-perm-text">
-              <span class="wizard-perm-title">System Audio</span>
-              <span class="wizard-perm-why">
-                Optional — only used to capture system audio for
-                Meeting Mode. Hush never captures pixels. Skip if you
-                won't use meetings.
-              </span>
-            </div>
-            {#if isGranted("screenRecording")}
-              <span class="wizard-perm-badge" aria-label="Granted">✓</span>
-            {:else}
-              <button
-                class="ghost wizard-allow-btn"
-                disabled={screenRequesting}
-                data-testid="wizard-allow-screen-recording"
-                onclick={requestScreenRecording}
-              >
-                {screenRequesting ? "Opening…" : "Open Settings"}
-              </button>
-            {/if}
-          </li>
         </ul>
 
         <footer class="first-run-footer">

@@ -4,12 +4,89 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 fn main() {
+    // Compile/stub the CoreAudio tap capture binary (production system-audio path).
+    bundle_audio_tap_capture();
     tauri_build::build();
     synth_cue_files();
     emit_build_timestamp();
 }
 
-/// Stamp the binary with the Unix-second time at which `build.rs` last ran.
+/// Compile (macOS) or stub (other platforms) the CoreAudio tap capture binary.
+///
+/// This is the production system-audio path: spawned by
+/// `audio::core_audio_tap::CoreAudioTapSession::start` during meeting mode.
+/// The Swift binary taps all system audio via `AudioHardwareCreateProcessTap`
+/// and streams f32 LE PCM to stdout (see `resources/macos-audio-tap.swift`).
+///
+/// On Linux/Windows a zero-byte placeholder satisfies the `tauri.conf.json`
+/// resources entry; the Rust side returns an error before attempting to
+/// execute the stub on those platforms.
+fn bundle_audio_tap_capture() {
+    use std::path::Path;
+
+    let capture_out = Path::new("resources/hush-audio-tap-capture");
+    std::fs::create_dir_all("resources").expect("create src-tauri/resources");
+
+    println!("cargo:rerun-if-changed=../resources/macos-audio-tap.swift");
+
+    #[cfg(target_os = "macos")]
+    {
+        let src = Path::new("../resources/macos-audio-tap.swift");
+        if !src.exists() {
+            return;
+        }
+
+        if capture_out.exists() {
+            let src_mod = std::fs::metadata(src).and_then(|m| m.modified()).ok();
+            let out_mod = std::fs::metadata(capture_out)
+                .and_then(|m| m.modified())
+                .ok();
+            if let (Some(s), Some(o)) = (src_mod, out_mod) {
+                if o >= s {
+                    return;
+                }
+            }
+        }
+
+        println!("cargo:warning=Compiling macos-audio-tap.swift...");
+        let status = std::process::Command::new("swiftc")
+            .args([
+                src.to_str().unwrap(),
+                "-framework",
+                "CoreAudio",
+                "-framework",
+                "Foundation",
+                "-framework",
+                "AudioToolbox",
+                "-framework",
+                "AVFAudio",
+                "-o",
+                capture_out.to_str().unwrap(),
+            ])
+            .status()
+            .expect("swiftc not found; cannot compile audio tap capture binary");
+
+        if !status.success() {
+            panic!("Failed to compile macos-audio-tap.swift");
+        }
+
+        let status = std::process::Command::new("codesign")
+            .args(["-s", "-", capture_out.to_str().unwrap()])
+            .status();
+        if !status.map(|s| s.success()).unwrap_or(false) {
+            println!("cargo:warning=codesign of hush-audio-tap-capture failed or was skipped");
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if !capture_out.exists() {
+            std::fs::write(capture_out, b"").expect("create capture placeholder");
+        }
+    }
+}
+
+/// Emits `HUSH_BUILD_TIMESTAMP` — the Unix-second time at which `build.rs` last ran.
 /// Consumed by the `get_build_info` IPC command via `env!("HUSH_BUILD_TIMESTAMP")`.
 ///
 /// Accuracy note: Cargo only re-runs `build.rs` when a watched file changes
