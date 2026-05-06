@@ -41,3 +41,4 @@ tests/e2e-tauri/.wdio-logs/
 
 # CoreAudio tap capture binary (compiled from resources/macos-audio-tap.swift by build.rs)
 src-tauri/resources/hush-audio-tap-capture
+src-tauri/resources/hush-audio-tap-probe

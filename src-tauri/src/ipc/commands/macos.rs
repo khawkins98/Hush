@@ -69,10 +69,10 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
             }
             "screen-recording" => {
-                // Screen & System Audio Recording pane — the one that
-                // governs ScreenCaptureKit (system-audio capture in
-                // meeting mode). Surfaces stale rows after a
-                // `tccutil reset` so the user can `-` them out.
+                // Legacy Screen & System Audio Recording grant from builds before
+                // #600 (when system audio used ScreenCaptureKit). Kept in the
+                // reset list so old grants are cleaned up; Hush no longer
+                // requires this permission for meeting mode.
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
             }
             // "accessibility" target intentionally absent — Hush

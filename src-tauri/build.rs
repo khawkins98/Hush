@@ -70,9 +70,12 @@ fn bundle_audio_tap_capture() {
             panic!("Failed to compile macos-audio-tap.swift");
         }
 
-        let _ = std::process::Command::new("codesign")
+        let status = std::process::Command::new("codesign")
             .args(["-s", "-", capture_out.to_str().unwrap()])
             .status();
+        if !status.map(|s| s.success()).unwrap_or(false) {
+            println!("cargo:warning=codesign of hush-audio-tap-capture failed or was skipped");
+        }
     }
 
     #[cfg(not(target_os = "macos"))]

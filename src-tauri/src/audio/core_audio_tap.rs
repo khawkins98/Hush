@@ -84,19 +84,36 @@ impl CoreAudioTapSession {
             ));
         }
 
-        let mut child = Command::new(&binary)
+        let child = Command::new(&binary)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()) // tap diagnostic messages → app stderr/log
             .spawn()
             .with_context(|| format!("spawn {}", binary.display()))?;
 
+        // RAII guard: if any step below fails, kill + reap the child so the
+        // tap and aggregate device it installed are cleaned up before we return.
+        // Disarmed at the end of the function via `guard.0.take()`.
+        struct KillGuard(Option<Child>);
+        impl Drop for KillGuard {
+            fn drop(&mut self) {
+                if let Some(mut c) = self.0.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+            }
+        }
+        let mut guard = KillGuard(Some(child));
+
         // Read the 12-byte protocol header before handing off to the
         // background reader thread.  The Swift binary writes the header before
         // starting `engine.start()`, so this read will unblock promptly once
-        // the tap is established.  A timeout is not needed — if the binary
-        // crashes before writing the header the pipe EOF will propagate here
-        // as an `UnexpectedEof` error.
-        let stdout = child
+        // the tap is established.  If the binary exits before writing the header
+        // the pipe EOF propagates here as `UnexpectedEof`; the KillGuard above
+        // ensures the child is reaped even on these early-return paths.
+        let stdout = guard
+            .0
+            .as_mut()
+            .unwrap()
             .stdout
             .take()
             .ok_or_else(|| anyhow!("child stdout not captured"))?;
@@ -138,27 +155,37 @@ impl CoreAudioTapSession {
         let reader_thread = thread::Builder::new()
             .name("hush-cat-reader".into())
             .spawn(move || {
-                // Read 4 bytes (one f32) at a time.  `read_exact` blocks until
-                // the bytes are available or the pipe closes.  On EOF we exit
-                // cleanly; on other errors we log and exit.
-                let mut buf = [0u8; 4];
+                // Read in 4096-byte chunks (~1024 f32 samples per iteration)
+                // rather than one sample at a time — reduces read overhead by
+                // ~250× at 48 kHz stereo.  A `tail` counter tracks the 0–3
+                // bytes of a partial f32 straddling a read boundary.
+                let mut chunk_buf = [0u8; 4096];
+                let mut tail = 0usize;
+
                 loop {
-                    match reader.read_exact(&mut buf) {
-                        Ok(()) => {
-                            let sample = f32::from_le_bytes(buf);
-                            // Update the level meter with the absolute value of
-                            // each sample (cheap per-sample metric; the pump
-                            // drains quickly enough that this stays fresh).
-                            level_writer.store(sample.abs().to_bits(), Ordering::Relaxed);
-                            if producer.push(sample).is_err() {
-                                overflow_writer.store(true, Ordering::Relaxed);
-                                // Drop the sample — ring is full.
+                    match reader.read(&mut chunk_buf[tail..]) {
+                        Ok(0) => break, // EOF — child exited, normal shutdown
+                        Ok(n) => {
+                            let total = tail + n;
+                            let samples = total / 4;
+                            for i in 0..samples {
+                                let s = i * 4;
+                                let sample = f32::from_le_bytes(
+                                    chunk_buf[s..s + 4].try_into().unwrap(),
+                                );
+                                level_writer
+                                    .store(sample.abs().to_bits(), Ordering::Relaxed);
+                                if producer.push(sample).is_err() {
+                                    overflow_writer.store(true, Ordering::Relaxed);
+                                }
+                            }
+                            tail = total - samples * 4;
+                            if tail > 0 {
+                                let carried = samples * 4;
+                                chunk_buf.copy_within(carried..carried + tail, 0);
                             }
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                            // Child exited — normal shutdown.
-                            break;
-                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(e) => {
                             tracing::warn!(
                                 error = %e,
@@ -169,7 +196,11 @@ impl CoreAudioTapSession {
                     }
                 }
             })
-            .expect("failed to spawn hush-cat-reader thread");
+            .context("failed to spawn hush-cat-reader thread")?;
+
+        // All fallible operations succeeded — disarm the kill guard and store
+        // the child in TapInner.
+        let child = guard.0.take().unwrap();
 
         active_sessions.fetch_add(1, Ordering::Release);
 

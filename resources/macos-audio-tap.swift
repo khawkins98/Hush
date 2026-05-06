@@ -139,6 +139,12 @@ let channelCount = captureFormat.channelCount
 
 // ── 5. Header ─────────────────────────────────────────────────────────────────
 
+// Ignore SIGPIPE before the first stdout write: if the Rust parent is
+// force-killed the next write would raise SIGPIPE and terminate the helper
+// before the SIGTERM cleanup block runs, leaking the tap and aggregate device.
+// The SIGPIPE DispatchSource below handles the cleanup path explicitly.
+signal(SIGPIPE, SIG_IGN)
+
 // Write header BEFORE installing the tap so the Rust reader always
 // sees the header first, with no risk of a race between the first
 // PCM dispatch and the header write.
@@ -169,6 +175,7 @@ stdout.write(header)
 // chunk rather than blocking the audio thread.
 let writeQueue = DispatchQueue(label: "hush.audio.writer", qos: .userInteractive)
 let semaphore = DispatchSemaphore(value: 32)
+var droppedChunks: Int = 0
 
 inputNode.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
     guard let channelData = buffer.floatChannelData else { return }
@@ -189,11 +196,20 @@ inputNode.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
         }
     }
 
-    // Non-blocking acquire: if the queue is saturated, drop this chunk.
+    // Non-blocking acquire: if the queue is saturated, drop this chunk
+    // and log a running total via writeQueue (off the RT thread).
     if semaphore.wait(timeout: .now()) == .success {
         writeQueue.async {
             stdout.write(bytes)
             semaphore.signal()
+        }
+    } else {
+        droppedChunks += 1
+        let dropped = droppedChunks
+        if dropped % 256 == 0 {
+            writeQueue.async {
+                fputs("hush-audio-tap: \(dropped) total chunks dropped (reader stalled)\n", stderr)
+            }
         }
     }
 }
@@ -212,11 +228,11 @@ do {
 
 fputs("hush-audio-tap: streaming (sr=\(sampleRate) ch=\(channelCount))\n", stderr)
 
-// ── 8. SIGTERM → clean shutdown ───────────────────────────────────────────────
+// ── 8. Signal handlers → clean shutdown ──────────────────────────────────────
 
-let sigSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-signal(SIGTERM, SIG_IGN)  // prevent default handler; DispatchSource handles it
-sigSource.setEventHandler {
+// Shared cleanup path used by SIGTERM (Rust parent sent stop) and SIGPIPE
+// (Rust parent force-killed; next stdout write would fail).
+func cleanup() {
     inputNode.removeTap(onBus: 0)
     engine.stop()
     writeQueue.sync {}  // flush any pending stdout writes
@@ -224,6 +240,17 @@ sigSource.setEventHandler {
     AudioHardwareDestroyProcessTap(tapID)
     exit(0)
 }
-sigSource.resume()
+
+let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+signal(SIGTERM, SIG_IGN)  // prevent default handler; DispatchSource handles it
+sigTermSource.setEventHandler { cleanup() }
+sigTermSource.resume()
+
+// SIGPIPE fires when the Rust parent is force-killed and the next write to
+// stdout fails.  signal(SIGPIPE, SIG_IGN) was installed above; this source
+// handles the explicit cleanup so the tap + aggregate device are destroyed.
+let sigPipeSource = DispatchSource.makeSignalSource(signal: SIGPIPE, queue: .main)
+sigPipeSource.setEventHandler { cleanup() }
+sigPipeSource.resume()
 
 RunLoop.main.run()
