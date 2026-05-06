@@ -154,6 +154,20 @@ GitHub user [@m13v](https://github.com/m13v) commented on three issues across th
 
 ---
 
+## 2026-05-07 — CI clippy version differs from local toolchain (parallel to rustfmt gap)
+
+**Problem:** Same root cause as the rustfmt entry above: CI's pinned January-2026 stable runs Rust 1.95+ while local stable can be older (e.g. 1.94.0 as of this entry). New clippy lints land between point releases — `clippy::collapsible_match` triggering on a nested-`if`-inside-`match-arm` pattern landed in 1.95 but not 1.94. The result: `cargo clippy --all-targets -- -D warnings` passes locally but fails on CI after a push.
+
+**Symptoms:** CI's `clippy (default features)` step fails with a clear diagnostic naming the lint and a suggested fix. The lint isn't visible locally because the older toolchain doesn't include it.
+
+**Workaround:** Same shape as the rustfmt one — read the diagnostic from the CI log, apply the suggested rewrite (clippy diagnostics include the exact code edit), push again. The pre-push hook (`.githooks/pre-push`) runs clippy `--lib --no-default-features` which is the right cross-platform shape but uses local clippy's lint set. There is no local check that catches lints CI's stricter version will flag.
+
+**Concrete example caught in #604:** a `match RunEvent::ExitRequested { ref api, .. } => { if !flag { api.prevent_exit(); } }` pattern. Rust 1.94's clippy was silent; Rust 1.95's `collapsible_match` flagged it and suggested collapsing the inner `if` into a match guard. Behaviour identical either way.
+
+**Long-term fix:** Same as the rustfmt entry: pin local toolchain via `rust-toolchain.toml`. Deferred for the same coordination reason. When enough version-mismatch incidents accumulate to justify the friction, both gaps close together with one `rust-toolchain.toml` commit.
+
+---
+
 ## 2026-05-05 — Meeting pump diarizer buffer drift on drain failure (#553)
 
 **Problem:** In `meeting/pump.rs`, when `drain_into` fails for a tick (e.g. transient SCK interruption), `tick_formats[i]` stays `None` and the diarizer's `AudioRollingBuffer` receives no samples for that tick. The streaming transcription session continues advancing its internal timeline, so the diarizer buffer falls behind. When utterance finals arrive with `[started_at_ms, ended_at_ms)` timestamps, `audio_buffer.slice_ms()` returns stale or misaligned audio, degrading speaker-labelling quality for the rest of the session.
