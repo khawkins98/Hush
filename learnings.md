@@ -42,6 +42,20 @@ Codec pipelines (SCK, any OS media stack) can produce PCM that passes amplitude 
 
 ---
 
+## 2026-05-06 — `isExclusive = true` is required for `CATapDescription` to capture any audio (#593, #594)
+
+**The bug:** `CATapDescription.processes = []` with `isExclusive = false` delivers silence — it means "tap no processes". With `isExclusive = true`, the empty list means "exclude no one from the tap", i.e. capture the entire system mix. This is documented in Korus's source code but not in Apple's headers or developer documentation.
+
+Every working open-source implementation confirmed in research (OpenWhispr, Korus, Atoll, yogurt) uses `isExclusive = true`. Hush originally copied the wrong default.
+
+**Second bug:** Using AVAudioEngine pointed at an aggregate device where the main sub-device is output-only (no input channels) returns silence from the AUHAL unit's non-existent input bus. The fix is `AudioDeviceCreateIOProcIDWithBlock` directly on the aggregate device — the IOProc's `inInputData` receives the tap's PCM from the aggregate input bus regardless of sub-device channel configuration.
+
+**Lesson:** When a CoreAudio tap delivers samples (non-zero byte counts in the log) but Whisper sees only silence, suspect the tap configuration before the transcription stack. The `isExclusive` flag is the first thing to check. The `real_finals` / `blank_finals` counter added in #591 is the right end-to-end signal: `real_finals=0 blank_finals=N` from a system-audio source confirms audio is flowing but content is silence.
+
+**Acoustic echo risk (follow-up):** When the user has speakers (not headphones), the microphone will acoustically pick up whatever the tap captures digitally, producing a duplicate stream attributed to a separate diarizer speaker. The standard fix is Apple's Voice Processing I/O unit (built-in AEC) for the microphone capture path. Tracked as a comment on #594; scoped to a future issue.
+
+---
+
 ## 2026-05-06 — System audio on macOS: `AudioHardwareCreateProcessTap` is the right approach on macOS 14.2+ (#585)
 
 This entry is the authoritative summary. Several earlier entries explored ScreenCaptureKit (SCK) and the tap API separately; those entries are marked **[SUPERSEDED]** below and preserved for historical context.
