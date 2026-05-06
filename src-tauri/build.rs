@@ -4,9 +4,89 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 fn main() {
+    // Compile/stub the audio tap probe BEFORE tauri_build::build() validates resources.
+    bundle_audio_tap_probe();
     tauri_build::build();
     synth_cue_files();
     emit_build_timestamp();
+}
+
+/// Compile (macOS) or stub (other platforms) the CoreAudio-tap probe binary
+/// so `tauri.conf.json`'s resources reference is always satisfiable.
+///
+/// On macOS the probe is the minimal Swift binary in
+/// `resources/macos-audio-tap-probe.swift` (repo root) — compiled via `swiftc`
+/// and ad-hoc signed so TCC treats it as a real executable.  It lets us
+/// empirically confirm which permission dialog `AudioHardwareCreateProcessTap`
+/// triggers when run inside a signed `.app` bundle (see issue #585).
+///
+/// On Linux/Windows a zero-byte placeholder keeps the `tauri.conf.json`
+/// `resources` entry from failing the bundle step.  The Rust-side
+/// `probe_audio_tap_permission` command returns `"not_applicable"` on those
+/// platforms, so the placeholder is never executed.
+fn bundle_audio_tap_probe() {
+    use std::path::Path;
+
+    let probe_out = Path::new("resources/hush-audio-tap-probe");
+    std::fs::create_dir_all("resources").expect("create src-tauri/resources");
+
+    // Re-run this step whenever the Swift source changes.
+    println!("cargo:rerun-if-changed=../resources/macos-audio-tap-probe.swift");
+
+    #[cfg(target_os = "macos")]
+    {
+        let src = Path::new("../resources/macos-audio-tap-probe.swift");
+        if !src.exists() {
+            // Source removed — leave any existing binary as-is.
+            return;
+        }
+
+        // Skip recompile if binary is already newer than source.
+        if probe_out.exists() {
+            let src_mod = std::fs::metadata(src).and_then(|m| m.modified()).ok();
+            let out_mod = std::fs::metadata(probe_out)
+                .and_then(|m| m.modified())
+                .ok();
+            if let (Some(s), Some(o)) = (src_mod, out_mod) {
+                if o >= s {
+                    return;
+                }
+            }
+        }
+
+        println!("cargo:warning=Compiling macos-audio-tap-probe.swift...");
+        let status = std::process::Command::new("swiftc")
+            .args([
+                src.to_str().unwrap(),
+                "-framework",
+                "CoreAudio",
+                "-framework",
+                "Foundation",
+                "-framework",
+                "AudioToolbox",
+                "-o",
+                probe_out.to_str().unwrap(),
+            ])
+            .status()
+            .expect("swiftc not found; cannot compile audio tap probe");
+
+        if !status.success() {
+            panic!("Failed to compile macos-audio-tap-probe.swift");
+        }
+
+        // Ad-hoc sign so macOS treats it as a proper executable for TCC.
+        let _ = std::process::Command::new("codesign")
+            .args(["-s", "-", probe_out.to_str().unwrap()])
+            .status();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Zero-byte placeholder — satisfies tauri.conf.json resources ref.
+        if !probe_out.exists() {
+            std::fs::write(probe_out, b"").expect("create probe placeholder");
+        }
+    }
 }
 
 /// Stamp the binary with the Unix-second time at which `build.rs` last ran.

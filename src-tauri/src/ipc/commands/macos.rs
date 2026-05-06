@@ -733,3 +733,61 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
         })
     }
 }
+
+/// Run the CoreAudio-tap probe binary (#585) and return a human-readable
+/// result string.
+///
+/// The probe binary (`resources/hush-audio-tap-probe`, compiled from
+/// `resources/macos-audio-tap-probe.swift` at build time) calls
+/// `AudioHardwareCreateProcessTap` from within the signed Hush bundle so
+/// macOS attributes the TCC dialog to Hush — not the terminal. This is the
+/// only reliable way to see the real dialog text and icon (mic vs lock).
+///
+/// On non-macOS platforms returns `"not_applicable"` without spawning
+/// anything.
+#[tauri::command]
+pub async fn probe_audio_tap_permission(app: tauri::AppHandle) -> IpcResult<String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use tauri::Manager;
+
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .map_err(|e| IpcError::Internal(format!("resource_dir: {e}")))?;
+        let probe_bin = resource_dir.join("hush-audio-tap-probe");
+
+        if !probe_bin.exists() {
+            return Err(IpcError::Internal(
+                "probe binary not found in bundle resources".to_owned(),
+            ));
+        }
+
+        // Ensure executable bit survived bundling.
+        if let Ok(meta) = std::fs::metadata(&probe_bin) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(&probe_bin, perms);
+        }
+
+        let output = std::process::Command::new(&probe_bin)
+            .output()
+            .map_err(|e| IpcError::Internal(format!("spawn probe: {e}")))?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let result = match output.status.code() {
+            Some(0) => format!("tap_created ✓ — permission granted. Note the dialog icon/text!\n{}", stderr.trim()),
+            Some(1) => format!("permission_denied — user clicked Don't Allow (or previously denied).\n{}", stderr.trim()),
+            Some(2) => format!("unsupported — macOS 14.2+ required.\n{}", stderr.trim()),
+            _ => format!("error (exit {}) — {}", output.status, stderr.trim()),
+        };
+        Ok(result)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok("not_applicable: CoreAudio tap is macOS-only".to_owned())
+    }
+}

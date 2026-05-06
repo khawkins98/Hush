@@ -38,3 +38,6 @@ tests/e2e-tauri/.wdio-logs/
 # Claude Code runtime artefacts (memory, worktrees, scheduled-task locks).
 # Local to each contributor's machine; not part of the project source.
 .claude/
+
+# CoreAudio tap probe binary (compiled from resources/macos-audio-tap-probe.swift by build.rs)
+src-tauri/resources/hush-audio-tap-probe
