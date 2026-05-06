@@ -6,6 +6,23 @@ use std::path::Path;
 fn main() {
     tauri_build::build();
     synth_cue_files();
+    emit_build_timestamp();
+}
+
+/// Stamp the binary with the Unix-second time at which `build.rs` last ran.
+/// Consumed by the `get_build_info` IPC command via `env!("HUSH_BUILD_TIMESTAMP")`.
+///
+/// Accuracy note: Cargo only re-runs `build.rs` when a watched file changes
+/// (here: `build.rs` itself, via `cargo:rerun-if-changed=build.rs` below).
+/// Release and CI builds always start clean, so the stamp is accurate there.
+/// Incremental dev builds reuse the previous stamp until `build.rs` is
+/// touched — good enough for a "when was this binary built" display.
+fn emit_build_timestamp() {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    println!("cargo:rustc-env=HUSH_BUILD_TIMESTAMP={secs}");
 }
 
 /// Synthesise the two audio-cue WAV files (#446) into OUT_DIR so

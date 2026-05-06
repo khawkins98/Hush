@@ -128,6 +128,8 @@ export async function installMocks(
       check_for_updates: () => ({ ...defaultUpdateCheckResult }),
       // App version string for the debug issue-report generator.
       get_app_version: () => "0.0.0-test",
+      // Version + build timestamp for the debug console header and issue report.
+      get_build_info: () => ({ version: "0.0.0-test", buildTimestamp: 0 }),
       // Auto-update install (#10). Default to the typed
       // not-configured gate-error (#497) so specs that don't
       // override see the friendly fallback copy + manual
