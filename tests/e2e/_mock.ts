@@ -130,6 +130,10 @@ export async function installMocks(
       get_app_version: () => "0.0.0-test",
       // Version + build timestamp for the debug console header and issue report.
       get_build_info: () => ({ version: "0.0.0-test", buildTimestamp: 0 }),
+      // #584 Angle 1 — startup phase timings. Default returns an empty
+      // list so specs that don't care about the timings panel see it
+      // collapsed/empty. Specs that care override with a populated list.
+      get_startup_timings: () => [],
       // Auto-update install (#10). Default to the typed
       // not-configured gate-error (#497) so specs that don't
       // override see the friendly fallback copy + manual

@@ -733,6 +733,7 @@ pub fn run() {
             ipc::commands::system::check_for_updates,
             ipc::commands::system::get_app_version,
             ipc::commands::system::get_build_info,
+            ipc::commands::system::get_startup_timings,
             ipc::commands::ptt::ptt_get_config,
             ipc::commands::ptt::ptt_set_config,
             ipc::commands::permissions::open_macos_privacy_pane,
