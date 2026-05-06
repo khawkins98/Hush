@@ -247,3 +247,33 @@ pub fn get_build_info() -> BuildInfo {
         build_timestamp: env!("HUSH_BUILD_TIMESTAMP").parse().unwrap_or(0),
     }
 }
+
+/// One per-phase entry in the startup timing trace (#584 Angle 1).
+///
+/// `elapsed_ms` is the absolute milliseconds since `build_default`
+/// started — same scale the existing `tracing::info!` lines use, so
+/// reading the values here matches what you'd see in the log. The
+/// gap between consecutive phases gives the wall time of that phase.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupPhase {
+    /// Human-readable phase name. Stable enough for the frontend to
+    /// pin in tests; not a stable wire token, so renaming is a
+    /// pure-prose change.
+    pub name: String,
+    /// Milliseconds elapsed since `build_default` started.
+    pub elapsed_ms: u64,
+}
+
+/// Return the list of startup-phase timings captured during
+/// `AppState::build_default` (#584 Angle 1).
+///
+/// The list is populated once at boot and held read-only on
+/// `AppState`. Empty in `--no-default-features` builds where some
+/// phases are skipped, but otherwise the same shape regardless of
+/// platform. Used by the Debug tab to surface a per-phase trace
+/// without the user having to grep the log.
+#[tauri::command]
+pub fn get_startup_timings(state: State<'_, AppState>) -> Vec<StartupPhase> {
+    state.startup_timings.clone()
+}
