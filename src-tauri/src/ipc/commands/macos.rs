@@ -218,9 +218,10 @@ async fn watch_screen_recording_permission(app: tauri::AppHandle) {
 
         // Validate with a real SCK round-trip to rule out stale TCC
         // cache (preflight=true while SCK is still denied).
-        let probe =
-            tauri::async_runtime::spawn_blocking(crate::audio::validate_screen_recording_capability)
-                .await;
+        let probe = tauri::async_runtime::spawn_blocking(
+            crate::audio::validate_screen_recording_capability,
+        )
+        .await;
 
         if matches!(probe, Ok(Ok(()))) {
             tracing::info!("permission watcher: System Audio grant confirmed; notifying frontend");
