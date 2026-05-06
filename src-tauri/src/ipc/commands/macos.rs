@@ -756,7 +756,7 @@ pub async fn probe_audio_tap_permission(app: tauri::AppHandle) -> IpcResult<Stri
             .path()
             .resource_dir()
             .map_err(|e| IpcError::Internal(format!("resource_dir: {e}")))?;
-        let probe_bin = resource_dir.join("hush-audio-tap-probe");
+        let probe_bin = resource_dir.join("resources/hush-audio-tap-probe");
 
         if !probe_bin.exists() {
             return Err(IpcError::Internal(
