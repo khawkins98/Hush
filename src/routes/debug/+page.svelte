@@ -17,21 +17,9 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import DebugConsole from "$lib/DebugConsole.svelte";
-
-  type BuildInfo = { version: string; buildTimestamp: number };
+  import { formatBuildTimestamp, type BuildInfo } from "$lib/utils/format";
 
   let buildInfo = $state<BuildInfo>({ version: "…", buildTimestamp: 0 });
-
-  function formatBuildTimestamp(unixSecs: number): string {
-    if (unixSecs === 0) return "";
-    const d = new Date(unixSecs * 1000);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2, "0");
-    const min = String(d.getMinutes()).padStart(2, "0");
-    return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
-  }
 
   onMount(async () => {
     try {
@@ -46,7 +34,7 @@
   <header class="debug-window-header">
     <span class="debug-window-title">Debug Console</span>
     <span class="debug-window-version">
-      v{buildInfo.version}{formatBuildTimestamp(buildInfo.buildTimestamp)
+      v{buildInfo.version}{buildInfo.buildTimestamp > 0
         ? ` · built ${formatBuildTimestamp(buildInfo.buildTimestamp)}`
         : ""}
     </span>
