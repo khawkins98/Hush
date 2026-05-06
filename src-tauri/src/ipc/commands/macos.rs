@@ -34,10 +34,8 @@
 //! (`MacosPermissionDiagnostic`, `MacosPermissionResetResult`)
 //! that travel with the commands cleanly.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use serde::Serialize;
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::ipc::AppState;
 
@@ -50,11 +48,20 @@ use crate::ipc::AppState;
 use super::IpcError;
 use super::IpcResult;
 
+// The grant-watcher and relaunch helpers are macOS-only — the static
+// guard and its imports are gated accordingly to keep Linux/Windows
+// clean under `-D warnings`.
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+
 /// Guards against duplicate grant-watchers when the user clicks
 /// "Grant in Settings" multiple times before returning to Hush.
 /// Process-scoped (single-instance guarantee from
 /// `tauri-plugin-single-instance`), so a module-level atomic
 /// suffices without touching `AppState`.
+#[cfg(target_os = "macos")]
 static SCREEN_GRANT_WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Open the macOS System Settings pane the user needs to grant
