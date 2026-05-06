@@ -562,6 +562,7 @@ enum Cmd {
     Shutdown,
 }
 
+#[allow(clippy::new_without_default)]
 impl CpalAudioCapture {
     /// Spawn the audio worker thread and return a handle.
     ///

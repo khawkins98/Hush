@@ -45,6 +45,7 @@ use crate::transcription::download::CancelHandle;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
 use tauri::Manager;
 
 use crate::audio::{AudioCapture, CpalAudioCapture};
