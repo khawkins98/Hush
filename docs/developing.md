@@ -31,6 +31,21 @@ This activates a pre-push hook that runs `cargo fmt --check`, `cargo clippy`, an
 `npm run check` before every push — the same gates as CI. To skip on an emergency
 push use `git push --no-verify`.
 
+The hook prints the failing step and a short remediation hint when something
+breaks, so you don't have to scroll back through the full output to find what
+went wrong. Set `HUSH_SLOW_HOOKS=1` in your shell to additionally run
+`cargo test --lib --no-default-features` before each push (off by default to
+keep the hook interactive-friendly during rapid iteration; a good idea before
+the final push to a PR).
+
+**rustfmt version gap.** CI pins a January-2026 stable toolchain; local stable
+is typically newer. The two disagree on borderline line-wraps. The hook catches
+the bulk of formatting issues but can't guarantee parity. If CI's `rustfmt
+check` fails after a push, copy the exact diff from the CI log and apply it
+manually — running local `cargo fmt --all` won't reproduce the CI version's
+output. Tracked in `learnings.md` under "2026-05-05 — CI rustfmt version
+differs from local toolchain".
+
 The first `npm run tauri dev` will:
 
 1. Download the ONNX Runtime vendored binaries (~50 MB) via the `ort` `download-binaries` feature — needs network access once.
