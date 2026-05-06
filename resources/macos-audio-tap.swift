@@ -74,7 +74,9 @@ func defaultOutputDeviceUID() -> String? {
 //
 // `isExclusive = true` with `processes = []` means "exclude no one from the
 // tap" — i.e. capture the whole system mix. With `false` the empty array
-// delivers silence. See learnings.md entry for #593.
+// delivers silence. Confirmed by OpenWhispr, Korus, Atoll, and yogurt source
+// code — every working open-source implementation uses `true`. See learnings.md
+// entry for #593.
 
 let tapUUID = UUID()
 let desc = CATapDescription()
@@ -121,6 +123,9 @@ var aggDesc: [String: Any] = [
     kAudioAggregateDeviceTapAutoStartKey as String: false,
     kAudioAggregateDeviceSubDeviceListKey as String: subDeviceList,
     kAudioAggregateDeviceTapListKey as String: [
+        // Drift compensation inserts/deletes samples to align the tap's clock
+        // with the aggregate. PCM is no longer bit-identical to the source, but
+        // for speech-to-text that's irrelevant and clock alignment is worth it.
         [kAudioSubTapUIDKey as String: tapUID,
          kAudioSubTapDriftCompensationKey as String: NSNumber(value: true)]
     ],
@@ -149,7 +154,11 @@ var aliveAddr = AudioObjectPropertyAddress(
 var isAlive: UInt32 = 0
 var aliveSize = UInt32(MemoryLayout<UInt32>.size)
 for _ in 0..<20 {  // up to 200 ms
-    AudioObjectGetPropertyData(aggDeviceID, &aliveAddr, 0, nil, &aliveSize, &isAlive)
+    let st = AudioObjectGetPropertyData(aggDeviceID, &aliveAddr, 0, nil, &aliveSize, &isAlive)
+    if st != noErr {
+        fputs("warning: alive-poll failed: OSStatus=\(st)\n", stderr)
+        break
+    }
     if isAlive != 0 { break }
     usleep(10_000)
 }
@@ -162,6 +171,9 @@ if isAlive == 0 {
 // The input scope of the aggregate device exposes the tap's stream. Querying
 // here (after the device is alive, before starting) gives us the sample rate
 // and channel count we need for the HUSH wire-protocol header.
+// Element 0 (main) is correct for the one-tap-one-input shape; if a second
+// tap is ever added the aggregate gains multiple input streams and a stream
+// enumeration via kAudioDevicePropertyStreams would be needed instead.
 
 var streamFormatAddr = AudioObjectPropertyAddress(
     mSelector: kAudioDevicePropertyStreamFormat,
@@ -230,10 +242,12 @@ let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
         UnsafeMutablePointer(mutating: inInputData))
     guard !buffers.isEmpty,
           let first = buffers.first,
-          let _ = first.mData,
+          first.mData != nil,
           first.mDataByteSize > 0 else { return }
 
     let chanCount = Int(channelCount)
+    // For non-interleaved, each per-channel AudioBuffer has the same frame
+    // count (all channels emitted in lockstep by an aggregate-device tap).
     let framesPerBuffer = Int(first.mDataByteSize) / MemoryLayout<Float>.size /
         (isNonInterleaved ? 1 : chanCount)
     guard framesPerBuffer > 0 else { return }
@@ -298,8 +312,12 @@ fputs("hush-audio-tap: streaming (sr=\(sampleRate) ch=\(channelCount))\n", stder
 // ── 10. Signal handlers → clean shutdown ─────────────────────────────────────
 
 func cleanup() {
-    AudioDeviceStop(aggDeviceID, ioProcID)
-    if let proc = ioProcID { AudioDeviceDestroyIOProcID(aggDeviceID, proc) }
+    // Guard both calls: AudioDeviceStop(_, nil) has "stop default I/O" semantics
+    // that would do the wrong thing if ioProcID were ever nil here.
+    if let proc = ioProcID {
+        AudioDeviceStop(aggDeviceID, proc)
+        AudioDeviceDestroyIOProcID(aggDeviceID, proc)
+    }
     writeQueue.sync {}  // flush any pending stdout writes
     AudioHardwareDestroyAggregateDevice(aggDeviceID)
     AudioHardwareDestroyProcessTap(tapID)
