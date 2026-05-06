@@ -23,6 +23,10 @@ let meetingActiveDetail = $state<MeetingSessionDetail | null>(null);
 let meetingBusy = $state(false);
 let meetingCopyNotice = $state<MeetingCopyNotice | null>(null);
 let pendingPermissionsDialogIntro = $state<string | null>(null);
+/// Source-failed banner text set when the backend emits
+/// `meeting:source-failed` during an active session (#533).
+/// Cleared when the session ends or the user dismisses it.
+let meetingSourceFailedNotice = $state<string | null>(null);
 
 export const meeting = {
   get sessions() {
@@ -72,6 +76,12 @@ export const meeting = {
   },
   set pendingPermissionsDialogIntro(val: string | null) {
     pendingPermissionsDialogIntro = val;
+  },
+  get sourceFailedNotice() {
+    return meetingSourceFailedNotice;
+  },
+  set sourceFailedNotice(val: string | null) {
+    meetingSourceFailedNotice = val;
   },
   async refresh() {
     try {
@@ -185,6 +195,8 @@ export const meeting = {
     try {
       await invoke("meeting_stop_manual");
       await meeting.refresh();
+      // Clear any source-failed banner — the session is done.
+      meetingSourceFailedNotice = null;
     } catch (e) {
       meetingSessionsError = formatErrorDisplay(e);
     } finally {

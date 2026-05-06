@@ -17,7 +17,8 @@
     "dev-reset": "bash scripts/dev-reset.sh",
     "tauri": "tauri",
     "tauri:bundle": "bash scripts/tauri-bundle-macos.sh",
-    "tauri:dmg": "bash scripts/tauri-dmg-macos.sh"
+    "tauri:dmg": "bash scripts/tauri-dmg-macos.sh",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "license": "Apache-2.0",
   "dependencies": {

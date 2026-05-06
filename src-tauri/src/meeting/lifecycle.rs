@@ -37,7 +37,10 @@ use crate::audio::{AudioSession, AudioSource};
 use crate::transcription::StreamingTranscribeSession;
 
 use super::classifier::AppClassifier;
-use super::manager::{ActiveSession, SessionManager, SessionState};
+use super::manager::{
+    ActiveSession, MeetingSourceFailedPayload, SessionManager, SessionState,
+    MEETING_SOURCE_FAILED_EVENT,
+};
 use super::pump;
 use super::{MeetingSession, NewMeetingSession, NewPersistedUtterance};
 
@@ -257,6 +260,20 @@ impl SessionManager {
                             source_kind = source.kind_label(),
                             "meeting pump: drain_into pre-warm failed; streaming disabled for this source"
                         );
+                        // Surface the failure to the frontend (#533). A
+                        // pre-warm failure at startup means this source will
+                        // produce 0 utterances for the entire session — not
+                        // a transient blip like the mid-session path. Emit
+                        // so the panel can show a warning banner rather than
+                        // silently logging nothing.
+                        self.event_emitter.emit(
+                            MEETING_SOURCE_FAILED_EVENT,
+                            &MeetingSourceFailedPayload {
+                                session_id: session.id,
+                                source_kind: source.kind_label(),
+                                reason: "audio capture pre-warm failed at session start",
+                            },
+                        );
                         streaming_sessions.push(None);
                         continue;
                     }
@@ -268,6 +285,17 @@ impl SessionManager {
                             error = ?e,
                             source_kind = source.kind_label(),
                             "meeting pump: start_stream failed; streaming disabled for this source"
+                        );
+                        // Same surface-to-frontend pattern as the pre-warm
+                        // failure arm above (#533): a start_stream failure
+                        // means this source will produce 0 utterances.
+                        self.event_emitter.emit(
+                            MEETING_SOURCE_FAILED_EVENT,
+                            &MeetingSourceFailedPayload {
+                                session_id: session.id,
+                                source_kind: source.kind_label(),
+                                reason: "streaming session creation failed at session start",
+                            },
                         );
                         streaming_sessions.push(None);
                     }
@@ -283,6 +311,21 @@ impl SessionManager {
                 "meeting pump: no transcriber loaded; pump will run idle until model is picked"
             );
             streaming_sessions.resize_with(sources.len(), || None);
+        }
+
+        // If all sources failed to open a streaming session despite a
+        // transcriber being loaded, the entire session will be silent.
+        // Log at error level so it's immediately visible in any log
+        // level — warn-only was the original oversight that made #533
+        // hard to diagnose (#533 hardening).
+        let active_streaming = streaming_sessions.iter().filter(|s| s.is_some()).count();
+        if transcriber_snapshot.is_some() && active_streaming == 0 && !sources.is_empty() {
+            tracing::error!(
+                session_id = session.id,
+                sources = sources.len(),
+                "meeting pump: ALL streaming sessions failed at startup; \
+                 session will produce 0 utterances despite transcriber being loaded"
+            );
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
