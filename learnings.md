@@ -14,6 +14,8 @@ This is **not a Whisper bug** — `no_speech_thold = 0.6` is the correct default
 
 **Fix (shipped in #588):** Switch system-audio sources to `CoreAudioTapSession` (the `AudioHardwareCreateProcessTap` backend). CoreAudio tap delivers raw f32 PCM with zero codec round-tripping. No `no_speech_thold` workaround needed.
 
+> **Note:** The codec-artefact cause is inferred from the absence of transcription on SCK + its presence on the CoreAudio tap path post-#588. We never directly measured Whisper's `no_speech_prob` values on the corrupted samples. If the silence returns on the tap path, instrument `no_speech_prob` per-segment in `WhisperContext::transcribe` before chasing the codec theory further.
+
 ### Diagnostic additions (#533 follow-up)
 
 To make this class of bug reproducible in the future, three diagnostics were added in #533:

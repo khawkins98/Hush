@@ -177,7 +177,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // not counted — they're in-flight revisions, not committed speech.
     // Logged at session end alongside the source kind so a future bug
     // report can immediately tell which source (mic vs system) went dark.
-    let mut final_counts: Vec<u64> = vec![0; ctx.sources.len()];
+    let mut final_counts: Vec<u64> = vec![0; ctx.handles.len()];
 
     // Per-source first-drain RMS (#533 diagnostic). Logged once on the
     // first drain that returns audio for each source. A near-zero RMS
@@ -262,7 +262,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                         tracing::info!(
                             session_id = ctx.session_id,
                             source_kind = ctx.sources[i].kind_label(),
-                            samples = 0u32,
+                            samples = 0usize,
                             rms = 0.0f64,
                             "meeting pump: first-drain RMS (#533 diagnostic; drain failed)"
                         );

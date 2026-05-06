@@ -389,19 +389,30 @@
     });
 
     // Surface per-source transcription failures as a banner (#533).
-    // The backend emits this at session start (if a source fails to
-    // open a streaming session) and mid-session (on panic or drain
-    // failure). Gate on sessionId so a stale event from a prior
-    // session doesn't bleed into the current one.
+    // The backend emits this at session start (source failed to open)
+    // and mid-session (drain failure / panic). No activeId gate here:
+    // startup failures arrive before the invoke resolves and sets
+    // activeId, so gating would silently drop the very case this
+    // banner is designed for. The backend never emits for a stopped
+    // session, so stale-event bleed isn't a real risk.
     unlistenMeetingSourceFailed = await listen<{
       sessionId: number;
       sourceKind: string;
       reason: string;
     }>(Events.MeetingSourceFailed, (e) => {
-      if (e.payload.sessionId !== meeting.activeId) return;
+      console.debug(
+        "[MeetingSourceFailed]",
+        e.payload.sourceKind,
+        e.payload.reason,
+        "sessionId:",
+        e.payload.sessionId,
+      );
       const label =
         e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
-      meeting.sourceFailedNotice = `${label} source stopped transcribing.`;
+      const verb = e.payload.reason.includes("at session start")
+        ? "couldn't start transcribing"
+        : "stopped transcribing";
+      meeting.sourceFailedNotice = `${label} ${verb}.`;
     });
 
     window.addEventListener("keydown", handleGlobalKeydown);
