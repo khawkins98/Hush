@@ -42,9 +42,9 @@ pub mod dictation;
 pub mod dictionary;
 pub mod export;
 pub mod history;
-pub mod macos;
 pub mod meeting;
 pub mod models;
+pub mod permissions;
 pub mod ptt;
 pub mod settings;
 pub mod system;
@@ -286,9 +286,10 @@ pub const UPDATE_CHECK_TTL: std::time::Duration = std::time::Duration::from_secs
 // PttConfig + ptt_get_config + ptt_set_config live in
 // `crate::ipc::commands::ptt` — extracted under #431.
 
-// macOS-only commands (privacy-pane open / diagnose /
-// reset) live in `crate::ipc::commands::macos` —
-// extracted under #82.
+// Permission-related commands (privacy-pane open / diagnose /
+// reset) live in `crate::ipc::commands::permissions` —
+// extracted under #82, renamed from `macos` under #597 in
+// preparation for cross-platform permission impls (#106 / #107).
 
 #[cfg(test)]
 mod tests {

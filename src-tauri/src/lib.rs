@@ -12,8 +12,8 @@ pub mod history;
 pub mod hotkey;
 pub mod hud;
 pub mod ipc;
-pub mod macos_perms;
 pub mod meeting;
+pub mod permissions;
 pub mod repository;
 pub mod settings;
 pub mod transcription;
@@ -735,15 +735,15 @@ pub fn run() {
             ipc::commands::system::get_build_info,
             ipc::commands::ptt::ptt_get_config,
             ipc::commands::ptt::ptt_set_config,
-            ipc::commands::macos::open_macos_privacy_pane,
-            ipc::commands::macos::diagnose_macos_permissions,
-            ipc::commands::macos::reset_macos_permissions,
-            ipc::commands::macos::get_permission_health,
-            ipc::commands::macos::confirm_permission,
-            ipc::commands::macos::prime_screen_recording_permission,
-            ipc::commands::macos::request_microphone_permission,
-            ipc::commands::macos::request_input_monitoring_permission,
-            ipc::commands::macos::relaunch_app,
+            ipc::commands::permissions::open_macos_privacy_pane,
+            ipc::commands::permissions::diagnose_macos_permissions,
+            ipc::commands::permissions::reset_macos_permissions,
+            ipc::commands::permissions::get_permission_health,
+            ipc::commands::permissions::confirm_permission,
+            ipc::commands::permissions::prime_screen_recording_permission,
+            ipc::commands::permissions::request_microphone_permission,
+            ipc::commands::permissions::request_input_monitoring_permission,
+            ipc::commands::permissions::relaunch_app,
             ipc::commands::meeting::meeting_sessions_list,
             ipc::commands::meeting::meeting_sessions_search,
             ipc::commands::meeting::meeting_session_get,

@@ -1,38 +1,48 @@
-//! Programmatic macOS permission status checks for the three TCC
-//! categories Hush touches: Microphone, Screen Recording, and Input
-//! Monitoring. The earlier diagnostic surface (in `ipc::commands`)
-//! only emitted hint copy because of a long-held belief that macOS
-//! doesn't expose read access to TCC. That's true for some
-//! categories (Accessibility, Full Disk Access) — but **not** for
-//! these three:
+//! Programmatic permission status checks.
+//!
+//! Cross-platform types ([`PermissionStatus`], [`PermissionsHealth`], etc.)
+//! plus the platform-dispatching public API ([`read_all`],
+//! [`request_microphone_permission`], [`request_input_monitoring_permission`])
+//! live in this file. The macOS-specific FFI lives in [`macos`]; future
+//! Linux (#106) and Windows (#107) implementations will be peers under
+//! the same pattern.
+//!
+//! ## Why this module exists
+//!
+//! macOS exposes read access to three TCC categories Hush touches:
 //!
 //! - **Microphone**:
 //!   `+[AVCaptureDevice authorizationStatusForMediaType:]` returns a
 //!   real `AVAuthorizationStatus` enum without prompting.
 //! - **Screen Recording**:
 //!   `CGPreflightScreenCaptureAccess()` (CoreGraphics) returns a Bool
-//!   without triggering the prompt.
+//!   without triggering the prompt. Hush no longer requires Screen
+//!   Recording post-#588 (system audio uses CoreAudio process tap),
+//!   but the read path stays for migration UX.
 //! - **Input Monitoring**:
 //!   `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)` (IOKit) returns
 //!   an `IOHIDAccessType` enum without prompting.
 //!
 //! Read these on demand and surface them through
-//! [`crate::ipc::commands::diagnose_macos_permissions`] so the
-//! frontend can render a green "all granted" affordance instead of
+//! [`crate::ipc::commands::permissions::diagnose_macos_permissions`] so
+//! the frontend can render a green "all granted" affordance instead of
 //! the unconditional yellow hint.
 //!
 //! ## Why FFI rather than the objc2-* binding crates
 //!
-//! The three system functions are simple C signatures (the mic one
-//! is technically Objective-C, called via objc2 since it's already
-//! in the dep tree from `screencapturekit`). Adding direct deps on
-//! `objc2-av-foundation`, `objc2-core-graphics`, `objc2-io-kit`
-//! would land a few hundred KLOC of generated bindings for three
-//! function calls — not worth the build-time hit. Raw `extern "C"`
-//! against the framework + a thin objc2 call for the AV one is
-//! ~50 LOC and zero new transitive deps.
+//! The three system functions are simple C signatures (the mic one is
+//! technically Objective-C, called via objc2 since it's already in the
+//! dep tree from `screencapturekit`). Adding direct deps on
+//! `objc2-av-foundation`, `objc2-core-graphics`, `objc2-io-kit` would
+//! land a few hundred KLOC of generated bindings for three function
+//! calls — not worth the build-time hit. Raw `extern "C"` against the
+//! framework + a thin objc2 call for the AV one is ~50 LOC and zero
+//! new transitive deps.
 
 use serde::{Deserialize, Serialize};
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 /// Programmatic status of a single TCC-gated permission. Mirrors the
 /// `AVAuthorizationStatus` shape (the most expressive of the three
@@ -215,131 +225,6 @@ pub fn request_microphone_permission() {
     #[cfg(target_os = "macos")]
     {
         macos::request_microphone();
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod macos {
-    use super::PermissionStatus;
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    // ---- Microphone ---------------------------------------------------
-    //
-    // `AVAuthorizationStatus` from AVFoundation:
-    //   0 = NotDetermined, 1 = Restricted, 2 = Denied, 3 = Authorized.
-    //
-    // `AVMediaTypeAudio` is an exported `NSString *` constant from the
-    // framework. Type it as `*const AnyObject` so the signature matches
-    // Apple's header (`NSString * const`) — reviewer-flagged that
-    // `*const c_void` worked by accident on AArch64/x86_64 but lied
-    // about the wire shape.
-
-    #[link(name = "AVFoundation", kind = "framework")]
-    extern "C" {
-        static AVMediaTypeAudio: *const AnyObject;
-    }
-
-    pub fn microphone_status() -> PermissionStatus {
-        // AVCaptureDevice is an Objective-C class. `objc2`'s
-        // `class!()` macro resolves it at runtime (the framework is
-        // dynamically linked). Calling the class method
-        // `+authorizationStatusForMediaType:` returns an i32.
-        unsafe {
-            let cls = match AnyClass::get(c"AVCaptureDevice") {
-                Some(c) => c,
-                // The class missing means AVFoundation isn't loaded
-                // (shouldn't happen on macOS), so we conservatively
-                // report NotDetermined and let the user discover it
-                // by clicking Start.
-                None => return PermissionStatus::NotDetermined,
-            };
-            let status: i32 = msg_send![cls, authorizationStatusForMediaType: AVMediaTypeAudio];
-            match status {
-                0 => PermissionStatus::NotDetermined,
-                1 => PermissionStatus::Denied, // "Restricted" — treat as Denied for UX.
-                2 => PermissionStatus::Denied,
-                3 => PermissionStatus::Granted,
-                _ => PermissionStatus::NotDetermined,
-            }
-        }
-    }
-
-    // ---- Screen Recording ---------------------------------------------
-    //
-    // Screen Recording TCC is no longer required since #600 switched
-    // system-audio capture to `AudioHardwareCreateProcessTap` (CoreAudio tap).
-    // The tap does not require Screen Recording permission on macOS 26+
-    // (confirmed by the probe in #585; see `learnings.md`).
-    // We always return `NotApplicable` so the frontend's permissions UI
-    // does not prompt the user to grant a permission Hush no longer needs.
-
-    pub fn screen_recording_status() -> PermissionStatus {
-        PermissionStatus::NotApplicable
-    }
-
-    // ---- Input Monitoring ---------------------------------------------
-    //
-    // `IOHIDCheckAccess(IOHIDRequestType)` returns an
-    // `IOHIDAccessType` enum:
-    //   0 = Granted, 1 = Unknown (= NotDetermined), 2 = Denied.
-    // `kIOHIDRequestTypeListenEvent = 1` is the Input Monitoring
-    // category (vs `kIOHIDRequestTypePostEvent = 0` = Accessibility).
-
-    const K_IO_HID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
-
-    #[link(name = "IOKit", kind = "framework")]
-    extern "C" {
-        fn IOHIDCheckAccess(request_type: u32) -> u32;
-        // `IOHIDRequestAccess` fires the synchronous Input
-        // Monitoring TCC prompt and blocks until the user responds.
-        // Returns `true` (1) on grant, `false` (0) on denial /
-        // dismiss. Used by the first-run wizard's Allow button
-        // (#511) so the user grants permissions inline without
-        // having to open System Settings manually.
-        fn IOHIDRequestAccess(request_type: u32) -> u8;
-    }
-
-    pub fn input_monitoring_status() -> PermissionStatus {
-        unsafe {
-            match IOHIDCheckAccess(K_IO_HID_REQUEST_TYPE_LISTEN_EVENT) {
-                0 => PermissionStatus::Granted,
-                1 => PermissionStatus::NotDetermined,
-                2 => PermissionStatus::Denied,
-                _ => PermissionStatus::NotDetermined,
-            }
-        }
-    }
-
-    /// Fire the macOS Input Monitoring TCC prompt synchronously
-    /// (#511). Returns `true` if the user granted on this call,
-    /// `false` if they denied or dismissed. Already-granted
-    /// installs return `true` immediately without a prompt.
-    pub fn request_input_monitoring() -> bool {
-        unsafe { IOHIDRequestAccess(K_IO_HID_REQUEST_TYPE_LISTEN_EVENT) != 0 }
-    }
-
-    /// Fire the macOS Microphone TCC prompt asynchronously (#511).
-    /// `AVCaptureDevice requestAccessForMediaType:completionHandler:`
-    /// returns immediately and shows the system dialog; the user
-    /// responds at their leisure. We pass a NULL completion handler
-    /// because the frontend polls `get_permission_health` to
-    /// observe the resulting state — wiring a block-based callback
-    /// would require an extra dependency (`block2`) for no
-    /// behavioural gain over the polling shape that's already
-    /// established for the Settings → Permissions tab.
-    pub fn request_microphone() {
-        unsafe {
-            let cls = match AnyClass::get(c"AVCaptureDevice") {
-                Some(c) => c,
-                None => return,
-            };
-            let _: () = msg_send![
-                cls,
-                requestAccessForMediaType: AVMediaTypeAudio,
-                completionHandler: std::ptr::null::<std::ffi::c_void>()
-            ];
-        }
     }
 }
 
