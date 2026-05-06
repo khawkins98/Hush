@@ -197,6 +197,32 @@ let channelCount = asbd.mChannelsPerFrame
 // We interleave in the IOProc before writing to stdout.
 let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
 
+// ── 5b. Scratch buffer pool ───────────────────────────────────────────────────
+//
+// Apple guidance: never call malloc/free inside an IOProc (malloc holds an
+// internal lock → priority inversion risk on the audio thread).
+// Solution: pre-allocate 32 raw slots sized to the device's nominal buffer,
+// reuse them across callbacks. Pool count == semaphore bound (32) so slot N is
+// never overwritten while its corresponding write is still in-flight.
+
+var nominalFrames: UInt32 = 4096
+var nominalFramesSize = UInt32(MemoryLayout<UInt32>.size)
+var nominalFramesAddr = AudioObjectPropertyAddress(
+    mSelector: kAudioDevicePropertyBufferFrameSize,
+    mScope: kAudioObjectPropertyScopeInput,
+    mElement: kAudioObjectPropertyElementMain)
+// Ignore error: 4096 frames is a safe over-allocation if the query fails.
+AudioObjectGetPropertyData(aggDeviceID, &nominalFramesAddr, 0, nil, &nominalFramesSize, &nominalFrames)
+
+let poolCount = 32
+let slotStride = Int(nominalFrames) * Int(channelCount) * MemoryLayout<Float>.size
+let scratchPool: [UnsafeMutableRawPointer] = (0..<poolCount).map { _ in
+    UnsafeMutableRawPointer.allocate(byteCount: slotStride, alignment: MemoryLayout<Float>.alignment)
+}
+// Only incremented by the audio thread (IOProc callbacks are serialised), so
+// no atomic is needed.
+var nextSlot = 0
+
 // ── 6. SIGPIPE guard + write queue ───────────────────────────────────────────
 //
 // Ignore SIGPIPE before any stdout writes so a force-killed Rust parent
@@ -252,12 +278,21 @@ let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
         (isNonInterleaved ? 1 : chanCount)
     guard framesPerBuffer > 0 else { return }
 
-    // Interleave: non-interleaved has one AudioBuffer per channel; interleaved
-    // has one buffer with all channels packed. Either way we produce wire-
-    // format: interleaved f32 LE.
-    var bytes = Data(count: framesPerBuffer * chanCount * MemoryLayout<Float>.size)
-    bytes.withUnsafeMutableBytes { raw in
-        let dst = raw.baseAddress!.assumingMemoryBound(to: Float.self)
+    let byteCount = framesPerBuffer * chanCount * MemoryLayout<Float>.size
+    // Safety: if the device delivers more frames than the pool slot was sized
+    // for (e.g. after a reconfiguration), skip rather than overflow.
+    guard byteCount <= slotStride else { return }
+
+    if semaphore.wait(timeout: .now()) == .success {
+        // Pick the next pool slot. The semaphore bound == poolCount guarantees
+        // this slot's previous write has already completed before we reuse it.
+        let slot = nextSlot % poolCount
+        nextSlot &+= 1
+
+        // Interleave: non-interleaved has one AudioBuffer per channel; interleaved
+        // has one buffer with all channels packed. Either way we produce wire-
+        // format: interleaved f32 LE.
+        let dst = scratchPool[slot].assumingMemoryBound(to: Float.self)
         if isNonInterleaved {
             for (ch, buf) in buffers.enumerated() where ch < chanCount {
                 guard let data = buf.mData else { continue }
@@ -267,15 +302,16 @@ let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
                 }
             }
         } else {
-            guard let data = buffers[0].mData else { return }
+            guard let data = buffers[0].mData else { semaphore.signal(); return }
             let src = data.assumingMemoryBound(to: Float.self)
             for i in 0..<(framesPerBuffer * chanCount) { dst[i] = src[i] }
         }
-    }
 
-    if semaphore.wait(timeout: .now()) == .success {
+        // bytesNoCopy: no malloc — the slot stays live until signal() fires.
+        let ptr = scratchPool[slot]
+        let count = byteCount
         writeQueue.async {
-            stdout.write(bytes)
+            stdout.write(Data(bytesNoCopy: ptr, count: count, deallocator: .none))
             semaphore.signal()
         }
     } else {
@@ -319,6 +355,7 @@ func cleanup() {
         AudioDeviceDestroyIOProcID(aggDeviceID, proc)
     }
     writeQueue.sync {}  // flush any pending stdout writes
+    for ptr in scratchPool { ptr.deallocate() }
     AudioHardwareDestroyAggregateDevice(aggDeviceID)
     AudioHardwareDestroyProcessTap(tapID)
     exit(0)
