@@ -226,3 +226,24 @@ pub(crate) async fn check_for_updates_inner(
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+/// Version + build timestamp bundled together for the debug surfaces.
+///
+/// `buildTimestamp` is Unix seconds set by `build.rs` at compile time
+/// via `HUSH_BUILD_TIMESTAMP`. The frontend formats it as
+/// `DD/MM/YYYY HH:MM` in local time.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildInfo {
+    pub version: String,
+    /// Unix seconds at compile time. 0 when the build stamp is unavailable.
+    pub build_timestamp: u64,
+}
+
+#[tauri::command]
+pub fn get_build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        build_timestamp: env!("HUSH_BUILD_TIMESTAMP").parse().unwrap_or(0),
+    }
+}
