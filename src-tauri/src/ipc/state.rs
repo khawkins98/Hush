@@ -251,6 +251,14 @@ pub struct AppState {
     /// [`RuntimeFlags`] for the full per-field rationale. Grouped
     /// into a substruct (#431) so `AppState` stays readable.
     pub runtime_flags: RuntimeFlags,
+    /// Per-phase wall-clock timings captured during
+    /// [`AppState::build_default`] (#584 Angle 1). Populated at
+    /// boot, never mutated thereafter — `Vec` rather than
+    /// `Mutex<Vec>` because the IPC reader (`get_startup_timings`)
+    /// only ever sees a finished list. Surfaced to the Debug tab
+    /// so contributors can spot startup-time regressions without
+    /// reaching for Instruments.
+    pub startup_timings: Vec<crate::ipc::commands::system::StartupPhase>,
 }
 
 /// User-facing runtime flags that mirror Settings rows (#431).
@@ -506,6 +514,18 @@ impl AppState {
         debug_log: crate::debug_log::DebugLogState,
     ) -> Result<Self> {
         let t_start = std::time::Instant::now();
+        // Per-phase timing trace (#584 Angle 1). Populated below at
+        // each existing `tracing::info!` checkpoint so the IPC
+        // surface and the log lines share one source of truth. The
+        // closure captures `t_start` so the `elapsed_ms` field
+        // matches what gets logged at the same point.
+        let mut startup_timings: Vec<crate::ipc::commands::system::StartupPhase> = Vec::new();
+        let mut record_phase = |name: &str| {
+            startup_timings.push(crate::ipc::commands::system::StartupPhase {
+                name: name.to_owned(),
+                elapsed_ms: t_start.elapsed().as_millis() as u64,
+            });
+        };
         tracing::info!("app state: build_default started");
         #[cfg(target_os = "macos")]
         let resource_dir = app
@@ -535,6 +555,7 @@ impl AppState {
         );
         let meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
             Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db));
+        record_phase("database and repositories");
         tracing::info!(
             elapsed_ms = t_start.elapsed().as_millis(),
             "app state: database and repositories ready"
@@ -606,6 +627,7 @@ impl AppState {
             ),
         );
 
+        record_phase("whisper contexts (parallel load)");
         tracing::info!(
             elapsed_ms = t_start.elapsed().as_millis(),
             "app state: whisper contexts loaded"
@@ -650,6 +672,7 @@ impl AppState {
         // post-download swap propagates to the meeting pump on the
         // next tick — no restart needed.
         let diarize_inner_initial = build_diarizer_inner(&models_dir);
+        record_phase("diarizer init");
         tracing::info!(
             elapsed_ms = t_start.elapsed().as_millis(),
             "app state: diarizer ready"
@@ -760,6 +783,13 @@ impl AppState {
                 .as_deref(),
         );
 
+        // Final phase covers everything between the diarizer init and
+        // the AppState compose (settings reads, autostart-mode decode,
+        // PTT setup, hud / sound-cue flag init). Cheap on every host
+        // I've measured but still worth a checkpoint so a future
+        // regression in any of those settings reads is visible.
+        record_phase("settings + flag wiring");
+
         let state = AppStateBuilder::new()
             .audio(audio)
             .transcribe_arc(transcribe_shared)
@@ -785,6 +815,7 @@ impl AppState {
             .inference_threads_arc(inference_threads_arc)
             .mic_gain_db_arc(mic_gain_db_arc)
             .debug_log(debug_log)
+            .startup_timings(startup_timings)
             .build();
         tracing::info!(
             elapsed_ms = t_start.elapsed().as_millis(),

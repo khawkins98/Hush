@@ -108,6 +108,10 @@ pub struct AppStateBuilder {
     /// tracing layer. When unset, `build` constructs a new
     /// (empty) state — fine for tests.
     debug_log: Option<crate::debug_log::DebugLogState>,
+    /// Per-phase startup timings (#584 Angle 1). Populated by
+    /// `AppState::build_default` as it walks the boot path; tests
+    /// leave it unset (the IPC reads back an empty `Vec`).
+    startup_timings: Option<Vec<crate::ipc::commands::system::StartupPhase>>,
 }
 
 impl AppStateBuilder {
@@ -275,6 +279,18 @@ impl AppStateBuilder {
         self
     }
 
+    /// Hand the builder the per-phase startup-timing trace captured
+    /// in `AppState::build_default` (#584 Angle 1). Tests leave this
+    /// unset; the resulting `AppState.startup_timings` is an empty
+    /// `Vec` and the IPC simply returns no rows.
+    pub fn startup_timings(
+        mut self,
+        timings: Vec<crate::ipc::commands::system::StartupPhase>,
+    ) -> Self {
+        self.startup_timings = Some(timings);
+        self
+    }
+
     /// Set the pre-built [`crate::diarization::DiarizeSlot`] (#301).
     /// The `FlagGatedDiarizer` holds an `Arc::clone` of the same
     /// slot, so the IPC `download_diarizer_model` path can
@@ -418,6 +434,7 @@ impl AppStateBuilder {
                     .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU32::new(0f32.to_bits()))),
                 autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
+            startup_timings: self.startup_timings.unwrap_or_default(),
         })
     }
 }

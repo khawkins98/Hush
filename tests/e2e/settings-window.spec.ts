@@ -1191,6 +1191,101 @@ test.describe("settings window — General tab: developer console toggle", () =>
   });
 });
 
+test.describe("settings window — Debug tab: startup phase timings", () => {
+  // #584 Angle 1. Debug tab is gated on the developer-console toggle
+  // (localStorage `hush.debugConsole = "1"`); seed before goto so the
+  // tab renders. The Backend log section is always present; the
+  // Startup section gates on `get_startup_timings` returning a
+  // non-empty list.
+
+  test("startup section is hidden when get_startup_timings returns empty list", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("hush.debugConsole", "1");
+      } catch {
+        // localStorage may throw under sandbox configs; the test still
+        // exercises the empty path because the default mock returns [].
+      }
+    });
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator(`[data-testid="settings-tab-debug"]`).click();
+
+    await expect(
+      page.locator('[data-testid="debug-startup-section"]'),
+    ).toHaveCount(0);
+  });
+
+  test("startup section renders phases + total when get_startup_timings returns rows", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("hush.debugConsole", "1");
+      } catch {
+        // sandbox-tolerant; assertion below would surface the issue.
+      }
+    });
+    // Mock override functions are serialised — outer variables don't
+    // survive (see _mock.ts CLOSURE CAPTURE LIMITATION). Inline the
+    // phase list as a literal.
+    await installMocks(page, {
+      get_startup_timings: () => [
+        { name: "database and repositories", elapsedMs: 42 },
+        { name: "whisper contexts (parallel load)", elapsedMs: 800 },
+        { name: "diarizer init", elapsedMs: 930 },
+        { name: "settings + flag wiring", elapsedMs: 950 },
+      ],
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator(`[data-testid="settings-tab-debug"]`).click();
+
+    await expect(
+      page.locator('[data-testid="debug-startup-section"]'),
+    ).toBeVisible();
+    // Total = elapsedMs of the last row (950 ms here, well below the
+    // 2 s amber threshold).
+    await expect(
+      page.locator('[data-testid="debug-startup-total"]'),
+    ).toHaveText(/950 ms/);
+    // Four phases → four <tr> in tbody.
+    const rows = page.locator(
+      '[data-testid="debug-startup-table"] tbody tr',
+    );
+    await expect(rows).toHaveCount(4);
+  });
+
+  test("amber 'slow' indicator fires when total >= 2000ms", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("hush.debugConsole", "1");
+      } catch {
+        // sandbox-tolerant
+      }
+    });
+    await installMocks(page, {
+      get_startup_timings: () => [
+        { name: "database and repositories", elapsedMs: 100 },
+        { name: "whisper contexts (parallel load)", elapsedMs: 2400 },
+      ],
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator(`[data-testid="settings-tab-debug"]`).click();
+
+    // Pin the amber class, not the colour value (theme-dependent).
+    await expect(
+      page.locator('[data-testid="debug-startup-total"]'),
+    ).toHaveClass(/startup-total-slow/);
+  });
+});
+
 test.describe("settings window — Permissions tab: refresh button", () => {
   // perms-refresh triggers a fresh diagnose_macos_permissions call so the
   // user can re-check after granting/revoking a permission outside the app.

@@ -30,6 +30,15 @@
   };
 
   let buildInfo = $state<BuildInfo>({ version: "…", buildTimestamp: 0 });
+
+  /// One per-phase row from `get_startup_timings` (#584 Angle 1).
+  /// `elapsedMs` is absolute ms since `build_default` started; the
+  /// per-phase duration is the gap between consecutive entries.
+  type StartupPhase = { name: string; elapsedMs: number };
+  let startupTimings = $state<StartupPhase[]>([]);
+  // Threshold above which the total is rendered amber rather than
+  // green. Matches the issue spec (#584 Angle 1: ≥ 2 s = warn).
+  const STARTUP_AMBER_MS = 2000;
   let os = $state<string>("macOS");
   let reportText = $state<string>("");
   let copied = $state(false);
@@ -115,11 +124,77 @@
     } catch {
       os = "macOS";
     }
+    // #584 Angle 1 — pull the startup phase trace. Empty list is
+    // expected on tests + on `--no-default-features` builds where
+    // some phases skip; the section gates on `length > 0`.
+    try {
+      startupTimings = await invoke<StartupPhase[]>("get_startup_timings");
+    } catch {
+      startupTimings = [];
+    }
     await generateReport();
   });
 </script>
 
 <h2 class="tab-title">Debug</h2>
+
+{#if startupTimings.length > 0}
+  {@const totalMs = startupTimings[startupTimings.length - 1].elapsedMs}
+  {@const isSlow = totalMs >= STARTUP_AMBER_MS}
+  <!--
+    Per-phase startup trace (#584 Angle 1). Collapsible so it doesn't
+    crowd the more frequently-used issue-report section, but expanded
+    headline shows the total + an amber "slow" indicator when the
+    boot crossed STARTUP_AMBER_MS — visible at-a-glance regression
+    signal without opening the panel.
+  -->
+  <section
+    class="settings-group"
+    aria-labelledby="debug-startup-heading"
+    data-testid="debug-startup-section"
+  >
+    <details>
+      <summary class="startup-summary">
+        <h2 id="debug-startup-heading" class="group-heading">
+          ⏱ Startup
+          <span
+            class="startup-total"
+            class:startup-total-slow={isSlow}
+            data-testid="debug-startup-total"
+          >
+            {totalMs} ms
+          </span>
+        </h2>
+      </summary>
+      <p class="settings-row-note">
+        Per-phase wall-clock from <code>AppState::build_default</code>.
+        Capture once at boot. {isSlow
+          ? "Total ≥ 2 s — investigate which phase regressed."
+          : ""}
+      </p>
+      <table class="startup-table" data-testid="debug-startup-table">
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>At (ms)</th>
+            <th>Duration (ms)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each startupTimings as phase, i}
+            {@const prevMs = i === 0 ? 0 : startupTimings[i - 1].elapsedMs}
+            {@const durationMs = phase.elapsedMs - prevMs}
+            <tr>
+              <td>{phase.name}</td>
+              <td class="num">{phase.elapsedMs}</td>
+              <td class="num">{durationMs}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </details>
+  </section>
+{/if}
 
 <section class="settings-group" aria-labelledby="debug-log-heading">
   <h2 id="debug-log-heading" class="group-heading">Backend log</h2>
@@ -216,5 +291,45 @@
     overflow-y: auto;
     max-height: 280px;
     margin: 0;
+  }
+
+  /* Startup timing trace (#584 Angle 1). */
+  .startup-summary {
+    cursor: pointer;
+    list-style-position: inside;
+  }
+  .startup-summary > .group-heading {
+    display: inline;
+  }
+  .startup-total {
+    font-weight: normal;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-left: 0.4rem;
+  }
+  .startup-total-slow {
+    color: #c08000;
+    font-weight: 500;
+  }
+  .startup-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    margin-top: 0.5rem;
+  }
+  .startup-table th,
+  .startup-table td {
+    padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+  .startup-table th {
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .startup-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-family: "SF Mono", "Fira Code", monospace;
   }
 </style>
