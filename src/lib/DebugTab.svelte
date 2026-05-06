@@ -28,13 +28,26 @@
     message: string;
   };
 
-  let appVersion = $state<string>("…");
+  type BuildInfo = { version: string; buildTimestamp: number };
+
+  let buildInfo = $state<BuildInfo>({ version: "…", buildTimestamp: 0 });
   let os = $state<string>("macOS");
   let reportText = $state<string>("");
   let copied = $state(false);
 
   function formatTime(ms: number): string {
     return new Date(ms).toISOString();
+  }
+
+  function formatBuildTimestamp(unixSecs: number): string {
+    if (unixSecs === 0) return "unknown";
+    const d = new Date(unixSecs * 1000);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
   }
 
   async function generateReport() {
@@ -53,7 +66,8 @@
       .join("\n");
 
     reportText = [
-      `**Hush version:** ${appVersion}`,
+      `**Hush version:** ${buildInfo.version}`,
+      `**Built:** ${formatBuildTimestamp(buildInfo.buildTimestamp)}`,
       `**OS:** ${os}`,
       ``,
       `**Last 50 log entries:**`,
@@ -89,9 +103,9 @@
 
   onMount(async () => {
     try {
-      appVersion = await invoke<string>("get_app_version");
+      buildInfo = await invoke<BuildInfo>("get_build_info");
     } catch {
-      appVersion = "unknown";
+      buildInfo = { version: "unknown", buildTimestamp: 0 };
     }
     try {
       os = `macOS ${await osVersion()}`;
