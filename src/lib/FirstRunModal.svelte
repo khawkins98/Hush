@@ -368,7 +368,7 @@
           >
             <div class="wizard-perm-icon" aria-hidden="true">🖥</div>
             <div class="wizard-perm-text">
-              <span class="wizard-perm-title">Screen Recording</span>
+              <span class="wizard-perm-title">System Audio</span>
               <span class="wizard-perm-why">
                 Optional — only used to capture system audio for
                 Meeting Mode. Hush never captures pixels. Skip if you

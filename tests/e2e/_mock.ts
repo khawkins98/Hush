@@ -175,6 +175,7 @@ export async function installMocks(
       "plugin:shell|open": () => undefined,
       open_macos_privacy_pane: () => undefined,
       prime_screen_recording_permission: () => undefined,
+      relaunch_app: () => undefined,
       // First-run wizard inline-grant IPCs (#511). Default no-op
       // for mic (real IPC fires the OS dialog asynchronously and
       // returns immediately) and `true` for IM (real IPC blocks
