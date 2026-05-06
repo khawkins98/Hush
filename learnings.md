@@ -1483,3 +1483,13 @@ If per-test counters or dynamic values are genuinely needed, use `page.exposeFun
 **Duplicate-watcher guard:** The watcher is spawned by `prime_screen_recording_permission`. If the user clicks "Grant in Settings" multiple times, only one watcher should run. A process-scoped `static AtomicBool` (not an `AppState` field) is sufficient because `tauri-plugin-single-instance` guarantees a single Hush process — no shared state between processes needed.
 
 **"Screen Recording" label is alarming for users:** macOS's TCC category is `ScreenCapture`, but "Screen Recording" makes users think Hush is watching their screen. The same permission is labeled "System Audio (optional)" in OpenWhispr. Hush now uses "System Audio" in all user-visible copy (the internal `screenRecording` key in `PermissionStatuses` and the `ScreenCapture` TCC category remain unchanged). This is a framing change only — the underlying permission and how it's requested is identical.
+
+---
+
+### 2026-05-06 — Compile-time build timestamp via `build.rs` + `cargo:rustc-env` (#583)
+
+**Pattern:** `build.rs` emits `HUSH_BUILD_TIMESTAMP` (Unix seconds) via `println!("cargo:rustc-env=HUSH_BUILD_TIMESTAMP={secs}")`. The IPC command `get_build_info` reads it at runtime with `env!("HUSH_BUILD_TIMESTAMP")`. No external crate (`vergen` or similar) needed — a handful of lines of stdlib code in `build.rs` is sufficient.
+
+**Incremental-build caveat:** Cargo only re-runs `build.rs` when a watched file changes. Here, `cargo:rerun-if-changed=build.rs` means the stamp only refreshes when `build.rs` itself is edited. Incremental dev builds reuse the previous stamp — good enough for a "when was this binary built" display. Release and CI builds always start clean, so the stamp is accurate there.
+
+**Why not `vergen`?** The `vergen` crate provides richer build metadata (git SHA, dirty flag, etc.) but adds a build dependency. The plain `SystemTime` approach is simpler and covers the use case (debug identification). If git SHA is ever needed, `vergen` would be the right reach.
