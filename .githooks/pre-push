@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Pre-push hook: runs the same lint/fmt/type-check gates as CI.
+#
+# Installs automatically via `npm install` (the prepare script sets
+# core.hooksPath). To skip on an emergency push: git push --no-verify
+#
+# Checks run:
+#   1. cargo fmt --check     (CI pinned version differs slightly; close enough)
+#   2. cargo clippy (no-default-features, -D warnings)
+#   3. npm run check         (svelte-check, zero errors/warnings required)
+#
+# cargo test is intentionally omitted — too slow for an interactive hook.
+# Run it manually before opening a PR: cd src-tauri && cargo test --lib
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "▶ pre-push: rustfmt check"
+(cd src-tauri && cargo fmt --all -- --check)
+
+echo "▶ pre-push: clippy (no-default-features)"
+(cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings)
+
+echo "▶ pre-push: svelte-check"
+npm run check --silent
+
+echo "✓ pre-push checks passed"

@@ -88,6 +88,7 @@
   let unlistenSettingsGoto: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenAppProfileActivated: UnlistenFn | null = null;
+  let unlistenMeetingSourceFailed: UnlistenFn | null = null;
 
   // PTT state machine.
   //
@@ -387,6 +388,33 @@
       void dictation.stop(TRAILING_SILENCE_MS);
     });
 
+    // Surface per-source transcription failures as a banner (#533).
+    // The backend emits this at session start (source failed to open)
+    // and mid-session (drain failure / panic). No activeId gate here:
+    // startup failures arrive before the invoke resolves and sets
+    // activeId, so gating would silently drop the very case this
+    // banner is designed for. The backend never emits for a stopped
+    // session, so stale-event bleed isn't a real risk.
+    unlistenMeetingSourceFailed = await listen<{
+      sessionId: number;
+      sourceKind: string;
+      reason: string;
+    }>(Events.MeetingSourceFailed, (e) => {
+      console.debug(
+        "[MeetingSourceFailed]",
+        e.payload.sourceKind,
+        e.payload.reason,
+        "sessionId:",
+        e.payload.sessionId,
+      );
+      const label =
+        e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
+      const verb = e.payload.reason.includes("at session start")
+        ? "couldn't start transcribing"
+        : "stopped transcribing";
+      meeting.sourceFailedNotice = `${label} ${verb}.`;
+    });
+
     window.addEventListener("keydown", handleGlobalKeydown);
   });
 
@@ -398,6 +426,7 @@
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
+    unlistenMeetingSourceFailed?.();
     if (pttPressTimer !== null) {
       clearTimeout(pttPressTimer);
       pttPressTimer = null;
@@ -509,6 +538,28 @@
       class="stale-perm-banner-dismiss"
       aria-label="Dismiss"
       onclick={() => (staleBannerDismissed = true)}
+    >✕</button>
+  </div>
+  {/if}
+  <!--
+    Meeting source-failed banner (#533). Shown when the backend emits
+    `meeting:source-failed` during an active session — at startup if a
+    source fails to open a streaming session, or mid-session on panic /
+    drain failure. Visible regardless of which sidebar section is active
+    so the user sees it even if they switch away from Dictation while
+    the meeting runs. Dismissed automatically when the session ends (the
+    listener clears `meeting.sourceFailedNotice` in stopSession), or
+    manually with ✕.
+  -->
+  {#if meeting.sourceFailedNotice}
+  <div class="source-failed-banner" role="alert" data-testid="source-failed-banner">
+    <span class="source-failed-banner-icon" aria-hidden="true">⚠️</span>
+    <span class="source-failed-banner-text">{meeting.sourceFailedNotice}</span>
+    <button
+      type="button"
+      class="source-failed-banner-dismiss"
+      aria-label="Dismiss"
+      onclick={() => (meeting.sourceFailedNotice = null)}
     >✕</button>
   </div>
   {/if}
@@ -702,6 +753,49 @@
   flex-wrap: wrap;
 }
 
+/* Meeting source-failed banner (#533). Same amber style as the
+   stale-perm banner; shown when a mic or system-audio source
+   stops transcribing mid-session. */
+.source-failed-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  margin: 0.75rem 0 0;
+  background-color: #fdf6e3;
+  border: 1px solid #e0a020;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.source-failed-banner-icon {
+  flex-shrink: 0;
+}
+
+.source-failed-banner-text {
+  flex: 1;
+  min-width: 0;
+  color: #5a3e00;
+  line-height: 1.4;
+}
+
+.source-failed-banner-dismiss {
+  padding: 0.2em 0.5em;
+  font-size: 0.78rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #7a5500;
+  border-radius: 4px;
+  font-family: inherit;
+  transition: background-color 0.1s;
+}
+
+.source-failed-banner-dismiss:hover {
+  background-color: rgba(0, 0, 0, 0.07);
+}
+
 .stale-perm-banner-text {
   flex: 1;
   min-width: 0;
@@ -779,6 +873,29 @@
   background-color: #3a3000;
 }
 :root[data-theme="dark"] .stale-perm-banner-dismiss {
+  color: #c08000;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .source-failed-banner {
+    background-color: #2a2200;
+    border-color: #7a5500;
+  }
+  :root:not([data-theme="light"]) .source-failed-banner-text {
+    color: #f0c878;
+  }
+  :root:not([data-theme="light"]) .source-failed-banner-dismiss {
+    color: #c08000;
+  }
+}
+:root[data-theme="dark"] .source-failed-banner {
+  background-color: #2a2200;
+  border-color: #7a5500;
+}
+:root[data-theme="dark"] .source-failed-banner-text {
+  color: #f0c878;
+}
+:root[data-theme="dark"] .source-failed-banner-dismiss {
   color: #c08000;
 }
 

@@ -26,6 +26,11 @@ cd Hush
 npm install
 ```
 
+`npm install` runs the `prepare` script, which sets `core.hooksPath = .githooks`.
+This activates a pre-push hook that runs `cargo fmt --check`, `cargo clippy`, and
+`npm run check` before every push — the same gates as CI. To skip on an emergency
+push use `git push --no-verify`.
+
 The first `npm run tauri dev` will:
 
 1. Download the ONNX Runtime vendored binaries (~50 MB) via the `ort` `download-binaries` feature — needs network access once.
