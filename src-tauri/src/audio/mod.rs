@@ -488,9 +488,10 @@ pub struct CpalAudioCapture {
     /// and we need `&self` access from multiple threads through the trait.
     cmd_tx: Mutex<mpsc::Sender<Cmd>>,
     /// Reference count of active capture sessions. The legacy
-    /// singleton path (cpal mic via worker, SCK via `sck_session`
-    /// slot) plus the handle-based [`AudioCapture::start_session`]
-    /// paths all increment this on start and decrement on stop.
+    /// singleton path (cpal mic via worker, macOS system audio via
+    /// `cat_session` slot) plus the handle-based
+    /// [`AudioCapture::start_session`] paths all increment this on
+    /// start and decrement on stop.
     ///
     /// Modelled as a count rather than a bool so parallel mic +
     /// system-audio capture (the meeting pump's canonical config)
