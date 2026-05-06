@@ -1493,3 +1493,44 @@ If per-test counters or dynamic values are genuinely needed, use `page.exposeFun
 **Incremental-build caveat:** Cargo only re-runs `build.rs` when a watched file changes. Here, `cargo:rerun-if-changed=build.rs` means the stamp only refreshes when `build.rs` itself is edited. Incremental dev builds reuse the previous stamp — good enough for a "when was this binary built" display. Release and CI builds always start clean, so the stamp is accurate there.
 
 **Why not `vergen`?** The `vergen` crate provides richer build metadata (git SHA, dirty flag, etc.) but adds a build dependency. The plain `SystemTime` approach is simpler and covers the use case (debug identification). If git SHA is ever needed, `vergen` would be the right reach.
+
+---
+
+### 2026-05-06 — OpenWhispr uses `AudioHardwareCreateProcessTap` (CoreAudio), not ScreenCaptureKit, for system audio
+
+**Background:** A user questioned whether OpenWhispr avoids the Screen Recording TCC permission by using Accessibility instead. Research into the [OpenWhispr MIT source code](https://github.com/OpenWhispr/openwhispr) (an Electron/React app) produced a definitive answer.
+
+**What OpenWhispr does (macOS):**
+
+OpenWhispr ships a compiled Swift binary (`resources/macos-audio-tap.swift`) that uses `AudioHardwareCreateProcessTap` — a CoreAudio API introduced in **macOS 14.2**. The binary:
+1. Creates a `CATapDescription` with `processes = []` (capture all system audio), `isExclusive = true`, `isMixdown = true`, `isPrivate = true`.
+2. Creates a CoreAudio aggregate device backed by the tap.
+3. Streams raw PCM (16-bit, 24 kHz mono) chunks to stdout.
+
+The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary as a child process, reads PCM chunks via stdout, and forwards them to the renderer for transcription.
+
+**Permission model:** `AudioHardwareCreateProcessTap` triggers its **own native macOS consent dialog** — distinct from Screen Recording TCC. It does NOT use `ScreenCaptureKit` and does not appear under System Settings → Privacy & Security → Screen Recording. OpenWhispr caches the granted/denied status to a file (`~/.../userData/.system-audio-permission`) because there is no API to query whether the tap permission was previously granted without actually trying to create a tap.
+
+**Accessibility permission (user's question):** OpenWhispr appears in System Settings → Accessibility because of its **text injection** feature (auto-paste transcribed text into the focused app using `AXIsProcessTrustedWithOptions`). This is completely separate from audio capture.
+
+**Relevance to Hush:**
+
+| | Hush (current) | OpenWhispr |
+|---|---|---|
+| Audio API | ScreenCaptureKit | `AudioHardwareCreateProcessTap` (CoreAudio) |
+| TCC category | Screen Recording | Own dialog (not SCR) |
+| macOS min | any (no lower bound in code) | 14.2+ |
+| Architecture | Rust native | Swift helper binary via Electron |
+
+**Potential improvement for Hush:** Switching meeting audio capture from ScreenCaptureKit to `AudioHardwareCreateProcessTap` would:
+- Eliminate the Screen Recording TCC permission requirement entirely — a more targeted "capture system audio" consent rather than the alarming "screen recording" framing
+- Avoid the TCC caching / process-relaunch problem (the process tap permission does not suffer the same `mediaserverd` cache issue)
+- Require macOS 14.2+ (Hush already targets macOS 26, so this is not a regression)
+
+**Why not done yet:** The entire Hush audio stack is built on ScreenCaptureKit — the `AudioCapture` trait, `ScreenCaptureKit` crate, virtual device support, ring buffer, and pump are all SCK-centric. Switching would be a substantial Rust rewrite (likely a new `CoreAudioTap` impl behind the `AudioCapture` trait seam). Filed as a future improvement in GitHub issues.
+
+**Key files in OpenWhispr for reference:**
+- `resources/macos-audio-tap.swift` — Swift binary; `AudioHardwareCreateProcessTap` usage
+- `src/helpers/audioTapManager.js` — Electron main; spawns binary, caches permission status, streams chunks
+- `src/utils/systemAudioAccess.ts` — defines `RendererSystemAudioStrategy` (`loopback` for Windows, `browser-portal` for Linux, `native` for macOS 14.2+ via CoreAudio tap)
+- `src/types/electron.ts` — `SystemAudioStrategy` type (`"native" | "loopback" | "browser-portal" | "portal-helper" | "unsupported"`)
