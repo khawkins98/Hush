@@ -146,7 +146,7 @@ fn start_dictation_inner(state: &AppState, source: AudioSource) -> IpcResult<()>
     // no "microphone" substring, so the post-call classifier in
     // the `.map_err` below rarely catches mic denials. Instead,
     // ask AVAuthorizationStatus directly before touching cpal:
-    // if it's Denied (which `macos_perms` also normalises
+    // if it's Denied (which `permissions` also normalises
     // Restricted into for UX purposes), surface the typed
     // variant upfront. NotDetermined falls through so the OS
     // prompt fires on the actual cpal call (the user hasn't
@@ -160,8 +160,8 @@ fn start_dictation_inner(state: &AppState, source: AudioSource) -> IpcResult<()>
     // the post-call classifier handles it.
     #[cfg(target_os = "macos")]
     if matches!(source, AudioSource::Microphone(_)) {
-        let mic_status = crate::macos_perms::read_all().microphone;
-        if matches!(mic_status, crate::macos_perms::PermissionStatus::Denied) {
+        let mic_status = crate::permissions::read_all().microphone;
+        if matches!(mic_status, crate::permissions::PermissionStatus::Denied) {
             return Err(IpcError::PermissionDenied("microphone".to_owned()));
         }
     }

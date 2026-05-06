@@ -1,6 +1,10 @@
-//! macOS-only IPC commands (#82 extraction).
+//! Permission-related IPC commands (#82 extraction; renamed from
+//! `macos.rs` under #597).
 //!
-//! Commands gated on `cfg(target_os = "macos")` for the
+//! Today every command here is macOS-specific in implementation —
+//! the file was renamed in advance of Linux (#106) and Windows
+//! (#107) impls so cross-platform permission code has a home.
+//! Commands are gated on `cfg(target_os = "macos")` for the
 //! interesting branch, with non-macOS fallthroughs that return
 //! "not applicable" so the frontend doesn't have to platform-
 //! branch every call site:
@@ -12,7 +16,7 @@
 //!   `open` shell.
 //! - [`diagnose_macos_permissions`] returns bundle id + recovery
 //!   hints + live grant state from
-//!   [`crate::macos_perms::read_all`]. Side-effect-free; doesn't
+//!   [`crate::permissions::read_all`]. Side-effect-free; doesn't
 //!   trigger OS prompts.
 //! - [`reset_macos_permissions`] runs `tccutil reset` for the
 //!   three TCC categories Hush actually touches (Microphone,
@@ -27,7 +31,7 @@
 //!   IPC so the frontend relaunch banner can trigger it with a
 //!   single `invoke`.
 //!
-//! Extracted from `commands/mod.rs` under #82 to give the macOS
+//! Extracted from `commands/mod.rs` under #82 to give the
 //! permissions surface its own module — already cfg-gated by
 //! platform, with its own result types
 //! (`MacosPermissionDiagnostic`, `MacosPermissionResetResult`)
@@ -162,7 +166,7 @@ pub async fn relaunch_app(app: tauri::AppHandle) -> IpcResult<()> {
 /// post-prompt state through the health probe.
 #[tauri::command]
 pub async fn request_microphone_permission() -> IpcResult<()> {
-    crate::macos_perms::request_microphone_permission();
+    crate::permissions::request_microphone_permission();
     Ok(())
 }
 
@@ -188,7 +192,7 @@ pub async fn request_input_monitoring_permission() -> IpcResult<bool> {
     // so we don't tie up an async slot for the prompt's
     // duration. `spawn_blocking` is the standard escape hatch.
     let granted =
-        tokio::task::spawn_blocking(crate::macos_perms::request_input_monitoring_permission)
+        tokio::task::spawn_blocking(crate::permissions::request_input_monitoring_permission)
             .await
             .map_err(|e| IpcError::Internal(format!("request IM permission task: {e}")))?;
     Ok(granted)
@@ -208,7 +212,7 @@ const MACOS_BUNDLE_ID: &str = "io.github.khawkins98.hush";
 /// Snapshot of the bundle id, human-readable recovery hints, and (as
 /// of #166) the live grant state of each TCC permission Hush touches.
 /// The grant state comes from
-/// [`crate::macos_perms::read_all`], which uses
+/// [`crate::permissions::read_all`], which uses
 /// `AVCaptureDevice.authorizationStatusForMediaType:` (mic),
 /// `CGPreflightScreenCaptureAccess()` (screen recording), and
 /// `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)` (input
@@ -241,7 +245,7 @@ pub struct MacosPermissionDiagnostic {
     /// Live grant state for each TCC permission. Drives the green /
     /// yellow indicator pills in the Settings → Permissions tab and
     /// the Dictation-tab status hint.
-    pub statuses: crate::macos_perms::PermissionStatuses,
+    pub statuses: crate::permissions::PermissionStatuses,
 }
 
 /// Best-effort diagnostic snapshot for the macOS permission story.
@@ -259,7 +263,7 @@ pub struct MacosPermissionDiagnostic {
 /// in-app surface wraps.
 #[tauri::command]
 pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic> {
-    let statuses = crate::macos_perms::read_all();
+    let statuses = crate::permissions::read_all();
 
     #[cfg(target_os = "macos")]
     {
@@ -304,7 +308,7 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
 }
 
 /// Three-state permission health snapshot (#378). Wraps
-/// [`crate::macos_perms::PermissionsHealth`] and returns it from
+/// [`crate::permissions::PermissionsHealth`] and returns it from
 /// the new [`get_permission_health`] IPC; the frontend uses the
 /// per-permission verdicts to render Settings → Permissions
 /// traffic-light rows + the small main-window status dot.
@@ -316,7 +320,7 @@ pub async fn diagnose_macos_permissions() -> IpcResult<MacosPermissionDiagnostic
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionHealthResponse {
-    pub health: crate::macos_perms::PermissionsHealth,
+    pub health: crate::permissions::PermissionsHealth,
 }
 
 /// Read the three-state permission health (#378). Combines the
@@ -334,7 +338,7 @@ pub struct PermissionHealthResponse {
 pub async fn get_permission_health(
     state: State<'_, AppState>,
 ) -> IpcResult<PermissionHealthResponse> {
-    let statuses = crate::macos_perms::read_all();
+    let statuses = crate::permissions::read_all();
     let screen_recording_last_confirmed = state
         .settings
         .get(crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED)
@@ -353,7 +357,7 @@ pub async fn get_permission_health(
     let mut effective_mic_lc = microphone_last_confirmed.clone();
     if matches!(
         statuses.microphone,
-        crate::macos_perms::PermissionStatus::Granted
+        crate::permissions::PermissionStatus::Granted
     ) && microphone_last_confirmed.is_none()
     {
         match stamp_last_confirmed(
@@ -371,7 +375,7 @@ pub async fn get_permission_health(
         }
     }
 
-    let health = crate::macos_perms::evaluate_permissions_health(
+    let health = crate::permissions::evaluate_permissions_health(
         statuses,
         effective_screen_lc.as_deref(),
         effective_mic_lc.as_deref(),
