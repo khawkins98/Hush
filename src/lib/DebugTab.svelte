@@ -110,7 +110,7 @@
     try {
       audioTapResult = await invoke<string>("probe_audio_tap_permission");
     } catch (e) {
-      audioTapResult = `Error: ${e}`;
+      audioTapResult = `Error: ${typeof e === "object" ? JSON.stringify(e) : e}`;
     } finally {
       audioTapRunning = false;
     }
