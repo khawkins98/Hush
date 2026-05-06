@@ -49,12 +49,17 @@
     type ErrorDisplay as ErrorDisplayShape,
   } from "./errors";
   import type { UpdateCheckResult } from "./types";
+  import { formatBuildTimestamp, type BuildInfo } from "./utils/format";
   import "./settings-tab.css";
 
   // Tauri runtime version + the app's productName / version, all
   // fetched at runtime so they track the actual build rather than
   // a hardcoded string that would silently rot.
   let appVersion = $state<string>("");
+  // Build timestamp pulled from the backend's `get_build_info` IPC
+  // (#589). The build.rs script stamps Unix-epoch-seconds at compile
+  // time; rendered as DD/MM/YYYY HH:MM local time below the version.
+  let buildTimestamp = $state<number>(0);
   let appName = $state<string>("Hush");
   let tauriVersion = $state<string>("");
 
@@ -108,6 +113,17 @@
     } catch {
       // Non-fatal — the static fallback ("Hush" + empty version)
       // is still readable.
+    }
+    // Build timestamp lives in a separate IPC because it's backend-only
+    // metadata (the JS-side `getVersion` reads from `tauri.conf.json`,
+    // which has no compile-time timestamp). Failure here leaves
+    // `buildTimestamp = 0`, which `formatBuildTimestamp` renders as
+    // "unknown" — useful prefix for a future bug report regardless.
+    try {
+      const info = await invoke<BuildInfo>("get_build_info");
+      buildTimestamp = info.buildTimestamp;
+    } catch {
+      // best-effort
     }
   }
 
@@ -261,6 +277,11 @@
     <h3 class="about-name">{appName}</h3>
     {#if appVersion}
       <p class="about-version">Version {appVersion}</p>
+    {/if}
+    {#if buildTimestamp > 0}
+      <p class="about-build-timestamp" data-testid="about-build-timestamp">
+        Built {formatBuildTimestamp(buildTimestamp)}
+      </p>
     {/if}
   </header>
 

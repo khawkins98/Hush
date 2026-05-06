@@ -739,6 +739,48 @@ test.describe("settings window — About section", () => {
     ).toBeVisible();
   });
 
+  test("build timestamp hidden when get_build_info reports 0 (default mock)", async ({
+    page,
+  }) => {
+    // The default mock returns `{ buildTimestamp: 0 }`. The About
+    // pane gates the timestamp line on `buildTimestamp > 0` so the
+    // "Built …" row should not render — pinning so a future change
+    // doesn't accidentally show "Built unknown" to users (#589).
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
+    await expect(page.locator(".about-version")).toBeVisible();
+    await expect(
+      page.locator('[data-testid="about-build-timestamp"]'),
+    ).toHaveCount(0);
+  });
+
+  test("build timestamp renders DD/MM/YYYY HH:MM when get_build_info returns a value (#589)", async ({
+    page,
+  }) => {
+    // Mock override functions are serialised via `.toString()` and
+    // re-built with `new Function(...)` in the page context — see
+    // tests/e2e/_mock.ts for the closure-capture caveat. Outer
+    // variables don't survive, so the timestamp must be a literal.
+    // 1778149800 = 2026-05-06 18:30:00 UTC. Rendered in the
+    // runner's local time, so we assert on the date/time pattern
+    // rather than the literal string.
+    await installMocks(page, {
+      get_build_info: () => ({
+        version: "0.0.0-test",
+        buildTimestamp: 1778149800,
+      }),
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-about"]`).click();
+    await expect(
+      page.locator('[data-testid="about-build-timestamp"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="about-build-timestamp"]'),
+    ).toHaveText(/Built\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}/);
+  });
+
   test("Check for updates — up-to-date branch", async ({ page }) => {
     await installMocks(page, {
       check_for_updates: () => ({ kind: "upToDate", current: "0.1.0" }),
