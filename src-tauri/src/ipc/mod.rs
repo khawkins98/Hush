@@ -313,10 +313,6 @@ pub struct AppState {
     /// onto a code path that requires a real Tauri runtime
     /// (untestable, per #315).
     pub downloads: Arc<Mutex<HashMap<String, CancelHandle>>>,
-    /// Serialises concurrent `get_permission_health` calls that stamp
-    /// the microphone `last_confirmed` row. Kept as a tokio Mutex so
-    /// the guard can be held across `.await` boundaries.
-    pub sck_probe_lock: tokio::sync::Mutex<()>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
     /// User's chosen PTT key combo, hot-swappable via
     /// `ptt_set_combo`. The listener thread reads through this
@@ -808,7 +804,6 @@ impl AppStateBuilder {
                 .build()
                 .expect("reqwest client should always build with default config"),
             downloads: Arc::new(Mutex::new(HashMap::new())),
-            sck_probe_lock: tokio::sync::Mutex::new(()),
             pending_foreground: Mutex::new(None),
             last_update_check: Mutex::new(None),
             ptt_combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(
