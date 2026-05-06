@@ -170,11 +170,9 @@ impl CoreAudioTapSession {
                             let samples = total / 4;
                             for i in 0..samples {
                                 let s = i * 4;
-                                let sample = f32::from_le_bytes(
-                                    chunk_buf[s..s + 4].try_into().unwrap(),
-                                );
-                                level_writer
-                                    .store(sample.abs().to_bits(), Ordering::Relaxed);
+                                let sample =
+                                    f32::from_le_bytes(chunk_buf[s..s + 4].try_into().unwrap());
+                                level_writer.store(sample.abs().to_bits(), Ordering::Relaxed);
                                 if producer.push(sample).is_err() {
                                     overflow_writer.store(true, Ordering::Relaxed);
                                 }
