@@ -4,6 +4,42 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-06 — Meeting mode silent-audio root cause: SCK codec artefacts defeated Whisper's noise gate (#533)
+
+### Root cause (confirmed by community reviewer)
+
+Meeting mode sources that used ScreenCaptureKit for system audio appeared to transcribe silence even when audio was clearly playing. The root cause: ScreenCaptureKit's audio pipeline applies **Opus/AAC codec processing** internally before delivering PCM to the app. The codec artefacts (pre-echo, spectral smearing) inflated Whisper's `no_speech_thold` comparison, pushing nearly every audio segment into the "no speech" bucket. Effective threshold: segments that would pass at the raw-PCM level were silently discarded.
+
+This is **not a Whisper bug** — `no_speech_thold = 0.6` is the correct default for clean PCM. The issue is that SCK does not deliver clean PCM for system audio: it delivers post-codec samples that look like noise to a model calibrated for raw capture.
+
+**Fix (shipped in #588):** Switch system-audio sources to `CoreAudioTapSession` (the `AudioHardwareCreateProcessTap` backend). CoreAudio tap delivers raw f32 PCM with zero codec round-tripping. No `no_speech_thold` workaround needed.
+
+### Diagnostic additions (#533 follow-up)
+
+To make this class of bug reproducible in the future, three diagnostics were added in #533:
+
+1. **Per-source final utterance counter** (`pump.rs`): at pump shutdown, logs `source_kind=<kind> finals=<N>` for each source. `finals=0` from a system-audio source that was visibly playing audio is the unambiguous reproduction signal.
+
+2. **First-drain RMS log** (`pump.rs`): on the first drain tick for each source (empty or non-empty), logs `rms=<f>` of the drained samples. Near-zero RMS from a system-audio source confirms no PCM is reaching the pump — distinguishes a capture failure from a transcription failure.
+
+3. **`MEETING_SOURCE_FAILED_EVENT` on streaming-session init failure** (`lifecycle.rs`): if `drain_into` (pre-warm) or `start_stream` fails, the frontend now receives an event and displays an amber banner — the failure was previously silent.
+
+### Reproduction protocol
+
+```
+RUST_LOG=hush::meeting=debug npm run tauri dev
+```
+1. Open a YouTube video (audio visible in system volume indicator).
+2. Start a meeting in Hush with system audio enabled.
+3. At meeting stop, grep log for `source_kind=system finals=0` — if present, confirms the bug.
+4. Also check `first_drain rms=0.0` lines — confirms no samples reached the pump.
+
+### Lesson
+
+Codec pipelines (SCK, any OS media stack) can produce PCM that passes amplitude checks but fails deep spectral analysis. For transcription, **raw PCM = correctness guarantee**. Any audio API that recompresses before delivery is untrustworthy for speech-to-text. The per-source final counter is the right end-to-end sanity metric; add it to any new audio source type.
+
+---
+
 ## 2026-05-06 — System audio on macOS: `AudioHardwareCreateProcessTap` is the right approach on macOS 14.2+ (#585)
 
 This entry is the authoritative summary. Several earlier entries explored ScreenCaptureKit (SCK) and the tap API separately; those entries are marked **[SUPERSEDED]** below and preserved for historical context.

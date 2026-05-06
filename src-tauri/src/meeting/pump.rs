@@ -173,6 +173,21 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // stale/misaligned audio when finals arrive, degrading speaker labelling.
     let mut last_known_formats: Vec<Option<CaptureFormat>> = vec![None; ctx.handles.len()];
 
+    // Per-source final-utterance counter (#533 diagnostic). Partials are
+    // not counted — they're in-flight revisions, not committed speech.
+    // Logged at session end alongside the source kind so a future bug
+    // report can immediately tell which source (mic vs system) went dark.
+    let mut final_counts: Vec<u64> = vec![0; ctx.sources.len()];
+
+    // Per-source first-drain RMS (#533 diagnostic). Logged once on the
+    // first drain that returns audio for each source. A near-zero RMS
+    // (<0.001) on the first tick means "capture returned silence", which
+    // distinguishes "audio device opened but isn't producing samples" from
+    // "samples flowing but Whisper's no_speech_thold gated everything".
+    // Logged even for an empty drain (samples = 0) so a device that
+    // never produces audio is also visible.
+    let mut first_drain_logged: Vec<bool> = vec![false; ctx.handles.len()];
+
     // Per-tick scratch for the merge-sort-label-split pattern (#206).
     // Accumulates `(source_label, utterances)` pairs from each
     // source's inference, then `diarize_and_dispatch_merged` runs the
@@ -219,8 +234,41 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                     );
                     tick_formats[i] = Some(format);
                     last_known_formats[i] = Some(format);
+                    // Log first-drain RMS once per source (#533 diagnostic).
+                    // Near-zero RMS = device opened but producing silence;
+                    // non-zero = audio flowing, so any 0-utterance result
+                    // means Whisper's no_speech_thold is gating the output.
+                    if !first_drain_logged[i] {
+                        let rms = if buf.is_empty() {
+                            0.0
+                        } else {
+                            let sum_sq: f64 =
+                                buf.iter().map(|s| (*s as f64) * (*s as f64)).sum();
+                            (sum_sq / buf.len() as f64).sqrt()
+                        };
+                        tracing::info!(
+                            session_id = ctx.session_id,
+                            source_kind = ctx.sources[i].kind_label(),
+                            samples = buf.len(),
+                            rms,
+                            "meeting pump: first-drain RMS (#533 diagnostic; <0.001 suggests capture silence)"
+                        );
+                        first_drain_logged[i] = true;
+                    }
                 }
                 Err(e) => {
+                    // Log the first-drain diagnostic even on failure so
+                    // a device that never returns audio produces a line.
+                    if !first_drain_logged[i] {
+                        tracing::info!(
+                            session_id = ctx.session_id,
+                            source_kind = ctx.sources[i].kind_label(),
+                            samples = 0u32,
+                            rms = 0.0f64,
+                            "meeting pump: first-drain RMS (#533 diagnostic; drain failed)"
+                        );
+                        first_drain_logged[i] = true;
+                    }
                     tracing::warn!(
                         error = ?e,
                         source_kind = ctx.sources[i].kind_label(),
@@ -421,6 +469,9 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             // call below runs the diarizer once over the merged +
             // chronologically-sorted batch, then splits the labelled
             // result back per source for dispatch (#206).
+            // Count finals before moving utterances into the bucket
+            // (#533 diagnostic — logged at session end).
+            final_counts[i] += utterances.iter().filter(|u| u.is_final).count() as u64;
             tick_buckets.push(TickBucket {
                 source_label,
                 utterances,
@@ -479,6 +530,8 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             .iter()
             .map(|u| audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
             .collect();
+        // All tail utterances from finish() are finals (#533 diagnostic).
+        final_counts[i] += finals.len() as u64;
         tail_buckets.push(TickBucket {
             source_label,
             utterances: finals,
@@ -503,6 +556,18 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // partials store doesn't grow unbounded across many sessions.
     if let Ok(mut guard) = ctx.partials.write() {
         guard.remove(&ctx.session_id);
+    }
+    // Per-source final-utterance summary (#533 diagnostic). Logged at
+    // info level so it appears in standard debug runs without
+    // RUST_LOG=hush::meeting=debug. "source_kind=mic finals=0" is
+    // the first thing to check when a user reports a silent session.
+    for (source, count) in ctx.sources.iter().zip(final_counts.iter()) {
+        tracing::info!(
+            session_id = ctx.session_id,
+            source_kind = source.kind_label(),
+            finals = count,
+            "meeting pump: per-source utterance summary (#533 diagnostic)"
+        );
     }
     tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
 }
