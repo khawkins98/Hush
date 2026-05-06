@@ -299,8 +299,6 @@ fn stop_inner(inner: TapInner) -> Result<Vec<f32>> {
 // ── Path helper ───────────────────────────────────────────────────────────────
 
 /// Resolve the CoreAudio tap binary path from the Tauri resource directory.
-/// Exported so `ipc/commands/macos.rs::probe_audio_tap_permission` and
-/// `audio/mod.rs::start_session` share the same lookup logic.
 pub fn capture_binary_path(resource_dir: &Path) -> PathBuf {
     resource_dir
         .join("resources")

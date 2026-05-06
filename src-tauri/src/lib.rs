@@ -744,7 +744,6 @@ pub fn run() {
             ipc::commands::macos::request_microphone_permission,
             ipc::commands::macos::request_input_monitoring_permission,
             ipc::commands::macos::relaunch_app,
-            ipc::commands::macos::probe_audio_tap_permission,
             ipc::commands::meeting::meeting_sessions_list,
             ipc::commands::meeting::meeting_sessions_search,
             ipc::commands::meeting::meeting_session_get,
