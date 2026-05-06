@@ -23,7 +23,7 @@
       },
       {
         "label": "hud",
-        "title": "Hush — Recording",
+        "title": "Hush \u2014 Recording",
         "url": "/hud",
         "width": 290,
         "height": 60,
@@ -54,7 +54,7 @@
       },
       {
         "label": "debug",
-        "title": "Hush — Debug Console",
+        "title": "Hush \u2014 Debug Console",
         "url": "/debug",
         "width": 760,
         "height": 520,
@@ -83,6 +83,9 @@
     ],
     "macOS": {
       "infoPlist": "Info.plist"
-    }
+    },
+    "resources": [
+      "resources/hush-audio-tap-capture"
+    ]
   }
 }

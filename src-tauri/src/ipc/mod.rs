@@ -45,6 +45,8 @@ use crate::transcription::download::CancelHandle;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 
 use crate::audio::{AudioCapture, CpalAudioCapture};
 use crate::db::SqliteDatabase;
@@ -311,21 +313,9 @@ pub struct AppState {
     /// onto a code path that requires a real Tauri runtime
     /// (untestable, per #315).
     pub downloads: Arc<Mutex<HashMap<String, CancelHandle>>>,
-    /// Serialises the SCK auto-confirm probe inside
-    /// `get_permission_health` (#386). Without this, two near-
-    /// simultaneous calls (Settings tab open + window-focus +
-    /// startup probe firing concurrently) each `spawn_blocking`
-    /// the `validate_screen_recording_capability` Cocoa round-
-    /// trip and each stamp the settings row. The stamp is
-    /// idempotent (last writer wins, both write near-identical
-    /// timestamps), so it's wasted work rather than corruption —
-    /// but the Cocoa round-trip is single-digit ms each and the
-    /// frontend may issue several focus-driven refreshes in
-    /// quick succession.
-    ///
-    /// `tokio::sync::Mutex` (not `std::sync::Mutex`) so the
-    /// guard can be held across `.await` boundaries — the probe
-    /// is `spawn_blocking().await` and the stamp is `set().await`.
+    /// Serialises concurrent `get_permission_health` calls that stamp
+    /// the microphone `last_confirmed` row. Kept as a tokio Mutex so
+    /// the guard can be held across `.await` boundaries.
     pub sck_probe_lock: tokio::sync::Mutex<()>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
     /// User's chosen PTT key combo, hot-swappable via
@@ -1034,7 +1024,15 @@ impl AppState {
     ) -> Result<Self> {
         let t_start = std::time::Instant::now();
         tracing::info!("app state: build_default started");
-        let audio: Arc<dyn AudioCapture> = Arc::new(CpalAudioCapture::new());
+        #[cfg(target_os = "macos")]
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .context("resolve Tauri resource directory")?;
+        let audio: Arc<dyn AudioCapture> = Arc::new(CpalAudioCapture::new(
+            #[cfg(target_os = "macos")]
+            resource_dir,
+        ));
 
         let db = SqliteDatabase::open(db_path)
             .await

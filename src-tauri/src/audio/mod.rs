@@ -37,16 +37,12 @@
 mod format;
 
 #[cfg(target_os = "macos")]
-mod screencapturekit;
+pub mod core_audio_tap;
 
 #[cfg(feature = "test-utils")]
 pub mod file_source;
 
 pub use format::{apply_mic_gain, downmix_to_mono};
-#[cfg(target_os = "macos")]
-pub use screencapturekit::{
-    prime_screen_recording_permission, validate_screen_recording_capability,
-};
 
 /// Defensive ceiling on the number of `f32` samples a single capture
 /// buffer may hold. Beyond this, the callback drops the oldest
@@ -534,13 +530,18 @@ pub struct CpalAudioCapture {
     level: Arc<AtomicU32>,
     /// Joined on drop. Wrapped in [`Option`] so [`Drop`] can take ownership.
     worker: Option<JoinHandle<()>>,
-    /// Active ScreenCaptureKit session for system-audio capture (#105).
-    /// Lives outside the cpal worker because SCK delivers samples on
-    /// its own libdispatch queue — there is no Stream object to babysit
+    /// Active CoreAudio tap session for system-audio capture (#600).
+    /// Lives outside the cpal worker because the tap delivers samples on
+    /// its own reader thread — there is no Stream object to babysit
     /// from a !Send-bound thread. Mutex<Option<...>> mirrors the
     /// "either nothing, or one in-flight" shape of the cpal session.
     #[cfg(target_os = "macos")]
-    sck_session: Mutex<Option<screencapturekit::ScreenCaptureKitSession>>,
+    cat_session: Mutex<Option<core_audio_tap::CoreAudioTapSession>>,
+    /// Path to the Tauri resource directory. Used to locate
+    /// `resources/hush-audio-tap-capture` when starting a system-audio
+    /// session via the CoreAudio tap path.
+    #[cfg(target_os = "macos")]
+    resource_dir: std::path::PathBuf,
 }
 
 /// Commands sent from the public API into the audio worker thread.
@@ -561,13 +562,14 @@ enum Cmd {
     Shutdown,
 }
 
+#[allow(clippy::new_without_default)]
 impl CpalAudioCapture {
     /// Spawn the audio worker thread and return a handle.
     ///
     /// Allocating the thread up-front (rather than on first `start`) keeps
     /// the latency between hotkey-press and first sample bounded, since the
     /// thread is already alive and blocked on `recv`.
-    pub fn new() -> Self {
+    pub fn new(#[cfg(target_os = "macos")] resource_dir: std::path::PathBuf) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let active_sessions = Arc::new(AtomicU32::new(0));
         let level = Arc::new(AtomicU32::new(0_f32.to_bits()));
@@ -585,7 +587,9 @@ impl CpalAudioCapture {
             level,
             worker: Some(worker),
             #[cfg(target_os = "macos")]
-            sck_session: Mutex::new(None),
+            cat_session: Mutex::new(None),
+            #[cfg(target_os = "macos")]
+            resource_dir,
         }
     }
 
@@ -601,12 +605,6 @@ impl CpalAudioCapture {
             .map_err(|_| anyhow!("audio worker thread has exited"))?;
         rx.recv()
             .map_err(|_| anyhow!("audio worker dropped reply channel"))?
-    }
-}
-
-impl Default for CpalAudioCapture {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -646,23 +644,22 @@ impl AudioCapture for CpalAudioCapture {
             #[cfg(target_os = "macos")]
             AudioSource::SystemAudio => {
                 let mut guard = self
-                    .sck_session
+                    .cat_session
                     .lock()
-                    .map_err(|_| anyhow!("sck session lock poisoned"))?;
+                    .map_err(|_| anyhow!("cat session lock poisoned"))?;
                 if guard.is_some() {
                     return Err(anyhow!(
                         "system-audio capture already in progress"
                     ));
                 }
-                let session = screencapturekit::ScreenCaptureKitSession::start(
+                let session = core_audio_tap::CoreAudioTapSession::start(
+                    &self.resource_dir,
+                    Arc::clone(&self.active_sessions),
                     Arc::clone(&self.level),
                 )?;
+                // active_sessions already incremented inside start(); no
+                // additional fetch_add here.
                 *guard = Some(session);
-                // Increment the cross-path session count so the legacy
-                // `is_recording()` reads true while SCK is in flight,
-                // even alongside a parallel mic session via the new
-                // handle API.
-                self.active_sessions.fetch_add(1, Ordering::Release);
                 Ok(())
             }
             #[cfg(not(target_os = "macos"))]
@@ -682,35 +679,20 @@ impl AudioCapture for CpalAudioCapture {
     }
 
     fn stop(&self) -> Result<CapturedAudio> {
-        // SCK path first: if a system-audio session is active, drain
-        // it and skip the cpal worker round-trip entirely. Order
-        // matters — we must clear the SCK slot before decrementing
-        // the active-sessions counter, so a concurrent start() call
-        // can't see a "not recording" state while the SCK session is
-        // still mid-stop.
+        // CoreAudio tap path first: if a system-audio session is active, drain
+        // it and skip the cpal worker round-trip entirely. Order matters —
+        // we must clear the cat slot before the caller can observe
+        // is_recording() == false; active_sessions decrement is inside stop().
         #[cfg(target_os = "macos")]
         {
             let mut guard = self
-                .sck_session
+                .cat_session
                 .lock()
-                .map_err(|_| anyhow!("sck session lock poisoned"))?;
+                .map_err(|_| anyhow!("cat session lock poisoned"))?;
             if let Some(session) = guard.take() {
-                let format = session.format();
-                // Capture the result before decrementing so the decrement
-                // is unconditional: if stop() errors the session is already
-                // consumed and Drop won't clean up the counter (inner is None
-                // for the handle path; the raw session has no handle-level
-                // Drop). Without this the refcount leaks and is_recording()
-                // returns true indefinitely — see #555.
-                let result = session.stop();
-                self.active_sessions.fetch_sub(1, Ordering::Release);
-                if self.active_sessions.load(Ordering::Acquire) == 0 {
-                    self.level.store(0_f32.to_bits(), Ordering::Relaxed);
-                }
-                return Ok(CapturedAudio {
-                    samples: result?,
-                    format,
-                });
+                // stop() decrements active_sessions unconditionally inside
+                // CoreAudioTapSession::stop — #555 pattern preserved.
+                return Box::new(session).stop();
             }
         }
         self.dispatch(Cmd::Stop)
@@ -771,24 +753,19 @@ impl AudioCapture for CpalAudioCapture {
             }
             #[cfg(target_os = "macos")]
             AudioSource::SystemAudio => {
-                // Independent SCStream owned by the handle. Doesn't
-                // touch `sck_session` (the legacy hot-path slot), so
-                // the dictation hot path's SystemAudio capture and
-                // the meeting pump's SystemAudio capture don't race
-                // on the same slot. ScreenCaptureKit allows multiple
-                // SCStream instances per process; if the pump and
-                // dictation ever do run simultaneously the two
-                // streams just see the same audio independently.
-                let session = screencapturekit::ScreenCaptureKitSession::start(
+                // Independent CoreAudio tap session owned by the handle.
+                // Doesn't touch `cat_session` (the legacy hot-path slot), so
+                // the dictation hot path's SystemAudio capture and the meeting
+                // pump's SystemAudio capture don't race on the same slot.
+                let session = core_audio_tap::CoreAudioTapSession::start(
+                    &self.resource_dir,
+                    Arc::clone(&self.active_sessions),
                     Arc::clone(&self.level),
                 )?;
-                self.active_sessions.fetch_add(1, Ordering::Release);
-                Ok(Box::new(SckSessionHandle {
-                    source: AudioSource::SystemAudio,
-                    inner: Some(session),
-                    active_sessions: Arc::clone(&self.active_sessions),
-                    level: Arc::clone(&self.level),
-                }))
+                // active_sessions already incremented inside start(); the
+                // CoreAudioTapSession takes ownership of the decrement in its
+                // stop()/Drop path.
+                Ok(Box::new(session) as Box<dyn AudioSession>)
             }
             #[cfg(not(target_os = "macos"))]
             AudioSource::SystemAudio => Err(anyhow!(
@@ -884,85 +861,6 @@ impl Drop for CpalMicSessionHandle {
                     error = ?e,
                     "cpal mic session Cmd::Stop failed during Drop (worker likely exited)"
                 );
-            }
-        }
-    }
-}
-
-/// Handle returned by [`CpalAudioCapture::start_session`] for a
-/// system-audio source on macOS. Owns the underlying SCStream session
-/// directly, so dropping the handle ends the capture without any
-/// channel round-trip.
-#[cfg(target_os = "macos")]
-struct SckSessionHandle {
-    source: AudioSource,
-    /// `Option` so the explicit `stop()` path can take it out, while
-    /// the implicit `Drop` path (a panic between start and stop, say)
-    /// can still see whether there's anything to clean up.
-    inner: Option<screencapturekit::ScreenCaptureKitSession>,
-    active_sessions: Arc<AtomicU32>,
-    level: Arc<AtomicU32>,
-}
-
-#[cfg(target_os = "macos")]
-impl AudioSession for SckSessionHandle {
-    fn source(&self) -> &AudioSource {
-        &self.source
-    }
-    fn current_level(&self) -> f32 {
-        f32::from_bits(self.level.load(Ordering::Relaxed))
-    }
-    fn drain_into(&self, sink: &mut Vec<f32>) -> Result<CaptureFormat> {
-        // SCK keeps the buffer Arc inside `inner` (the
-        // ScreenCaptureKitSession). We can't `take` it because the
-        // session is still running — instead we expose a public
-        // drain helper on the SCK session that locks the Mutex,
-        // mem::takes the inner Vec, and returns the samples while
-        // leaving the SCStream callback's Arc clone intact (the
-        // callback continues writing to the now-empty buffer).
-        let session = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| anyhow!("sck session already stopped; drain_into unavailable"))?;
-        let samples = session.drain_buffer()?;
-        sink.extend_from_slice(&samples);
-        Ok(session.format())
-    }
-    fn stop(mut self: Box<Self>) -> Result<CapturedAudio> {
-        let session = self
-            .inner
-            .take()
-            .ok_or_else(|| anyhow!("sck session already stopped"))?;
-        let format = session.format();
-        // Capture result first; decrement unconditionally. After take()
-        // self.inner is None, so Drop won't decrement — if we used `?`
-        // directly, a stop() failure would leak the refcount (#555).
-        let result = session.stop();
-        self.active_sessions.fetch_sub(1, Ordering::Release);
-        if self.active_sessions.load(Ordering::Acquire) == 0 {
-            self.level.store(0_f32.to_bits(), Ordering::Relaxed);
-        }
-        Ok(CapturedAudio {
-            samples: result?,
-            format,
-        })
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for SckSessionHandle {
-    fn drop(&mut self) {
-        // If the handle is dropped without an explicit stop (panic in
-        // the pump task, say), best-effort drain so the SCStream is
-        // closed and the active-sessions count stays consistent. The
-        // drained samples are discarded — there's nowhere to send them.
-        if let Some(session) = self.inner.take() {
-            if let Err(e) = session.stop() {
-                tracing::warn!(error = ?e, "SCK session stop failed during Drop");
-            }
-            self.active_sessions.fetch_sub(1, Ordering::Release);
-            if self.active_sessions.load(Ordering::Acquire) == 0 {
-                self.level.store(0_f32.to_bits(), Ordering::Relaxed);
             }
         }
     }

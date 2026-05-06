@@ -48,18 +48,16 @@
   let permStatuses = $state<PermissionStatuses | null>(null);
   let permissionHealth = $state<PermissionsHealth | null>(null);
   let screenRecordingLive = $derived(
-    permissionHealth?.screenRecording === "confirmed",
+    audio.findSystemAudio()?.isSupported ?? false,
   );
   let allPermsGranted = $derived(
     !!permStatuses
       && permStatuses.microphone === "granted"
-      && permStatuses.screenRecording === "granted"
       && permStatuses.inputMonitoring !== "denied",
   );
   let anyPermsDenied = $derived(
     !!permStatuses
       && (permStatuses.microphone === "denied"
-        || permStatuses.screenRecording === "denied"
         || permStatuses.inputMonitoring === "denied"),
   );
 
@@ -72,7 +70,6 @@
     macosCapable
       && !!permissionHealth
       && (permissionHealth.microphone === "stale"
-        || permissionHealth.screenRecording === "stale"
         || permissionHealth.inputMonitoring === "stale"),
   );
   // Session-only dismiss — not persisted. The stale state is
@@ -91,15 +88,6 @@
   let unlistenSettingsGoto: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenAppProfileActivated: UnlistenFn | null = null;
-  let unlistenScreenGranted: UnlistenFn | null = null;
-
-  // Relaunch banner — shown when the backend confirms that System
-  // Audio (Screen Recording TCC) was just granted in this session.
-  // macOS caches the deny in mediaserverd/coreaudiod for the life of
-  // the current process, so a relaunch is required for the grant to
-  // take effect. The banner is session-only; it disappears if the
-  // user dismisses or relaunches.
-  let showRelaunchBanner = $state(false);
 
   // PTT state machine.
   //
@@ -358,13 +346,6 @@
       void dictation.onAppProfileActivated(e.payload);
     });
 
-    unlistenScreenGranted = await listen(
-      Events.PermissionScreenRecordingGranted,
-      () => {
-        showRelaunchBanner = true;
-      },
-    );
-
     unlistenPttPress = await listen(Events.HotkeyPttPress, () => {
       pttIsDown = true;
       if (dictation.busy || dictation.recording) return;
@@ -417,7 +398,6 @@
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
-    unlistenScreenGranted?.();
     if (pttPressTimer !== null) {
       clearTimeout(pttPressTimer);
       pttPressTimer = null;
@@ -529,33 +509,6 @@
       class="stale-perm-banner-dismiss"
       aria-label="Dismiss"
       onclick={() => (staleBannerDismissed = true)}
-    >✕</button>
-  </div>
-  {/if}
-  <!--
-    System Audio relaunch banner (#579). Shown when the backend
-    confirms a Screen Recording TCC grant was just obtained in this
-    session. macOS caches the deny in mediaserverd/coreaudiod for the
-    life of the current process — only a fresh process sees the grant
-    take effect. One-click relaunch removes the manual quit-and-reopen
-    step.
-  -->
-  {#if showRelaunchBanner}
-  <div class="relaunch-banner" role="status" data-testid="relaunch-banner">
-    <span class="relaunch-banner-text">
-      ✅ System Audio permission granted — relaunch Hush to enable system audio in meetings.
-    </span>
-    <button
-      type="button"
-      class="relaunch-banner-btn"
-      onclick={() => invoke("relaunch_app")}
-      data-testid="relaunch-banner-btn"
-    >Relaunch Now</button>
-    <button
-      type="button"
-      class="stale-perm-banner-dismiss"
-      aria-label="Dismiss"
-      onclick={() => (showRelaunchBanner = false)}
     >✕</button>
   </div>
   {/if}
@@ -827,80 +780,6 @@
 }
 :root[data-theme="dark"] .stale-perm-banner-dismiss {
   color: #c08000;
-}
-
-/* Relaunch banner (#579) — success/green variant of the amber
-   stale-perm-banner. Shown after System Audio TCC grant to prompt
-   the user to relaunch so the grant takes effect. */
-.relaunch-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.55rem 0.8rem;
-  margin: 0.75rem 0 0;
-  background-color: #edfaf3;
-  border: 1px solid #2a9d5c;
-  border-radius: 7px;
-  font-size: 0.85rem;
-  flex-wrap: wrap;
-}
-
-.relaunch-banner-text {
-  flex: 1;
-  min-width: 0;
-  color: #14532d;
-  line-height: 1.4;
-}
-
-.relaunch-banner-btn {
-  padding: 0.25em 0.7em;
-  font-size: 0.82rem;
-  font-weight: 600;
-  border: 1px solid #1a7a44;
-  background-color: #d1fae5;
-  border-radius: 5px;
-  cursor: pointer;
-  color: #14532d;
-  white-space: nowrap;
-  font-family: inherit;
-  transition: background-color 0.1s;
-}
-
-.relaunch-banner-btn:hover {
-  background-color: #a7f3c2;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .relaunch-banner {
-    background-color: #052e16;
-    border-color: #16a34a;
-  }
-  :root:not([data-theme="light"]) .relaunch-banner-text {
-    color: #86efac;
-  }
-  :root:not([data-theme="light"]) .relaunch-banner-btn {
-    background-color: #052e16;
-    border-color: #16a34a;
-    color: #86efac;
-  }
-  :root:not([data-theme="light"]) .relaunch-banner-btn:hover {
-    background-color: #0f3d20;
-  }
-}
-:root[data-theme="dark"] .relaunch-banner {
-  background-color: #052e16;
-  border-color: #16a34a;
-}
-:root[data-theme="dark"] .relaunch-banner-text {
-  color: #86efac;
-}
-:root[data-theme="dark"] .relaunch-banner-btn {
-  background-color: #052e16;
-  border-color: #16a34a;
-  color: #86efac;
-}
-:root[data-theme="dark"] .relaunch-banner-btn:hover {
-  background-color: #0f3d20;
 }
 
 /* About as a standalone sidebar section. AboutTab's own

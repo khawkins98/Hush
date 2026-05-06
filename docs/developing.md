@@ -143,6 +143,13 @@ npm run dev-reset
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo fmt --all
+
+# Cross-platform lint — run before every PR that touches Rust.
+# The standard clippy above runs on macOS where cfg(target_os="macos") code
+# is active, so it won't catch unused imports, missing Default impls, or other
+# lint failures that only appear on Linux. This command simulates the Linux CI
+# path and must be clean before opening or updating a PR.
+cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings
 ```
 
 ---

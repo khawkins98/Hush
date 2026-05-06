@@ -4,6 +4,78 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-06 — System audio on macOS: `AudioHardwareCreateProcessTap` is the right approach on macOS 14.2+ (#585)
+
+This entry is the authoritative summary. Several earlier entries explored ScreenCaptureKit (SCK) and the tap API separately; those entries are marked **[SUPERSEDED]** below and preserved for historical context.
+
+### Definitive answer
+
+On macOS 14.2+, **`AudioHardwareCreateProcessTap` / `CATapDescription` captures all system audio with no TCC permission prompt of any kind.** No "Screen Recording" dialog, no microphone dialog. The user sees nothing.
+
+For any macOS app that:
+- targets macOS 14.2+ (Hush targets 26+)
+- is distributed outside the MAS sandbox (sideloaded, notarised, Homebrew cask)
+
+…this API is strictly superior to ScreenCaptureKit for system-audio capture.
+
+### Architecture (what Hush ships)
+
+A Swift helper binary (`resources/macos-audio-tap.swift`) compiled by `build.rs` and bundled into `Contents/Resources/resources/`:
+
+1. `CATapDescription(processes:[])` — captures all system audio; `isExclusive: false` (don't mute tapped apps), `isMixdown: true` (mix all to one stream)
+2. Aggregate device backed by the tap, with the default output device as the main sub-device (ties clock to system output)
+3. `AVAudioEngine` → `installTap` on the output node → f32 PCM chunks to stdout
+
+**Wire protocol:** 12-byte header — `HUSH` magic (4) + u32le sample\_rate (4) + u32le channels (4) — followed by continuous f32 LE interleaved PCM. Header is written before `engine.start()` so it always precedes PCM in the pipe.
+
+**Rust side:** `CoreAudioTapSession` (implementing `AudioSession`) spawns the binary, reads the header, pumps samples into an `rtrb` ring via a reader thread. Stop: SIGTERM → 1 s poll (50 ms intervals) → SIGKILL fallback → join reader thread.
+
+### Why the 2026-04-26 entry was wrong
+
+The 2026-04-26 entry concluded: *"prefer TCC path (ScreenCaptureKit); the tap API is entitlement-required and only pays back in MAS."* That was based on developer forum posts describing macOS 14.x sandboxed-MAS behaviour. **For unsandboxed/sideloaded apps on macOS 14.2+ (and confirmed macOS 26), no entitlement is required and no TCC prompt fires.** The forum posts described the OS-level audio-recording entitlement for sandboxed MAS apps — a different code path.
+
+### Problems with SCK that this eliminates
+
+- "Screen & System Audio Recording" label alarmed users (they thought Hush recorded their screen)
+- `mediaserverd`/`coreaudiod` cached TCC deny for the current process → required full process relaunch after every grant
+- Ad-hoc rebuild signature changes produced stale TCC rows in System Settings
+- App had to call `SCShareableContent::get()` to get enrolled in the TCC pane before the user could toggle the row on — confusing dead end if they navigated there first
+
+### Implementation gotchas
+
+- Call `engine.prepare()` **before** `installTap` so the output node format is resolved before writing the header to stdout
+- Use `DispatchSemaphore(value:32)` + `tryWait` in the audio callback — drop chunks when stdout backpressures rather than blocking the CoreAudio thread
+- `SIGTERM` handler: use `signal(SIGTERM, SIG_IGN)` + `DispatchSource` handler; a raw C signal handler cannot safely run Cocoa/AV cleanup
+- Link `AVFAudio` (not `AVFoundation`) — `AVAudioEngine` lives in the `AVFAudio` sub-framework
+- Resource path: `tauri.conf.json` entry `"resources/hush-audio-tap-capture"` lands at `Contents/Resources/resources/hush-audio-tap-capture`; Rust lookup requires `resource_dir.join("resources").join("hush-audio-tap-capture")` (not just `resource_dir.join("hush-audio-tap-capture")`)
+- Binary is macOS-only; `build.rs` writes an empty placeholder on Linux/Windows. All Rust code is `#[cfg(target_os = "macos")]`-gated — cross-platform CI is unaffected.
+
+---
+
+## 2026-05-06 — Community input and open-source references that shaped the system-audio architecture
+
+Two external inputs proved decisive on the system-audio journey. Both are worth crediting explicitly because they establish precedents for how Hush engages with the community and with other MIT-licensed projects.
+
+### m13v — recurring contributor, consistently right about system audio
+
+GitHub user [@m13v](https://github.com/m13v) commented on three issues across the system-audio arc and was correct at each juncture:
+
+- **#33** (2026-04-26, the original system audio issue): *"macOS 14.4+ added Core Audio process taps which avoid the screen recording prompt entirely for system audio — that's the path I'd build toward over SCK long-term."* This was filed the same day Hush chose SCK, before the SCK work was complete. The advice was accurate; we didn't act on it at the time.
+- **#579** (2026-05-05): Explained the real root cause of the relaunch requirement (`mediaserverd`/`coreaudiod` caches the deny for the current process before the grant lands — every SCK app faces this). Proposed the architecturally correct fix (helper-process pattern). Agreed the "Screen Recording" label is "genuinely alarming for a dictation tool."
+- **#585** (2026-05-06): Confirmed `helper-binary-via-stdout` is the cleanest integration path; noted that direct Rust FFI to `AudioHardwareCreateProcessTap` requires Obj-C toll-free bridging for `CATapDescription`'s `NSArray` of pids (i.e., the Swift helper binary is the right call, not just a convenience). Also flagged the DRM caveat: both SCK and CAT are silenced by macOS protected-output flags — don't try to use either as a DRM workaround.
+
+**Precedent:** m13v's comments are uncompensated, technically accurate, and saved significant refactor time. This kind of community guidance from issue comments is legitimate input — read it seriously even when it contradicts an already-shipped implementation.
+
+### OpenWhispr — MIT reference implementation
+
+[OpenWhispr](https://github.com/OpenWhispr/openwhispr) (MIT licence, Electron/React app) independently arrived at the same `AudioHardwareCreateProcessTap` + Swift helper binary + stdout streaming architecture we shipped. Studying their MIT source code was legal and productive: it confirmed the helper-binary approach, the `CATapDescription` parameters, and the lack of a TCC entitlement requirement before we committed engineering time to the port.
+
+**This is distinct from the VoiceInk discipline** (CLAUDE.md §"Black-box reimplementation discipline"): VoiceInk is off-limits because Hush is a black-box reimplementation of it and reading its source would taint the independence claim. OpenWhispr is an unrelated MIT project in a different tech stack solving a shared sub-problem. Studying MIT code for a standalone, technically fungible sub-system (system audio capture) is normal open-source engineering. Hush's CoreAudio tap is an independent implementation of the same API, not a port of OpenWhispr's Swift file.
+
+**DRM caveat to retain (from m13v + confirmed independently):** Both `AudioHardwareCreateProcessTap` and ScreenCaptureKit are silenced by macOS protected-output flags when DRM content is playing. Meeting Mode cannot capture audio from DRM-protected streams. This is by design in macOS and should be documented in the UI when we add a "not all audio sources are capturable" explanation.
+
+---
+
 ## 2026-05-06 — Parallel Whisper model loads at startup (#561)
 
 **Problem:** Startup took 2–4 s on typical hardware because `build_default` loaded two `WhisperTranscription` contexts sequentially. Each load mmaps the GGUF file and initialises a `whisper.cpp` context — ~1–2 s each for large models.
@@ -317,6 +389,8 @@ Shipped #243: swap production wiring to `NoopDiarizer`. The dispatch fallback in
 ---
 
 ## 2026-04-29 — macOS adds an app to the Screen Recording list only after the app actively requests SCK
+
+> **[SUPERSEDED]** Hush no longer uses ScreenCaptureKit for system audio (replaced by `AudioHardwareCreateProcessTap` in #585). The SCK enrollment quirk described below is moot. The general TCC lesson (apps only appear in a pane after first requesting it) remains true for Microphone and Input Monitoring.
 
 User caught this hands-on after the first end-to-end smoke of the post-#234 build: clicking **Permissions → Screen Recording → Grant in Settings…** deep-linked into System Settings → Privacy & Security → Screen & System Audio Recording, and Hush wasn't in the list. Microphone and Input Monitoring rows were both `GRANTED`, so the app was registered with TCC — just not under Screen Recording.
 
@@ -905,6 +979,10 @@ A pattern surfaced in #103 + #104 that's worth pinning. The PR descriptions clai
 
 ## 2026-04-26 — ScreenCaptureKit as the only sanctioned macOS system-audio path
 
+> **[SUPERSEDED]** The conclusion of this entry ("prefer TCC path / ScreenCaptureKit for unsigned distribution") was wrong. `AudioHardwareCreateProcessTap` requires **no entitlement** for unsandboxed/sideloaded apps on macOS 14.2+ (and macOS 26). Hush replaced SCK with the CoreAudio tap in #585. See the 2026-05-06 entry at the top of this file for the definitive account.
+> 
+> The body below is preserved as historical context.
+
 Phase A2 of meeting-mode delivery needed actual system-audio capture on macOS. Three plausible routes were on the table:
 
 1. **CoreAudio HAL plug-in / Aggregate Device** — wire BlackHole-style virtual loopback into a multi-output device. Requires user installation of a third-party driver, and Apple has been deprecating HAL plug-ins since macOS 14.
@@ -1227,6 +1305,8 @@ Two related lessons from the dev iteration after first
 
 ### The Reset button silently skipped Screen Recording
 
+> **[MOOT for Screen Recording]** Hush no longer uses ScreenCaptureKit. The `reset_macos_permissions` call no longer resets `ScreenCapture` because Hush holds no ScreenCapture TCC grant. The underlying lesson (every service the app touches must be covered by Reset) still applies to **Microphone** and **InputMonitoring/ListenEvent**.
+
 `reset_macos_permissions` ran `tccutil reset` for `Microphone`,
 `ListenEvent`, and `Accessibility` — but not `ScreenCapture`. We
 caught it hands-on: clicked Reset, saw the Screen Recording entry
@@ -1257,6 +1337,8 @@ recording attempt because *some* Hush.app row is granted, but the
 running build's identity matches none of those rows, so it's
 blocked anyway. Silent block, no prompt, no grant.
 
+> **Note (2026-05-06):** The `ScreenCapture` rows are now irrelevant (Hush no longer requests ScreenCapture). This stale-row behaviour still applies to **Microphone** and **Accessibility / ListenEvent** rows.
+
 **Recovery procedure documented in `docs/macos-permissions.md`
 "Dev-loop":** reset → click `−` on each Hush.app row in System
 Settings → relaunch → re-grant. The Settings → Permissions Reset
@@ -1273,6 +1355,7 @@ out-of-band cleanup steps that the OS API can't do for us (the `−`
 button case). The post-reset summary is a good place for the
 latter; a GUI button can't do it because reaching into System
 Settings requires user consent.
+
 
 ---
 
@@ -1474,7 +1557,9 @@ If per-test counters or dynamic values are genuinely needed, use `page.exposeFun
 
 ### 2026-05-06 — System Audio TCC grant requires a process relaunch; "Screen Recording" label is alarming (#579)
 
-**Root cause (from m13v's review):** The need to relaunch after granting the Screen Recording TCC isn't because `CGPreflightScreenCaptureAccess()` returns stale data — it's that `mediaserverd`/`coreaudiod` cached the deny for the current process before the grant landed. The grant takes effect only in a fresh process. Every ScreenCaptureKit app faces this constraint.
+> **[SUPERSEDED]** Hush no longer uses ScreenCaptureKit for system audio. The entire class of problem described here — relaunch requirement, alarming TCC label, `mediaserverd` deny cache — is gone. `AudioHardwareCreateProcessTap` fires no TCC prompt at all. See the 2026-05-06 entry at the top of this file.
+> 
+> Historical notes preserved below.
 
 **Proper fix vs chosen tradeoff:** The architecturally correct fix is a small helper process for SCK: on `TCCDeny`, kill and respawn the helper while the main app stays alive. This avoids any relaunch for the user. However, this is significant complexity for a once-per-install event. The chosen approach — auto-detect grant + prompt-relaunch — is the right cost/benefit tradeoff for production.
 
@@ -1498,6 +1583,18 @@ If per-test counters or dynamic values are genuinely needed, use `page.exposeFun
 
 ### 2026-05-06 — OpenWhispr uses `AudioHardwareCreateProcessTap` (CoreAudio), not ScreenCaptureKit, for system audio
 
+> **[RESOLVED & IMPLEMENTED]** The uncertainty at the bottom of this entry ("not yet verified by hands-on testing on macOS 26 and should be confirmed before investing in a port") is now resolved. Probe confirmed no TCC prompt; implementation shipped in #585. See the 2026-05-06 authoritative entry at the top of this file for the complete picture. The OpenWhispr research and the probe results below remain valid as supporting evidence.
+
+- **`tap_created: status=0 tapID=222` with Screen Recording TCC intentionally NOT granted.** The tap was created successfully — no Screen Recording permission required.
+- **No audio-capture dialog appeared.** On macOS 26 the tap runs silently without any TCC prompt (neither the lock-icon Screen Recording dialog nor the mic-icon NSAudioCaptureUsageDescription dialog).
+- **A "Files in your Documents folder" dialog appeared** at the same time — this is unrelated to the tap (likely from Hush's own SQLite or model storage path touching `~/Documents/`). Tracked separately.
+
+**Conclusion:** `AudioHardwareCreateProcessTap` on macOS 26 is **fully independent of Screen Recording TCC** and requires no user-facing permission prompt of its own. Switching Hush's meeting audio to this API would eliminate the Screen Recording dialog entirely.
+
+**The uncertainty in the original entry is now resolved:** The conflicting forum accounts were about older macOS versions (14.x/15). On macOS 26, no TCC gate on this API.
+
+---
+
 **Background:** A user questioned whether OpenWhispr avoids the Screen Recording TCC permission by using Accessibility instead. Research into the [OpenWhispr MIT source code](https://github.com/OpenWhispr/openwhispr) (an Electron/React app) produced a definitive answer.
 
 **What OpenWhispr does (macOS):**
@@ -1520,21 +1617,19 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 | | Hush (current) | OpenWhispr |
 |---|---|---|
 | Audio API | ScreenCaptureKit | `AudioHardwareCreateProcessTap` (CoreAudio) |
-| TCC category | Screen Recording (confirmed) | Unknown — may or may not require SCR |
+| TCC category | Screen Recording (confirmed) | **None on macOS 26** (confirmed by probe) |
 | macOS min | none specified | 14.2+ |
 | Architecture | Rust native | Swift helper binary (spawned child process) |
-| TCC cache / relaunch | Yes (mediaserverd cache) | Unknown — needs testing |
+| TCC cache / relaunch | Yes (mediaserverd cache) | No prompt → no cache issue |
 
 **Cross-platform impact of a port:** Zero. The CoreAudio tap would be `#[cfg(target_os = "macos")]`-gated exactly like the current SCK code. Linux and Windows CI builds would be unaffected.
 
-**Potential improvement for Hush (if TCC claim holds):** If `AudioHardwareCreateProcessTap` truly avoids the Screen Recording TCC category:
-- More targeted audio-only consent framing vs. alarming "Screen Recording" label
-- Possibly avoids the `mediaserverd` TCC cache / process-relaunch issue (#579)
-- No regression on macOS version (Hush targets macOS 26+, well above 14.2)
+**Confirmed improvement for Hush (probe verified on macOS 26):**
+- Eliminates the Screen Recording dialog entirely — no lock icon, no scary "record this computer's screen and audio" copy
+- Likely avoids the `mediaserverd` TCC cache / process-relaunch issue (#579) since there is no TCC prompt to cache
+- No regression on macOS version (Hush targets macOS 26+, well above the 14.2 minimum)
 
-**If TCC is still Screen Recording:** The main benefit shrinks to architectural preference (CoreAudio vs. SCK) — the permission UX would be identical and the substantial SCK→tap rewrite would not be justified.
-
-**Why not done yet:** (1) The TCC permission model is unverified — needs hands-on testing on macOS 15/26 before we can confirm the user-facing benefit. (2) The entire Hush audio stack is built on ScreenCaptureKit — the `AudioCapture` trait, `ScreenCaptureKit` crate, virtual device support, ring buffer, and pump are all SCK-centric. Switching would be a substantial Rust rewrite (likely a new `CoreAudioTap` impl behind the `AudioCapture` trait seam, plus shipping a pre-compiled Swift binary in the bundle). Filed in issue #585.
+**Why not implemented yet:** The entire Hush audio stack is built on ScreenCaptureKit — the `AudioCapture` trait, `ScreenCaptureKit` crate, virtual device support, ring buffer, and pump are all SCK-centric. Switching would be a substantial Rust rewrite (likely a new `CoreAudioTap` impl behind the `AudioCapture` trait seam, plus shipping a pre-compiled Swift binary in the bundle). Implementation tracked in issue #585.
 
 **Key files in OpenWhispr for reference:**
 - `resources/macos-audio-tap.swift` — Swift binary; `AudioHardwareCreateProcessTap` usage

@@ -137,7 +137,7 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
   }) => {
     await openPermissionsStep(page);
 
-    for (const key of ["microphone", "input-monitoring", "screen-recording"]) {
+    for (const key of ["microphone", "input-monitoring"]) {
       await expect(
         page.locator(`[data-testid="wizard-perm-${key}"]`),
       ).toBeVisible();
@@ -149,16 +149,11 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
   }) => {
     await openPermissionsStep(page);
 
-    // wizard-allow-input-monitoring is disabled until microphone is
-    // granted — but it IS in the DOM with the disabled attribute.
     await expect(
       page.locator('[data-testid="wizard-allow-microphone"]'),
     ).toBeVisible();
     await expect(
       page.locator('[data-testid="wizard-allow-input-monitoring"]'),
-    ).toBeVisible();
-    await expect(
-      page.locator('[data-testid="wizard-allow-screen-recording"]'),
     ).toBeVisible();
   });
 
@@ -175,15 +170,12 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
       page.getByRole("heading", { name: "Permissions" }),
     ).toBeVisible();
 
-    // All three Allow buttons should be absent — ✓ badges shown instead.
+    // Both Allow buttons should be absent — ✓ badges shown instead.
     await expect(
       page.locator('[data-testid="wizard-allow-microphone"]'),
     ).toHaveCount(0);
     await expect(
       page.locator('[data-testid="wizard-allow-input-monitoring"]'),
-    ).toHaveCount(0);
-    await expect(
-      page.locator('[data-testid="wizard-allow-screen-recording"]'),
     ).toHaveCount(0);
   });
 });
