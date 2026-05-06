@@ -135,6 +135,16 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // the close-hide pattern wired in lib.rs::run; HUD hides without
     // affecting the in-flight recording.
     let window_submenu = SubmenuBuilder::new(app, "Window")
+        // "Show Hush" recovers the main window when it's been hidden
+        // by the close-hide pattern (#590). macOS's auto-managed
+        // NSWindowsMenu only lists *visible* NSWindows, so a hidden
+        // main window never appears via the standard mechanism — this
+        // explicit entry gives a discoverable, keyboard-accessible
+        // path that doesn't require finding the tray icon. Belt-and-
+        // braces with the `RunEvent::Reopen` handler in lib.rs that
+        // covers the Dock-icon-click path.
+        .item(&MenuItemBuilder::with_id("show-main-window", "Show Hush").build(app)?)
+        .separator()
         .item(
             &MenuItemBuilder::with_id("close-window", "Close Window")
                 .accelerator("CmdOrCtrl+W")
@@ -254,6 +264,16 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 } else {
                     tracing::debug!("menu check-for-updates: probe already in flight; skipping");
                 }
+            }
+            "show-main-window" => {
+                // Window → Show Hush (#590). Routes through the same
+                // helper as the tray's "Show Hush" item and the
+                // RunEvent::Reopen handler so all three Dock /
+                // Window-menu / tray paths share one code path —
+                // any future change to "what does showing main mean"
+                // (e.g. unminimise + activate app + emit a
+                // window-shown event) lands in one place.
+                crate::tray::show_main_window(app);
             }
             "close-window" => {
                 // ⌘W (#336). Hide the focused window rather than

@@ -784,10 +784,31 @@ pub fn run() {
             // The flag stays `true` once set (no reset) — the
             // process is on its way out and there's no
             // "consumer" pattern that would care.
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                if !USER_QUIT_REQUESTED.load(Ordering::SeqCst) {
-                    api.prevent_exit();
+            match event {
+                tauri::RunEvent::ExitRequested { ref api, .. } => {
+                    if !USER_QUIT_REQUESTED.load(Ordering::SeqCst) {
+                        api.prevent_exit();
+                    }
                 }
+                // Dock-icon click on macOS while the main window is hidden
+                // (#590). macOS dispatches `applicationShouldHandleReopen`
+                // which Tauri surfaces as `RunEvent::Reopen`. Without a
+                // handler the click does nothing — users have to find the
+                // tray icon to recover the window, which breaks the
+                // standard Dock-bring-to-front expectation.
+                //
+                // The macOS HIG specifies this should re-show the main
+                // window unconditionally. `has_visible_windows` is
+                // intentionally ignored: hidden HUD / menu-bar / debug
+                // windows count as "visible" to Tauri's bookkeeping
+                // (they're alive, just `.hide()`'d), so the
+                // visible-windows check would return true even when the
+                // user explicitly closed the main window.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    crate::tray::show_main_window(_app_handle);
+                }
+                _ => {}
             }
         });
 }
