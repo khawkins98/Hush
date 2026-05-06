@@ -178,6 +178,10 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // Logged at session end alongside the source kind so a future bug
     // report can immediately tell which source (mic vs system) went dark.
     let mut final_counts: Vec<u64> = vec![0; ctx.handles.len()];
+    // Counts finals whose text is the Whisper silence token or empty.
+    // A session where real_finals=0 and blank_finals=N means the tap
+    // delivered silence — distinct from finals=0 (no audio at all).
+    let mut blank_counts: Vec<u64> = vec![0; ctx.handles.len()];
 
     // Per-source first-drain RMS (#533 diagnostic). Logged once on the
     // first drain that returns audio for each source. A near-zero RMS
@@ -471,6 +475,10 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             // Count finals before moving utterances into the bucket
             // (#533 diagnostic — logged at session end).
             final_counts[i] += utterances.iter().filter(|u| u.is_final).count() as u64;
+            blank_counts[i] += utterances
+                .iter()
+                .filter(|u| u.is_final && (u.text == "[BLANK_AUDIO]" || u.text.trim().is_empty()))
+                .count() as u64;
             tick_buckets.push(TickBucket {
                 source_label,
                 utterances,
@@ -531,6 +539,10 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             .collect();
         // All tail utterances from finish() are finals (#533 diagnostic).
         final_counts[i] += finals.len() as u64;
+        blank_counts[i] += finals
+            .iter()
+            .filter(|u| u.text == "[BLANK_AUDIO]" || u.text.trim().is_empty())
+            .count() as u64;
         tail_buckets.push(TickBucket {
             source_label,
             utterances: finals,
@@ -560,11 +572,20 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // info level so it appears in standard debug runs without
     // RUST_LOG=hush::meeting=debug. "source_kind=mic finals=0" is
     // the first thing to check when a user reports a silent session.
-    for (source, count) in ctx.sources.iter().zip(final_counts.iter()) {
+    // "real_finals=0 blank_finals=N" means the tap delivered silence
+    // (the audio pipeline is running but the content is empty).
+    for (source, (count, blanks)) in ctx
+        .sources
+        .iter()
+        .zip(final_counts.iter().zip(blank_counts.iter()))
+    {
+        let real_finals = count.saturating_sub(*blanks);
         tracing::info!(
             session_id = ctx.session_id,
             source_kind = source.kind_label(),
             finals = count,
+            real_finals = real_finals,
+            blank_finals = blanks,
             "meeting pump: per-source utterance summary (#533 diagnostic)"
         );
     }

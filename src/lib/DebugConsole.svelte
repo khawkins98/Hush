@@ -25,7 +25,7 @@
     message: string;
   };
 
-  const MAX_ENTRIES = 200;
+  const MAX_ENTRIES = 500;
 
   let entries = $state<LogEntry[]>([]);
   let scrollEl = $state<HTMLElement | null>(null);

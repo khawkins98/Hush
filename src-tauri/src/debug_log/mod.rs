@@ -61,7 +61,7 @@ pub struct DebugLogState {
     /// Sequence counter — incremented per-event so the frontend can
     /// deduplicate snapshot + live-stream.
     seq: Arc<AtomicU64>,
-    /// Ring buffer, capacity 200.
+    /// Ring buffer, capacity 500.
     buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     /// Set once during Tauri `setup()`. Write-once so we never pay
     /// a lock on the hot path; reads after `set` are lock-free.
@@ -72,7 +72,7 @@ impl DebugLogState {
     pub fn new() -> Self {
         Self {
             seq: Arc::new(AtomicU64::new(0)),
-            buffer: Arc::new(Mutex::new(VecDeque::with_capacity(200))),
+            buffer: Arc::new(Mutex::new(VecDeque::with_capacity(500))),
             handle: Arc::new(OnceLock::new()),
         }
     }
@@ -145,12 +145,12 @@ where
             message: visitor.formatted(),
         };
 
-        // 1. Append to ring buffer (capped at 200). Drop the lock
+        // 1. Append to ring buffer (capped at 500). Drop the lock
         //    before we emit to the frontend to avoid holding it
         //    during a potentially-slow Tauri IPC call.
         let handle_opt = {
             let mut buf = self.state.buffer.lock().expect("debug_log buffer poisoned");
-            if buf.len() == 200 {
+            if buf.len() == 500 {
                 buf.pop_front();
             }
             buf.push_back(entry.clone());
