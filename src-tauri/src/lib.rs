@@ -785,10 +785,10 @@ pub fn run() {
             // process is on its way out and there's no
             // "consumer" pattern that would care.
             match event {
-                tauri::RunEvent::ExitRequested { ref api, .. } => {
-                    if !USER_QUIT_REQUESTED.load(Ordering::SeqCst) {
-                        api.prevent_exit();
-                    }
+                tauri::RunEvent::ExitRequested { ref api, .. }
+                    if !USER_QUIT_REQUESTED.load(Ordering::SeqCst) =>
+                {
+                    api.prevent_exit();
                 }
                 // Dock-icon click on macOS while the main window is hidden
                 // (#590). macOS dispatches `applicationShouldHandleReopen`
