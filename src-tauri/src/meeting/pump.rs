@@ -242,8 +242,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                         let rms = if buf.is_empty() {
                             0.0
                         } else {
-                            let sum_sq: f64 =
-                                buf.iter().map(|s| (*s as f64) * (*s as f64)).sum();
+                            let sum_sq: f64 = buf.iter().map(|s| (*s as f64) * (*s as f64)).sum();
                             (sum_sq / buf.len() as f64).sqrt()
                         };
                         tracing::info!(
