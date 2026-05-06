@@ -58,8 +58,6 @@ fn bundle_audio_tap_capture() {
                 "Foundation",
                 "-framework",
                 "AudioToolbox",
-                "-framework",
-                "AVFAudio",
                 "-o",
                 capture_out.to_str().unwrap(),
             ])

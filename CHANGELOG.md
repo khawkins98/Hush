@@ -51,6 +51,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Meeting mode system audio was always silent — IOProc replaces AVAudioEngine in CoreAudio tap (#593, #594)
+
+- `CATapDescription.isExclusive` was `false`. With `processes = []`, `false` means "tap no processes" and delivers silence; `true` means "exclude no one" and captures all system audio. Changed to `true`.
+- The readout path used AVAudioEngine pointed at an output-only aggregate sub-device, which returns silence from its non-existent input channels. Replaced with `AudioDeviceCreateIOProcIDWithBlock` — the IOProc receives the tap's PCM directly from the aggregate input bus.
+- Added a device-alive wait (20 × 10 ms) before format query and IOProc start to avoid degenerate formats from HAL's async registration.
+- HUSH wire-protocol header is now written before `AudioDeviceStart` so the Rust reader always sees the header before any PCM.
+- Cleanup order is now correct: `AudioDeviceStop` → `AudioDeviceDestroyIOProcID` → destroy aggregate → destroy tap.
+- Removed unused `AVFAudio` framework link from `build.rs`.
+
+#### Meeting mode diagnostic counters distinguish real speech from silence (#591)
+
+- `pump.rs` now tracks `blank_counts` alongside `final_counts` per source. At session end, the summary log emits `real_finals` (non-blank finals) and `blank_finals` (finals where Whisper returned `[BLANK_AUDIO]` or empty text) for each source, making a silent system-audio source immediately diagnostic without reading individual segment logs.
+- Debug log ring buffer bumped from 200 → 500 entries (both Rust `debug_log/mod.rs` and the frontend `DebugConsole.svelte`).
+
 #### Diarizer timeline drift on transient drain failure now corrected (#553)
 
 - When a `drain_into` call fails for a tick, the pump now zero-fills the diarizer's rolling audio buffer for the expected tick duration, keeping its timeline aligned with the transcription session's internal clock. Previously, a failed drain left a gap in the buffer, causing `slice_ms()` to return stale or misaligned audio for subsequent utterances and degrading speaker-labelling quality for the rest of the session.
