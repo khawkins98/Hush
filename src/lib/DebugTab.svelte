@@ -19,6 +19,7 @@
   import { version as osVersion } from "@tauri-apps/plugin-os";
   import { onMount } from "svelte";
   import "./settings-tab.css";
+  import { formatBuildTimestamp, type BuildInfo } from "./utils/format";
 
   type LogEntry = {
     seq: number;
@@ -27,8 +28,6 @@
     target: string;
     message: string;
   };
-
-  type BuildInfo = { version: string; buildTimestamp: number };
 
   let buildInfo = $state<BuildInfo>({ version: "…", buildTimestamp: 0 });
   let os = $state<string>("macOS");
@@ -40,17 +39,6 @@
 
   function formatTime(ms: number): string {
     return new Date(ms).toISOString();
-  }
-
-  function formatBuildTimestamp(unixSecs: number): string {
-    if (unixSecs === 0) return "unknown";
-    const d = new Date(unixSecs * 1000);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2, "0");
-    const min = String(d.getMinutes()).padStart(2, "0");
-    return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
   }
 
   async function generateReport() {
