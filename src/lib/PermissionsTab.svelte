@@ -88,25 +88,9 @@
   }
 
   async function openPrivacyPane(
-    target: "microphone" | "input-monitoring" | "screen-recording",
+    target: "microphone" | "input-monitoring",
   ) {
     try {
-      // For Screen Recording: macOS only adds Hush to the Screen
-      // & System Audio Recording list once Hush has actively
-      // queried SCK. A user who hasn't started a Meeting Mode
-      // session yet would land on the pane with no Hush row to
-      // toggle. Prime the permission first so the row appears
-      // (and the standard TCC prompt fires for not-determined
-      // state). Fire-and-forget — we don't block deep-linking on
-      // it, and the helper internally swallows the typical
-      // "denied" return.
-      if (target === "screen-recording") {
-        try {
-          await invoke("prime_screen_recording_permission");
-        } catch (primeErr) {
-          console.warn("[hush] prime SCK permission failed", primeErr);
-        }
-      }
       await invoke("open_macos_privacy_pane", { target });
     } catch (e) {
       console.warn("[hush] open privacy pane failed", e);
@@ -123,15 +107,6 @@
       );
       resetMessage = res.summary;
       showResetGuide = true;
-      // Open Screen Recording pane directly — no SCK priming.
-      // Priming is correct for "Grant in Settings…" (row hasn't
-      // enrolled yet), but wrong here: we just ran tccutil reset
-      // and the user needs to remove stale rows, not trigger a
-      // fresh TCC prompt. Call the IPC directly to bypass the
-      // priming step in openPrivacyPane().
-      void invoke("open_macos_privacy_pane", {
-        target: "screen-recording",
-      }).catch((e) => console.warn("[hush] open pane after reset:", e));
     } catch (e) {
       resetMessage = formatErrorMessage(e);
     } finally {

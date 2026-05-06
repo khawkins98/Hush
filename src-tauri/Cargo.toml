@@ -296,4 +296,7 @@ objc2 = "0.6"
 # `NSString` constructor for the audio_cues `NSSound soundNamed:`
 # call (#292). Same family as `objc2` above; trivial dep weight.
 objc2-foundation = "0.3"
+# Used by `audio::core_audio_tap` to send SIGTERM to the tap binary
+# child process for clean shutdown.
+libc = "0.2"
 

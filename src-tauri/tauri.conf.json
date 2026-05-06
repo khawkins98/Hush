@@ -85,7 +85,8 @@
       "infoPlist": "Info.plist"
     },
     "resources": [
-      "resources/hush-audio-tap-probe"
+      "resources/hush-audio-tap-probe",
+      "resources/hush-audio-tap-capture"
     ]
   }
 }

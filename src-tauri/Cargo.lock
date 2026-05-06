@@ -2420,6 +2420,7 @@ dependencies = [
  "csv",
  "futures-util",
  "hound",
+ "libc",
  "log",
  "ndarray",
  "objc2",

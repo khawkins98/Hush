@@ -24,7 +24,7 @@
     diagnostic: MacosPermissionDiagnostic;
     health: PermissionsHealth | null;
     onOpenPrivacyPane: (
-      target: "microphone" | "input-monitoring" | "screen-recording",
+      target: "microphone" | "input-monitoring",
     ) => void | Promise<void>;
   };
 
@@ -36,12 +36,6 @@
       paneTarget: "microphone" as const,
       label: "Microphone",
       why: "Required for dictation.",
-    },
-    {
-      key: "screenRecording" as const,
-      paneTarget: "screen-recording" as const,
-      label: "System Audio",
-      why: "Required for system-audio capture in meetings.",
     },
     {
       key: "inputMonitoring" as const,

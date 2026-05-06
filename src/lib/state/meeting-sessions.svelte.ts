@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import type { MeetingCopyNotice } from "$lib/MeetingSection.svelte";
 import {
   formatErrorDisplay,
-  isPermissionShapedError,
   type ErrorDisplay,
 } from "$lib/errors";
 import { joinUtterances } from "$lib/transcript-format";
@@ -175,20 +174,8 @@ export const meeting = {
       }
       await invoke("meeting_start_manual", { sources, appName: null });
       await meeting.refresh();
-      if (sources.some((s) => s.kind === "system-audio")) {
-        void invoke("confirm_permission", {
-          permission: "screen-recording",
-        }).catch((err) => {
-          console.warn("[hush] confirm_permission(screen-recording) failed", err);
-        });
-      }
     } catch (e) {
       meetingSessionsError = formatErrorDisplay(e);
-      if (isPermissionShapedError(e)) {
-        pendingPermissionsDialogIntro =
-          meetingSessionsError.headline
-          + " — open System Settings below to grant access, then try the meeting again.";
-      }
     } finally {
       meetingBusy = false;
     }

@@ -17,7 +17,7 @@
     /// on reset; these let the user reach the other two without
     /// hunting in System Settings.
     onDeepLinkPrivacyPane?: (
-      target: "microphone" | "input-monitoring" | "screen-recording",
+      target: "microphone" | "input-monitoring",
     ) => void | Promise<void>;
     onReset: () => void | Promise<void>;
   };

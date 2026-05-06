@@ -10,7 +10,6 @@ export const TRAILING_SILENCE_MS = 500;
 
 import {
   formatErrorDisplay,
-  isPermissionShapedError,
   type ErrorDisplay,
 } from "$lib/errors";
 import { joinUtterances } from "$lib/transcript-format";
@@ -219,20 +218,8 @@ export const dictation = {
         startedAtMs: Date.now(),
       };
       meeting.activeId = session.id;
-      if (isMultiSource) {
-        void invoke("confirm_permission", {
-          permission: "screen-recording",
-        }).catch((err) => {
-          console.warn("[hush] confirm_permission(screen-recording) failed", err);
-        });
-      }
     } catch (e) {
       error = formatErrorDisplay(e);
-      if (isMultiSource && isPermissionShapedError(e)) {
-        pendingPermissionsDialogIntro =
-          (error.headline ?? "Screen Recording permission needed")
-          + " — open System Settings below to grant access, then try Record again.";
-      }
       phase = { tag: "idle" };
     }
   },

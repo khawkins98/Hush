@@ -19,11 +19,10 @@
 //!   ScreenCapture, ListenEvent / Input Monitoring).
 //!   Accessibility was previously included but Hush never
 //!   requests it (#273).
-//! - [`prime_screen_recording_permission`] touches SCK so macOS
-//!   enrolls Hush in the System Audio TCC list, then spawns a
-//!   background watcher that emits
-//!   `permission:screen-recording-granted` once the grant is
-//!   confirmed via a real SCK probe (not just `CGPreflight`).
+//! - [`prime_screen_recording_permission`] is now a no-op (#600):
+//!   system-audio capture no longer uses ScreenCaptureKit, so
+//!   Screen Recording TCC is not required.  Kept for frontend
+//!   call-site compatibility while the frontend is being updated.
 //! - [`relaunch_app`] calls `AppHandle::restart()`. Exposed as an
 //!   IPC so the frontend relaunch banner can trigger it with a
 //!   single `invoke`.
@@ -39,30 +38,8 @@ use tauri::State;
 
 use crate::ipc::AppState;
 
-// `IpcError` was previously only referenced inside
-// `#[cfg(target_os = "macos")]` blocks; the cfg gate on the import
-// kept clippy's `unused-imports` lint quiet on Linux/Windows.
-// The new `get_permission_health` + `confirm_permission` commands
-// (#378) reference IpcError unconditionally, so the gate is no
-// longer correct. The import is now ungated.
 use super::IpcError;
 use super::IpcResult;
-
-// The grant-watcher and relaunch helpers are macOS-only — the static
-// guard and its imports are gated accordingly to keep Linux/Windows
-// clean under `-D warnings`.
-#[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_os = "macos")]
-use tauri::Emitter;
-
-/// Guards against duplicate grant-watchers when the user clicks
-/// "Grant in Settings" multiple times before returning to Hush.
-/// Process-scoped (single-instance guarantee from
-/// `tauri-plugin-single-instance`), so a module-level atomic
-/// suffices without touching `AppState`.
-#[cfg(target_os = "macos")]
-static SCREEN_GRANT_WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Open the macOS System Settings pane the user needs to grant
 /// the named permission. Tauri's shell plugin can launch arbitrary
@@ -141,105 +118,15 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
 /// Settings…" button on the System Audio row, immediately before
 /// deep-linking to System Settings.
 ///
-/// Without this priming step, a user who hasn't yet started a
-/// Meeting Mode session lands in the Screen & System Audio
-/// Recording pane only to find Hush isn't listed — macOS only
-/// enrolls an app once it actively requests the permission.
-/// `audio::prime_screen_recording_permission` calls
-/// `SCShareableContent::get()` and discards the result; the side
-/// effect is that the Hush row appears in the list.
-///
-/// After priming, spawns a background watcher that polls for the
-/// grant and emits `permission:screen-recording-granted` when
-/// confirmed via a real SCK probe. At most one watcher runs at a
-/// time — duplicate calls within the same session are ignored.
-///
-/// No-op on non-macOS. Errors at the SCK layer (rare on a healthy
-/// system) surface as `IpcError::Internal` — but since the
-/// "permission denied" case is the very state we're priming, the
-/// underlying helper swallows it and returns `Ok(())`.
+/// **No-op since #600.** System-audio capture now uses
+/// `AudioHardwareCreateProcessTap` which does not require Screen
+/// Recording TCC on macOS 26+.  This command is kept registered so
+/// any frontend call-sites that haven't been updated yet don't
+/// produce a command-not-found error.
 #[tauri::command]
 pub async fn prime_screen_recording_permission(app: tauri::AppHandle) -> IpcResult<()> {
-    #[cfg(target_os = "macos")]
-    {
-        crate::audio::prime_screen_recording_permission()
-            .map_err(|e| IpcError::Internal(format!("prime SCK permission: {e:#}")))?;
-
-        // Spawn a grant-watcher only if one isn't already running.
-        if !SCREEN_GRANT_WATCHER_ACTIVE.swap(true, Ordering::SeqCst) {
-            tauri::async_runtime::spawn(watch_screen_recording_permission(app));
-        }
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        Ok(())
-    }
-}
-
-/// Poll for a confirmed System Audio (Screen Recording TCC) grant
-/// and emit `permission:screen-recording-granted` to all windows.
-///
-/// # Why poll rather than rely on focus-refresh alone
-///
-/// The focus-refresh in `PermissionsTab` already re-runs
-/// `diagnose_macos_permissions` when the window regains focus.
-/// That handles the happy path. This watcher catches the case
-/// where the user grants the permission and returns to Hush
-/// without the Settings window being the focused one — e.g. the
-/// main window or no Hush window was in focus when they switched
-/// back. It also provides a more immediate signal (~1 s latency)
-/// than waiting for the next user focus event.
-///
-/// # Why validate rather than trust `CGPreflightScreenCaptureAccess`
-///
-/// Preflight can return true on cached TCC state while the real
-/// `SCShareableContent::get()` call still fails. The existing
-/// `get_permission_health` path already discovered this (#378).
-/// We run the same `validate_screen_recording_capability` probe
-/// before emitting so the frontend only sees a confirmed grant.
-#[cfg(target_os = "macos")]
-async fn watch_screen_recording_permission(app: tauri::AppHandle) {
-    use std::time::Duration;
-    use tokio::time::sleep;
-
-    const POLL_INTERVAL: Duration = Duration::from_secs(1);
-    const MAX_POLLS: u32 = 60;
-
-    for _ in 0..MAX_POLLS {
-        sleep(POLL_INTERVAL).await;
-
-        // Fast preflight check before paying the blocking probe cost.
-        let preflight_ok = unsafe {
-            #[link(name = "CoreGraphics", kind = "framework")]
-            extern "C" {
-                fn CGPreflightScreenCaptureAccess() -> u8;
-            }
-            CGPreflightScreenCaptureAccess() != 0
-        };
-        if !preflight_ok {
-            continue;
-        }
-
-        // Validate with a real SCK round-trip to rule out stale TCC
-        // cache (preflight=true while SCK is still denied).
-        let probe = tauri::async_runtime::spawn_blocking(
-            crate::audio::validate_screen_recording_capability,
-        )
-        .await;
-
-        if matches!(probe, Ok(Ok(()))) {
-            tracing::info!("permission watcher: System Audio grant confirmed; notifying frontend");
-            let _ = app.emit("permission:screen-recording-granted", ());
-            break;
-        }
-    }
-
-    // Release the guard so a future `prime_screen_recording_permission`
-    // call (e.g. after a `tccutil reset`) can spawn a fresh watcher.
-    SCREEN_GRANT_WATCHER_ACTIVE.store(false, Ordering::SeqCst);
+    let _ = app;
+    Ok(())
 }
 
 /// Relaunch the app immediately via `AppHandle::restart()`.
@@ -459,107 +346,11 @@ pub async fn get_permission_health(
         .await
         .map_err(|e| IpcError::Settings(e.to_string()))?;
 
-    // Auto-confirm on probe success (#378). When the live OS
-    // status is Granted *and* we don't have a `last_confirmed`
-    // row yet, seed one. This is what makes the Stale verdict
-    // possible later: a future probe that flips to false against
-    // an existing row reads as "was granted, now revoked" rather
-    // than "never asked". Restricting the write to the
-    // first-seen-Granted case keeps the row stable instead of
-    // re-stamping on every read.
-    // `effective_screen_lc` is only mutated inside the macOS-gated
-    // SCK-validation block below; declaring it `mut` unconditionally
-    // trips clippy's `unused_mut` lint on Linux / Windows. Split the
-    // binding by cfg to match the cfg-gated re-export of
-    // `validate_screen_recording_capability` itself.
-    #[cfg(target_os = "macos")]
-    let mut effective_screen_lc = screen_recording_last_confirmed.clone();
-    #[cfg(not(target_os = "macos"))]
+    // `effective_screen_lc` may not change (screen_recording is always
+    // NotApplicable now — no probe needed). `effective_mic_lc` is mutated
+    // in the auto-confirm block below.
     let effective_screen_lc = screen_recording_last_confirmed.clone();
     let mut effective_mic_lc = microphone_last_confirmed.clone();
-    // Strongest-signal validation (#378 follow-up review). The
-    // `validate_screen_recording_capability` helper is a macOS-only
-    // re-export — Screen Recording is a macOS-only TCC concept, so
-    // the whole stamp-on-validation block is cfg-gated. On Linux /
-    // Windows `statuses.screen_recording` is always NotApplicable
-    // and this branch wouldn't fire anyway; the gate just keeps
-    // the symbol resolution clean.
-    #[cfg(target_os = "macos")]
-    if matches!(
-        statuses.screen_recording,
-        crate::macos_perms::PermissionStatus::Granted
-    ) && screen_recording_last_confirmed.is_none()
-    {
-        // Serialise the SCK probe across concurrent
-        // `get_permission_health` calls (#386). Two near-
-        // simultaneous callers (Settings tab open + window-focus
-        // refresh + startup probe) all read `last_confirmed = None`
-        // at the same time and would each spawn_blocking the
-        // Cocoa round-trip without this guard. After taking the
-        // lock, re-read the settings row — the in-flight holder
-        // we waited for may have just stamped, in which case we
-        // skip the probe entirely.
-        let _probe_lock = state.sck_probe_lock.lock().await;
-        let recheck_screen_lc = state
-            .settings
-            .get(crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED)
-            .await
-            .map_err(|e| IpcError::Settings(e.to_string()))?;
-        if let Some(stamped) = recheck_screen_lc {
-            // Another caller stamped while we were waiting for
-            // the lock. Reuse their value.
-            effective_screen_lc = Some(stamped);
-        } else {
-            // We hold the lock and there's still no stamp; we're
-            // the one to do the probe. A stale TCC row (cert /
-            // bundle-id rotation) can return preflight=true while
-            // the real `SCShareableContent::get()` call still
-            // fails — exactly the case the staleness model is
-            // built to detect. Run the real probe via
-            // spawn_blocking and only stamp when it succeeds. If
-            // the probe fails, leave `last_confirmed` unset; the
-            // next false-preflight tick reads NotGranted (honest
-            // — no evidence the capability works in this install
-            // yet).
-            let probe = tauri::async_runtime::spawn_blocking(
-                crate::audio::validate_screen_recording_capability,
-            )
-            .await;
-            match probe {
-                Ok(Ok(())) => {
-                    match stamp_last_confirmed(
-                        &state,
-                        crate::settings::keys::PERMISSIONS_SCREEN_RECORDING_LAST_CONFIRMED,
-                    )
-                    .await
-                    {
-                        Ok(stamped) => {
-                            effective_screen_lc = Some(stamped);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "permission health: stamp screen-recording confirmed failed"
-                            );
-                        }
-                    }
-                }
-                Ok(Err(e)) => {
-                    tracing::info!(
-                        error = %e,
-                        "permission health: SCK probe failed despite preflight=true; \
-                         leaving last_confirmed unset"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "permission health: SCK probe task panicked; treating as unconfirmed"
-                    );
-                }
-            }
-        }
-    }
     if matches!(
         statuses.microphone,
         crate::macos_perms::PermissionStatus::Granted

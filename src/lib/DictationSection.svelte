@@ -96,24 +96,16 @@
     mics.length > 0 || (systemAudio?.isSupported ?? false),
   );
 
-  let screenRecordingHealth = $derived(
-    permissionHealth?.screenRecording ?? null,
-  );
-
-  let badgeVisible = $derived(
-    !recording
-      && selected !== null
-      && selected !== "system"
-      && (screenRecordingHealth === "stale"
-        || screenRecordingHealth === "not-granted"),
-  );
-  let badgeIsStale = $derived(screenRecordingHealth === "stale");
+  // System audio is always available via CoreAudio tap (#600) — no
+  // Screen Recording permission needed.  Badge is never shown.
+  const badgeVisible = false;
+  const badgeIsStale = false;
 
   let willRecordMeeting = $derived(
     !recording
       && selected !== null
       && selected !== "system"
-      && screenRecordingHealth === "confirmed",
+      && (systemAudio?.isSupported ?? false),
   );
 
   let selectedSourceLabel = $derived.by(() => {
