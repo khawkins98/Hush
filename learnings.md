@@ -52,6 +52,30 @@ The 2026-04-26 entry concluded: *"prefer TCC path (ScreenCaptureKit); the tap AP
 
 ---
 
+## 2026-05-06 — Community input and open-source references that shaped the system-audio architecture
+
+Two external inputs proved decisive on the system-audio journey. Both are worth crediting explicitly because they establish precedents for how Hush engages with the community and with other MIT-licensed projects.
+
+### m13v — recurring contributor, consistently right about system audio
+
+GitHub user [@m13v](https://github.com/m13v) commented on three issues across the system-audio arc and was correct at each juncture:
+
+- **#33** (2026-04-26, the original system audio issue): *"macOS 14.4+ added Core Audio process taps which avoid the screen recording prompt entirely for system audio — that's the path I'd build toward over SCK long-term."* This was filed the same day Hush chose SCK, before the SCK work was complete. The advice was accurate; we didn't act on it at the time.
+- **#579** (2026-05-05): Explained the real root cause of the relaunch requirement (`mediaserverd`/`coreaudiod` caches the deny for the current process before the grant lands — every SCK app faces this). Proposed the architecturally correct fix (helper-process pattern). Agreed the "Screen Recording" label is "genuinely alarming for a dictation tool."
+- **#585** (2026-05-06): Confirmed `helper-binary-via-stdout` is the cleanest integration path; noted that direct Rust FFI to `AudioHardwareCreateProcessTap` requires Obj-C toll-free bridging for `CATapDescription`'s `NSArray` of pids (i.e., the Swift helper binary is the right call, not just a convenience). Also flagged the DRM caveat: both SCK and CAT are silenced by macOS protected-output flags — don't try to use either as a DRM workaround.
+
+**Precedent:** m13v's comments are uncompensated, technically accurate, and saved significant refactor time. This kind of community guidance from issue comments is legitimate input — read it seriously even when it contradicts an already-shipped implementation.
+
+### OpenWhispr — MIT reference implementation
+
+[OpenWhispr](https://github.com/OpenWhispr/openwhispr) (MIT licence, Electron/React app) independently arrived at the same `AudioHardwareCreateProcessTap` + Swift helper binary + stdout streaming architecture we shipped. Studying their MIT source code was legal and productive: it confirmed the helper-binary approach, the `CATapDescription` parameters, and the lack of a TCC entitlement requirement before we committed engineering time to the port.
+
+**This is distinct from the VoiceInk discipline** (CLAUDE.md §"Black-box reimplementation discipline"): VoiceInk is off-limits because Hush is a black-box reimplementation of it and reading its source would taint the independence claim. OpenWhispr is an unrelated MIT project in a different tech stack solving a shared sub-problem. Studying MIT code for a standalone, technically fungible sub-system (system audio capture) is normal open-source engineering. Hush's CoreAudio tap is an independent implementation of the same API, not a port of OpenWhispr's Swift file.
+
+**DRM caveat to retain (from m13v + confirmed independently):** Both `AudioHardwareCreateProcessTap` and ScreenCaptureKit are silenced by macOS protected-output flags when DRM content is playing. Meeting Mode cannot capture audio from DRM-protected streams. This is by design in macOS and should be documented in the UI when we add a "not all audio sources are capturable" explanation.
+
+---
+
 ## 2026-05-06 — Parallel Whisper model loads at startup (#561)
 
 **Problem:** Startup took 2–4 s on typical hardware because `build_default` loaded two `WhisperTranscription` contexts sequentially. Each load mmaps the GGUF file and initialises a `whisper.cpp` context — ~1–2 s each for large models.
