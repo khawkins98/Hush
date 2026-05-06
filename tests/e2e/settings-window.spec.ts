@@ -557,6 +557,42 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await expect(rows.nth(1).locator(".override-name")).toHaveText("zebra.app");
   });
 
+  test("override-profile-row and override-audio-/override-model-{appName} selects render when audio sources and models are available", async ({
+    page,
+  }) => {
+    // override-profile-row renders only when onSetProfile is set AND
+    // (audioSources.length > 0 || models.length > 0).
+    // Default mock already returns one audio source and one model, so
+    // we only need to supply an existing override row.
+    await installMocks(page, {
+      meeting_app_override_list: () => [
+        {
+          appName: "Zoom",
+          kind: "meeting",
+          createdAt: "2026-04-28T00:00:00Z",
+          preferredAudioSource: null,
+          preferredModelId: null,
+        },
+      ],
+    });
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-settings"]').click();
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    // Profile row container
+    await expect(
+      page.locator('[data-testid="override-profile-row"]'),
+    ).toBeVisible();
+    // Per-app audio source select
+    await expect(
+      page.locator('[data-testid="override-audio-Zoom"]'),
+    ).toBeVisible();
+    // Per-app model select
+    await expect(
+      page.locator('[data-testid="override-model-Zoom"]'),
+    ).toBeVisible();
+  });
+
   test("built-in defaults disclosure renders Meeting + Media sections (#320)", async ({
     page,
   }) => {
@@ -912,6 +948,126 @@ test.describe("settings window — About section", () => {
     await expect(
       page.locator('.about-meta a[href*="apache.org"]'),
     ).toBeVisible();
+  });
+
+  test("audio-pipeline-diagram is visible in About tab", async ({ page }) => {
+    await installMocks(page);
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-about"]').click();
+    await expect(
+      page.locator('[data-testid="audio-pipeline-diagram"]'),
+    ).toBeVisible();
+  });
+});
+
+test.describe("settings window — Permissions tab — perm-action buttons", () => {
+  // perm-action-{key} buttons render inside PermissionsRows when
+  // the matching status is NOT "not-applicable". The PermissionsTab
+  // only mounts PermissionsRows when diagnostic !== null (requires
+  // canReset: true). Each test inlines the full mock literal because
+  // override functions are serialised via .toString() — closure
+  // variables from the test scope are not available in the browser.
+
+  test("perm-action-microphone is visible when microphone is denied", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: null,
+        inputMonitoringHint: null,
+        canReset: true,
+        statuses: {
+          microphone: "denied",
+          screenRecording: "not-applicable",
+          inputMonitoring: "not-applicable",
+        },
+      }),
+    });
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-settings"]').click();
+    await page.locator('[data-testid="settings-tab-permissions"]').click();
+    await expect(
+      page.locator('[data-testid="perm-action-microphone"]'),
+    ).toBeVisible();
+  });
+
+  test("perm-action-screenRecording is visible when screenRecording is not-determined", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: null,
+        inputMonitoringHint: null,
+        canReset: true,
+        statuses: {
+          microphone: "not-applicable",
+          screenRecording: "not-determined",
+          inputMonitoring: "not-applicable",
+        },
+      }),
+    });
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-settings"]').click();
+    await page.locator('[data-testid="settings-tab-permissions"]').click();
+    await expect(
+      page.locator('[data-testid="perm-action-screenRecording"]'),
+    ).toBeVisible();
+  });
+
+  test("perm-action-inputMonitoring is visible when inputMonitoring is granted", async ({
+    page,
+  }) => {
+    // "granted" also causes perm-action to render — an "Open Settings"
+    // affordance is shown even for already-granted permissions.
+    await installMocks(page, {
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: null,
+        inputMonitoringHint: null,
+        canReset: true,
+        statuses: {
+          microphone: "not-applicable",
+          screenRecording: "not-applicable",
+          inputMonitoring: "granted",
+        },
+      }),
+    });
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-settings"]').click();
+    await page.locator('[data-testid="settings-tab-permissions"]').click();
+    await expect(
+      page.locator('[data-testid="perm-action-inputMonitoring"]'),
+    ).toBeVisible();
+  });
+
+  test("perm-action buttons are absent when all statuses are not-applicable", async ({
+    page,
+  }) => {
+    // Default mock already returns canReset: false → diagnostic is null →
+    // PermissionsRows doesn't mount. Override with canReset: true but keep
+    // all statuses as not-applicable so the {#if status !== "not-applicable"}
+    // guard hides every action button.
+    await installMocks(page, {
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: null,
+        inputMonitoringHint: null,
+        canReset: true,
+        statuses: {
+          microphone: "not-applicable",
+          screenRecording: "not-applicable",
+          inputMonitoring: "not-applicable",
+        },
+      }),
+    });
+    await page.goto("/");
+    await page.locator('[data-testid="sidebar-nav-settings"]').click();
+    await page.locator('[data-testid="settings-tab-permissions"]').click();
+    await expect(
+      page.locator('[data-testid^="perm-action-"]'),
+    ).toHaveCount(0);
   });
 });
 

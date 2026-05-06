@@ -86,4 +86,22 @@ test.describe("menu-bar popover", () => {
       )
       .toBe(1);
   });
+
+  test("popover-error appears when show_main_window throws", async ({
+    page,
+  }) => {
+    // The "Open Hush" button calls show_main_window; if it throws,
+    // the error is shown inline in the popover via popover-error.
+    await installMocks(page, {
+      show_main_window: () => {
+        throw new Error("Window unavailable");
+      },
+    });
+    await page.goto("/menu-bar");
+
+    await page.locator('[data-testid="popover-open-main"]').click();
+    await expect(
+      page.locator('[data-testid="popover-error"]'),
+    ).toBeVisible();
+  });
 });

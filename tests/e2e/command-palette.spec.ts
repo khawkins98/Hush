@@ -12,6 +12,37 @@ import { installMocks } from "./_mock";
 //   5. Clicking an action runs it (Settings: General → opens
 //      settings — covered via the existing open_settings mock).
 
+test.describe("command palette — backdrop and empty state", () => {
+  test("command-palette-backdrop is visible when palette opens", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/");
+
+    await page.locator("section#dictation-section header").click();
+    await page.keyboard.press("ControlOrMeta+k");
+    await expect(
+      page.locator('[data-testid="command-palette-backdrop"]'),
+    ).toBeVisible();
+  });
+
+  test("command-palette-empty appears when no commands match the query", async ({
+    page,
+  }) => {
+    await installMocks(page);
+    await page.goto("/");
+
+    await page.locator("section#dictation-section header").click();
+    await page.keyboard.press("ControlOrMeta+k");
+
+    const input = page.locator('[data-testid="command-palette-input"]');
+    await input.fill("zzzznosuchthing");
+    await expect(
+      page.locator('[data-testid="command-palette-empty"]'),
+    ).toBeVisible();
+  });
+});
+
 test.describe("CommandPalette — F3 ⌘K", () => {
   test("⌘K opens the palette and Esc closes it", async ({ page }) => {
     await installMocks(page);
