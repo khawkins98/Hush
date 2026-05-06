@@ -281,7 +281,15 @@ fn handle_icon_event<R: Runtime>(tray: &tauri::tray::TrayIcon<R>, event: TrayIco
     }
 }
 
-fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+/// Show, unminimise, and focus the main window. Idempotent — calling
+/// while it's already visible is a no-op (besides bringing it to the
+/// foreground).
+///
+/// Exposed so the `RunEvent::Reopen` handler in `lib.rs` (the macOS
+/// Dock-icon-click path, #590) and the `Window → Show Hush` app-menu
+/// item can route through the same code path as the tray's
+/// "Show Hush" entry.
+pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
