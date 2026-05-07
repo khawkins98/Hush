@@ -704,20 +704,21 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 /// stale double-click reaches here as a recoverable error rather
 /// than a panic.
 ///
-/// After a successful stop the diarizer slot is nulled immediately
-/// (resets speaker-cluster state for the next meeting and frees the
-/// ORT Session arena) while the transcriber slots are rebuilt in the
-/// background (#636). Old `WhisperContext` compute buffers (KV cache,
-/// mel scratch, beam scratch) stay live in the transcriber slots until
-/// the new contexts are ready (~1–2 s); the background task then
-/// atomically installs the new contexts, dropping the old `Arc`s so
-/// the C++ destructors can release those buffers.
+/// After a successful stop the transcribers AND the diarizer are
+/// rebuilt in the background (#636). Old `WhisperContext` compute
+/// buffers (KV cache, mel scratch, beam scratch) and the old ORT
+/// `Session` stay live in their slots until the new contexts are
+/// ready (~1 s for transcribers, ~80 ms for the diarizer); the
+/// background task then atomically installs each new context,
+/// dropping the old `Arc`s so the C++ destructors can release the
+/// buffers.
 ///
-/// Keeping old transcribers live during the rebuild window means a
-/// rapid stop-then-start sequence always finds a valid transcriber in
-/// the slot. Nulling first would leave a ~1–2 s window where
-/// `meeting_start_manual` snapshots `None` and the new meeting runs
-/// idle for its entire duration.
+/// Keeping old contexts live during the rebuild window means a
+/// rapid stop-then-start sequence always finds a valid transcriber
+/// AND a valid diarizer in their slots. The new `OnnxDiarizer`
+/// instance has its own fresh `SessionClusterState` so speaker
+/// labels do not bleed across meeting boundaries — the reset
+/// happens at swap-time, not at null-time.
 #[tauri::command]
 pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
     // Hide the HUD up front — the user clicked Stop and expects the
@@ -746,32 +747,25 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
         // The pump task has been joined (or this is a DB-close retry
         // where it was already joined previously). All Arc<dyn Transcribe>
         // clones held inside WhisperStreamingSession have been dropped.
-
-        // Null the diarizer slot immediately. Two reasons:
-        //   1. ORT Session arena is freed right away (Physical Footprint
-        //      benefit doesn't wait for the background rebuild).
-        //   2. Resets SessionClusterState so the next meeting starts
-        //      with a clean speaker-label namespace instead of inheriting
-        //      labels from the just-ended session.
-        // `diarize_slot` holds the inner diarizer; FlagGatedDiarizer in
-        // AppState wraps the slot and reads from it on every call, so
-        // this write takes effect immediately for any active/future pump.
-        // Recover from poison — we must write the Noop even after a panic.
-        {
-            let mut guard = state
-                .diarize_slot
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            *guard = Arc::new(crate::diarization::NoopDiarizer);
-        }
-
-        // Rebuild transcribers in the background. The old Arc<dyn Transcribe>
-        // values stay live in the slots while the rebuild runs (~1–2 s),
-        // so a rapid stop-then-start always finds a valid transcriber and
-        // doesn't run idle for its entire duration. Only overwrite a slot
-        // when the rebuild returns Some — a None result is logged at error!
+        //
+        // Rebuild both the transcribers AND the diarizer in the background.
+        // The old Arcs stay live in their slots while the rebuild runs
+        // (~1 s transcribers, ~80 ms diarizer), so a rapid stop-then-start
+        // always finds a valid transcriber + diarizer in their slots and
+        // doesn't run idle / fall back to source labels for the new
+        // session. Only overwrite a slot when the rebuild returns Some
+        // (transcriber) or Ok (diarizer) — a failure is logged at error!
         // and the existing (possibly high-watermarked) context stays live
         // rather than leaving dictation/meetings broken until restart.
+        //
+        // SessionClusterState reset: a fresh `OnnxDiarizer` instance
+        // built by `swap_diarizer_after_download` has its own empty
+        // `SessionClusterState`, so installing it via the atomic write
+        // implicitly resets the speaker-label namespace — no bleed
+        // across meeting boundaries. The reset happens at swap-time,
+        // not at null-time, which is why we no longer need the
+        // synchronous `*slot = NoopDiarizer` step that earlier
+        // iterations of this PR included.
         //
         // Old WhisperContext compute buffers (KV cache, mel scratch, beam
         // scratch) are freed when the new Arcs replace the old ones and

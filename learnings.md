@@ -1981,22 +1981,19 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 
 ### The actual fix (#636)
 
-`meeting_stop_manual` now runs a two-phase cleanup+reload at every session boundary:
+`meeting_stop_manual` runs a single-phase background rebuild at every session boundary:
 
-1. **Immediate drop (synchronous, on the IPC handler thread):**
-   - Write `Arc::new(NoopDiarizer)` into `state.diarize_slot`, replacing the live `OnnxDiarizer` session.
-   - The ORT `Session` destructor runs as soon as the old `Arc` drops — typically within microseconds of the write returning. Physical Footprint shrinks by the ORT arena size immediately.
-   - Reason for immediate diarizer null (not deferred): `SessionClusterState` must reset for each meeting. Keeping the old `OnnxDiarizer` live would bleed speaker labels from the ended session into the next one.
-
-2. **Background rebuild (fire-and-forget `tokio::spawn`):**
+- **Background rebuild only (fire-and-forget `tokio::spawn`):**
    - Calls `build_transcriber` twice (dictation + meeting slots) concurrently via `tokio::join!`.
    - Calls `swap_diarizer_after_download` on `spawn_blocking` to reload the `OnnxDiarizer` (SHA-256 verify + ONNX init, ~80 ms).
-   - On success, atomically installs the new context Arc, dropping the old one. Old `WhisperContext` C++ destructors fire here — KV cache, mel scratch, beam scratch reclaimed.
-   - On failure (`build_transcriber` returns `None`): logs at `error!` and leaves the existing (high-watermarked) context live rather than silently breaking dictation.
+   - On success, atomically installs each new context Arc, dropping the old one. Old `WhisperContext` C++ destructors fire here — KV cache, mel scratch, beam scratch reclaimed. Old ORT `Session` destructor fires when the old diarizer Arc drops.
+   - On failure (`build_transcriber` returns `None` or `swap_diarizer_after_download` errors): logs at `error!` and leaves the existing (high-watermarked) context live rather than silently breaking dictation / speaker identification.
 
-### Why transcribers are NOT nulled immediately
+### Why transcribers AND the diarizer are rebuilt-then-installed (not nulled-then-rebuilt)
 
-The original implementation nulled transcribers synchronously (foreground) then rebuilt in background. A review test found a correctness regression: if the user rapidly stops-then-starts a meeting within the ~1–2 s rebuild window, `meeting_start_manual` snapshots `None` from the slot (taken once at session start) and the new meeting runs idle for its **entire duration** with no transcription. Inversion (rebuild → install → old Arcs drop) is the correct approach: old contexts stay live during the window, so a rapid start always finds a valid transcriber. Memory is freed ~1–2 s later when the new context is installed.
+An earlier iteration nulled the transcribers synchronously then rebuilt in background. Hands-on review caught a correctness regression: a rapid stop-then-start within the ~1–2 s rebuild window had `meeting_start_manual` snapshot `None` from the transcriber slot, and the new meeting ran idle for its **entire duration** with no transcription. Inversion (rebuild → install → old Arcs drop) is the correct approach: old contexts stay live during the window, so a rapid start always finds a valid transcriber. Memory is freed ~1–2 s later when the new context is installed.
+
+The same logic applies to the diarizer. An intermediate iteration kept the diarizer null synchronous (different code path because `swap_diarizer_after_download` already builds-then-swaps atomically) on the reasoning that `SessionClusterState` must reset between meetings to prevent label bleed. But the same outcome is achieved by the swap itself: a freshly-built `OnnxDiarizer` instance has its own empty `SessionClusterState`, so installing it via the atomic write implicitly resets the speaker namespace. The reset happens at swap-time, not at null-time. Eliminating the synchronous null also avoids a brief window where a rapid stop-then-start would have the new meeting's first ~1 s of utterances fall through to source-derived "mic" / "system" labels until the rebuild completed.
 
 ### Why the `has_active_session()` guard
 
