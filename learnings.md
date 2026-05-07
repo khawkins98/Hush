@@ -4,6 +4,65 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-07 (late) — #612 actual root cause: ORT silently uses Metal/MPS even with `CPU::default()` EP
+
+After a full day of fixes targeting various malloc-side hypotheses, the **vmmap region breakdown** finally pointed at the right layer. Captured during a 5-min meeting with diarization on:
+
+```
+REGION TYPE              VIRTUAL    RESIDENT   DIRTY      SWAPPED     COUNT
+IOAccelerator            9.0 G      12.5 M     12.5 M     7.8 G       96
+MALLOC_LARGE             (gone — mimalloc claimed the malloc-side, was 23.5 GB pre-#639)
+MALLOC_SMALL             8 MB       1 MB       ...        ...         ...
+```
+
+**The leak is in `IOAccelerator` — Apple's GPU memory framework backing Metal / CoreAnimation / MPS.** Not malloc. Not the C/C++ allocators. Not anything our `mimalloc-override` or `WhisperContext` destructor work touched.
+
+Confirmed by Ken's mid-meeting toggle test: turning Diarization OFF mid-meeting flatlined memory growth immediately. Turning it back ON resumed the ~1.25 GB/min climb.
+
+### Why our explicit `CPU::default()` EP didn't keep ORT off the GPU
+
+We had configured `OnnxDiarizer` with:
+
+```rust
+.with_execution_providers([ort::ep::CPU::default()
+    .with_arena_allocator(false)
+    .build()])?
+.with_memory_pattern(false)?
+```
+
+We assumed this kept ORT entirely on CPU. It doesn't. The execution provider declares which provider **owns the graph** — but at kernel-dispatch time, ORT can still route individual operations (matmul, layernorm, softmax) to Apple-specific accelerated implementations. On Apple Silicon, ORT's `download-binaries` builds (from pyke's prebuilt CDN) link against Metal Performance Shaders by default. Each `session.run()` allocates MPS command buffers and texture-backed Metal buffers via IOAccelerator, even though the "EP" is CPU.
+
+### Why every prior fix targeted the wrong layer
+
+The differential test mid-day correctly identified the diarizer as the source (1.25 GB/min on, 250 MB/min off — 5× rate difference). But every fix attempted assumed the leak was malloc-side:
+
+- **#630** disabled the CPU arena + memory pattern. Confirmed by ort tracing dump that the settings applied. Made no measurable footprint difference because the leak isn't in those structures.
+- **#631** added per-run `memory.enable_memory_arena_shrinkage`. Broke output tensor extraction (silently zeroed embeddings) and was reverted in #632.
+- **#635** swapped to mimalloc as global allocator. Didn't help because the libraries held live pointers — allocator-swap can't reclaim what's actively referenced.
+- **#639** added meeting-stop-boundary destructor firing + mimalloc-with-`override`. Real win on the malloc side (8 GB → 3.2 GB post-stop reclaim, 5 GB recovered) but doesn't touch the IOAccelerator allocations because those bypass malloc entirely.
+
+The pattern repeated: see leak → assume malloc-side → ship fix → measure → "still leaking" → assume different malloc-side mechanism → repeat. The vmmap region breakdown was the diagnostic that should have been step ONE, not step N.
+
+**Lesson for future memory hunts:** before targeting any malloc-side fix, run `vmmap -summary <pid>` and check which region types actually carry the dirty bytes. Malloc zones (MALLOC_LARGE / MALLOC_SMALL / MALLOC_NANO) vs. IOAccelerator vs. VM_ALLOCATE vs. specific framework zones (WebKit Malloc, etc.) all have different fix paths. Trying allocator-tuning when the leak is in IOAccelerator is wasted motion.
+
+### What this PR (#639) still earns its keep for
+
+- mimalloc with `override` cleanly claimed the malloc allocations (vmmap shows MALLOC_LARGE basically empty post-PR vs. 23.5 GB pre-PR).
+- Meeting-boundary destructor firing means a fresh `WhisperContext` is built between meetings, capping the malloc-side accumulation at one meeting's worth.
+- Post-stop footprint reclaim went from "stuck at 8 GB indefinitely" to "drops to 3.2 GB within 60 sec" — observable in vmmap.
+
+Without #639 + mimalloc-override, the malloc side would still leak unboundedly. The PR is correct for what it targets; it just doesn't target the dominant source.
+
+### Possible fixes for the GPU leak (tracked in a fresh issue)
+
+1. **Build ORT without GPU support.** Drop `download-binaries`, build from source with cmake configured to disable Metal / CoreML providers entirely. Cost: significant build infrastructure change.
+2. **Runtime env var to disable Metal.** ORT may honor an env var to disable specific providers; needs investigation. Cheapest if it works.
+3. **Periodic mid-meeting `OnnxDiarizer` recreation.** Same shape as #623's `WhisperState` recreation but for the diarizer. Drop + reload every N utterances; ~80 ms per recreation. Forces Metal command buffers to retire and IOAccelerator regions to release.
+4. **Different model.** wespeaker is what we use; alternative speaker-embedding models may not have GPU-routed kernels. Switching is research effort.
+5. **Accept and document.** Pair with #639's per-meeting bound and call it survivable — a 30-min meeting hits ~38 GB physical footprint, which is uncomfortable but not catastrophic on a 32 GB+ Mac with swap. Cosmetic improvement: add a "Long meetings: stop and restart between sessions" note in Settings.
+
+---
+
 ## 2026-05-07 — #612 not actually closed: macOS compression was hiding the leak
 
 Earlier today I declared #612 closed based on "Real Mem at 848 MB after 11 min of recording." That claim was wrong. macOS's compressed memory subsystem was silently pushing the leaked memory into compressed swap, so RSS stayed bounded while the **physical footprint** (the actual memory commitment) climbed unboundedly at the same rate as before any of the fixes.
