@@ -417,11 +417,25 @@
       //   AirPods walked out / webcam disabled.
       //   anything else — generic mid-session drain failure or
       //   inference panic (#591's existing surface).
+      // Multi-source intent: the user picked a mic AND opted into
+      // system audio, AND system audio was supported on this host.
+      // Mirrors the include-source logic in meeting-sessions.svelte.ts.
+      // When this is true and only one source failed, the other is
+      // still capturing — claiming "recording stopped" would be a lie.
+      const wasMultiSource =
+        audio.meetingMicId !== null &&
+        audio.meetingIncludeSystemAudio &&
+        audio.findSystemAudio()?.isSupported === true;
+      const otherSourceLabel =
+        e.payload.sourceKind === "mic" ? "system audio" : "microphone";
+
       let verb: string;
       if (e.payload.reason.includes("at session start")) {
-        verb = "couldn't start transcribing";
+        verb = "couldn't start";
       } else if (e.payload.reason.includes("disconnected")) {
-        verb = "disconnected mid-session — recording stopped";
+        verb = wasMultiSource
+          ? `disconnected mid-session — ${otherSourceLabel} still recording`
+          : "disconnected mid-session — recording stopped";
       } else {
         verb = "stopped transcribing";
       }
