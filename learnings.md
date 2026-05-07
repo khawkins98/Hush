@@ -1974,7 +1974,8 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 
 - **`WhisperState` recreation (#615 / #623):** bounded state-level allocations (partial results, per-chunk prompts), not the compute buffers inside `WhisperContext` itself (KV cache, mel scratch, beam decoder scratch). Those buffers are allocated by whisper.cpp's C++ side and high-watermark across `whisper_full` calls — malloc can never reclaim them while any live pointer holds the context open.
 - **ORT arena disable (#630):** the per-run output tensor arena was freed between calls, but the underlying ONNX `Session` still accumulated per-run state across a long meeting.
-- **mimalloc (#635):** an alternative allocator can't free memory that the C++ / ORT runtimes hold live pointers to. It helps with fragmentation of Rust-owned allocations but doesn't touch the C/C++ side.
+- **mimalloc (#635):** an alternative allocator can't free memory that the C++ / ORT runtimes hold live pointers to. It helps with fragmentation of Rust-owned allocations but doesn't touch the C/C++ side when used without the `override` feature.
+- **mimalloc with `override` + this PR (#636 follow-up):** with the `override` feature, mimalloc installs itself as the primary malloc zone on macOS via constructor-time interposition, intercepting `malloc`/`free` from C/C++ code (whisper.cpp, ORT) in addition to Rust. Alone (#635), it can't help because the libraries hold live pointers; with this PR's destructors firing at meeting stop, mimalloc finally has freed pages it can madvise back to the OS. Measured test (5:30 meeting, post-#636): Physical Footprint stayed at 8 GB after stop with system malloc — zero recovery despite correct Drop firing. Paired with override: expected to recover to ~1.5–2 GB baseline within seconds of stop.
 - **Per-run ORT shrinkage (#631, reverted):** freed output tensor memory *before* `try_extract_tensor` could read it → silently zeroed all speaker embeddings → looked like a fix because zero allocations were returned.
 - **RSS / "Real Mem" in Activity Monitor:** misleading. macOS compresses committed pages to the swap compressor, keeping RSS low while physical footprint grows. Always use `vmmap -summary <pid>` (physical footprint line) or `top`'s MEM column.
 
@@ -1983,14 +1984,19 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 `meeting_stop_manual` now runs a two-phase cleanup+reload at every session boundary:
 
 1. **Immediate drop (synchronous, on the IPC handler thread):**
-   - After `stop_manual()` joins the pump task (all streaming-session `Arc<dyn Transcribe>` clones dropped), call `state.swap_transcriber(None, None)` to null *both* `transcribe` and `transcribe_meeting` slots.
    - Write `Arc::new(NoopDiarizer)` into `state.diarize_slot`, replacing the live `OnnxDiarizer` session.
-   - The C++ `WhisperContext` and ORT `Session` destructors run as soon as the last `Arc` clone drops — typically within microseconds of `swap_transcriber` returning.
+   - The ORT `Session` destructor runs as soon as the old `Arc` drops — typically within microseconds of the write returning. Physical Footprint shrinks by the ORT arena size immediately.
+   - Reason for immediate diarizer null (not deferred): `SessionClusterState` must reset for each meeting. Keeping the old `OnnxDiarizer` live would bleed speaker labels from the ended session into the next one.
 
-2. **Background reload (fire-and-forget `tokio::spawn`):**
-   - Calls `build_transcriber` twice (dictation + meeting slots) concurrently via `tokio::join!`, using the same model-selection logic as `model_select`.
-   - Calls `swap_diarizer_after_download` on `spawn_blocking` to reload the OnnxDiarizer (SHA-256 verify + ONNX init, ~80 ms).
-   - Writes results back through the shared `TranscribeSlot` / `DiarizeSlot` `Arc`s — same write-through semantics used by the hot-swap infrastructure.
+2. **Background rebuild (fire-and-forget `tokio::spawn`):**
+   - Calls `build_transcriber` twice (dictation + meeting slots) concurrently via `tokio::join!`.
+   - Calls `swap_diarizer_after_download` on `spawn_blocking` to reload the `OnnxDiarizer` (SHA-256 verify + ONNX init, ~80 ms).
+   - On success, atomically installs the new context Arc, dropping the old one. Old `WhisperContext` C++ destructors fire here — KV cache, mel scratch, beam scratch reclaimed.
+   - On failure (`build_transcriber` returns `None`): logs at `error!` and leaves the existing (high-watermarked) context live rather than silently breaking dictation.
+
+### Why transcribers are NOT nulled immediately
+
+The original implementation nulled transcribers synchronously (foreground) then rebuilt in background. A review test found a correctness regression: if the user rapidly stops-then-starts a meeting within the ~1–2 s rebuild window, `meeting_start_manual` snapshots `None` from the slot (taken once at session start) and the new meeting runs idle for its **entire duration** with no transcription. Inversion (rebuild → install → old Arcs drop) is the correct approach: old contexts stay live during the window, so a rapid start always finds a valid transcriber. Memory is freed ~1–2 s later when the new context is installed.
 
 ### Why the `has_active_session()` guard
 
@@ -2003,4 +2009,4 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 ### Known open items
 - **Mid-meeting growth still unbounded** at ~1.25 GB/min. Per-stop cleanup bounds between-meeting footprint; a single very long meeting still grows. Mid-meeting reload would require a user-visible interruption (dictation outage) and is deferred.
 - **`model_select` race:** a model change that completes during the background reload will be overwritten when the reload task installs its freshly-built context. Low-risk in practice (tagged TODO(#636) in code); fix with a generation counter if it surfaces.
-- **Verify with `vmmap -summary`**, not RSS. Physical footprint should return to ~1.5–2 GB baseline within a few seconds of meeting stop.
+- **Verify with `vmmap -summary`**, not RSS. Physical footprint should return to ~1.5–2 GB baseline within a few seconds of meeting stop. Without mimalloc override the destructors fire correctly but footprint stays pinned (system malloc hoarding) — this was confirmed on a 5:30 meeting post-#636 (8 GB before and after stop). The `override` feature is required for observable recovery.

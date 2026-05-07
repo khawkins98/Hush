@@ -575,3 +575,52 @@ impl SessionManager {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use crate::db::SqliteDatabase;
+    use crate::meeting::manager::{ActiveSession, SessionState};
+    use crate::meeting::SqliteMeetingSessionRepository;
+
+    async fn idle_manager() -> crate::meeting::SessionManager {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let repo: Arc<dyn crate::meeting::MeetingSessionRepository> =
+            Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+        crate::meeting::SessionManager::new_for_test(repo)
+    }
+
+    #[tokio::test]
+    async fn has_active_session_false_when_idle() {
+        assert!(!idle_manager().await.has_active_session());
+    }
+
+    #[tokio::test]
+    async fn has_active_session_true_when_active() {
+        let manager = idle_manager().await;
+        {
+            let mut guard = manager.state.lock().unwrap();
+            *guard = SessionState::Active(ActiveSession {
+                id: 1,
+                started_at: std::time::Instant::now(),
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                pump_handle: Mutex::new(None),
+                close_attempted: false,
+            });
+        }
+        assert!(manager.has_active_session());
+    }
+
+    #[tokio::test]
+    async fn has_active_session_false_when_opening() {
+        let manager = idle_manager().await;
+        {
+            let mut guard = manager.state.lock().unwrap();
+            *guard = SessionState::Opening;
+        }
+        assert!(!manager.has_active_session());
+    }
+}

@@ -704,12 +704,20 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 /// stale double-click reaches here as a recoverable error rather
 /// than a panic.
 ///
-/// After a successful stop the WhisperContext(s) and ORT Session are
-/// dropped immediately so their high-watermarked compute buffers
-/// (KV cache, mel scratch, beam scratch) can be reclaimed by the
-/// allocator (#636). Both transcriber slots and the diarizer slot
-/// are then reloaded in the background so dictation remains usable
-/// as soon as the model files are remapped (~1–2 s).
+/// After a successful stop the diarizer slot is nulled immediately
+/// (resets speaker-cluster state for the next meeting and frees the
+/// ORT Session arena) while the transcriber slots are rebuilt in the
+/// background (#636). Old `WhisperContext` compute buffers (KV cache,
+/// mel scratch, beam scratch) stay live in the transcriber slots until
+/// the new contexts are ready (~1–2 s); the background task then
+/// atomically installs the new contexts, dropping the old `Arc`s so
+/// the C++ destructors can release those buffers.
+///
+/// Keeping old transcribers live during the rebuild window means a
+/// rapid stop-then-start sequence always finds a valid transcriber in
+/// the slot. Nulling first would leave a ~1–2 s window where
+/// `meeting_start_manual` snapshots `None` and the new meeting runs
+/// idle for its entire duration.
 #[tauri::command]
 pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
     // Hide the HUD up front — the user clicked Stop and expects the
@@ -736,22 +744,19 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
 
     if had_active {
         // The pump task has been joined (or this is a DB-close retry
-        // where it was already joined previously). Either way, all
-        // Arc<dyn Transcribe> clones held inside WhisperStreamingSession
-        // have been dropped. Null both transcribe slots so the
-        // WhisperContext compute buffers are freed by the C++ destructor,
-        // then reload in the background (#636).
-        //
-        // We null *both* slots (dictation + meeting) because both hold
-        // independent WhisperContext instances that have accumulated
-        // high-watermark allocations over the meeting lifetime.
-        if let Err(e) = state.swap_transcriber(None, None) {
-            tracing::warn!(error = ?e, "failed to null transcribe slots after meeting stop");
-        }
+        // where it was already joined previously). All Arc<dyn Transcribe>
+        // clones held inside WhisperStreamingSession have been dropped.
 
-        // Null the diarizer slot so the ORT Session arena is freed.
-        // Recover from poison — we must still write the Noop even if
-        // the lock was tainted by a prior panic.
+        // Null the diarizer slot immediately. Two reasons:
+        //   1. ORT Session arena is freed right away (Physical Footprint
+        //      benefit doesn't wait for the background rebuild).
+        //   2. Resets SessionClusterState so the next meeting starts
+        //      with a clean speaker-label namespace instead of inheriting
+        //      labels from the just-ended session.
+        // `diarize_slot` holds the inner diarizer; FlagGatedDiarizer in
+        // AppState wraps the slot and reads from it on every call, so
+        // this write takes effect immediately for any active/future pump.
+        // Recover from poison — we must write the Noop even after a panic.
         {
             let mut guard = state
                 .diarize_slot
@@ -760,10 +765,17 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
             *guard = Arc::new(crate::diarization::NoopDiarizer);
         }
 
-        // Reload both transcribers and the diarizer in the background.
-        // Uses the same Arc write-through semantics as model_select —
-        // the slots are shared Arcs so background writes are visible on
-        // the next dictation / meeting-pump read.
+        // Rebuild transcribers in the background. The old Arc<dyn Transcribe>
+        // values stay live in the slots while the rebuild runs (~1–2 s),
+        // so a rapid stop-then-start always finds a valid transcriber and
+        // doesn't run idle for its entire duration. Only overwrite a slot
+        // when the rebuild returns Some — a None result is logged at error!
+        // and the existing (possibly high-watermarked) context stays live
+        // rather than leaving dictation/meetings broken until restart.
+        //
+        // Old WhisperContext compute buffers (KV cache, mel scratch, beam
+        // scratch) are freed when the new Arcs replace the old ones and
+        // their refcounts hit zero (#636).
         //
         // TODO(#636): a concurrent model_select that completes *during*
         // this reload can be overwritten when the reload task finishes.
@@ -793,10 +805,26 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
                     &mic_gain_db_bg,
                 ),
             );
-            if let Ok(mut g) = transcribe_slot.lock() {
+            // Only install a new context when the rebuild succeeded.
+            // Writing None would leave dictation broken until the next
+            // model selection; keeping the high-watermarked context live
+            // is preferable to a silent outage.
+            if dictation.is_none() {
+                tracing::error!(
+                    "meeting stop: dictation transcriber rebuild returned None; \
+                     dictation will keep using the previous context until the \
+                     next model selection"
+                );
+            } else if let Ok(mut g) = transcribe_slot.lock() {
                 *g = dictation;
             }
-            if let Ok(mut g) = transcribe_meeting_slot.lock() {
+            if meeting.is_none() {
+                tracing::error!(
+                    "meeting stop: meeting transcriber rebuild returned None; \
+                     next meeting will keep using the previous context until the \
+                     next model selection"
+                );
+            } else if let Ok(mut g) = transcribe_meeting_slot.lock() {
                 *g = meeting;
             }
 
@@ -805,6 +833,9 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
                 use crate::diarization::catalog::WESPEAKER_RESNET34_LM_FILENAME;
                 let model_path = models_dir_bg.join(WESPEAKER_RESNET34_LM_FILENAME);
                 if model_path.exists() {
+                    // `diarize_slot` holds the inner diarizer directly;
+                    // FlagGatedDiarizer wraps the slot in AppState and reads
+                    // through it on every call (not a snapshot at session start).
                     let slot = Arc::clone(&diarize_slot_bg);
                     match tokio::task::spawn_blocking(move || {
                         crate::ipc::commands::diarizer::swap_diarizer_after_download(
@@ -818,15 +849,17 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
                             tracing::info!("diarizer reloaded after meeting stop");
                         }
                         Ok(Err(e)) => {
-                            tracing::warn!(
+                            tracing::error!(
                                 error = ?e,
-                                "diarizer reload failed after meeting stop"
+                                "meeting stop: diarizer reload failed; \
+                                 speaker identification unavailable until next model selection"
                             );
                         }
                         Err(e) => {
-                            tracing::warn!(
+                            tracing::error!(
                                 error = ?e,
-                                "diarizer reload task panicked after meeting stop"
+                                "meeting stop: diarizer reload task panicked; \
+                                 speaker identification unavailable until next model selection"
                             );
                         }
                     }
