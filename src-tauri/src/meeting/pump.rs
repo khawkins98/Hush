@@ -105,7 +105,6 @@ enum SourceRecoveryState {
     Dead,
 }
 
-
 /// Pump tick interval — how often the streaming pump pulls samples
 /// from each audio handle and feeds them into the per-source
 /// streaming inference session. Inference itself happens internally
@@ -456,8 +455,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                                             if let Some(per_session) =
                                                 guard.get_mut(&ctx.session_id)
                                             {
-                                                per_session
-                                                    .remove(ctx.sources[i].speaker_tag());
+                                                per_session.remove(ctx.sources[i].speaker_tag());
                                             }
                                         }
                                         ctx.handles[i] = Some(new_handle);
@@ -588,11 +586,8 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                     drop(ctx.handles[i].take());
                     ctx.streaming_sessions[i] = None;
 
-                    match open_source_handle(
-                        &ctx.audio,
-                        ctx.transcribe.as_ref(),
-                        &original_source,
-                    ) {
+                    match open_source_handle(&ctx.audio, ctx.transcribe.as_ref(), &original_source)
+                    {
                         Ok((new_handle, new_stream)) => {
                             tracing::info!(
                                 device = %original_device_name,
@@ -1204,7 +1199,10 @@ pub(super) fn open_source_handle(
     audio: &Arc<dyn AudioCapture>,
     transcriber: Option<&Arc<dyn Transcribe>>,
     source: &AudioSource,
-) -> Result<(Box<dyn AudioSession>, Option<Box<dyn StreamingTranscribeSession>>)> {
+) -> Result<(
+    Box<dyn AudioSession>,
+    Option<Box<dyn StreamingTranscribeSession>>,
+)> {
     let handle = audio.start_session(source.clone())?;
     let streaming_session = match transcriber {
         Some(t) => {
