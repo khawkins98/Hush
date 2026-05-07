@@ -1,6 +1,6 @@
 {
   "name": "hush",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Offline voice-to-text for macOS, Windows, and Linux.",
   "type": "module",
   "scripts": {
