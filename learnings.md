@@ -4,6 +4,25 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-07 — Whisper streaming session leaked ~76 MB per inference cycle (#612)
+
+**Symptom (reported in #612):** A 35-minute meeting grew RSS to **53.3 GB** before the user terminated the session. Memory was not reclaimed when the meeting stopped. Mac OS swap usage shot through the roof.
+
+**Root cause:** `WhisperInferer::infer` (and the older `run_inference`) called `ctx.create_state()` **on every inference cycle**. The streaming policy fires the inferer roughly every 3 s when speech is present. Over a 35-min session that's ~700 calls. Whisper.cpp's per-state init does sizeable C-heap allocations (KV cache scratch, mel pre-alloc, decoder scratch); on the whisper-rs 0.14.4 path those allocations apparently do not return cleanly to the C heap on free. **~76 MB × 700 ≈ 53 GB**, matching the bug report exactly.
+
+**Fix:**
+- Added a `whisper_state: Option<WhisperState>` field to `WhisperStreamingSession`. Lazily initialised on the first `infer` call (so a session that never produces audio pays no init cost), then reused for every subsequent call until the session ends and the field drops with the session.
+- `WhisperInferer` now borrows `&'a mut Option<WhisperState>` from the session. `infer()` takes the existing state via `as_mut()` instead of building a new one.
+- `WhisperState` from whisper-rs 0.14.4 is owned (no lifetime parameter) and `Send + Sync` via its internal `Arc<WhisperInnerContext>`, so this is a straightforward field-in-struct change rather than a self-referential mess.
+
+**Why this hadn't been caught:** the dictation path is short-lived (typically a few seconds → a single inference), so per-call state churn never accumulated. The leak is meeting-mode-specific, and meeting mode hadn't been exercised in long sessions until #612 reported it.
+
+**Related diagnostic added:** the CoreAudio tap now logs `sr=… ch=… ring_capacity_samples=… (~X MB)` at init. Candidate-2 in #612's investigation was an over-allocated audio ring on multi-channel devices; the log gives a cheap way to rule that out from a user's log capture without rebuilding.
+
+**Open follow-up:** if profiling on a real long session still shows growth after the WhisperState fix, the next suspect is the hand-off between `WhisperStreamingState` and the meeting-pump's `AudioRollingBuffer` — both retain f32 PCM and could be pinning samples beyond their nominal window. Filed as #612 follow-up if the fix doesn't fully close it.
+
+---
+
 ## 2026-05-07 — Splash screen for cold-boot launch gap: experimented and reverted (#584 Angle 2)
 
 **Hypothesis:** A splash window during `AppState::build_default` would mask the 1-2 s blank-window gap on cold boots and feel more polished than the bare blank Tauri window.

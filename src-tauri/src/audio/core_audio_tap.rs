@@ -147,6 +147,18 @@ impl CoreAudioTapSession {
         // SPSC ring large enough for ~2 min of 48 kHz stereo (same ceiling as
         // the cpal path — see MAX_BUFFER_FRAMES in mod.rs).
         let capacity = MAX_BUFFER_FRAMES * channels as usize;
+        // #612 candidate-2 diagnostic: log the channel count and ring
+        // size so we can rule out an over-allocated ring when the tap
+        // reports >2 channels (e.g. an aggregate device). Downstream
+        // code mixes to mono before forwarding, so this is purely an
+        // init-time footprint check.
+        tracing::info!(
+            "core-audio tap init: sr={} ch={} ring_capacity_samples={} (~{:.1} MB)",
+            sample_rate,
+            channels,
+            capacity,
+            (capacity * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0),
+        );
         let (mut producer, consumer) = RingBuffer::new(capacity);
         let overflow_flag = Arc::new(AtomicBool::new(false));
         let overflow_writer = Arc::clone(&overflow_flag);

@@ -68,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Long-meeting memory leak: WhisperState reused across the streaming session (#612)
+
+- **Symptom:** a 35-minute meeting could grow RSS to 53 GB and not reclaim after stop, eventually grinding the host to swap. Reproduced reliably with the meeting-mode pump.
+- **Root cause:** `WhisperInferer::infer` called `ctx.create_state()` on every inference cycle (~once per 3 s of speech). Each state init allocates ~76 MB of C-heap inside whisper.cpp that doesn't return cleanly on free; over a long meeting that's hundreds of allocations stacking up.
+- **Fix:** a single `WhisperState` is now lazily created on the first inference call and reused for the lifetime of the streaming session. The session struct owns the state and drops it when the meeting ends. Dictation was unaffected (single-shot transcribe never accumulated state).
+- **Bonus diagnostic:** the CoreAudio tap now logs sample rate, channel count, and ring-buffer footprint at init, making it easy to rule out an over-allocated audio ring on multi-channel aggregate devices from a user's log capture.
+
 #### Microphone disconnect mid-session now surfaces a clear message (#587)
 
 - When the cpal backend reports `StreamError::DeviceNotAvailable` (USB unplug, AirPods walked out of range, webcam disabled), Hush now propagates a typed `audio::DeviceLost` error with the captured device name through `Cmd::Stop` and `Cmd::DrainBuffer`.
