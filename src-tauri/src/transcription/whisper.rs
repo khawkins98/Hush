@@ -31,7 +31,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 use crate::audio::{apply_mic_gain, downmix_to_mono, CaptureFormat, CapturedAudio};
 use crate::transcription::resample::resample_to_mono;
@@ -455,6 +457,26 @@ pub struct WhisperStreamingSession {
     /// [`WhisperTranscription`] at session construction so
     /// settings updates propagate without rebuilding the session.
     inference_threads: Arc<std::sync::atomic::AtomicI32>,
+    /// Reused whisper.cpp inference state for the lifetime of this
+    /// streaming session (#612). Lazily created on the first
+    /// `infer` call and reused for every subsequent call until the
+    /// session ends. Pre-#612, `WhisperInferer::infer` called
+    /// `ctx.create_state()` per inference cycle (~3 s) — over a
+    /// 35-min meeting that's ~700 init/free cycles, and whisper.cpp's
+    /// internal allocations from `whisper_init_state` apparently do
+    /// not return cleanly to the C heap on `whisper_free_state`.
+    /// The math worked out: 700 calls × ~76 MB per state ≈ 53 GB
+    /// of unreclaimed C-heap, matching the symptom in the issue.
+    /// Reusing the state holds whisper.cpp's per-session allocations
+    /// once and frees them once when the session is dropped, which
+    /// is the textbook streaming-mode pattern.
+    ///
+    /// `set_no_context(true)` (still set in `WhisperInferer::infer`)
+    /// keeps each inference run independent at the decoder level —
+    /// previous-window text is not fed back into the prompt — so
+    /// reusing the state has no quality impact on the policy's
+    /// converge-on-stable-transcript story.
+    whisper_state: Option<WhisperState>,
 }
 
 impl WhisperStreamingSession {
@@ -471,6 +493,7 @@ impl WhisperStreamingSession {
             prompt,
             state: SlidingWindowState::new(WHISPER_SAMPLE_RATE, config),
             inference_threads,
+            whisper_state: None,
         }
     }
 
@@ -496,21 +519,30 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
     }
 
     fn drain(&mut self) -> Result<Vec<Utterance>> {
+        // Field-borrow split so the WhisperInferer can hold a mutable
+        // reference to `self.whisper_state` while `self.state.tick`
+        // runs against `self.state` (#612). Both fields are independent;
+        // taking them out into separate locals before constructing the
+        // inferer makes Rust happy without unsafe.
+        let policy_state = &mut self.state;
         let mut inferer = WhisperInferer {
             ctx: Arc::clone(&self.ctx),
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
+            whisper_state: &mut self.whisper_state,
         };
-        self.state.tick(&mut inferer)
+        policy_state.tick(&mut inferer)
     }
 
     fn finish(mut self: Box<Self>) -> Result<Vec<Utterance>> {
+        let policy_state = &mut self.state;
         let mut inferer = WhisperInferer {
             ctx: Arc::clone(&self.ctx),
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
+            whisper_state: &mut self.whisper_state,
         };
-        self.state.finish(&mut inferer)
+        policy_state.finish(&mut inferer)
     }
 }
 
@@ -522,6 +554,13 @@ struct WhisperInferer<'a> {
     ctx: Arc<Mutex<WhisperContext>>,
     prompt: &'a str,
     inference_threads: Arc<std::sync::atomic::AtomicI32>,
+    /// Persistent reference to the streaming session's reused
+    /// `WhisperState` slot (#612). Lazily created on the first
+    /// `infer` call so a session that never produces audio never
+    /// pays the init cost; reused on every subsequent call so
+    /// whisper.cpp's per-init C-heap allocations don't accumulate
+    /// across the meeting.
+    whisper_state: &'a mut Option<WhisperState>,
 }
 
 impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
@@ -554,9 +593,24 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             .ctx
             .lock()
             .map_err(|_| anyhow!("whisper context mutex poisoned"))?;
-        let mut state = ctx
-            .create_state()
-            .map_err(|e| anyhow!("failed to create whisper state: {e}"))?;
+        // Reuse a single WhisperState across calls (#612). Pre-#612
+        // this branch ran `ctx.create_state()` per call — over a
+        // long session that's hundreds of init/free cycles, and
+        // whisper.cpp's per-init C-heap allocations apparently do
+        // not return cleanly to the C heap on free. Lazy init keeps
+        // the no-audio session from paying the init cost; subsequent
+        // calls hit the `else` branch and reuse the existing state.
+        if self.whisper_state.is_none() {
+            *self.whisper_state = Some(
+                ctx.create_state()
+                    .map_err(|e| anyhow!("failed to create whisper state: {e}"))?,
+            );
+            tracing::debug!("whisper streaming session: created reusable WhisperState (#612)");
+        }
+        let state = self
+            .whisper_state
+            .as_mut()
+            .expect("whisper_state is Some after the lazy-init branch above");
         state
             .full(params, mono_16k_pcm)
             .map_err(|e| anyhow!("whisper streaming inference failed: {e}"))?;
