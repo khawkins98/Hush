@@ -409,9 +409,22 @@
       );
       const label =
         e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
-      const verb = e.payload.reason.includes("at session start")
-        ? "couldn't start transcribing"
-        : "stopped transcribing";
+      // Three reason classes:
+      //   "at session start" — never started (pre-warm or
+      //   start_stream failure caught in lifecycle.rs).
+      //   "device disconnected" — mid-session DeviceLost from the
+      //   audio backend (#587 PR 2a). The user pulled their mic /
+      //   AirPods walked out / webcam disabled.
+      //   anything else — generic mid-session drain failure or
+      //   inference panic (#591's existing surface).
+      let verb: string;
+      if (e.payload.reason.includes("at session start")) {
+        verb = "couldn't start transcribing";
+      } else if (e.payload.reason.includes("disconnected")) {
+        verb = "disconnected mid-session — recording stopped";
+      } else {
+        verb = "stopped transcribing";
+      }
       meeting.sourceFailedNotice = `${label} ${verb}.`;
     });
 
