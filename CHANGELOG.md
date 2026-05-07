@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-08
+
 ### Fixed
 
 - **About tab links no longer crash the app** (#648). Clicking any external link in the About tab (Apache licence, GitHub repo, bug report, whisper.cpp, etc.) previously caused a SIGSEGV via `fork()` in the multithreaded Tauri/Tokio process (`_malloc_fork_child + 184` in the crash log). The `tauri-plugin-shell` open path has been replaced with a custom `open_url` IPC command that uses `posix_spawn()` via `std::process::Command` — safe from multithreaded callers. All update-result "Open release notes" links are also fixed. The now-unnecessary `shell:allow-open` capability grant has been removed.
