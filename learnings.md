@@ -4,6 +4,37 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-07 — #612 FIFTH pass: per-run arena shrinkage broke diarization (illusory fix)
+
+After #631 shipped (per-run `memory.enable_memory_arena_shrinkage=cpu:0` RunOption), Ken's hands-on test showed RSS basically flat — 700 MB at 2 min, no climbing. Looked like a complete win. Then he checked the transcript: every utterance was labelled `mic:` or `system:` instead of `Speaker N`. Diarization was broken on every utterance.
+
+**Mechanism:** the per-run shrinkage triggers at end of `session.run()`. ORT releases the output tensor's backing memory as part of that shrinkage. Our code then calls `try_extract_tensor::<f32>()` against the now-freed memory, which errors. The error from `embed()` is caught in `label_utterances` and logged at DEBUG (not visible at our INFO-filtered log layer). The utterance falls through to the source-derived `mic`/`system` label via `dispatch_utterances`'s fallback branch.
+
+**Why memory looked fixed:** failed embeds = zero successful inferences = zero allocations to leak. The "no growth" observation was an artifact of the diarizer being silently broken, NOT the per-run shrinkage actually reclaiming memory.
+
+**Reverted:** PR #631's `run_with_options` + RunOptions change. Back to plain `session.run()`. Kept the ort `tracing` feature (purely diagnostic — confirmed `enable_cpu_mem_arena:0` and `enable_mem_pattern:0` were correctly applied by #630).
+
+**What this teaches us:**
+- ORT's per-run shrinkage option is incompatible with our extract-after-run pattern. Either we'd need to copy outputs immediately into safe memory before the shrinkage hits (but that's already what `view.to_vec()` does at the next line — so the freed memory is being read DURING the run, not after), or we need a different lever.
+- A hands-on debugging cycle should always include a transcript spot-check, not just memory metrics. RSS-flat with diarization-broken-silently looks identical to RSS-flat with everything-working.
+- DEBUG-level error logs need to be visible during active debugging. Setting `RUST_LOG=hush=debug` for sessions where we're hunting bugs would have surfaced the `OnnxDiarizer: skip utterance` line on the first run.
+
+**Current state of #612:**
+- #615 (state reuse) and #623 (periodic state recreation): real wins, kept.
+- #630 (build-time `with_arena_allocator(false)` + `with_memory_pattern(false)`): kept; confirmed correctly applied by ort tracing. Doesn't fix the leak alone but is defense-in-depth.
+- #631's RunOptions: reverted.
+- Net leak rate with diarizer ON: still ~1.25 GB/min. Open.
+
+**Next attempt should target a different layer.** Options on the table:
+- Recreate `OnnxDiarizer` per meeting session (1-2 s model reload at session start; releases everything between sessions but doesn't help within a single long meeting)
+- Investigate IO binding / explicit allocator control (more invasive but precise)
+- Wait for ort 2.0 stable + bump (defers fix; supply-chain pin learning warns against unmotivated bumps)
+- Make diarization opt-in instead of on-by-default; document the leak in the toggle UI as a tradeoff
+
+The right move probably depends on hands-on data with #630 alone (RunOptions reverted): confirm the leak rate in that configuration, then choose between per-session recreation vs. opt-in.
+
+---
+
 ## 2026-05-07 — #612 fourth pass: ORT CPU arena was the dominant leak, not whisper
 
 **Symptom (continued from earlier #612 entries):** With #623 (periodic `WhisperState` recreation) shipped, RSS still climbed at ~1.25 GB/min on a two-source meeting, AND held at peak for 4+ minutes after meeting stop. The post-stop persistence ruled out anything per-session (audio buffers, streaming session, drain buffers — all dropped on stop) and pointed at app-lifetime owners.
