@@ -131,6 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - New `rust-windows` workflow job runs `cargo check --no-default-features --all-targets` on `windows-latest`. Catches `cfg`-gating regressions (e.g. macOS-specific dep added without `#[cfg(target_os = "macos")]`) without paying the cmake + msvc + whisper.cpp build cost the original Windows-in-matrix decision rejected. Promotes back into the main matrix when Windows distribution lands.
 
+#### First-run wizard simplified: permissions-first ordering, removed redundant dialog (#609)
+
+- **Wizard now opens on the Permissions step** (was Welcome). New users hit the mandatory grants first and the explainer second — the previous order asked them to sit through copy before they could even use the app, then dropped them into a separate permissions surface.
+- **Welcome step's primary button became "Start using Hush"** (was "Continue") — it's the dismiss action, not a forward step. Clarifies that the welcome screen is a parking spot, not another gate.
+- **Removed the redundant third permissions dialog** that previously auto-opened after the wizard dismissed. The wizard's permission step is now the single new-user permission surface; the in-app `PermissionsDialog` only appears when a permission-denied error fires (the live trigger). Dismissing via Escape still persists the first-run flag.
+
 #### Pre-push hook coverage extended (#592)
 
 - The pre-push hook (`.githooks/pre-push`) now prints a friendly remediation hint when a step fails (e.g. "Fix: cd src-tauri && cargo fmt --all") instead of dumping raw tool output. EXIT trap names the in-flight step so contributors don't have to scroll back to find which gate broke.
