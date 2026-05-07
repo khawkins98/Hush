@@ -4,6 +4,81 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-07 — Splash screen for cold-boot launch gap: experimented and reverted (#584 Angle 2)
+
+**Hypothesis:** A splash window during `AppState::build_default` would mask the 1-2 s blank-window gap on cold boots and feel more polished than the bare blank Tauri window.
+
+**Implementation tried in PR #607:**
+- Static-HTML/CSS splash route at `src/routes/splashscreen/+page.svelte` (Hush wordmark + spinner + "Loading…", no JS, no IPC).
+- New `splashscreen` window in `tauri.conf.json` (`visible: true`, transparent, 360×200, centred). Main window flipped to `visible: false`.
+- Setup hook in `lib.rs::run` closed splash + showed main once `block_on(build_default)` returned. Background-launch path kept main hidden but still closed splash.
+
+**Outcome: closed without merging.** The startup-timings diagnostic (#605, also from this work) measured warm-boot `build_default` at **992 ms** with the diarizer init dominating at 913 ms. That's borderline — Apple's HIG calls anything <1 s "responsive."
+
+The splash only covers the `build_default` window. It does NOT cover:
+- Process spawn + Tauri runtime init (before the setup hook runs)
+- Window pre-creation for the 4 windows declared in `tauri.conf.json` (created before setup fires)
+- Main webview mount + SvelteKit hydration + first IPC volley from `onMount` (after `main_win.show()`)
+
+If the perceived gap is dominated by the bracketing segments rather than `build_default`, the splash makes things visually *worse* (splash flashes for ~1 s, closes, blank main webview hydrates for another ~500 ms, populated main appears — three-state transition replaces the original two-state).
+
+**Costs vs benefit at the measured warm-boot:**
+- Extra window in `tauri.conf.json`, additional capability surface
+- Process-activation sequencing risk on macOS (main starting hidden) — needs `tauri:bundle` re-validation per release
+- ~190 LOC
+
+**Decision:** revert. Keep #605's `get_startup_timings` diagnostic (it's the durable instrumentation). If a future change pushes `build_default` past ~2 s on real hardware, the splash story is worth re-opening *with the data backing it* — until then the diagnostic alone is the right shape.
+
+---
+
+## 2026-05-07 — Typed errors via `anyhow::Error::new` + downcast at the trait boundary (#587 PR 1)
+
+**Pattern.** A trait surface that returns `anyhow::Result<T>` can carry typed sentinels by wrapping a `#[derive(Debug, Clone)]` struct that impls `std::fmt::Display` + `std::error::Error`, and creating the error via `anyhow::Error::new(MySentinel { … })`. Callers that want to special-case the sentinel use `err.downcast_ref::<MySentinel>()`; callers that don't get the existing string-render path via `Display`.
+
+**Concrete example (this PR):** `audio::DeviceLost { device: String }` in `audio/mod.rs`. The cpal backend wraps it on `StreamError::DeviceNotAvailable`; the IPC layer's dictation-stop path (`commands/dictation/pipeline.rs::stop_audio_capture`) downcasts and routes to `IpcError::AudioDeviceLost(name)`; the meeting pump's drain handler (`meeting/pump.rs`) does the same downcast and emits the existing `meeting:source-failed` event with a typed reason. Both consumers route the same typed signal to user-appropriate UI without the audio module knowing about either consumer.
+
+**Why this beats the alternatives:**
+- Adding a typed enum variant to the audio trait's return type forces every backend to implement the variant + every caller to match on it. The downcast pattern lets new sentinels land without trait churn.
+- String-matching the error chain is fragile (a change in cpal's error-text format silently re-routes the case). Downcast is type-checked.
+- `anyhow::Error::new` preserves the source chain — `Display` still renders something useful for callers that don't downcast (logging, generic error buckets).
+
+**Caveat:** the sentinel must be `'static` and `Send + Sync` for `anyhow::Error::new` to accept it. A `Clone + Debug` derive plus a hand-written `Display` + empty `impl std::error::Error` covers all four. The two unit tests in `audio/tests.rs` (`device_lost_round_trips_through_anyhow_downcast` and `device_lost_display_includes_device_name_for_log_lines`) pin both halves so a future thiserror-derive refactor that drops type identity fails loudly rather than silently downgrading the sentinel to the generic bucket.
+
+**Where else this pattern would fit:** anywhere a trait returns `anyhow::Result` and you want one variant routed to typed UI. Example future use: a `transcription::ModelLoadError { path: PathBuf, kind: ModelLoadFailureKind }` for the model-picker hot-path, or a `meeting::PumpStalledError` for the pump's never-tick failure mode.
+
+---
+
+## 2026-05-07 — Audio module file layout for cross-platform readiness (#597)
+
+**Decision.** `src-tauri/src/audio/` now follows a peer-files-per-backend pattern:
+
+```
+audio/
+  mod.rs           — trait + shared types (CaptureFormat, AudioSession, AudioCapture, AudioSource, MAX_BUFFER_FRAMES, drain_consumer, log_overflow_if_set)
+  cpal.rs          — cpal-backed mic capture (the cross-platform mic path)
+  core_audio_tap.rs — macOS system-audio capture (CoreAudio process tap, spawns Swift helper)
+  file_source.rs   — WavFileAudioCapture test fixture (gated on `--features test-utils`)
+  format.rs        — apply_mic_gain + downmix_to_mono helpers
+  tests.rs         — cross-platform trait tests + drain_consumer / log_overflow_if_set tests
+```
+
+Pre-#597, `audio/mod.rs` was 1900 lines holding the trait, the cpal worker, all helper structs, AND every test. The split brings mod.rs to ~530 lines containing just the trait and shared types.
+
+**Why this matters: cross-platform readiness.** When Linux PulseAudio (#106) or Windows WASAPI loopback (#107) lands, those impls become peers (`audio/pulse.rs`, `audio/wasapi.rs`) under the same pattern. The pre-#597 layout would have either bloated `mod.rs` to ~3500 lines or forced an emergency extraction under deadline pressure.
+
+**Same pattern applied to `permissions/` and `ipc/commands/` for the macOS-only modules.** Renamed from `macos_perms/` and `ipc/commands/macos.rs` to `permissions/macos.rs` (under `permissions/mod.rs`) and `ipc/commands/permissions.rs` so future Linux/Windows permission code has a clean home rather than fragmenting into a sibling `linux_perms/` module.
+
+**Same pattern applied to `ipc/mod.rs`** (was 2247 lines, now 67) — split into `ipc/{state.rs, builder.rs, pipeline.rs, tests.rs}` peers. The mod.rs now reads as a front door (module declarations + re-exports).
+
+**What didn't get extracted (and why):**
+- `commands/dictation.rs` got `pipeline.rs` for orchestration helpers but its `stop_dictation` body (262 lines) stayed inline. Restructuring the dictation hot path carries regression risk that's worth a focused PR rather than a roll-up refactor.
+- `meeting/manager.rs` (1786 lines after pump/lifecycle/classifier already extracted) was deliberately not touched in #597's roll-up. The state-machine + per-session wiring is dense; further extraction was deemed lower value than the items 1-6 work.
+- `AppState`'s 19 fields stayed flat. The existing `DataServices` and `RuntimeFlags` substructs already absorbed the worst clustering; the three additional substructs the audit proposed (`RecordingSlots`, `PttState`, `Downloads`) would only consolidate ~9 of 18 fields at the cost of 30 reference-site changes for cosmetic gain. Closed as not-now in #597 item 7.
+
+**Trigger for revisiting:** when AppState crosses 22 fields, or when a second-platform audio impl lands and the existing peer-file pattern starts feeling cramped.
+
+---
+
 ## 2026-05-06 — Meeting mode silent-audio root cause: SCK codec artefacts defeated Whisper's noise gate (#533)
 
 ### Root cause (confirmed by community reviewer)

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### System audio backend: CoreAudio process tap replaces ScreenCaptureKit (#588, #595)
+
+- **No more "Screen Recording" prompt for system audio capture.** Hush previously required the user to grant Screen Recording in macOS Privacy settings — an alarming permission for an app that only captures audio. The system audio backend now uses `AudioHardwareCreateProcessTap` (CoreAudio's process-level audio tap, available on macOS 14.2+) which only requires the standard microphone-style audio consent dialog (`NSAudioCaptureUsageDescription`).
+- Implemented as a small Swift helper binary at `resources/macos-audio-tap.swift`, compiled by `build.rs` and bundled as a Tauri resource. The Rust side spawns the helper, reads a 12-byte `HUSH` magic + sample-rate + channel-count header, then streams f32 LE interleaved PCM via stdout into an `rtrb` ring buffer that the meeting pump drains per tick.
+- Resolves the silent-system-audio failure mode #533 was investigating: SCK's audio path applied codec processing internally and the post-codec PCM tripped Whisper's `no_speech_thold` gate. The direct CoreAudio tap delivers raw f32 PCM with zero codec round-trip.
+- IOProc callback uses a pre-allocated scratch-buffer pool (#595) to avoid heap allocation on the realtime audio thread.
+
+#### Build timestamp in the About pane (#589)
+
+- The About pane now displays "Built DD/MM/YYYY HH:MM" below the version, sourced from the `HUSH_BUILD_TIMESTAMP` env var stamped by `build.rs` at compile time. Helps users (and bug reports) confirm which build is running without scrolling backend logs.
+- Shared `formatBuildTimestamp` helper in `src/lib/utils/format.ts` consolidates the formatter that was previously duplicated across the Debug Console and issue-report generator.
+
+#### Startup phase timings in the Debug tab (#584 Angle 1)
+
+- New `get_startup_timings` IPC returns a per-phase trace of `AppState::build_default` (database / whisper-contexts / diarizer init / settings wiring) with absolute and per-phase durations. The Debug tab renders a collapsible "⏱ Startup" section listing each phase and its duration; total ≥ 2 s renders in amber as a regression flag.
+- Captures startup-time regressions without needing Instruments. The existing `tracing::info!` checkpoints feed the same `Vec<StartupPhase>` so the IPC and the log line share one source of truth.
+
 #### System Audio permission: auto-detect grant + relaunch prompt (#579)
 
 - **"System Audio" label throughout UI** — all user-visible copy in the Permissions tab, first-run wizard, and error messages now says "System Audio" instead of "Screen Recording". The underlying TCC category is still `ScreenCapture`; this is a framing change only, matching how apps like OpenWhispr present the same permission.
@@ -51,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Microphone disconnect mid-session now surfaces a clear message (#587)
+
+- When the cpal backend reports `StreamError::DeviceNotAvailable` (USB unplug, AirPods walked out of range, webcam disabled), Hush now propagates a typed `audio::DeviceLost` error with the captured device name through `Cmd::Stop` and `Cmd::DrainBuffer`.
+- **Dictation:** the IPC layer downcasts to `IpcError::AudioDeviceLost(deviceName)`. The frontend renders "Microphone disconnected — the selected input source ('Foo') is no longer available. Pick a different source and try again." with the device name in the hint.
+- **Meeting mode:** the pump downcasts the same error and emits the existing `meeting:source-failed` event with reason "audio device disconnected mid-session" plus a per-source `device_lost` flag so subsequent ticks skip the dead handle. The amber banner reads "Microphone disconnected mid-session — recording stopped" instead of the previous silent-zero-fill behavior. Other sources in the meeting keep going independently.
+- Auto-fallback (recreate the source on system default and reconnect to the original on replug) and an optional preferred-mic preference are tracked in #611.
+
+#### Main window can be reopened after being closed/hidden (#590)
+
+- Clicking the Dock icon while the main window is hidden (red ✕ or ⌘W) now brings it back to the front. Tauri's `RunEvent::Reopen` is now handled and routes through the same `tray::show_main_window` helper as the tray's "Show Hush" item.
+- The Window menu gains a "Show Hush" entry. macOS's auto-managed NSWindowsMenu only lists *visible* windows, so a hidden main never appeared via the standard mechanism — this gives a discoverable, keyboard-accessible recovery path that doesn't require finding the tray icon.
+
 #### Meeting mode system audio was always silent — IOProc replaces AVAudioEngine in CoreAudio tap (#593, #594)
 
 - `CATapDescription.isExclusive` was `false`. With `processes = []`, `false` means "tap no processes" and delivers silence; `true` means "exclude no one" and captures all system audio. Changed to `true`.
@@ -87,6 +116,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `streaming tick: inference ran` now logs `raw_segments` and `non_empty_segments` so Whisper no-speech suppression (`no_speech_thold`) is visible without recompiling.
 - `meeting pump: inference tick` now includes `elapsed_ms` for the feed+drain round-trip, making slow-inference diagnosis straightforward.
 - Added `whisper: inference complete` log at the whisper layer showing raw segment count before text-emptiness filtering.
+
+### Changed
+
+#### Architecture cleanup: pre-Linux/Windows structural readiness + post-#588 doc drift (#597)
+
+- **Documentation refresh.** ARCHITECTURE.md updated to reflect the CoreAudio tap migration (system-audio backend section + module-map row + module shutdown discussion). Stale `sck_probe_lock` field and `SCK via sck_session` comments removed from the Rust source.
+- **`macos_perms/` renamed to `permissions/macos.rs`** under a new `permissions/mod.rs` so future Linux (#106) and Windows (#107) permission impls have a home. Same parallel rename for `ipc/commands/macos.rs` → `permissions.rs`. IPC command names are unchanged (wire protocol stable).
+- **`audio/mod.rs` (1900 lines) split** into `audio/{mod.rs, cpal.rs, tests.rs}` peers next to the existing `core_audio_tap.rs`. mod.rs is now ~530 lines containing only the trait + shared types; cpal.rs holds the cpal worker + cpal-specific tests. When Linux PulseAudio (#106) or Windows WASAPI loopback (#107) lands, those impls become peers under `audio/` rather than bloating one file.
+- **`ipc/mod.rs` (2247 lines) split** into `ipc/{state.rs, builder.rs, pipeline.rs, tests.rs}` peers. mod.rs is now a 67-line front door (module declarations + re-exports). State, builder, and pipeline orchestration each have their own dedicated file.
+- **`commands/dictation.rs` extracted** a `dictation/pipeline.rs` peer for the orchestration helpers (`start_dictation_inner`, `strip_whisper_brackets`, `load_vocabulary_prompt`, etc.). mod.rs keeps the Tauri command shells.
+
+#### Lightweight Windows compile-only CI job (#597)
+
+- New `rust-windows` workflow job runs `cargo check --no-default-features --all-targets` on `windows-latest`. Catches `cfg`-gating regressions (e.g. macOS-specific dep added without `#[cfg(target_os = "macos")]`) without paying the cmake + msvc + whisper.cpp build cost the original Windows-in-matrix decision rejected. Promotes back into the main matrix when Windows distribution lands.
+
+#### Pre-push hook coverage extended (#592)
+
+- The pre-push hook (`.githooks/pre-push`) now prints a friendly remediation hint when a step fails (e.g. "Fix: cd src-tauri && cargo fmt --all") instead of dumping raw tool output. EXIT trap names the in-flight step so contributors don't have to scroll back to find which gate broke.
+- Opt-in slow-step gate via `HUSH_SLOW_HOOKS=1` runs `cargo test --lib --no-default-features` after the existing checks. Off by default to keep the hook interactive-friendly during rapid iteration; turn on for the final push to a PR.
+- Hook header explains the cross-platform shape (every step uses `--no-default-features` so the hook works identically on macOS / Linux / Windows) and points at `learnings.md` for the rustfmt + clippy version-gap workarounds.
 
 ### Performance
 
