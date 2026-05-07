@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **About tab version and Tauri runtime now display correctly** (#649 follow-up). Version and "Tauri runtime" rows were silently hidden because the main window capability intentionally excludes `app:default`, causing `getVersion()`/`getTauriVersion()` to fail without error. These values are now read from the existing `get_build_info` IPC command (no capability required); `tauri_version` is baked in at compile time by `build.rs` parsing `Cargo.lock`.
+
 ## [0.5.1] - 2026-05-08
 
 ### Fixed
