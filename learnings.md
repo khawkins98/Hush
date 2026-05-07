@@ -4,6 +4,26 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-07 — #612 fourth pass: ORT CPU arena was the dominant leak, not whisper
+
+**Symptom (continued from earlier #612 entries):** With #623 (periodic `WhisperState` recreation) shipped, RSS still climbed at ~1.25 GB/min on a two-source meeting, AND held at peak for 4+ minutes after meeting stop. The post-stop persistence ruled out anything per-session (audio buffers, streaming session, drain buffers — all dropped on stop) and pointed at app-lifetime owners.
+
+**Differential test:** toggle Diarization OFF in Settings → Meeting → re-run a 5-min meeting.
+
+**Result:** RSS climbed ~1 GB total in 4 minutes (~250 MB/min) instead of ~5 GB. The diarizer was responsible for ~80% of the leak; whisper.cpp's contribution is a much smaller residual (probably a mix of real per-call growth + macOS allocator hoarding on the already-elevated RSS baseline).
+
+**Root cause:** ORT's default CPU execution provider uses an **arena allocator** that never returns pages to the OS, combined with a **memory-pattern cache** keyed on input shape. The wespeaker model takes variable-length log-Mel features (one per utterance, length proportional to utterance duration) — which is the textbook trigger for both. Every new sequence length grows the arena AND adds a memory-pattern cache entry; neither is reclaimed even when the `Session` is held long-lived.
+
+This is documented ORT behaviour, not an `ort` Rust crate bug. Canonical references: [microsoft/onnxruntime#11627](https://github.com/microsoft/onnxruntime/issues/11627) (200 MB → 6 GB on a 2 MB model, fixed by `enable_cpu_mem_arena=false`) and [#22271](https://github.com/microsoft/onnxruntime/issues/22271). The official [ORT memory-tuning page](https://onnxruntime.ai/docs/performance/tune-performance/memory.html) calls this out explicitly.
+
+**Fix shipped:** at session-build time, register the CPU EP with `with_arena_allocator(false)` and call `with_memory_pattern(false)` on the builder. Allocations now route through plain malloc/free (deallocations actually return to the OS at end of `run`); the per-shape plan cache is disabled. Perf cost is the documented 2–10% latency hit per `session.run`, invisible at our once-per-utterance cadence (per-utterance run is already 50–100 ms).
+
+**Why three passes of "WhisperState recreation" missed this:** whisper.cpp's per-call accumulation is real but small (~26 MB per `whisper_full` worth of working set), much less than ORT's per-shape arena growth. The first three #612 passes were in the right place algorithmically — they just under-estimated the dominant source. The diagnostic from #629 (RSS-delta logged at recreation) was the right tool to find this if we'd run it earlier; the fastest way to diagnose ended up being the differential A/B (toggle diarizer off), which directly named the owner.
+
+**Followup:** the residual ~250 MB/min growth with diarizer off is plausible to chase separately, but at that rate a 30-min meeting hits ~8 GB which is in the "annoying but not catastrophic" range and likely partly macOS allocator hoarding rather than true leak. Worth re-measuring with the ORT fix in place before committing more time. The #629 RSS-delta diagnostic is now perfectly suited to that follow-up.
+
+---
+
 ## 2026-05-07 — Stacked PRs + squash-merge auto-close the dependent PR irrecoverably
 
 **Symptom:** Stacked PR B against branch A. PR A squash-merged to main with `--delete-branch`. PR B auto-closed by GitHub the moment A's branch was deleted. Trying to recover via `gh pr reopen` returned `Could not open the pull request`; trying to retarget via `gh pr edit --base main` returned `Cannot change the base branch of a closed pull request`. The closure is permanent at the API level even when the branch and commits still exist.
