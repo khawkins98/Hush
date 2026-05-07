@@ -68,12 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-#### Long-meeting memory leak: WhisperState reused across the streaming session (#612)
+#### Long-meeting memory leak: WhisperState reused + periodically recreated (#612)
 
 - **Symptom:** a 35-minute meeting could grow RSS to 53 GB and not reclaim after stop, eventually grinding the host to swap. Reproduced reliably with the meeting-mode pump.
-- **Root cause:** `WhisperInferer::infer` called `ctx.create_state()` on every inference cycle (~once per 3 s of speech). Each state init allocates ~76 MB of C-heap inside whisper.cpp that doesn't return cleanly on free; over a long meeting that's hundreds of allocations stacking up.
-- **Fix:** a single `WhisperState` is now lazily created on the first inference call and reused for the lifetime of the streaming session. The session struct owns the state and drops it when the meeting ends. Dictation was unaffected (single-shot transcribe never accumulated state).
-- **Bonus diagnostic:** the CoreAudio tap now logs sample rate, channel count, and ring-buffer footprint at init, making it easy to rule out an over-allocated audio ring on multi-channel aggregate devices from a user's log capture.
+- **First-pass root cause (#615):** `WhisperInferer::infer` called `ctx.create_state()` on every inference cycle (~once per 3 s of speech). Each state init allocates ~76 MB of C-heap inside whisper.cpp that doesn't return cleanly on free.
+- **First-pass fix:** a single `WhisperState` is now lazily created on the first inference call and reused for the lifetime of the streaming session. Brought 5-min meeting RSS from 53 GB → 3.5 GB.
+- **Second-pass root cause:** real-session profiling on a long two-source meeting showed RSS still climbing at ~2 GB/min — ~46 MB allocated and not returned per `whisper_full` call even with the state held long. whisper.cpp's pure-CPU code path appears to do scratch allocations within `whisper_full` that don't return to the heap; not surfaced upstream because heavy users typically run Metal/CoreML paths and we ship `features = []`.
+- **Second-pass fix:** every `DEFAULT_STATE_RECREATE_INTERVAL = 30` inferences (~90 s of speech per source), the streaming session drops its `WhisperState` so the next call lazy-recreates a fresh one. Pays the ~76 MB recreate cost once per ~90 s instead of leaking ~46 MB every ~3 s. Net: bounded RSS oscillating around ~1.5 GB per source instead of unbounded growth. Tunable via `HUSH_WHISPER_STATE_RECREATE_INTERVAL` env var (set 0 for "never recreate" A/B testing).
+- **Bonus diagnostic:** the CoreAudio tap logs sample rate, channel count, and ring-buffer footprint at init, making it easy to rule out an over-allocated audio ring on multi-channel aggregate devices from a user's log capture.
 
 #### Microphone disconnect mid-session now surfaces a clear message (#587)
 
