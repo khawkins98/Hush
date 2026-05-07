@@ -19,7 +19,22 @@
         "height": 600,
         "minWidth": 720,
         "minHeight": 400,
-        "maximizable": false
+        "maximizable": false,
+        "visible": false
+      },
+      {
+        "label": "splashscreen",
+        "title": "Hush",
+        "url": "/splashscreen",
+        "width": 360,
+        "height": 200,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": true,
+        "shadow": false
       },
       {
         "label": "hud",

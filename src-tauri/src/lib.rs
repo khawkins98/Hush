@@ -386,6 +386,33 @@ pub fn run() {
                 debug_log,
             ))
             .map_err(|e| format!("build app state: {e:#}"))?;
+
+            // #584 Angle 2 — splash screen handoff. The splash window
+            // (declared in `tauri.conf.json` as `visible: true`) was
+            // shown for the duration of `build_default` to mask the
+            // blank-window gap on cold boots. Now that state is built,
+            // close it and reveal the main window. On macOS background
+            // launch (LaunchAgent path, `--background` arg) the main
+            // window stays hidden — the `is_background_launch` check
+            // below mirrors the dedicated handler further down so both
+            // paths agree on what counts as a silent start.
+            //
+            // Cross-platform: the splash close runs on every platform.
+            // The main-show is gated only on macOS background launch
+            // because the autostart-LaunchAgent flow is macOS-only;
+            // Linux/Windows always show main here.
+            if let Some(splash) = app.get_webview_window("splashscreen") {
+                let _ = splash.close();
+            }
+            #[cfg(target_os = "macos")]
+            let is_bg = is_background_launch(std::env::args());
+            #[cfg(not(target_os = "macos"))]
+            let is_bg = false;
+            if !is_bg {
+                if let Some(main_win) = app.get_webview_window("main") {
+                    let _ = main_win.show();
+                }
+            }
             // Clone the audio Arc out before `manage` takes ownership of
             // `state` — the level-meter pump task below needs a handle
             // it can read from without going through `app.state()` on
@@ -512,26 +539,24 @@ pub fn run() {
                 hide_macos_zoom_button(&window);
             }
 
-            // Background-launch behaviour (#268). When the
-            // LaunchAgent fires Hush at login, we don't want to
-            // pop the main window — every macOS tray utility
-            // (Rectangle, Bartender, Alfred) starts silent. The
-            // installer / autostart-toggle code passes
-            // `--background` as a CLI arg; if present, hide the
-            // main window and switch to Accessory activation
-            // policy so the Dock icon doesn't appear either.
+            // Background-launch activation policy (#268). When the
+            // LaunchAgent fires Hush at login, we don't want to pop
+            // the main window — every macOS tray utility (Rectangle,
+            // Bartender, Alfred) starts silent. The main window
+            // already starts hidden post-#584 (splash gates it; the
+            // splash-close path above leaves it hidden when
+            // `--background` is set), so this block only needs to
+            // switch the activation policy to Accessory so the Dock
+            // icon doesn't appear either.
             //
             // The flag is passed via the autostart plugin's
             // `Some(vec!["--background"])` registration argument
             // (see the `tauri_plugin_autostart::init` call above).
             #[cfg(target_os = "macos")]
             if is_background_launch(std::env::args()) {
-                if let Some(main_win) = app.get_webview_window("main") {
-                    let _ = main_win.hide();
-                }
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 tracing::info!(
-                    "background launch: main window hidden, activation policy = Accessory"
+                    "background launch: activation policy = Accessory; main window stays hidden"
                 );
             }
 

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "splashscreen",
+  "description": "Capability for the splash window (#584 Angle 2). Shown during AppState::build_default and closed by the setup hook once construction completes. The page is static HTML/CSS — no JS, no IPC, no event listeners — so this capability deliberately grants nothing. If a future change wants progress events on the splash (e.g. phase-by-phase status text fed from build_default), add `core:event:default` here so the splash's listener can subscribe.",
+  "windows": ["splashscreen"],
+  "permissions": []
+}
