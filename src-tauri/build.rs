@@ -95,8 +95,8 @@ fn bundle_audio_tap_capture() {
 fn emit_build_timestamp() {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .expect("system clock is before 1970 — check CI time sync")
+        .as_secs();
     println!("cargo:rustc-env=HUSH_BUILD_TIMESTAMP={secs}");
 }
 

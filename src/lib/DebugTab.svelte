@@ -110,16 +110,14 @@
     window.open(url, "_blank");
   }
 
-  /// Reveal the log directory in Finder so the user can grep the
-  /// daily file with whatever tool they prefer (`tail`, `less`,
-  /// QuickLook). Routes through `tauri-plugin-shell::open` which
-  /// macOS treats as `open <path>` — Finder is the registered
-  /// handler for directories.
+  /// Reveal the log directory in Finder (#648). Routes through the
+  /// `reveal_log_dir` IPC command which spawns `open <dir>` via
+  /// `posix_spawn()` — avoiding the `tauri-plugin-shell` fork() path
+  /// that caused SIGSEGV in the multithreaded Tauri process.
   async function onRevealLogDir() {
     if (!logDirInfo) return;
     try {
-      const { open } = await import("@tauri-apps/plugin-shell");
-      await open(logDirInfo.dir);
+      await invoke("reveal_log_dir");
     } catch (e) {
       console.warn("[hush] reveal log dir failed", e);
     }

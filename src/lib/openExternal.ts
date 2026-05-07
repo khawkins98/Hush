@@ -1,11 +1,11 @@
-// External-URL opener (#322).
+// External-URL opener (#322, #648).
 //
 // Plain `<a target="_blank">` links do nothing in a Tauri 2 WebView
 // — outbound navigation is intercepted and dropped silently. This
-// helper delegates to `tauri-plugin-shell`'s `open()` which hands
-// the URL to the OS browser via the standard URL-handler chain
-// (`open` on macOS, `xdg-open` / portal on Linux, `ShellExecute`
-// on Windows).
+// helper invokes the `open_url` IPC command which spawns `open`/
+// `xdg-open`/`rundll32` directly via `posix_spawn()` — unlike the
+// previous `tauri-plugin-shell` route which used `fork()` in the
+// multithreaded Tokio process and caused SIGSEGV on macOS (#648).
 //
 // Use from a click handler:
 //
@@ -17,21 +17,18 @@
 //
 // `href` stays for accessibility (right-click → Copy link, screen
 // readers announce the URL); `onclick` prevents the dead WebView
-// navigation and routes through the plugin instead. The Rust crate
-// `tauri-plugin-shell` must be registered in `lib.rs` and
-// `shell:allow-open` granted in the window's capability JSON for
-// the call to succeed.
+// navigation and routes through the IPC instead.
 
-import { open } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 
 export async function openExternal(url: string): Promise<void> {
   try {
-    await open(url);
+    await invoke("open_url", { url });
   } catch (err) {
-    // Failures are exotic — the plugin only errors if the
-    // capability isn't granted or the OS handler is missing. Log
-    // for support and continue; the alternative is silently
-    // failing twice (the WebView already won't navigate).
+    // Failures are exotic — the IPC only errors if the URL scheme is
+    // rejected or the OS handler is missing. Log for support and
+    // continue; the alternative is silently failing twice (the WebView
+    // already won't navigate).
     console.warn("[hush] openExternal failed", { url, err });
   }
 }

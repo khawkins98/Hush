@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **About tab links no longer crash the app** (#648). Clicking any external link in the About tab (Apache licence, GitHub repo, bug report, whisper.cpp, etc.) previously caused a SIGSEGV via `fork()` in the multithreaded Tauri/Tokio process (`_malloc_fork_child + 184` in the crash log). The `tauri-plugin-shell` open path has been replaced with a custom `open_url` IPC command that uses `posix_spawn()` via `std::process::Command` — safe from multithreaded callers. All update-result "Open release notes" links are also fixed. The now-unnecessary `shell:allow-open` capability grant has been removed.
+- **Build timestamp now shows in About tab** (#649). The compile-time timestamp embedded by `build.rs` was silently suppressed by an `.unwrap_or(0)` fallback and a silent `catch {}` block. `build.rs` now uses `.expect()` (no silent zero on broken CI clock), and the catch block logs a `console.warn` so stale-build issues surface in dev tools.
+- **Input Monitoring permission prompt no longer fires at startup** (#647). The PTT keyboard listener (rdev) was started unconditionally at launch, triggering the macOS "Input Monitoring" TCC dialog before the user reached the Settings → PTT section. The listener now only starts if Input Monitoring is already granted (or not applicable on non-macOS). On a fresh install the prompt fires when the user first enables PTT in Settings, which is the appropriate moment.
+
+### Added
+
+- **Changelog link in About tab.** The About pane now includes a "Changelog → Release notes" row linking to the GitHub Releases page.
+
 ## [0.5.0] - 2026-05-07
 
 ### Added
