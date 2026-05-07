@@ -59,6 +59,15 @@ thiserror = "2"
 log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Alternative allocator that aggressively returns freed pages to the OS via
+# madvise, replacing macOS libmalloc's hold-forever freelist behaviour (#636).
+# `override` compiles mimalloc with MI_MALLOC_OVERRIDE + MI_OSX_ZONE so it
+# replaces the default malloc zone at startup — intercepting malloc/free from
+# C/C++ code (whisper.cpp, ORT) in addition to Rust allocations. Without
+# override, whisper.cpp/ORT pages are freed back to libmalloc which never
+# madvises; Physical Footprint stays pinned even after Drop fires. See
+# learnings.md 2026-05-07 for measurement context.
+mimalloc = { version = "0.1", features = ["override"] }
 # Daily-rolling file appender for the on-disk log layer (#622 follow-up).
 # Persists tracing output to `~/Library/Logs/io.github.khawkins98.hush/`
 # on macOS so post-hoc grepping is possible. The in-app Debug Console

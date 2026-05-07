@@ -21,6 +21,7 @@
 //! IPC layer (7 commands + types + a sanitiser).
 
 use serde::Serialize;
+use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use crate::audio::AudioSource;
@@ -702,6 +703,22 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 /// The panel disables the Stop button when nothing's running, but a
 /// stale double-click reaches here as a recoverable error rather
 /// than a panic.
+///
+/// After a successful stop the transcribers AND the diarizer are
+/// rebuilt in the background (#636). Old `WhisperContext` compute
+/// buffers (KV cache, mel scratch, beam scratch) and the old ORT
+/// `Session` stay live in their slots until the new contexts are
+/// ready (~1 s for transcribers, ~80 ms for the diarizer); the
+/// background task then atomically installs each new context,
+/// dropping the old `Arc`s so the C++ destructors can release the
+/// buffers.
+///
+/// Keeping old contexts live during the rebuild window means a
+/// rapid stop-then-start sequence always finds a valid transcriber
+/// AND a valid diarizer in their slots. The new `OnnxDiarizer`
+/// instance has its own fresh `SessionClusterState` so speaker
+/// labels do not bleed across meeting boundaries — the reset
+/// happens at swap-time, not at null-time.
 #[tauri::command]
 pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
     // Hide the HUD up front — the user clicked Stop and expects the
@@ -710,11 +727,142 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
     // tail of the session). `hide_async` dispatches onto the main
     // thread; same rationale as the start path (#476).
     crate::hud::hide_async(&app);
-    state
+
+    // Check *before* calling stop_manual so we know whether the pump
+    // was involved. We need this to distinguish two error cases:
+    //
+    //   (a) "no meeting session active" — no pump was ever running,
+    //       transcribe slots are still live for dictation → skip cleanup.
+    //   (b) DB close failed after pump was already joined — pump is
+    //       gone, contexts are safe to drop → run cleanup anyway.
+    let had_active = state.meeting_manager.has_active_session();
+
+    let stop_result = state
         .meeting_manager
         .stop_manual()
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e:#}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e:#}")));
+
+    if had_active {
+        // The pump task has been joined (or this is a DB-close retry
+        // where it was already joined previously). All Arc<dyn Transcribe>
+        // clones held inside WhisperStreamingSession have been dropped.
+        //
+        // Rebuild both the transcribers AND the diarizer in the background.
+        // The old Arcs stay live in their slots while the rebuild runs
+        // (~1 s transcribers, ~80 ms diarizer), so a rapid stop-then-start
+        // always finds a valid transcriber + diarizer in their slots and
+        // doesn't run idle / fall back to source labels for the new
+        // session. Only overwrite a slot when the rebuild returns Some
+        // (transcriber) or Ok (diarizer) — a failure is logged at error!
+        // and the existing (possibly high-watermarked) context stays live
+        // rather than leaving dictation/meetings broken until restart.
+        //
+        // SessionClusterState reset: a fresh `OnnxDiarizer` instance
+        // built by `swap_diarizer_after_download` has its own empty
+        // `SessionClusterState`, so installing it via the atomic write
+        // implicitly resets the speaker-label namespace — no bleed
+        // across meeting boundaries. The reset happens at swap-time,
+        // not at null-time, which is why we no longer need the
+        // synchronous `*slot = NoopDiarizer` step that earlier
+        // iterations of this PR included.
+        //
+        // Old WhisperContext compute buffers (KV cache, mel scratch, beam
+        // scratch) are freed when the new Arcs replace the old ones and
+        // their refcounts hit zero (#636).
+        //
+        // TODO(#636): a concurrent model_select that completes *during*
+        // this reload can be overwritten when the reload task finishes.
+        // Low-risk today (user rarely changes model right after a meeting
+        // stop); address with a generation counter if it surfaces.
+        let settings_bg = Arc::clone(&state.settings);
+        let models_dir_bg = state.models_dir.clone();
+        let inference_threads_bg = Arc::clone(&state.runtime_flags.inference_threads);
+        let mic_gain_db_bg = Arc::clone(&state.runtime_flags.mic_gain_db);
+        let transcribe_slot = Arc::clone(&state.transcribe);
+        let transcribe_meeting_slot = Arc::clone(&state.transcribe_meeting);
+        #[cfg(feature = "diarization-onnx")]
+        let diarize_slot_bg = Arc::clone(&state.diarize_slot);
+
+        tauri::async_runtime::spawn(async move {
+            let (dictation, meeting) = tokio::join!(
+                crate::ipc::pipeline::build_transcriber(
+                    &settings_bg,
+                    &models_dir_bg,
+                    &inference_threads_bg,
+                    &mic_gain_db_bg,
+                ),
+                crate::ipc::pipeline::build_transcriber(
+                    &settings_bg,
+                    &models_dir_bg,
+                    &inference_threads_bg,
+                    &mic_gain_db_bg,
+                ),
+            );
+            // Only install a new context when the rebuild succeeded.
+            // Writing None would leave dictation broken until the next
+            // model selection; keeping the high-watermarked context live
+            // is preferable to a silent outage.
+            if dictation.is_none() {
+                tracing::error!(
+                    "meeting stop: dictation transcriber rebuild returned None; \
+                     dictation will keep using the previous context until the \
+                     next model selection"
+                );
+            } else if let Ok(mut g) = transcribe_slot.lock() {
+                *g = dictation;
+            }
+            if meeting.is_none() {
+                tracing::error!(
+                    "meeting stop: meeting transcriber rebuild returned None; \
+                     next meeting will keep using the previous context until the \
+                     next model selection"
+                );
+            } else if let Ok(mut g) = transcribe_meeting_slot.lock() {
+                *g = meeting;
+            }
+
+            #[cfg(feature = "diarization-onnx")]
+            {
+                use crate::diarization::catalog::WESPEAKER_RESNET34_LM_FILENAME;
+                let model_path = models_dir_bg.join(WESPEAKER_RESNET34_LM_FILENAME);
+                if model_path.exists() {
+                    // `diarize_slot` holds the inner diarizer directly;
+                    // FlagGatedDiarizer wraps the slot in AppState and reads
+                    // through it on every call (not a snapshot at session start).
+                    let slot = Arc::clone(&diarize_slot_bg);
+                    match tokio::task::spawn_blocking(move || {
+                        crate::ipc::commands::diarizer::swap_diarizer_after_download(
+                            &slot,
+                            &model_path,
+                        )
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => {
+                            tracing::info!("diarizer reloaded after meeting stop");
+                        }
+                        Ok(Err(e)) => {
+                            tracing::error!(
+                                error = ?e,
+                                "meeting stop: diarizer reload failed; \
+                                 speaker identification unavailable until next model selection"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = ?e,
+                                "meeting stop: diarizer reload task panicked; \
+                                 speaker identification unavailable until next model selection"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    stop_result
 }
 
 #[cfg(test)]

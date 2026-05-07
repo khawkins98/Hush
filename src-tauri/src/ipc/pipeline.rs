@@ -181,10 +181,11 @@ async fn load_whisper_model(
 /// future "reload model" command can call it without rebuilding the
 /// rest of `AppState`.
 ///
-/// `pub(super)` so [`super::builder`]'s `AppState::build_default` can
-/// call this; not part of the public API.
+/// `pub(crate)` so [`super::builder`]'s `AppState::build_default` and
+/// the post-meeting-stop reload path in `commands::meeting` can both
+/// call this without duplicating the model-selection logic.
 #[cfg_attr(not(feature = "whisper"), allow(unused_variables))]
-pub(super) async fn build_transcriber(
+pub(crate) async fn build_transcriber(
     settings: &Arc<dyn SettingsRepository>,
     models_dir: &Path,
     inference_threads: &Arc<AtomicI32>,

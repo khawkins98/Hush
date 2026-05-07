@@ -1,6 +1,14 @@
 // Domain modules. Exposed at the crate root so integration tests and the
 // IPC layer can address them by their public surface.
 pub mod app_menu;
+
+// Replace macOS libmalloc's hold-forever freelist with mimalloc, which
+// aggressively madvises freed pages back to the OS (#636). The `override`
+// feature intercepts C/C++ malloc/free (whisper.cpp, ORT) too, not just
+// Rust allocations. Without this, Physical Footprint stays pinned after
+// meeting stop even though Drop fires correctly.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod audio;
 pub mod audio_cues;
 pub mod db;
