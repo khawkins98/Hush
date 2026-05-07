@@ -325,6 +325,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                                 session_id: ctx.session_id,
                                 source_kind: ctx.sources[i].kind_label(),
                                 reason: "audio device disconnected mid-session",
+                                device_lost: true,
                             },
                         );
                         device_lost[i] = true;
@@ -468,6 +469,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                             session_id,
                             source_kind: &source_label,
                             reason: "transcription task panicked",
+                            device_lost: false,
                         },
                     );
                     continue;
@@ -513,6 +515,11 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                             session_id,
                             source_kind: &source_label,
                             reason: &reason,
+                            // The streaming feed/drain path returns
+                            // whisper.cpp errors, not audio-capture
+                            // errors — DeviceLost would have been
+                            // caught in the drain_into arm above.
+                            device_lost: false,
                         },
                     );
                     continue;

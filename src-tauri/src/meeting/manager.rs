@@ -150,6 +150,12 @@ pub(super) struct MeetingSourceFailedPayload<'a> {
     pub session_id: i64,
     pub source_kind: &'a str,
     pub reason: &'a str,
+    /// `true` when the failure came from `audio::DeviceLost` — the
+    /// user's mic / AirPods disconnected mid-session or vanished
+    /// during pre-warm. Lets the frontend branch on a typed flag
+    /// instead of substring-matching `reason`, which #617 flagged
+    /// as fragile to backend wording changes.
+    pub device_lost: bool,
 }
 
 /// Tauri event name the pump fires through
@@ -1782,5 +1788,45 @@ mod tests {
         )]);
         assert_eq!(c.classify("Spotify"), MeetingAppKind::Media);
         assert_eq!(c.classify("us.zoom.xos"), MeetingAppKind::Meeting);
+    }
+
+    #[test]
+    fn meeting_source_failed_payload_serializes_with_camel_case_device_lost() {
+        // #617: pin the wire shape for the `meeting:source-failed`
+        // event. The frontend listener at
+        // `src/routes/+page.svelte` reads `deviceLost` (camelCase)
+        // off the payload to branch banner copy without
+        // substring-matching `reason`. Drift between the Rust
+        // field name and the JSON output silently demotes mic
+        // disconnects to the generic banner — the lie this PR
+        // exists to prevent.
+        let payload = super::MeetingSourceFailedPayload {
+            session_id: 42,
+            source_kind: "mic",
+            reason: "audio device disconnected mid-session",
+            device_lost: true,
+        };
+        let json = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(json["sessionId"], 42);
+        assert_eq!(json["sourceKind"], "mic");
+        assert_eq!(json["deviceLost"], true);
+        // Reason is still present — keep it for log/debug surfacing
+        // even though the frontend now branches on `deviceLost`.
+        assert_eq!(json["reason"], "audio device disconnected mid-session");
+    }
+
+    #[test]
+    fn meeting_source_failed_payload_device_lost_false_for_non_disconnect_failures() {
+        // The flag is opt-in true; serializer must round-trip false
+        // verbatim (not omit, since the frontend reads it
+        // unconditionally).
+        let payload = super::MeetingSourceFailedPayload {
+            session_id: 7,
+            source_kind: "system-audio",
+            reason: "transcription task panicked",
+            device_lost: false,
+        };
+        let json = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(json["deviceLost"], false);
     }
 }

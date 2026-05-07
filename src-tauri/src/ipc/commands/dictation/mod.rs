@@ -866,6 +866,29 @@ mod tests {
         }
     }
 
+    /// Audio mock whose `stop()` returns a typed `DeviceLost` wrapped
+    /// in `anyhow::Error`. Pin for the IPC downcast (#617).
+    struct AudioThatFailsToStopWithDeviceLost {
+        device: String,
+    }
+
+    impl AudioCapture for AudioThatFailsToStopWithDeviceLost {
+        fn list_input_devices(&self) -> anyhow::Result<Vec<AudioDevice>> {
+            Ok(vec![])
+        }
+        fn start(&self, _: Option<&str>) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn stop(&self) -> anyhow::Result<CapturedAudio> {
+            Err(anyhow::Error::new(crate::audio::DeviceLost {
+                device: self.device.clone(),
+            }))
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+    }
+
     struct VocabWithTerms(Vec<VocabularyTerm>);
 
     #[async_trait::async_trait]
@@ -997,6 +1020,29 @@ mod tests {
 
         let err = stop_audio_capture(&state).expect_err("stop fails");
         assert!(matches!(err, IpcError::Audio(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn stop_audio_capture_routes_device_lost_to_typed_ipc_variant() {
+        // #617: pin the downcast that distinguishes "mic disconnected"
+        // from generic audio failures. A regression here silently
+        // demotes mic disconnects to the generic Audio bucket and
+        // the frontend loses the structured banner copy.
+        let state = state_with(
+            Arc::new(AudioThatFailsToStopWithDeviceLost {
+                device: "AirPods Pro".to_owned(),
+            }),
+            Arc::new(crate::ipc::tests::NoopVocabulary),
+            Arc::new(crate::ipc::tests::NoopReplacements),
+        );
+
+        let err = stop_audio_capture(&state).expect_err("stop fails");
+        match err {
+            IpcError::AudioDeviceLost(name) => {
+                assert_eq!(name, "AirPods Pro");
+            }
+            other => panic!("expected IpcError::AudioDeviceLost(\"AirPods Pro\"), got {other:?}"),
+        }
     }
 
     #[tokio::test]

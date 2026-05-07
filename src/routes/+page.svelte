@@ -399,24 +399,32 @@
       sessionId: number;
       sourceKind: string;
       reason: string;
+      // #617: typed flag from the backend so we don't substring-
+      // match on `reason`. `true` for both mid-session DeviceLost
+      // and pre-warm DeviceLost; `false` for whisper panics,
+      // start_stream failures, generic drain errors.
+      deviceLost: boolean;
     }>(Events.MeetingSourceFailed, (e) => {
       console.debug(
         "[MeetingSourceFailed]",
         e.payload.sourceKind,
         e.payload.reason,
+        "deviceLost:",
+        e.payload.deviceLost,
         "sessionId:",
         e.payload.sessionId,
       );
       const label =
         e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
-      // Three reason classes:
-      //   "at session start" — never started (pre-warm or
-      //   start_stream failure caught in lifecycle.rs).
-      //   "device disconnected" — mid-session DeviceLost from the
-      //   audio backend (#587 PR 2a). The user pulled their mic /
-      //   AirPods walked out / webcam disabled.
-      //   anything else — generic mid-session drain failure or
-      //   inference panic (#591's existing surface).
+      // Three failure classes — distinguished by the typed
+      // `deviceLost` flag and a fallback `reason` substring on
+      // session-start (which has no typed equivalent yet):
+      //   - device-lost — user's mic / AirPods disconnected at
+      //     pre-warm or mid-session.
+      //   - session-start — pre-warm or start_stream failure that
+      //     ISN'T a device-lost (e.g. whisper init failed).
+      //   - other — generic mid-session drain failure or whisper
+      //     panic (#591).
       // Multi-source intent: the user picked a mic AND opted into
       // system audio, AND system audio was supported on this host.
       // Mirrors the include-source logic in meeting-sessions.svelte.ts.
@@ -430,12 +438,12 @@
         e.payload.sourceKind === "mic" ? "system audio" : "microphone";
 
       let verb: string;
-      if (e.payload.reason.includes("at session start")) {
-        verb = "couldn't start";
-      } else if (e.payload.reason.includes("disconnected")) {
+      if (e.payload.deviceLost) {
         verb = wasMultiSource
-          ? `disconnected mid-session — ${otherSourceLabel} still recording`
-          : "disconnected mid-session — recording stopped";
+          ? `disconnected — ${otherSourceLabel} still recording`
+          : "disconnected — recording stopped";
+      } else if (e.payload.reason.includes("at session start")) {
+        verb = "couldn't start";
       } else {
         verb = "stopped transcribing";
       }
