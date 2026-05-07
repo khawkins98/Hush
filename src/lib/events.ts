@@ -55,6 +55,16 @@ export const Events = {
   /// "system-audio", reason }`. Surfaces a struck-through chip
   /// in the active-session source line.
   MeetingSourceFailed: "meeting:source-failed",
+  /// Backend → frontend (main): a mic source was lost mid-session
+  /// and the pump has either fallen back to the system default or
+  /// has no fallback. Payload: `{ sessionId, sourceKind, lostDevice,
+  /// newDevice? }`. The meeting panel shows a banner with the lost
+  /// device name and (if present) the fallback device name.
+  AudioDeviceLost: "audio:device-lost",
+  /// Backend → frontend (main): the original mic was detected on
+  /// replug and the pump has swapped back. Payload: `{ sessionId,
+  /// sourceKind, restoredDevice }`. Dismisses the device-lost banner.
+  AudioDeviceRestored: "audio:device-restored",
   /// Backend → settings window: result of a Check for Updates
   /// probe fired from the macOS menu (#265). Payload is the
   /// `UpdateCheckResult` tagged union. The Settings About tab

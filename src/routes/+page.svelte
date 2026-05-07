@@ -89,6 +89,8 @@
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenAppProfileActivated: UnlistenFn | null = null;
   let unlistenMeetingSourceFailed: UnlistenFn | null = null;
+  let unlistenAudioDeviceLost: UnlistenFn | null = null;
+  let unlistenAudioDeviceRestored: UnlistenFn | null = null;
 
   // PTT state machine.
   //
@@ -450,6 +452,39 @@
       meeting.sourceFailedNotice = `${label} ${verb}.`;
     });
 
+    unlistenAudioDeviceLost = await listen<{
+      sessionId: number;
+      sourceKind: string;
+      lostDevice: string;
+      newDevice?: string;
+    }>(Events.AudioDeviceLost, (e) => {
+      console.debug(
+        "[AudioDeviceLost]",
+        e.payload.sourceKind,
+        e.payload.lostDevice,
+        "→",
+        e.payload.newDevice ?? "no fallback",
+      );
+      if (e.payload.newDevice) {
+        meeting.sourceFailedNotice = `Microphone "${e.payload.lostDevice}" disconnected — switched to "${e.payload.newDevice}".`;
+      } else {
+        meeting.sourceFailedNotice = `Microphone "${e.payload.lostDevice}" disconnected — recording stopped.`;
+      }
+    });
+
+    unlistenAudioDeviceRestored = await listen<{
+      sessionId: number;
+      sourceKind: string;
+      restoredDevice: string;
+    }>(Events.AudioDeviceRestored, (e) => {
+      console.debug(
+        "[AudioDeviceRestored]",
+        e.payload.sourceKind,
+        e.payload.restoredDevice,
+      );
+      meeting.sourceFailedNotice = null;
+    });
+
     window.addEventListener("keydown", handleGlobalKeydown);
   });
 
@@ -462,6 +497,8 @@
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
     unlistenMeetingSourceFailed?.();
+    unlistenAudioDeviceLost?.();
+    unlistenAudioDeviceRestored?.();
     if (pttPressTimer !== null) {
       clearTimeout(pttPressTimer);
       pttPressTimer = null;
