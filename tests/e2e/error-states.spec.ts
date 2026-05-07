@@ -104,6 +104,50 @@ test.describe("IPC error copy", () => {
       "deeply: nested: context",
     );
   });
+
+  test("audio-device-lost surfaces 'Microphone disconnected' with the device name (#587)", async ({
+    page,
+  }) => {
+    // Distinct from the generic `audio` bucket above: when the cpal
+    // backend reports `StreamError::DeviceNotAvailable`, the audio
+    // module wraps a typed `DeviceLost` and the IPC layer routes to
+    // `IpcError::AudioDeviceLost`. Frontend shows a clear
+    // "Microphone disconnected" headline naming the lost device,
+    // not the generic "Microphone access failed."
+    // Mock both start paths the same way the generic-audio test
+    // above does — the recording button can route to either
+    // `meeting_start_manual` or `start_dictation` depending on
+    // which audio sources are selected, and we want the test to
+    // pin the error rendering regardless of route.
+    await installMocks(page, {
+      meeting_start_manual: () => {
+        throw {
+          kind: "audio-device-lost",
+          message: "MacBook Pro Microphone",
+        };
+      },
+      start_dictation: () => {
+        throw {
+          kind: "audio-device-lost",
+          message: "MacBook Pro Microphone",
+        };
+      },
+    });
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Start recording" }).click();
+
+    const errorRegion = page.getByRole("alert").first();
+    await expect(errorRegion).toBeVisible();
+    await expect(errorRegion.locator(".error-headline")).toContainText(
+      /microphone disconnected/i,
+    );
+    // Hint includes the device name so the user knows which input
+    // walked away when they have several plugged in.
+    await expect(errorRegion.locator(".error-hint")).toContainText(
+      /MacBook Pro Microphone/,
+    );
+  });
 });
 
 test.describe("first-time setup banner", () => {

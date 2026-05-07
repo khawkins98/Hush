@@ -28,7 +28,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use super::core_audio_tap;
 use super::{
     drain_consumer, log_overflow_if_set, AudioCapture, AudioDevice, AudioSession, AudioSource,
-    CaptureFormat, CapturedAudio, MAX_BUFFER_FRAMES,
+    CaptureFormat, CapturedAudio, DeviceLost, MAX_BUFFER_FRAMES,
 };
 
 pub struct CpalAudioCapture {
@@ -419,6 +419,12 @@ struct Session {
     /// closure owns).
     stream: Stream,
     format: CaptureFormat,
+    /// Human-readable device name captured at session start (#587).
+    /// Kept here because cpal's `StreamError` callback fires after the
+    /// device is gone and `device.name()` would no longer be callable.
+    /// Surfaced through [`DeviceLost`] when the worker detects a
+    /// disconnect.
+    device_name: String,
     /// Consumer end of the SPSC ring (#55). The callback (writer) owns
     /// the matching `Producer` inside its closure; this `Consumer`
     /// stays on the worker thread and is the only reader. Single-
@@ -434,6 +440,14 @@ struct Session {
     /// samples are already lost regardless of when the worker
     /// notices.
     overflow_flag: Arc<AtomicBool>,
+    /// Latched flag the cpal `error_callback` flips when it sees
+    /// [`StreamError::DeviceNotAvailable`] (#587). Read on every
+    /// `Cmd::DrainBuffer` and on `Cmd::Stop` so the IPC layer can
+    /// route the typed [`DeviceLost`] error to the frontend instead
+    /// of a generic "audio: …" message. `Arc<AtomicBool>` because
+    /// the error callback runs on the cpal-owned audio thread and
+    /// the worker thread reads it on each drain.
+    device_lost_flag: Arc<AtomicBool>,
 }
 
 fn worker_loop(
@@ -502,6 +516,25 @@ fn worker_loop(
                 // pump (#108 PR3) calls this on a tight tick.
                 match session.as_mut() {
                     Some(s) => {
+                        // Device-disconnect detection (#587). The
+                        // cpal error callback sets this flag when the
+                        // selected input goes away. Surface as a
+                        // typed [`DeviceLost`] so the meeting pump
+                        // (PR 3 of #587) — and any future caller of
+                        // drain_into — can route the disconnect
+                        // through `IpcError::AudioDeviceLost`
+                        // instead of mistaking the empty-ring drain
+                        // for a regular tick. Drained samples are
+                        // dropped on this path: for a session that
+                        // ended because the device walked away, the
+                        // partial audio isn't worth more than the
+                        // typed failure signal.
+                        if s.device_lost_flag.load(Ordering::Relaxed) {
+                            let _ = reply.send(Err(anyhow::Error::new(DeviceLost {
+                                device: s.device_name.clone(),
+                            })));
+                            continue;
+                        }
                         let samples = drain_consumer(&mut s.consumer);
                         log_overflow_if_set(&s.overflow_flag);
                         let _ = reply.send(Ok((samples, s.format)));
@@ -558,6 +591,15 @@ fn start_cpal_session(
             .ok_or_else(|| anyhow!("no default input device available"))?,
     };
 
+    // Capture the device name once, here at start, so it's available
+    // for the [`DeviceLost`] error path (#587) — by the time the
+    // cpal error callback fires `DeviceNotAvailable`, calling
+    // `device.name()` is racy at best and may reflect the new
+    // default-input rather than the lost one.
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "<unknown input device>".to_owned());
+
     // `default_input_config` returns the format the OS thinks the device is
     // happiest at. Picking it (rather than negotiating a 16 kHz mono config
     // ourselves) maximises the chance the stream actually opens. See the
@@ -579,11 +621,13 @@ fn start_cpal_session(
     // start — no realloc inside the realtime callback.
     let (producer, consumer) = RingBuffer::<f32>::new(MAX_BUFFER_FRAMES);
     let overflow_flag = Arc::new(AtomicBool::new(false));
+    let device_lost_flag = Arc::new(AtomicBool::new(false));
     let stream = build_input_stream(
         &device,
         &supported,
         producer,
         Arc::clone(&overflow_flag),
+        Arc::clone(&device_lost_flag),
         level,
     )?;
     stream.play().context("start input stream")?;
@@ -591,8 +635,10 @@ fn start_cpal_session(
     Ok(Session {
         stream,
         format,
+        device_name,
         consumer,
         overflow_flag,
+        device_lost_flag,
     })
 }
 
@@ -607,6 +653,20 @@ fn stop_cpal_session(mut session: Session) -> Result<CapturedAudio> {
     let samples = drain_consumer(&mut session.consumer);
     log_overflow_if_set(&session.overflow_flag);
 
+    // Device-disconnect detection (#587). The cpal error callback
+    // sets the flag when the host fires `DeviceNotAvailable`; we
+    // surface it here as a typed [`DeviceLost`] error so the IPC
+    // layer can route to `IpcError::AudioDeviceLost` instead of the
+    // generic "audio: …" bucket. Whatever samples we drained pre-
+    // disconnect are dropped — for a recording that ended because
+    // the user's mic walked away, the partial audio isn't useful
+    // and surfacing the typed failure is the right shape.
+    if session.device_lost_flag.load(Ordering::Relaxed) {
+        return Err(anyhow::Error::new(DeviceLost {
+            device: session.device_name,
+        }));
+    }
+
     Ok(CapturedAudio {
         samples,
         format: session.format,
@@ -618,6 +678,7 @@ fn build_input_stream(
     supported: &SupportedStreamConfig,
     producer: Producer<f32>,
     overflow_flag: Arc<AtomicBool>,
+    device_lost_flag: Arc<AtomicBool>,
     level: Arc<AtomicU32>,
 ) -> Result<Stream> {
     let config: cpal::StreamConfig = supported.config();
@@ -632,6 +693,11 @@ fn build_input_stream(
     // The `Producer` is moved into the closure (single-owner — no
     // `Clone` impl), so each match arm gets its own move + a fresh
     // overflow_flag clone. The level Arc is the same shape as before.
+    // The error callback is built once and shared (Clone on the Arc),
+    // so each sample-format arm sets up the same DeviceNotAvailable →
+    // device_lost_flag detection.
+    let make_error_callback =
+        |flag: Arc<AtomicBool>| move |err: StreamError| stream_error_callback(&flag, err);
     let stream = match supported.sample_format() {
         SampleFormat::F32 => {
             let mut prod = producer;
@@ -640,7 +706,7 @@ fn build_input_stream(
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _| push_samples(&mut prod, &overflow, data, |s| *s, &lvl),
-                log_stream_error,
+                make_error_callback(Arc::clone(&device_lost_flag)),
                 None,
             )
         }
@@ -651,7 +717,7 @@ fn build_input_stream(
             device.build_input_stream(
                 &config,
                 move |data: &[i16], _| push_samples(&mut prod, &overflow, data, i16_to_f32, &lvl),
-                log_stream_error,
+                make_error_callback(Arc::clone(&device_lost_flag)),
                 None,
             )
         }
@@ -662,7 +728,7 @@ fn build_input_stream(
             device.build_input_stream(
                 &config,
                 move |data: &[u16], _| push_samples(&mut prod, &overflow, data, u16_to_f32, &lvl),
-                log_stream_error,
+                make_error_callback(Arc::clone(&device_lost_flag)),
                 None,
             )
         }
@@ -738,8 +804,40 @@ fn rms_from_sum_sq(sum_sq: f32, n: usize) -> f32 {
     }
 }
 
-fn log_stream_error(err: StreamError) {
-    tracing::error!(error = ?err, "audio input stream error");
+/// cpal stream `error_callback` — runs on the audio thread when the
+/// stream encounters a host-level fault.
+///
+/// Sets `device_lost_flag` on [`StreamError::DeviceNotAvailable`]
+/// (#587) so the worker's drain / stop paths surface a typed
+/// [`DeviceLost`] error to the IPC layer. Other variants
+/// (`BackendSpecific` etc.) remain logged-and-continue per the
+/// existing realtime-thread discipline: this callback runs on a
+/// realtime-ish thread, so heavy work or anything fallible would
+/// risk the audio backend's invariants.
+///
+/// Free function rather than a method so the callback's closure
+/// shape stays small — cpal's `error_callback` parameter is
+/// `FnMut(StreamError) + Send + 'static` and a single
+/// per-stream closure that calls into this helper compiles cleanly
+/// across all three sample-format arms.
+fn stream_error_callback(device_lost_flag: &AtomicBool, err: StreamError) {
+    match err {
+        StreamError::DeviceNotAvailable => {
+            // Latch the flag — the worker reads it on every drain
+            // tick and on Cmd::Stop. `Relaxed` is fine: the flag
+            // is independent of any other shared state, the worker
+            // tolerates a one-tick delay (~500 ms) before observing
+            // the flip, and an over-strong ordering would only buy
+            // an unhelpful "this drain saw it slightly sooner" win.
+            device_lost_flag.store(true, Ordering::Relaxed);
+            tracing::warn!(
+                "cpal stream error: DeviceNotAvailable — selected input device disconnected"
+            );
+        }
+        other => {
+            tracing::error!(error = ?other, "audio input stream error");
+        }
+    }
 }
 
 fn i16_to_f32(s: &i16) -> f32 {

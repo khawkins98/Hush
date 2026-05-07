@@ -87,6 +87,33 @@ use anyhow::{anyhow, Result};
 use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
 
+/// Sentinel attached to an `anyhow::Error` chain when the cpal
+/// backend's error-callback fires `cpal::StreamError::DeviceNotAvailable`
+/// — the device the user picked has been physically disconnected
+/// (USB unplugged, AirPods walked out of range, webcam disabled).
+///
+/// IPC handlers downcast against this so the frontend can render a
+/// targeted "microphone disconnected" message via
+/// [`crate::ipc::commands::IpcError::AudioDeviceLost`] instead of the
+/// generic `audio: …` bucket. Detection-and-surface only; the
+/// auto-fallback policy half (#587 PR 2) lives in a future PR after
+/// the silent-vs-prompted UX call is made.
+#[derive(Debug, Clone)]
+pub struct DeviceLost {
+    /// Human-readable name of the lost device — same string the user
+    /// saw in the source picker, captured at session start so it's
+    /// available even after the device is gone.
+    pub device: String,
+}
+
+impl std::fmt::Display for DeviceLost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "audio device '{}' disconnected", self.device)
+    }
+}
+
+impl std::error::Error for DeviceLost {}
+
 /// Format of a captured audio buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureFormat {

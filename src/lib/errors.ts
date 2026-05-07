@@ -49,6 +49,7 @@ export type ErrorDisplay = {
 
 const KNOWN_IPC_ERROR_KINDS = new Set<KnownIpcErrorKind>([
   "audio",
+  "audio-device-lost",
   "transcription",
   "transcription-unavailable",
   "clipboard",
@@ -181,6 +182,17 @@ function formatKnownIpcError(ipc: KnownIpcError): ErrorDisplay {
           "plugged in. On macOS, also check System Settings → " +
           "Privacy & Security → Microphone for Hush.",
         details: ipc.message,
+      };
+    case "audio-device-lost":
+      // The selected device disconnected mid-session — distinct
+      // from the generic "audio" bucket so the user gets a concrete
+      // explanation (USB unplugged, AirPods walked away, webcam
+      // disabled) and a clear next step. Auto-fallback to a
+      // different source is gated on the policy decision tracked
+      // in PR 2 of #587.
+      return {
+        headline: "Microphone disconnected",
+        hint: `The selected input source ("${ipc.message}") is no longer available. Pick a different source and try again.`,
       };
     case "transcription":
       return {
