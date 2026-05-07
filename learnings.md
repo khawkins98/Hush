@@ -1964,3 +1964,43 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 - `src/helpers/audioTapManager.js` — Electron main; spawns binary, caches permission status, streams chunks
 - `src/utils/systemAudioAccess.ts` — defines `RendererSystemAudioStrategy` (`loopback` for Windows, `browser-portal` for Linux, `native` for macOS 14.2+ via CoreAudio tap)
 - `src/types/electron.ts` — `SystemAudioStrategy` type (`"native" | "loopback" | "browser-portal" | "portal-helper" | "unsupported"`)
+
+
+---
+
+## 2026-06-XX — #636 fix: drop-and-recreate WhisperContext + ORT Session at meeting stop boundaries
+
+### Why prior fixes didn't fully work
+
+- **`WhisperState` recreation (#615 / #623):** bounded state-level allocations (partial results, per-chunk prompts), not the compute buffers inside `WhisperContext` itself (KV cache, mel scratch, beam decoder scratch). Those buffers are allocated by whisper.cpp's C++ side and high-watermark across `whisper_full` calls — malloc can never reclaim them while any live pointer holds the context open.
+- **ORT arena disable (#630):** the per-run output tensor arena was freed between calls, but the underlying ONNX `Session` still accumulated per-run state across a long meeting.
+- **mimalloc (#635):** an alternative allocator can't free memory that the C++ / ORT runtimes hold live pointers to. It helps with fragmentation of Rust-owned allocations but doesn't touch the C/C++ side.
+- **Per-run ORT shrinkage (#631, reverted):** freed output tensor memory *before* `try_extract_tensor` could read it → silently zeroed all speaker embeddings → looked like a fix because zero allocations were returned.
+- **RSS / "Real Mem" in Activity Monitor:** misleading. macOS compresses committed pages to the swap compressor, keeping RSS low while physical footprint grows. Always use `vmmap -summary <pid>` (physical footprint line) or `top`'s MEM column.
+
+### The actual fix (#636)
+
+`meeting_stop_manual` now runs a two-phase cleanup+reload at every session boundary:
+
+1. **Immediate drop (synchronous, on the IPC handler thread):**
+   - After `stop_manual()` joins the pump task (all streaming-session `Arc<dyn Transcribe>` clones dropped), call `state.swap_transcriber(None, None)` to null *both* `transcribe` and `transcribe_meeting` slots.
+   - Write `Arc::new(NoopDiarizer)` into `state.diarize_slot`, replacing the live `OnnxDiarizer` session.
+   - The C++ `WhisperContext` and ORT `Session` destructors run as soon as the last `Arc` clone drops — typically within microseconds of `swap_transcriber` returning.
+
+2. **Background reload (fire-and-forget `tokio::spawn`):**
+   - Calls `build_transcriber` twice (dictation + meeting slots) concurrently via `tokio::join!`, using the same model-selection logic as `model_select`.
+   - Calls `swap_diarizer_after_download` on `spawn_blocking` to reload the OnnxDiarizer (SHA-256 verify + ONNX init, ~80 ms).
+   - Writes results back through the shared `TranscribeSlot` / `DiarizeSlot` `Arc`s — same write-through semantics used by the hot-swap infrastructure.
+
+### Why the `has_active_session()` guard
+
+`stop_manual()` can fail in two structurally different ways:
+- **"no meeting session active"** — no pump was ever involved, transcribe slots are still live for dictation. Cleanup would spuriously interrupt dictation.
+- **DB close error after pump join** — pump already exited, contexts are safe to drop. Cleanup must still run.
+
+`has_active_session()` is checked *before* `stop_manual()` to record whether a session was live, then cleanup runs based on that flag regardless of the error path.
+
+### Known open items
+- **Mid-meeting growth still unbounded** at ~1.25 GB/min. Per-stop cleanup bounds between-meeting footprint; a single very long meeting still grows. Mid-meeting reload would require a user-visible interruption (dictation outage) and is deferred.
+- **`model_select` race:** a model change that completes during the background reload will be overwritten when the reload task installs its freshly-built context. Low-risk in practice (tagged TODO(#636) in code); fix with a generation counter if it surfaces.
+- **Verify with `vmmap -summary`**, not RSS. Physical footprint should return to ~1.5–2 GB baseline within a few seconds of meeting stop.

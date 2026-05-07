@@ -21,6 +21,7 @@
 //! IPC layer (7 commands + types + a sanitiser).
 
 use serde::Serialize;
+use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use crate::audio::AudioSource;
@@ -702,6 +703,13 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 /// The panel disables the Stop button when nothing's running, but a
 /// stale double-click reaches here as a recoverable error rather
 /// than a panic.
+///
+/// After a successful stop the WhisperContext(s) and ORT Session are
+/// dropped immediately so their high-watermarked compute buffers
+/// (KV cache, mel scratch, beam scratch) can be reclaimed by the
+/// allocator (#636). Both transcriber slots and the diarizer slot
+/// are then reloaded in the background so dictation remains usable
+/// as soon as the model files are remapped (~1–2 s).
 #[tauri::command]
 pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
     // Hide the HUD up front — the user clicked Stop and expects the
@@ -710,11 +718,124 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
     // tail of the session). `hide_async` dispatches onto the main
     // thread; same rationale as the start path (#476).
     crate::hud::hide_async(&app);
-    state
+
+    // Check *before* calling stop_manual so we know whether the pump
+    // was involved. We need this to distinguish two error cases:
+    //
+    //   (a) "no meeting session active" — no pump was ever running,
+    //       transcribe slots are still live for dictation → skip cleanup.
+    //   (b) DB close failed after pump was already joined — pump is
+    //       gone, contexts are safe to drop → run cleanup anyway.
+    let had_active = state.meeting_manager.has_active_session();
+
+    let stop_result = state
         .meeting_manager
         .stop_manual()
         .await
-        .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e:#}")))
+        .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e:#}")));
+
+    if had_active {
+        // The pump task has been joined (or this is a DB-close retry
+        // where it was already joined previously). Either way, all
+        // Arc<dyn Transcribe> clones held inside WhisperStreamingSession
+        // have been dropped. Null both transcribe slots so the
+        // WhisperContext compute buffers are freed by the C++ destructor,
+        // then reload in the background (#636).
+        //
+        // We null *both* slots (dictation + meeting) because both hold
+        // independent WhisperContext instances that have accumulated
+        // high-watermark allocations over the meeting lifetime.
+        if let Err(e) = state.swap_transcriber(None, None) {
+            tracing::warn!(error = ?e, "failed to null transcribe slots after meeting stop");
+        }
+
+        // Null the diarizer slot so the ORT Session arena is freed.
+        // Recover from poison — we must still write the Noop even if
+        // the lock was tainted by a prior panic.
+        {
+            let mut guard = state
+                .diarize_slot
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            *guard = Arc::new(crate::diarization::NoopDiarizer);
+        }
+
+        // Reload both transcribers and the diarizer in the background.
+        // Uses the same Arc write-through semantics as model_select —
+        // the slots are shared Arcs so background writes are visible on
+        // the next dictation / meeting-pump read.
+        //
+        // TODO(#636): a concurrent model_select that completes *during*
+        // this reload can be overwritten when the reload task finishes.
+        // Low-risk today (user rarely changes model right after a meeting
+        // stop); address with a generation counter if it surfaces.
+        let settings_bg = Arc::clone(&state.settings);
+        let models_dir_bg = state.models_dir.clone();
+        let inference_threads_bg = Arc::clone(&state.runtime_flags.inference_threads);
+        let mic_gain_db_bg = Arc::clone(&state.runtime_flags.mic_gain_db);
+        let transcribe_slot = Arc::clone(&state.transcribe);
+        let transcribe_meeting_slot = Arc::clone(&state.transcribe_meeting);
+        #[cfg(feature = "diarization-onnx")]
+        let diarize_slot_bg = Arc::clone(&state.diarize_slot);
+
+        tauri::async_runtime::spawn(async move {
+            let (dictation, meeting) = tokio::join!(
+                crate::ipc::pipeline::build_transcriber(
+                    &settings_bg,
+                    &models_dir_bg,
+                    &inference_threads_bg,
+                    &mic_gain_db_bg,
+                ),
+                crate::ipc::pipeline::build_transcriber(
+                    &settings_bg,
+                    &models_dir_bg,
+                    &inference_threads_bg,
+                    &mic_gain_db_bg,
+                ),
+            );
+            if let Ok(mut g) = transcribe_slot.lock() {
+                *g = dictation;
+            }
+            if let Ok(mut g) = transcribe_meeting_slot.lock() {
+                *g = meeting;
+            }
+
+            #[cfg(feature = "diarization-onnx")]
+            {
+                use crate::diarization::catalog::WESPEAKER_RESNET34_LM_FILENAME;
+                let model_path = models_dir_bg.join(WESPEAKER_RESNET34_LM_FILENAME);
+                if model_path.exists() {
+                    let slot = Arc::clone(&diarize_slot_bg);
+                    match tokio::task::spawn_blocking(move || {
+                        crate::ipc::commands::diarizer::swap_diarizer_after_download(
+                            &slot,
+                            &model_path,
+                        )
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => {
+                            tracing::info!("diarizer reloaded after meeting stop");
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                error = ?e,
+                                "diarizer reload failed after meeting stop"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = ?e,
+                                "diarizer reload task panicked after meeting stop"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    stop_result
 }
 
 #[cfg(test)]

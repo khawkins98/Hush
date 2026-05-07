@@ -384,6 +384,23 @@ impl SessionManager {
         Ok(session)
     }
 
+    /// Returns `true` when a session is in the `Active` state — i.e. a
+    /// pump is running or was running and needs a DB-close retry. Returns
+    /// `false` for `Idle`, `Opening`, or a poisoned state mutex.
+    ///
+    /// Called by [`crate::ipc::commands::meeting::meeting_stop_manual`] to
+    /// decide whether the WhisperContext + ORT Session cleanup should run:
+    /// the cleanup must fire even when `stop_manual` returns a DB-close
+    /// error (pump already joined), but must NOT fire for the "no meeting
+    /// session active" early-return case (pump was never involved, so the
+    /// transcribe slots are still in use for dictation).
+    pub fn has_active_session(&self) -> bool {
+        self.state
+            .lock()
+            .map(|guard| matches!(&*guard, SessionState::Active(_)))
+            .unwrap_or(false)
+    }
+
     /// Close the active session.
     ///
     /// Signals the pump to cancel, awaits its completion (the pump
