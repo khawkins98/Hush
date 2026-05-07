@@ -4,6 +4,68 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-07 — #612 not actually closed: macOS compression was hiding the leak
+
+Earlier today I declared #612 closed based on "Real Mem at 848 MB after 11 min of recording." That claim was wrong. macOS's compressed memory subsystem was silently pushing the leaked memory into compressed swap, so RSS stayed bounded while the **physical footprint** (the actual memory commitment) climbed unboundedly at the same rate as before any of the fixes.
+
+**The vmmap decomposition (28-min meeting, captured live):**
+
+```
+Physical footprint:         33.4G
+Physical footprint (peak):  33.6G
+
+ReadOnly portion of Libraries: Total=1.9G resident=575.3M(30%) swapped_out_or_unallocated=1.3G(70%)
+Writable regions: Total=38.7G written=33.5G(87%) resident=807.4M(2%) swapped_out=32.7G(85%) unallocated=5.2G(13%)
+
+REGION TYPE              VIRTUAL    RESIDENT   DIRTY      SWAPPED     COUNT
+MALLOC_LARGE             23.5G      171.6M     171.6M     22.9G       4415
+MALLOC_SMALL              9.9G      214.9M     126.0M      9.6G       2618
+MALLOC_NANO metadata        96K        80K        80K          0K        3
+MALLOC metadata           110.2M     2880K     2496K     106.6M       226
+JS VM Gigacage (reserved)  4.0G        0K         0K         0K          1   reserved VM, never touched
+IOSurface                152.0M      128K        0K        128K        208
+```
+
+**What this means:**
+
+- **Physical footprint = 33.4 GB.** That's the column Activity Monitor labels "Memory" (not "Real Mem"). It counts every page the process has *committed* — written-to memory, regardless of whether the kernel currently has it in RAM, compressed in the compressor pool, or paged out to disk.
+- **Resident (RSS) = 807 MB.** Of the 33.5 GB committed, only 807 MB is actually in physical RAM right now. The kernel's compressed-memory pool holds the rest.
+- **Swapped = 32.7 GB.** Cold pages got compressed (and possibly paged to disk under pressure). They still count against the system's memory commitment because the compressor pool is finite and compressed pages are still real bytes.
+- The leak rate matches what we measured before fixes: 28 min × ~1.25 GB/min ≈ 35 GB. Within rounding of the 33.4 GB observed.
+
+**The MALLOC_LARGE breakdown is the smoking gun.** 4415 separate large allocations totalling 23.5 GB. If those were the ~76 MB/state init that #623's periodic recreation was supposed to bound, we'd see ~30-50 of them per session, not 4415. The recreation IS releasing the WhisperState, but whisper.cpp (and/or ort) is allocating many more MALLOC_LARGE chunks per inference than the state object itself accounts for. Each `whisper_full` call is allocating multiple large buffers on top of the state — KV cache scratch, beam decoder scratch, mel feature scratch — and those are being freed by Rust's allocator but the underlying `malloc` arenas don't return pages to the OS.
+
+**The Real Mem confusion lesson.** macOS's "Real Mem" is the wrong metric on a system with compressed memory pressure. RSS-flat doesn't mean "memory bounded" — it can mean "memory committed but compressed/swapped." The right metric is **physical footprint** (vmmap's first line) or `top`'s `MEM` column, both of which count compressed pages. We had been celebrating false wins because the kernel was masking the growth.
+
+**What to use going forward:**
+
+| Metric | Source | What it tells you |
+| --- | --- | --- |
+| Resident (RSS) | `ps -o rss=`, Activity Monitor "Real Mem" | Pages currently in physical RAM. Useful for hot-path / cache analysis. **Misleading as a leak indicator on memory-pressured systems.** |
+| Physical footprint | `vmmap -summary <pid>`, Activity Monitor "Memory", `top` MEM | The total memory commitment. Includes RSS + compressed + swap. **This is the correct leak-detection metric.** |
+| Virtual size (VSZ) | `ps -o vsz=` | Total address space, including untouched reservations. Almost always huge (Tauri + ort + whisper.cpp + multiple thread stacks). **Mostly useless for leak detection.** |
+| Dirty bytes | `vmmap -summary` "Writable regions: written=" | Pages the process has actually written to. Tracks committed memory the kernel can't reclaim by re-reading from disk. |
+
+**What stays valid from the previous fixes:**
+
+- #615 (state reuse), #616 (drop on Err), #623 (periodic state recreation): all still real wins. They reduced the leak from catastrophic-swap-death (53 GB in 35 min) to the current 1.25 GB/min, which is **survivable** — a 30-min meeting hits ~38 GB physical footprint, painful but not catastrophic on a 32+ GB Mac with swap. Without these, we'd be back to 53 GB territory.
+- #630 (ORT arena/memory pattern off): genuinely applied per the ort tracing dump. Whether it helps in practice is unclear given the malloc-arena-not-returning-pages pattern is what's actually growing.
+- #632 (revert broken #631 RunOptions): correct revert, kept ort tracing for future debugging.
+
+**The actual root cause is now fairly clear.** It's not whisper.cpp's per-call C-heap (we're already recreating the state to release that). It's not the ORT arena (we disabled it). It's the **system malloc**'s default behaviour of not returning freed pages to the OS — Rust drops the allocations cleanly, but the libc allocator (or the C++ allocator backing whisper.cpp / ort) holds the pages on its freelist forever. Each `whisper_full` and each `session.run` call dirties enough new pages that the freelist never gets a chance to coalesce and madvise back.
+
+**Possible next-step fixes (none yet attempted):**
+
+- **Drop and reload the entire `WhisperContext` periodically** (not just the `WhisperState`). Costs a multi-second model reload mid-meeting. Releases everything whisper.cpp owns, including its allocator's freelist.
+- **Periodic `OnnxDiarizer` recreation per session** (1-2 s reload at session start). Releases everything ort/wespeaker owns between meetings. Doesn't help mid-session.
+- **`malloc_zone_pressure_relief()`** macOS-private API. Asks the libc allocator to release freelisted pages to the OS. Fragile but might cap the growth.
+- **Use a different allocator** (`mimalloc`, `jemalloc`) with documented release-to-OS semantics. Bigger change; may have other effects.
+- **Live with it** for now since the symptom is "reduced from catastrophic to merely uncomfortable." Document for users that long meetings should expect 30+ GB physical footprint.
+
+For the next contributor picking this up: do **not** repeat the Real Mem mistake. Run `vmmap -summary <hush-pid>` to see physical footprint before claiming any victory.
+
+---
+
 ## 2026-05-07 — #612 FIFTH pass: per-run arena shrinkage broke diarization (illusory fix)
 
 After #631 shipped (per-run `memory.enable_memory_arena_shrinkage=cpu:0` RunOption), Ken's hands-on test showed RSS basically flat — 700 MB at 2 min, no climbing. Looked like a complete win. Then he checked the transcript: every utterance was labelled `mic:` or `system:` instead of `Speaker N`. Diarization was broken on every utterance.
