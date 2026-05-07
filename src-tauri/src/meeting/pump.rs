@@ -183,6 +183,17 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // delivered silence — distinct from finals=0 (no audio at all).
     let mut blank_counts: Vec<u64> = vec![0; ctx.handles.len()];
 
+    // Tracks sources that have been marked dead via DeviceLost (#587).
+    // Once true: skip drain (cpal will keep returning the same error),
+    // skip inference, skip zero-fill of the diarizer buffer (the audio
+    // is gone — padding silence forever is wasteful). The
+    // MEETING_SOURCE_FAILED_EVENT is emitted exactly once per source
+    // when the flag flips. Auto-fallback to a different device is
+    // tracked in the follow-up to #587 (this PR ships detect-and-end
+    // only; the recreate-handle-and-streaming-session work is its own
+    // focused PR with hands-on validation).
+    let mut device_lost: Vec<bool> = vec![false; ctx.handles.len()];
+
     // Per-source first-drain RMS (#533 diagnostic). Logged once on the
     // first drain that returns audio for each source. A near-zero RMS
     // (<0.001) on the first tick means "capture returned silence", which
@@ -226,6 +237,14 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         // few-ms drain.
         let mut tick_formats: Vec<Option<CaptureFormat>> = vec![None; ctx.handles.len()];
         for (i, handle) in ctx.handles.iter().enumerate() {
+            // Skip sources we've already declared dead via DeviceLost
+            // (#587). Calling drain_into on a dead handle produces the
+            // same error every tick — running through the whole
+            // inference / zero-fill / event-emission path on every
+            // tick would spam logs and trade one outage for another.
+            if device_lost[i] {
+                continue;
+            }
             let buf = &mut drain_buffers[i];
             buf.clear();
             match handle.drain_into(buf) {
@@ -271,6 +290,49 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                             "meeting pump: first-drain RMS (#533 diagnostic; drain failed)"
                         );
                         first_drain_logged[i] = true;
+                    }
+                    // Device-disconnect detection (#587). The cpal
+                    // backend signals device-gone via the typed
+                    // [`crate::audio::DeviceLost`] error wrapped in
+                    // anyhow. Distinguishing it from transient drain
+                    // failures matters because:
+                    //
+                    // - A genuine disconnect will keep returning the
+                    //   same error every tick — zero-filling forever
+                    //   is wasteful and surfaces no signal.
+                    // - The user needs an unambiguous "your mic
+                    //   disconnected" signal, not a generic
+                    //   "drain_into failed" warn-log.
+                    //
+                    // Once flagged, the source is marked dead via
+                    // `device_lost[i] = true` and skipped on every
+                    // subsequent tick. Streaming session is dropped
+                    // so inference doesn't run on stale state.
+                    // Auto-fallback to a different device is the
+                    // follow-up PR (#587 PR 2b) — this PR ships the
+                    // detect-and-end half so users at least see what
+                    // happened instead of staring at a silent meeting.
+                    if let Some(lost) = e.downcast_ref::<crate::audio::DeviceLost>() {
+                        tracing::error!(
+                            device = %lost.device,
+                            source_kind = ctx.sources[i].kind_label(),
+                            session_id = ctx.session_id,
+                            "meeting pump: audio device disconnected; ending source"
+                        );
+                        ctx.event_emitter.emit(
+                            MEETING_SOURCE_FAILED_EVENT,
+                            &MeetingSourceFailedPayload {
+                                session_id: ctx.session_id,
+                                source_kind: ctx.sources[i].kind_label(),
+                                reason: "audio device disconnected mid-session",
+                            },
+                        );
+                        device_lost[i] = true;
+                        // Drop the streaming session — its internal
+                        // sliding-window state is stale and inference
+                        // on dead audio adds nothing.
+                        ctx.streaming_sessions[i] = None;
+                        continue;
                     }
                     tracing::warn!(
                         error = ?e,
