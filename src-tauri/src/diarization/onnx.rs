@@ -377,27 +377,20 @@ impl OnnxDiarizer {
         // poisoning is unlikely in practice but cheap to defend
         // against.
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-
-        // Per-run arena shrinkage (#612 fourth pass — belt-and-braces
-        // on top of the build-time `with_arena_allocator(false)` from
-        // #630). The build-time disable should make this redundant
-        // because there's no arena to shrink; but the #630 fix didn't
-        // visibly bend the RSS curve in hands-on profiling, so we
-        // layer this on as the canonical run-time alternative — works
-        // even if the build-time disable somehow isn't taking effect
-        // for our model. Costs a documented 2–10% latency hit per
-        // run; invisible at our once-per-utterance cadence. Key is
-        // `memory.enable_memory_arena_shrinkage = cpu:0` from the
-        // ORT C-API session-config keys.
-        let mut run_opts = ort::session::RunOptions::new().context("ort: build RunOptions")?;
-        run_opts
-            .add_config_entry("memory.enable_memory_arena_shrinkage", "cpu:0")
-            .context("ort: enable per-run CPU arena shrinkage")?;
+        // Reverted from #631's `run_with_options` + per-run arena
+        // shrinkage. The shrinkage released the output tensor's
+        // backing memory before `try_extract_tensor` could read
+        // it, causing `embed()` to silently fail on every
+        // utterance — which made the leak APPEAR fixed (no
+        // successful inferences = no allocations) while actually
+        // breaking diarization (every utterance fell back to the
+        // source-derived "mic"/"system" label). #630's build-time
+        // `with_arena_allocator(false)` + `with_memory_pattern(false)`
+        // are the fix we ship; the per-run shrinkage is too
+        // dangerous given how ORT's allocator interacts with
+        // output tensor lifetime.
         let outputs = session
-            .run_with_options(
-                ort::inputs![self.input_name.as_str() => input_value],
-                &run_opts,
-            )
+            .run(ort::inputs![self.input_name.as_str() => input_value])
             .context("ort: session.run")?;
 
         // Single output (the embedding). `try_extract_array` gives a
