@@ -66,6 +66,26 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # additive, not a replacement.
 tracing-appender = "0.2"
 
+# Replacement global allocator (#612). macOS's default libc malloc
+# does not return freed pages to the OS — it holds them on per-zone
+# freelists indefinitely. Whisper.cpp's per-`whisper_full` and ort's
+# per-`session.run` allocations are released by Rust drops cleanly,
+# but the underlying allocator never coalesces enough to madvise the
+# pages back. On a long meeting this manifests as physical-footprint
+# growth at ~1 GB/min even when RSS stays bounded (the kernel
+# compresses cold pages). mimalloc's design eagerly returns empty
+# pages to the OS via `MIMALLOC_PURGE_DELAY`, and exposes
+# `mi_collect(force)` as an explicit shrink lever we call on
+# session stop. See `learnings.md` "#612 not actually closed" for
+# the full diagnosis. `default-features = false` keeps build hygiene
+# (no debug assertions / stats trackers in release builds).
+mimalloc = { version = "0.1", default-features = false }
+# Low-level FFI for `mi_collect`; the high-level `mimalloc` crate
+# only exposes the `GlobalAlloc` impl. The `extended` feature gates
+# the `mi_collect` / `mi_stats_*` / `mi_heap_*` symbols we use as
+# the explicit shrink lever from `crate::mi_collect_force`.
+libmimalloc-sys = { version = "0.1", features = ["extended"] }
+
 # Audio capture (cross-platform)
 cpal = "0.15"
 # Realtime-safe SPSC ring buffer for the cpal callback → worker

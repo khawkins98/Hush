@@ -459,7 +459,19 @@ impl SessionManager {
         }
 
         match self.repo.close_session(active.id).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // mimalloc shrink at session quiescence (#612). The
+                // meeting pump has now finished its last drain and
+                // every per-source streaming session has been dropped;
+                // this is the cleanest natural point in the app's
+                // lifecycle to ask the allocator to release its
+                // freelisted pages back to the OS. Cheap (microseconds
+                // for our footprint) and only fires here, not in the
+                // hot path. See `crate::mi_collect_force` for the
+                // documented "fully drain" recipe.
+                crate::mi_collect_force();
+                Ok(())
+            }
             Err(e) => {
                 // Restore the active record with `close_attempted`
                 // set so a retry skips the (already-completed)

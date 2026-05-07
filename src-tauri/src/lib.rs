@@ -1,3 +1,42 @@
+// Replacement global allocator (#612). macOS's default libc malloc
+// holds freed pages on per-zone freelists indefinitely; whisper.cpp
+// and ort allocations get freed by Rust drops but the underlying
+// pages never return to the OS, which on a long meeting manifests
+// as physical-footprint growth at ~1 GB/min. mimalloc's design
+// eagerly returns empty pages and exposes `mi_collect` as an
+// explicit shrink lever we invoke after meeting stops (see
+// `mi_collect_force` below). The `#[global_allocator]` install must
+// happen at the crate root before any allocation; placing it here
+// at the top of `lib.rs` ensures the entire process — including
+// transitive C++ allocators that go through the Rust stdlib's
+// `GlobalAlloc` shim — routes through mimalloc.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Force mimalloc to drain its freelists back to the OS (#612).
+///
+/// Per the [mimalloc collect docs](https://github.com/microsoft/mimalloc/issues/1163)
+/// the documented "fully drain" recipe is one non-forcing collect
+/// followed by two forcing collects. The non-forcing pass coalesces
+/// per-thread heaps; the forcing passes release coalesced empty
+/// pages back to the OS via `madvise(MADV_FREE)`. Cheap call
+/// (microseconds for our footprint), but only worth invoking at
+/// natural quiescence points — meeting stop, dictation finish.
+///
+/// Safe to call from any thread; mimalloc's collect is internally
+/// synchronised. Marked `pub` so the meeting / dictation modules
+/// can reach it without round-tripping through the IPC layer.
+pub fn mi_collect_force() {
+    // Safety: mimalloc's `mi_collect` is documented thread-safe
+    // and takes no pointers; the `force` boolean is the only arg.
+    // Repeated calls per the upstream recipe.
+    unsafe {
+        libmimalloc_sys::mi_collect(false);
+        libmimalloc_sys::mi_collect(true);
+        libmimalloc_sys::mi_collect(true);
+    }
+}
+
 // Domain modules. Exposed at the crate root so integration tests and the
 // IPC layer can address them by their public surface.
 pub mod app_menu;
