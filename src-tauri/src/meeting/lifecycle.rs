@@ -384,6 +384,23 @@ impl SessionManager {
         Ok(session)
     }
 
+    /// Returns `true` when a session is in the `Active` state — i.e. a
+    /// pump is running or was running and needs a DB-close retry. Returns
+    /// `false` for `Idle`, `Opening`, or a poisoned state mutex.
+    ///
+    /// Called by [`crate::ipc::commands::meeting::meeting_stop_manual`] to
+    /// decide whether the WhisperContext + ORT Session cleanup should run:
+    /// the cleanup must fire even when `stop_manual` returns a DB-close
+    /// error (pump already joined), but must NOT fire for the "no meeting
+    /// session active" early-return case (pump was never involved, so the
+    /// transcribe slots are still in use for dictation).
+    pub fn has_active_session(&self) -> bool {
+        self.state
+            .lock()
+            .map(|guard| matches!(&*guard, SessionState::Active(_)))
+            .unwrap_or(false)
+    }
+
     /// Close the active session.
     ///
     /// Signals the pump to cancel, awaits its completion (the pump
@@ -556,5 +573,54 @@ impl SessionManager {
             .await?;
 
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use crate::db::SqliteDatabase;
+    use crate::meeting::manager::{ActiveSession, SessionState};
+    use crate::meeting::SqliteMeetingSessionRepository;
+
+    async fn idle_manager() -> crate::meeting::SessionManager {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let repo: Arc<dyn crate::meeting::MeetingSessionRepository> =
+            Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+        crate::meeting::SessionManager::new_for_test(repo)
+    }
+
+    #[tokio::test]
+    async fn has_active_session_false_when_idle() {
+        assert!(!idle_manager().await.has_active_session());
+    }
+
+    #[tokio::test]
+    async fn has_active_session_true_when_active() {
+        let manager = idle_manager().await;
+        {
+            let mut guard = manager.state.lock().unwrap();
+            *guard = SessionState::Active(ActiveSession {
+                id: 1,
+                started_at: std::time::Instant::now(),
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                pump_handle: Mutex::new(None),
+                close_attempted: false,
+            });
+        }
+        assert!(manager.has_active_session());
+    }
+
+    #[tokio::test]
+    async fn has_active_session_false_when_opening() {
+        let manager = idle_manager().await;
+        {
+            let mut guard = manager.state.lock().unwrap();
+            *guard = SessionState::Opening;
+        }
+        assert!(!manager.has_active_session());
     }
 }
