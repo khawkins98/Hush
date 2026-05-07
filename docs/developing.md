@@ -277,6 +277,26 @@ Runs `svelte-check` across the full frontend including `vite.config.js`. Require
 
 ---
 
+## Where logs live
+
+Hush writes tracing events to **three** sinks. Pick the one that fits the task:
+
+| Sink                                                            | Use it for                                                                                                                                                                                                                                |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **stderr** (`cargo tauri dev` console)                          | Live tailing while iterating. Filtered by `RUST_LOG`. Lost when the process exits.                                                                                                                                                        |
+| **In-app Debug Console** (Settings → Debug)                     | Browsing recent events from inside the running app. In-memory ring buffer; lost on quit. Has a "Copy to issue report" button.                                                                                                             |
+| **`~/Library/Logs/io.github.khawkins98.hush/hush.log.YYYY-MM-DD`** (macOS only) | Post-hoc grepping after the app exits, sharing logs in bug reports, or correlating events across multiple sessions. Daily-rotating, plain-text (no ANSI). Filtered by the same `RUST_LOG` as stderr. Files accumulate; clean up manually. |
+
+The file sink defaults on for any non-CI run. Disable with `HUSH_LOG_FILE=off` (e.g. for a one-off binary that shouldn't litter Logs). The first stderr line at startup prints the resolved path so you don't have to guess.
+
+```bash
+# Tail today's file while the app runs:
+tail -f ~/Library/Logs/io.github.khawkins98.hush/hush.log.$(date +%F)
+
+# Grep across all recent days:
+grep -h "recreating WhisperState" ~/Library/Logs/io.github.khawkins98.hush/hush.log.*
+```
+
 ## Diagnosing meeting mode (0 utterances)
 
 When meeting mode transcribes nothing, the logs distinguish three failure modes. First, enable debug logging:
@@ -285,7 +305,7 @@ When meeting mode transcribes nothing, the logs distinguish three failure modes.
 RUST_LOG=hush=debug npm run tauri:bundle && open ~/Applications/Hush.app
 ```
 
-Then start a meeting session and watch the console output (Tauri dev console, or the in-app Debug tab). You should see lines like:
+Then start a meeting session and watch the console output (Tauri dev console, in-app Debug tab, or `tail -f ~/Library/Logs/io.github.khawkins98.hush/hush.log.$(date +%F)`). You should see lines like:
 
 ```
 meeting pump: inference tick  session_id=1 source_kind=microphone utterances=0 elapsed_ms=47

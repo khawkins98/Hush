@@ -231,33 +231,155 @@ fn migrate_legacy_app_data_dir(new_path: &std::path::Path) {
     }
 }
 
+/// Bundle id used for filesystem locations. Mirrors `tauri.conf.json`'s
+/// `identifier` field — kept as a const here so the pre-Tauri tracing
+/// init can resolve `~/Library/Logs/<id>/` without depending on
+/// `AppHandle::path()` (which only resolves inside the `setup` hook).
+const BUNDLE_ID: &str = "io.github.khawkins98.hush";
+
+/// Resolve the on-disk log directory for the file appender.
+///
+/// macOS-only by design: the project is macOS-primary, so we don't
+/// litter Linux/Windows filesystems with a logs dir for those
+/// compile-only paths. Returns `None` on non-macOS so the caller
+/// skips the file layer cleanly.
+///
+/// Path: `~/Library/Logs/io.github.khawkins98.hush/`. This is the
+/// macOS HIG-recommended location for app-specific logs and shows
+/// up in Console.app under "Reports" → the bundle id.
+#[cfg(target_os = "macos")]
+fn resolve_log_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let dir = std::path::PathBuf::from(home)
+        .join("Library")
+        .join("Logs")
+        .join(BUNDLE_ID);
+    Some(dir)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_log_dir() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Wire up the tracing layers (stderr fmt, optional on-disk file fmt,
+/// in-memory DebugLogLayer) and return a guard that must outlive the
+/// process for the non-blocking file writer to flush cleanly on
+/// shutdown.
+///
+/// Returns `None` for the guard when the file layer is unavailable
+/// (non-macOS, `HUSH_LOG_FILE=off`, or log-dir creation failed) — the
+/// other two layers still init in those cases.
+///
+/// The two registry chains (with-file vs. without-file) are spelled
+/// out separately on purpose: tracing-subscriber's `Layered<...>` type
+/// changes shape with every `.with(...)`, so an `Option<Layer>` doesn't
+/// compose cleanly without trait-object boxing that adds its own
+/// type-system pain. Two short branches are easier to read than one
+/// clever one.
+fn init_tracing(
+    debug_log: crate::debug_log::DebugLogState,
+) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::prelude::*;
+
+    fn env_filter() -> tracing_subscriber::EnvFilter {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    }
+
+    let stderr_layer = tracing_subscriber::fmt::layer().with_filter(env_filter());
+    let debug_layer = crate::debug_log::DebugLogLayer::new(debug_log);
+
+    // Opt-out via env var so CI / one-off binaries don't accumulate
+    // logs in the user's Library. Default-on for normal runs, where
+    // post-hoc grepping is the whole point of having this layer at all.
+    let want_file_log = !matches!(
+        std::env::var("HUSH_LOG_FILE").as_deref(),
+        Ok(v) if v.eq_ignore_ascii_case("off") || v == "0"
+    );
+
+    let file_appender = if want_file_log {
+        build_file_appender()
+    } else {
+        None
+    };
+
+    if let Some((appender, dir)) = file_appender {
+        let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+        let file_layer = tracing_subscriber::fmt::layer()
+            // ANSI colours don't render in tail / less; turn them
+            // off so the file is plain text, copy-pasteable into
+            // bug reports.
+            .with_ansi(false)
+            .with_writer(non_blocking)
+            .with_filter(env_filter());
+        let _ = tracing_subscriber::registry()
+            .with(stderr_layer)
+            .with(file_layer)
+            .with(debug_layer)
+            .try_init();
+        // Print the path so a user grepping for "where did logs
+        // go" sees it even before the first tracing event reaches
+        // the in-app console.
+        eprintln!("hush: writing daily-rolling logs to {}", dir.display());
+        Some(guard)
+    } else {
+        let _ = tracing_subscriber::registry()
+            .with(stderr_layer)
+            .with(debug_layer)
+            .try_init();
+        None
+    }
+}
+
+/// Resolve the log dir, ensure it exists, and build a daily-rolling
+/// appender pointed at it. Returns `None` if the dir can't be
+/// resolved (non-macOS) or created (permissions, disk full).
+fn build_file_appender() -> Option<(
+    tracing_appender::rolling::RollingFileAppender,
+    std::path::PathBuf,
+)> {
+    let dir = resolve_log_dir()?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!(
+            "hush: could not create log dir {}: {e}; file logging disabled",
+            dir.display()
+        );
+        return None;
+    }
+    // Daily rotation with prefix `hush.log`. `tracing_appender` rolls
+    // by appending the date, so files look like `hush.log.2026-05-07`.
+    // No automatic retention — files accumulate; if that becomes a
+    // pain we can plug in `RollingFileAppender::builder().max_log_files(...)`
+    // (added in tracing-appender 0.2.4).
+    let appender = tracing_appender::rolling::daily(&dir, "hush.log");
+    Some((appender, dir))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialise tracing here so service-construction errors (database
     // open, whisper model load) reach `RUST_LOG` consumers before the
     // Tauri event loop starts.
     //
-    // We compose two layers:
-    //   1. The standard fmt subscriber (writes to stderr / RUST_LOG).
-    //   2. DebugLogLayer — captures events into a ring buffer and
+    // We compose three layers:
+    //   1. fmt → stderr (`RUST_LOG`-filtered, the dev-loop default).
+    //   2. fmt → daily-rolling file in
+    //      `~/Library/Logs/io.github.khawkins98.hush/` so post-hoc
+    //      grepping is possible. macOS-only because the project is
+    //      macOS-primary; on other platforms this layer is skipped.
+    //      Disable with `HUSH_LOG_FILE=off` (e.g. when running CI or
+    //      a one-off binary that shouldn't litter ~/Library/Logs).
+    //   3. DebugLogLayer — captures events into a ring buffer and
     //      forwards them to the frontend via the `log:event` Tauri
-    //      event once the AppHandle is available (#532).
+    //      event once the AppHandle is available (#532). Same shape
+    //      as the in-app Debug Console; this is additive, not a
+    //      replacement.
     //
     // `try_init` rather than `init` so re-runs in tests
     // (`cargo tauri dev`-restart-cycle) do not panic.
     let debug_log = crate::debug_log::DebugLogState::new();
-    {
-        use tracing_subscriber::prelude::*;
-        let fmt_layer = tracing_subscriber::fmt::layer().with_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        );
-        let debug_layer = crate::debug_log::DebugLogLayer::new(debug_log.clone());
-        let _ = tracing_subscriber::registry()
-            .with(fmt_layer)
-            .with(debug_layer)
-            .try_init();
-    }
+    let _file_log_guard = init_tracing(debug_log.clone());
 
     tauri::Builder::default()
         // Single-instance lock (#326). Registered first so a second
