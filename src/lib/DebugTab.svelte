@@ -29,7 +29,7 @@
     message: string;
   };
 
-  let buildInfo = $state<BuildInfo>({ version: "…", buildTimestamp: 0 });
+  let buildInfo = $state<BuildInfo>({ version: "…", tauriVersion: "", buildTimestamp: 0 });
 
   /// One per-phase row from `get_startup_timings` (#584 Angle 1).
   /// `elapsedMs` is absolute ms since `build_default` started; the
@@ -155,7 +155,7 @@
     try {
       buildInfo = await invoke<BuildInfo>("get_build_info");
     } catch {
-      buildInfo = { version: "unknown", buildTimestamp: 0 };
+      buildInfo = { version: "unknown", tauriVersion: "", buildTimestamp: 0 };
     }
     try {
       os = `macOS ${await osVersion()}`;

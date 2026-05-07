@@ -398,6 +398,7 @@ pub fn reveal_log_dir() -> IpcResult<()> {
 #[serde(rename_all = "camelCase")]
 pub struct BuildInfo {
     pub version: String,
+    pub tauri_version: String,
     /// Unix seconds at compile time. 0 when the build stamp is unavailable.
     pub build_timestamp: u64,
 }
@@ -406,6 +407,7 @@ pub struct BuildInfo {
 pub fn get_build_info() -> BuildInfo {
     BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
+        tauri_version: env!("HUSH_TAURI_VERSION").to_string(),
         build_timestamp: env!("HUSH_BUILD_TIMESTAMP").parse().unwrap_or(0),
     }
 }

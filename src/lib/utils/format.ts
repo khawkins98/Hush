@@ -9,6 +9,7 @@
 /** Wire shape of `crate::ipc::commands::system::get_build_info`. */
 export type BuildInfo = {
   version: string;
+  tauriVersion: string;
   /** Unix epoch seconds — set by `build.rs` at last compile time. */
   buildTimestamp: number;
 };

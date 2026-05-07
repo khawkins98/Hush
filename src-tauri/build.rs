@@ -9,6 +9,7 @@ fn main() {
     tauri_build::build();
     synth_cue_files();
     emit_build_timestamp();
+    emit_tauri_version();
 }
 
 /// Compile (macOS) or stub (other platforms) the CoreAudio tap capture binary.
@@ -98,6 +99,34 @@ fn emit_build_timestamp() {
         .expect("system clock is before 1970 — check CI time sync")
         .as_secs();
     println!("cargo:rustc-env=HUSH_BUILD_TIMESTAMP={secs}");
+}
+
+/// Emits `HUSH_TAURI_VERSION` — the `tauri` crate version from `Cargo.lock`.
+///
+/// Avoids the need to grant `app:default` capability to the main window just
+/// to read a runtime version string that is fixed at compile time anyway.
+/// Re-runs when `Cargo.lock` changes (the only source of truth for the dep
+/// version, since `Cargo.toml` uses a `"2"` range, not a pinned version).
+fn emit_tauri_version() {
+    println!("cargo:rerun-if-changed=Cargo.lock");
+    let lock = std::fs::read_to_string("Cargo.lock")
+        .expect("Cargo.lock not found — run cargo build from the workspace root");
+    // Cargo.lock TOML format: [[package]] blocks, `name` then `version` on
+    // consecutive lines. Find the first `name = "tauri"` entry.
+    let mut next_is_tauri = false;
+    for line in lock.lines() {
+        if line == r#"name = "tauri""# {
+            next_is_tauri = true;
+        } else if next_is_tauri {
+            if let Some(rest) = line.strip_prefix("version = ") {
+                let version = rest.trim_matches('"');
+                println!("cargo:rustc-env=HUSH_TAURI_VERSION={version}");
+                return;
+            }
+            next_is_tauri = false;
+        }
+    }
+    println!("cargo:rustc-env=HUSH_TAURI_VERSION=unknown");
 }
 
 /// Synthesise the two audio-cue WAV files (#446) into OUT_DIR so
