@@ -258,7 +258,7 @@ jobs:
           # Allowlisted *exact* dep-table lines (kept in lockstep
           # with `learnings.md` → "Supply-chain pins").
           allowed=$(cat <<'EOF'
-          ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "ndarray", "tls-rustls"], optional = true }
+          ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "ndarray", "tls-rustls", "tracing"], optional = true }
           rdev = { git = "https://github.com/fufesou/rdev", rev = "a90dbe1172f8832f54c97c62e823c5a34af5fdfe" }
           EOF
           )
