@@ -59,6 +59,12 @@ thiserror = "2"
 log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Daily-rolling file appender for the on-disk log layer (#622 follow-up).
+# Persists tracing output to `~/Library/Logs/io.github.khawkins98.hush/`
+# on macOS so post-hoc grepping is possible. The in-app Debug Console
+# (`debug_log` module) keeps its in-memory ring buffer too; this is
+# additive, not a replacement.
+tracing-appender = "0.2"
 
 # Audio capture (cross-platform)
 cpal = "0.15"
