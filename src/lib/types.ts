@@ -46,6 +46,7 @@ export type DictationResult = {
 };
 export type KnownIpcError =
   | { kind: "audio"; message: string }
+  | { kind: "audio-device-lost"; message: string }
   | { kind: "transcription"; message: string }
   | { kind: "transcription-unavailable" }
   | { kind: "clipboard"; message: string }

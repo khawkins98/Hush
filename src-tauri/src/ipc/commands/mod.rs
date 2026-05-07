@@ -158,6 +158,21 @@ pub enum IpcError {
     #[error("permission-denied: {0}")]
     PermissionDenied(String),
 
+    /// The audio input device the user picked has disconnected
+    /// mid-session (USB unplugged, AirPods walked out of range, webcam
+    /// disabled). Surfaced as a distinct variant from `Audio(String)`
+    /// so the frontend can render a clear "microphone disconnected"
+    /// message and (in PR 2 of #587) drive an auto-fallback offer
+    /// without substring-matching the inner error chain. The inner
+    /// `String` is the same device name the user saw in the source
+    /// picker — captured at session start because it's no longer
+    /// reachable via `cpal::Device::name()` once the device is gone
+    /// (#587). Tuple-variant shape matches the other IPC errors so
+    /// the wire format stays `{ kind: "audio-device-lost", message:
+    /// "MacBook Microphone" }`.
+    #[error("audio-device-lost: {0}")]
+    AudioDeviceLost(String),
+
     /// Auto-update is wired in code but the runtime support isn't
     /// active in this build — typically because the maintainer
     /// hasn't completed Steps 1–4 of the #10 plan (signing keypair,
