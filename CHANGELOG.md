@@ -78,8 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Microphone disconnect mid-session now surfaces a clear message (#587)
 
 - When the cpal backend reports `StreamError::DeviceNotAvailable` (USB unplug, AirPods walked out of range, webcam disabled), Hush now propagates a typed `audio::DeviceLost` error with the captured device name through `Cmd::Stop` and `Cmd::DrainBuffer`.
-- **Dictation:** the IPC layer downcasts to `IpcError::AudioDeviceLost(deviceName)`. The frontend renders "Microphone disconnected — the selected input source ('Foo') is no longer available. Pick a different source and try again." with the device name in the hint.
-- **Meeting mode:** the pump downcasts the same error and emits the existing `meeting:source-failed` event with reason "audio device disconnected mid-session" plus a per-source `device_lost` flag so subsequent ticks skip the dead handle. The amber banner reads "Microphone disconnected mid-session — recording stopped" instead of the previous silent-zero-fill behavior. Other sources in the meeting keep going independently.
+- **Dictation:** the IPC layer downcasts to `IpcError::AudioDeviceLost(deviceName)`. The frontend renders `Microphone disconnected — the selected input source ("Foo") is no longer available. Pick a different source and try again.` with the device name in the hint.
+- **Meeting mode:** the pump downcasts the same error and emits a typed `meeting:source-failed` event carrying a `deviceLost: true` flag (#617) so the frontend branches banner copy without substring-matching. The amber banner reads "Microphone disconnected — recording stopped" on single-source sessions, or "Microphone disconnected — system audio still recording" on multi-source ones (#618). Subsequent ticks skip the dead handle; other sources in the meeting keep going independently.
 - Auto-fallback (recreate the source on system default and reconnect to the original on replug) and an optional preferred-mic preference are tracked in #611.
 
 #### Main window can be reopened after being closed/hidden (#590)
