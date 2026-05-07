@@ -89,11 +89,10 @@ test.describe("first-run welcome modal", () => {
 
     // Step 1 (permissions) has the same two-button footer shape as the
     // pre-#609 welcome step: Skip setup (ghost) + Continue (primary).
-    // Drive the focus trap by manually focusing the first button —
-    // the modal's $effect autofocus runs at mount but Playwright's
-    // page-load can race ahead of the focus call, leaving the trap
-    // precondition (`active === first`) unsatisfied. Once we focus
-    // Skip setup explicitly, Shift+Tab triggers the wrap to Continue.
+    // Manually focus the first button to drive the focus trap.
+    // The modal's $effect autofocus runs at mount, but Playwright
+    // can still drive the keyboard before that microtask resolves
+    // — focusing here keeps the test deterministic regardless.
     const skipBtn = page.getByRole("button", { name: "Skip setup" });
     await skipBtn.focus();
     await expect(skipBtn).toBeFocused();
@@ -105,6 +104,26 @@ test.describe("first-run welcome modal", () => {
     await expect(
       page.getByRole("button", { name: "Skip setup" }),
     ).toBeFocused();
+  });
+
+  test("autofocus re-fires on step transition (#617 — caught by post-merge UX review)", async ({
+    page,
+  }) => {
+    await installMocks(page, { get_first_run_completed: () => false });
+    await page.goto("/");
+
+    // Sanity: opening on Permissions focuses something inside the modal.
+    await expect(page.getByRole("heading", { name: "Permissions" })).toBeVisible();
+
+    // Advance Permissions → Welcome by clicking Continue. The autofocus
+    // $effect now reads `step` so it re-runs on transitions; without
+    // that fix, focus fell to body and keyboard-only users had to Tab
+    // back into the modal. Welcome step's first focusable is "Back".
+    await page.locator('[data-testid="wizard-continue-permissions"]').click();
+    await expect(
+      page.getByRole("heading", { name: "Welcome to Hush" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Back" })).toBeFocused();
   });
 });
 
