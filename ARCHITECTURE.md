@@ -18,7 +18,7 @@ Primary target: **macOS 26+ on Apple Silicon.** Linux and Windows compile cleanl
 
 ---
 
-## Three windows (two production + two developer/overlay)
+## Four windows (three production + one developer-only)
 
 ```
 ┌─────────────────────┐    ┌──────────────┐    ┌───────────────┐    ┌───────────────┐
@@ -146,6 +146,33 @@ Tauri commands (`#[tauri::command]`) live in `src-tauri/src/ipc/commands/`. The 
 
 ---
 
+## Logging / observability
+
+Tracing events flow into three independent sinks, composed in `lib.rs::init_tracing`:
+
+1. **stderr fmt layer** — `tracing_subscriber::fmt`, filtered by `RUST_LOG` (defaults to `info`). The dev-loop default; visible when running `cargo tauri dev` or via `Console.app` for bundled builds.
+2. **Daily-rolling file appender** — writes plain-text logs to `~/Library/Logs/io.github.khawkins98.hush/hush.log.<YYYY-MM-DD>` on macOS, via `tracing-appender` (#624). Same `RUST_LOG` filter, ANSI stripped, non-blocking writer with a guard returned from `init_tracing`. macOS-only by `cfg`; gracefully no-ops on other platforms. Disable with `HUSH_LOG_FILE=off`. The Settings → Debug tab surfaces the path with "Reveal in Finder" + "Copy grep command" buttons (#627).
+3. **`DebugLogLayer` in-memory ring** — `src-tauri/src/debug_log/`, captures the last N events into a `Mutex<VecDeque>` and emits each event over the `log:event` Tauri event so the floating debug-console window can render the live stream. Bounded ring; drops the oldest event when full. Survives the lifetime of the process only; for post-hoc grepping use sink 2.
+
+`ort`'s own tracing (`features = ["tracing"]`) routes into all three sinks via `tracing` macros. EP-registration / session-options events show up at INFO level.
+
+---
+
+## Runtime tunables (environment variables)
+
+Read once at process / session construction. Mid-session changes do not take effect.
+
+| Var | Default | Effect |
+| --- | --- | --- |
+| `RUST_LOG` | `info` | Filter applied to both stderr and file sinks. |
+| `HUSH_LOG_FILE` | (on) | Set to `off` (or `0`) to disable the daily-rolling file appender. |
+| `HUSH_WHISPER_STATE_RECREATE_INTERVAL` | `30` | Number of streaming inferences before `WhisperState` is dropped + lazy-recreated to bound whisper.cpp's per-call C-heap accumulation (#623). Set to `0` for "never recreate" (legacy / A-B test). |
+| `HUSH_DIARIZER_THRESHOLD` | `0.4` | Cosine-distance threshold for declaring two utterance embeddings distinct speakers in `OnnxDiarizer::SessionClusterState::assign` (#316 / #633). Lower → more clusters; higher → speakers merge. Range `[0.0, 2.0]`. Out-of-range values warn and fall back to default. |
+
+For the in-process tunables that aren't env-driven (inference thread count, model selection, diarization toggle), see the hot-swap slots in the trait-seam pattern section above — those flow through Settings.
+
+---
+
 ## Persistence
 
 SQLite via `sqlx`. Migrations in `src-tauri/migrations/` (sqlx-managed, applied at startup). Schemas:
@@ -174,7 +201,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
 | `app_menu/` | Native macOS menu bar (no-op elsewhere) |
 | `tray/` | Status-bar / system-tray icon (cross-platform) |
-| `macos_perms/` | Programmatic TCC reads via AVFoundation / CoreGraphics / IOKit |
+| `permissions/` | Cross-platform permission state. `permissions/macos.rs` does programmatic TCC reads via AVFoundation / CoreGraphics / IOKit; `permissions/mod.rs` is the home for future Linux / Windows impls. Renamed from `macos_perms/` in #597. |
 | `updater/` | Manual "Check for updates" probe against GitHub releases |
 
 **Frontend** (`src/`):
