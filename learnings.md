@@ -21,6 +21,12 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 **Open follow-up:** if profiling on a real long session still shows growth after the WhisperState fix, the next suspect is the hand-off between `WhisperStreamingState` and the meeting-pump's `AudioRollingBuffer` — both retain f32 PCM and could be pinning samples beyond their nominal window. Filed as #612 follow-up if the fix doesn't fully close it.
 
+**Post-merge review caught two follow-ups (shipped same day):**
+1. **State retention on `state.full` error.** The first-cut fix reused the `WhisperState` even if `state.full(params, audio)` returned Err. whisper.cpp's contract on partial-failure state is undocumented — a state that errored mid-decode could carry KV-cache junk into the next inference and corrupt later transcripts. The follow-up restructures the err arm to clear the slot (`*self.whisper_state = None;`) before returning, so the next call lazy-recreates a clean state. The ~76 MB init re-cost is acceptable on the rare error path.
+2. **Unnecessary split-borrow rebind.** `drain()` and `finish()` had a `let policy_state = &mut self.state;` line introduced "to satisfy the borrow checker." Modern rustc's disjoint-field analysis handles `self.state.tick(&mut inferer)` directly while `inferer` holds `&mut self.whisper_state` — the rebind was a left-over from an earlier authoring iteration. Removed.
+
+Both findings came from a focused Rust review spawned right after merge — a fresh agent with no prior context on the change found the post-error retention bug in ~100 s. Worth normalising as a post-ship step for hot-path Rust changes that ship without hands-on validation.
+
 ---
 
 ## 2026-05-07 — Splash screen for cold-boot launch gap: experimented and reverted (#584 Angle 2)

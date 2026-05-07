@@ -519,30 +519,23 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
     }
 
     fn drain(&mut self) -> Result<Vec<Utterance>> {
-        // Field-borrow split so the WhisperInferer can hold a mutable
-        // reference to `self.whisper_state` while `self.state.tick`
-        // runs against `self.state` (#612). Both fields are independent;
-        // taking them out into separate locals before constructing the
-        // inferer makes Rust happy without unsafe.
-        let policy_state = &mut self.state;
         let mut inferer = WhisperInferer {
             ctx: Arc::clone(&self.ctx),
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
             whisper_state: &mut self.whisper_state,
         };
-        policy_state.tick(&mut inferer)
+        self.state.tick(&mut inferer)
     }
 
     fn finish(mut self: Box<Self>) -> Result<Vec<Utterance>> {
-        let policy_state = &mut self.state;
         let mut inferer = WhisperInferer {
             ctx: Arc::clone(&self.ctx),
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
             whisper_state: &mut self.whisper_state,
         };
-        policy_state.finish(&mut inferer)
+        self.state.finish(&mut inferer)
     }
 }
 
@@ -607,13 +600,27 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             );
             tracing::debug!("whisper streaming session: created reusable WhisperState (#612)");
         }
+        // Run the inference and capture the result so we can drop
+        // the state on error rather than reusing it. whisper.cpp's
+        // contract on partial-failure state is undocumented; a state
+        // that errored mid-decode could carry KV-cache junk into the
+        // next inference. Recreating costs the ~76 MB init again, but
+        // only on the rare error path.
+        let infer_result = self
+            .whisper_state
+            .as_mut()
+            .expect("whisper_state is Some after the lazy-init branch above")
+            .full(params, mono_16k_pcm);
+        if let Err(e) = infer_result {
+            *self.whisper_state = None;
+            return Err(anyhow!("whisper streaming inference failed: {e}"));
+        }
+        // Re-borrow for segment reading on the success path. The slot
+        // is still Some(_) because we only clear it in the err branch.
         let state = self
             .whisper_state
             .as_mut()
-            .expect("whisper_state is Some after the lazy-init branch above");
-        state
-            .full(params, mono_16k_pcm)
-            .map_err(|e| anyhow!("whisper streaming inference failed: {e}"))?;
+            .expect("whisper_state is Some on the inference-success path");
 
         let n_segments = state
             .full_n_segments()
