@@ -669,21 +669,13 @@ Tauri 2's runtime auto-exits when the last webview window goes away. Hush's clos
 
 ---
 
-## Supply-chain pins (policy, last reviewed 2026-05-01)
+## Supply-chain pins (policy, last reviewed 2026-05-01, updated 2026-05-08)
 
-Two production deps live outside the "stable crates.io release" baseline. Both are deliberate; both have a documented exit condition. Don't bump either without re-reading this section.
+One production dep lives outside the "stable crates.io release" baseline. It is deliberate and has a documented exit condition. Don't bump without re-reading this section.
 
-### `ort = "=2.0.0-rc.12"` (exact pin, RC)
+~~### `ort = "=2.0.0-rc.12"` (exact pin, RC)~~ — **removed in #641 (tract migration)**
 
-**Why we're on an RC.** ort 2.0 stable hasn't shipped. We need 2.0 for the macOS CoreML acceleration path the wespeaker diarizer (#111) takes; 1.x is missing several execution-provider features. The `download-binaries` feature pulls vendored ORT runtime libs from `pyke.io` at build time, so we don't depend on a system-installed onnxruntime — important for the Linux distro packagers and our Windows release artifact.
-
-**Why exact-pinned (`=`, not `^`).** rc.10 → rc.12 ate one breakage already (an upstream `ureq::tls` path change in ort-sys's build script). RCs ship API changes between versions; an unpinned `cargo update` could re-break the diarizer between PRs. The exact pin makes any version movement an explicit, reviewed change.
-
-**Bump-when policy.** Switch to a caret pin or stable version *only when* either:
-1. ort 2.0 stable ships and our compile is clean against it, **or**
-2. a future rc fixes a security advisory we care about (then bump to the next exact rc, run the diarizer integration smoke, document the bump in this section).
-
-`ndarray = "=0.17"` is exact-pinned for the same reason — ort's exposed types are generic over `ndarray::ArrayBase`, so bumping either crate in isolation breaks the build.
+`ort` and `ndarray` were exact-pinned to avoid RC-level API churn. Both have been removed; the diarizer now uses `tract-onnx = "0.22.1"` (current stable), which has no Metal/MPS dependency and uses a standard caret pin — no special bump policy required.
 
 ### `rdev` git fork pin
 
@@ -745,7 +737,9 @@ Pre-#251 the SCK system-audio path wrote into an `Arc<Mutex<Vec<f32>>>` from ins
 
 Six PRs (#295–#300) shipped the initial chain and three follow-ups (#303–#305) closed audit findings. Capturing the non-obvious calls so future-Claude doesn't re-derive them from the diff.
 
-**ort over candle for the ONNX runtime.** `candle-onnx` (HF's pure-Rust path) was tempting for binary size (~5 MB vs ~50 MB) and dep transparency, but it has incomplete operator coverage and is 3–5× slower on CPU than ort. CoreML acceleration on Apple Silicon — the project's design target — is the load-bearing reason to take ort: it lets us hand inference to the Neural Engine on supported Macs. Hush already ships whisper.cpp at ~50 MB, so the incremental ORT cost is real but not prohibitive. Trade-off accepted.
+**ort over candle for the ONNX runtime** (original rationale, superseded — see tract addendum below). `candle-onnx` (HF's pure-Rust path) was tempting for binary size (~5 MB vs ~50 MB) and dep transparency, but it has incomplete operator coverage and is 3–5× slower on CPU than ort. CoreML acceleration on Apple Silicon — the project's design target — is the load-bearing reason to take ort: it lets us hand inference to the Neural Engine on supported Macs. Hush already ships whisper.cpp at ~50 MB, so the incremental ORT cost is real but not prohibitive. Trade-off accepted.
+
+**Addendum (#641): ort replaced by tract-onnx.** CoreML/Neural Engine acceleration turned out not to be the load-bearing factor we thought. ORT's `download-binaries` prebuilts for Apple Silicon route matmul / layernorm / softmax through Metal Performance Shaders even with `CPU::default()` EP — no opt-out without a from-source build. Each `session.run` allocates IOAccelerator regions pinned to the `Session` lifetime; over a 5-min meeting `vmmap` showed 96 such regions totalling 9 GB virtual / 7.8 GB in swap (~1.25 GB/min growth). Periodic session recreation (#642) bounded but did not eliminate the growth. `tract-onnx` (pure Rust, zero Metal dispatch) fixes it at the root: zero IOAccelerator regions, no Metal at all. The wespeaker ResNet34-LM model uses only standard ONNX ops (Conv, Gemm, Add, Relu, ReduceMean, Flatten, …) that tract 0.22 supports natively. Binary size drops ~45 MB (no vendored ORT runtime). CPU latency is unchanged (~50–100 ms/utterance) because we were on CPU EP anyway. CoreML acceleration is not pursued further in the current architecture.
 
 **Why pump-side rolling audio buffer, not a `StreamingTranscribeSession` API extension.** D2 needs each utterance's audio to embed. The streaming session owns its sliding window internally; surfacing per-utterance audio at finals time would have meant adding a method to `StreamingTranscribeSession` and forcing every backend + test mock to grow it. We kept an independent `meeting::audio_buffer::AudioRollingBuffer` per source instead — bounded at 30 s (matches the streaming window), zeroized on drop, slices by absolute-session-time `[started_at_ms, ended_at_ms)`. Smaller diff, cleaner trait surface, mirrors the pattern `transcription::streaming::SlidingWindowState` already established for the same kind of data.
 
@@ -2066,3 +2060,29 @@ The same logic applies to the diarizer. An intermediate iteration kept the diari
 - **Mid-meeting growth still unbounded** at ~1.25 GB/min. Per-stop cleanup bounds between-meeting footprint; a single very long meeting still grows. Mid-meeting reload would require a user-visible interruption (dictation outage) and is deferred.
 - **`model_select` race:** a model change that completes during the background reload will be overwritten when the reload task installs its freshly-built context. Low-risk in practice (tagged TODO(#636) in code); fix with a generation counter if it surfaces.
 - **Verify with `vmmap -summary`**, not RSS. Physical footprint should return to ~1.5–2 GB baseline within a few seconds of meeting stop. Without mimalloc override the destructors fire correctly but footprint stays pinned (system malloc hoarding) — this was confirmed on a 5:30 meeting post-#636 (8 GB before and after stop). The `override` feature is required for observable recovery.
+
+---
+
+## 2026-05-08 — #641 root-cause fix: ORT → tract-onnx
+
+### Why periodic ORT session recreation (#642) was insufficient
+
+PR #642 dropped and lazily recreated the `ort::Session` every 25 utterances to flush IOAccelerator regions. Confirmed insufficient: memory footprint remained high after a fresh build. Root cause: Apple Silicon's Metal driver retains some global state (command buffers, Metal heaps) across `Session` recreation — dropping an individual session only releases that session's explicit allocations, not the driver-level state that accumulates over the process lifetime.
+
+### What ORT is actually doing on Apple Silicon (no opt-out)
+
+ORT's `download-binaries` prebuilts for Apple Silicon (arm64) link against Metal Performance Shaders (MPS) and use them for matmul, layernorm, and softmax kernels even when only `CPU::default()` EP is registered. There is no opt-out knob in the prebuilt binaries — you'd need to build ORT from source with Metal disabled. Building ORT from source requires `cmake` + ORT's own build system and would add ~10 min to CI builds.
+
+### Why tract fixes it at the root
+
+`tract-onnx` is pure Rust. There are no C bindings, no MPS/Metal dispatch, no IOAccelerator regions at any point in its execution path. All allocations are standard Rust heap allocations that go through mimalloc.
+
+The wespeaker ResNet34-LM model uses only: `Add, Cast, Concat, Constant, Conv, Div, Flatten, Gather, Gemm, Mul, ReduceMean, ReduceProd, Relu, Shape, Sqrt, Sub, Transpose, Unsqueeze` — all in tract's well-tested core op set. BatchNorm is fused into Conv at ONNX export time. Dynamic shapes (batch `?`, time `?`, mel_bins `80`) work out of the box via tract's symbolic dimension system.
+
+### Migration notes
+
+- `TypedRunnableModel<TypedModel>` (= `SimplePlan<TypedFact, Box<dyn TypedOp>, TypedModel>`) is `Send + Sync`: `TypedOp: Send + Sync` is a trait bound, so `Box<dyn TypedOp>: Send + Sync`, therefore `Arc<TypedModel>: Sync`. No mutex needed around the model.
+- `label_utterances` was restructured: embeddings are now computed outside the clusters mutex (inference is ~50–100 ms), then the mutex is acquired only for the cheap cluster-assignment loop.
+- `tract_ndarray::Array3::<f32>::from_shape_vec((1, frames, 80), flat_mel)?.into()` creates the input tensor. `model.run(tvec!(tensor.into()))` runs inference. Output is `result[0].to_array_view::<f32>()?`.
+- Binary size: ~45 MB smaller (no vendored ORT runtime).
+- SHA-256 verification is kept — same model file, same defence-in-depth.
