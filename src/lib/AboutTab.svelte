@@ -34,7 +34,6 @@
 -->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { platform } from "@tauri-apps/plugin-os";
   import { onDestroy, onMount } from "svelte";
@@ -52,15 +51,14 @@
   import { formatBuildTimestamp, type BuildInfo } from "./utils/format";
   import "./settings-tab.css";
 
-  // Tauri runtime version + the app's productName / version, all
-  // fetched at runtime so they track the actual build rather than
-  // a hardcoded string that would silently rot.
+  // App version + Tauri runtime version + build timestamp, all sourced
+  // from `get_build_info` (a custom IPC command). This avoids needing
+  // the `app:default` capability grant — the main window capability was
+  // intentionally kept minimal (#238) and explicitly excludes app-metadata
+  // reads. `get_build_info` bakes the same info at compile time via
+  // `build.rs` env vars, so it's equally accurate without a capability.
   let appVersion = $state<string>("");
-  // Build timestamp pulled from the backend's `get_build_info` IPC
-  // (#589). The build.rs script stamps Unix-epoch-seconds at compile
-  // time; rendered as DD/MM/YYYY HH:MM local time below the version.
   let buildTimestamp = $state<number>(0);
-  let appName = $state<string>("Hush");
   let tauriVersion = $state<string>("");
 
   // Manual "Check for updates" probe (#223). Tagged-union result;
@@ -102,30 +100,13 @@
 
   async function loadAppMetadata(): Promise<void> {
     try {
-      const [name, version, tauri] = await Promise.all([
-        getName(),
-        getVersion(),
-        getTauriVersion(),
-      ]);
-      appName = name;
-      appVersion = version;
-      tauriVersion = tauri;
-    } catch {
-      // Non-fatal — the static fallback ("Hush" + empty version)
-      // is still readable.
-    }
-    // Build timestamp lives in a separate IPC because it's backend-only
-    // metadata (the JS-side `getVersion` reads from `tauri.conf.json`,
-    // which has no compile-time timestamp). Failure here leaves
-    // `buildTimestamp = 0`, which `formatBuildTimestamp` renders as
-    // "unknown" — useful prefix for a future bug report regardless.
-    try {
       const info = await invoke<BuildInfo>("get_build_info");
+      appVersion = info.version;
+      tauriVersion = info.tauriVersion;
       buildTimestamp = info.buildTimestamp;
     } catch (e) {
-      // best-effort — if get_build_info isn't registered (stale dev
-      // build) warn so the omission is visible in dev tools.
-      console.warn("[hush] get_build_info failed — build timestamp unavailable", e);
+      // Non-fatal — version line is hidden when appVersion is empty.
+      console.warn("[hush] get_build_info failed — app metadata unavailable", e);
     }
   }
 
@@ -276,7 +257,7 @@
       no semantic relationship was a hierarchy violation
       flagged in review #3.
     -->
-    <h3 class="about-name">{appName}</h3>
+    <h3 class="about-name">Hush</h3>
     {#if appVersion}
       <p class="about-version">
         Version {appVersion}{#if buildTimestamp > 0} · <span data-testid="about-build-timestamp">Built {formatBuildTimestamp(buildTimestamp)}</span>{/if}

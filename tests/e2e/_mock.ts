@@ -137,8 +137,8 @@ export async function installMocks(
       check_for_updates: () => ({ ...defaultUpdateCheckResult }),
       // App version string for the debug issue-report generator.
       get_app_version: () => "0.0.0-test",
-      // Version + build timestamp for the debug console header and issue report.
-      get_build_info: () => ({ version: "0.0.0-test", buildTimestamp: 0 }),
+      // Version + build timestamp + Tauri runtime version for the About tab.
+      get_build_info: () => ({ version: "0.0.0-test", tauriVersion: "2.11.1", buildTimestamp: 0 }),
       // #584 Angle 1 — startup phase timings. Default returns an empty
       // list so specs that don't care about the timings panel see it
       // collapsed/empty. Specs that care override with a populated list.
