@@ -47,7 +47,8 @@
 //! tracked separately.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
@@ -66,6 +67,53 @@ use crate::transcription::Utterance;
 /// Embedding dimensionality — wespeaker ResNet34-LM emits 256-dim
 /// vectors. Used for shape-checking the model output.
 pub const EMBEDDING_DIM: usize = 256;
+
+/// Number of successful `embed` calls before the ORT `Session` is
+/// dropped and lazily recreated (#641).
+///
+/// **Why recreate the session at all:** on Apple Silicon, ORT's
+/// prebuilt `download-binaries` binaries link against Metal
+/// Performance Shaders and dispatch matmul / layernorm / softmax
+/// kernels through MPS even when only the CPU execution provider is
+/// registered. Each `session.run` allocates Metal command buffers and
+/// texture-backed `IOAccelerator` regions that are pinned to the
+/// `Session` object's lifetime — they are NOT freed at the end of
+/// `run`. Over a 5-min meeting post-#639 `vmmap` showed 96 such
+/// regions totalling 9 GB virtual / 7.8 GB in swap. The growth rate
+/// was ~1.25 GB/min with diarization enabled and flatlined
+/// immediately when diarization was toggled off mid-meeting
+/// (confirmed by Ken, #612 diagnostic).
+///
+/// **Why the Session only, not SessionClusterState:** the cluster
+/// state (`SessionClusterState`) is purely Rust — `Vec<(Vec<f32>,
+/// usize)>`. It has no ORT or Metal associations. Dropping only the
+/// `Session` forces Metal command buffers to retire and IOAccelerator
+/// regions to be released while keeping speaker-label continuity
+/// across recreations. "Speaker 1" at minute 3 stays "Speaker 1" at
+/// minute 8.
+///
+/// **Why 25:** at a rough ~10 utterances/min cadence this means one
+/// recreation every ~2.5 min. Each `IOAccelerator` batch at 1.25
+/// GB/min × 2.5 min ≈ 3 GB peak before each flush — acceptable and
+/// far below the OOM threshold on any supported Mac. Empirical tuning
+/// may revise this (lower = more flushing, less GPU pressure; higher
+/// = fewer pauses but more peak). Zero means "never recreate" (A/B
+/// knob for regression testing).
+///
+/// Tunable via `HUSH_DIARIZER_SESSION_RECREATE_INTERVAL` env var at
+/// app launch without rebuilding.
+pub const DEFAULT_SESSION_RECREATE_INTERVAL: u64 = 25;
+
+/// Resolves [`DEFAULT_SESSION_RECREATE_INTERVAL`] against an
+/// optional `HUSH_DIARIZER_SESSION_RECREATE_INTERVAL` env-var
+/// override read once at process start. Returns 0 to mean "never
+/// recreate" (A/B knob; keeps the old unbounded behaviour).
+fn session_recreate_interval() -> u64 {
+    std::env::var("HUSH_DIARIZER_SESSION_RECREATE_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_SESSION_RECREATE_INTERVAL)
+}
 
 /// Minimum number of Mel-FB frames an utterance needs to produce a
 /// useful embedding. Below this, the model can technically still
@@ -228,17 +276,15 @@ fn resolve_distance_threshold() -> f32 {
 /// Production diarizer: ONNX speaker-embedding model + online
 /// 1-NN-with-threshold clustering. See module-level doc.
 pub struct OnnxDiarizer {
-    /// `ort` session loaded from the user's downloaded model file.
-    /// Wrapped in a `Mutex` because `Session::run` takes `&mut self`
-    /// — internal state (allocator, run options) is mutable across
-    /// calls. The lock is held only for the duration of one
-    /// inference call (~50–100 ms on CPU), and the meeting pump is
-    /// the sole caller, so contention isn't a concern in practice.
-    /// We recover from poison by extracting the inner Session
-    /// (`PoisonError::into_inner`) — a transient panic in one
-    /// inference call shouldn't kill diarization for the rest of
-    /// the meeting.
-    session: Mutex<Session>,
+    /// Path to the loaded model file. Retained so the session can be
+    /// recreated periodically to flush Metal/MPS IOAccelerator
+    /// regions (#641).
+    model_path: PathBuf,
+    /// ORT session. `None` signals "needs lazy recreation" — same
+    /// pattern as `WhisperState` in the streaming transcriber (#612).
+    /// Holding an `Option` lets us `take()` the session at the
+    /// recreation boundary without touching the cluster state.
+    session: Mutex<Option<Session>>,
     /// Reusable Mel-FB extractor — holds the planned 512-pt FFT,
     /// Povey window, and 80-bin filterbank. Constructed once per
     /// `OnnxDiarizer`.
@@ -249,11 +295,23 @@ pub struct OnnxDiarizer {
     /// state mutates on each call. Lock is held for the duration
     /// of a single batch's labelling — sub-millisecond at typical
     /// batch sizes.
+    ///
+    /// Deliberately separate from `session`: this state is preserved
+    /// across periodic ORT session recreations so speaker-label
+    /// continuity is maintained for the full meeting (#641).
     clusters: Mutex<SessionClusterState>,
     /// Name of the input tensor declared by the wespeaker model.
     /// Cached at construction so `run` doesn't re-allocate the
     /// string on every utterance.
     input_name: String,
+    /// Successful `embed` calls on the current ORT session. When
+    /// this reaches `session_recreate_interval`, the session is
+    /// dropped (set to `None`) so the next `embed` lazily creates a
+    /// fresh one, flushing accumulated Metal command buffers (#641).
+    embeds_on_current_session: AtomicU64,
+    /// Cached value from [`session_recreate_interval`]. Zero means
+    /// "never recreate" (A/B disable knob).
+    session_recreate_interval: u64,
 }
 
 impl OnnxDiarizer {
@@ -261,59 +319,8 @@ impl OnnxDiarizer {
     /// inference. Fails if the file doesn't exist, isn't a valid
     /// ONNX model, or has an input shape we don't recognise.
     pub fn new(model_path: impl AsRef<Path>) -> Result<Self> {
-        let model_path = model_path.as_ref();
-
-        // Defence-in-depth: verify the file's SHA-256 against the
-        // catalog before handing it to ort (#111 audit). The
-        // download path verifies SHA at fetch time, but a sibling
-        // app sharing the user's macOS account can write into the
-        // models dir afterwards — re-checking at load means a
-        // substituted ONNX (potentially crafted to exploit ort's
-        // parser) is rejected before parsing. ~80 ms one-time cost
-        // per app boot for the 26 MB wespeaker model.
-        verify_model_sha256(model_path)
-            .with_context(|| format!("verify SHA-256 of model at {}", model_path.display()))?;
-
-        // Disable the CPU execution provider's arena allocator and
-        // ORT's memory-pattern cache before loading the model
-        // (#612). The wespeaker model takes variable-length log-Mel
-        // features per utterance, which is the textbook trigger for
-        // ORT's dynamic-shape memory growth: each new sequence
-        // length grows the per-session arena (which never returns
-        // pages to the OS by default) and adds a new entry in the
-        // shape-keyed memory-pattern cache.
-        //
-        // Hands-on profiling on 2026-05-07 nailed this as the
-        // dominant leak source: with diarization on, RSS climbed at
-        // ~1.25 GB/min and held at peak for 4+ min after meeting
-        // stop. With diarization toggled off (zero `session.run`
-        // calls) the rate dropped to ~0.25 GB/min. Disabling the
-        // arena routes allocations through plain malloc/free so
-        // they actually return to the OS at end of `run`; disabling
-        // the memory pattern stops the per-shape plan cache from
-        // accumulating.
-        //
-        // Documented behaviour, not an `ort`-Rust bug —
-        // microsoft/onnxruntime#11627 and #22271 are the canonical
-        // references. Perf cost is a 2–10% latency hit per
-        // `session.run`, which is invisible at our once-per-utterance
-        // cadence (the per-utterance run is already ~50–100 ms).
-        // `with_execution_providers` and `with_memory_pattern` return
-        // `Result<SessionBuilder, ort::Error<SessionBuilder>>` where the
-        // error variant carries the partially-built session back to the
-        // caller. anyhow's `.context()` doesn't apply because that
-        // error type isn't `StdError` the way anyhow expects, so we
-        // convert via `.map_err(|e| e.into_inner())` — `into_inner`
-        // returns the underlying `ort::Error` which IS `StdError`.
-        let mut builder = Session::builder()
-            .context("ort: build session")?
-            .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
-            .map_err(|e| anyhow!("ort: register CPU EP with arena disabled (#612): {}", e))?
-            .with_memory_pattern(false)
-            .map_err(|e| anyhow!("ort: disable memory pattern cache (#612): {}", e))?;
-        let session = builder
-            .commit_from_file(model_path)
-            .with_context(|| format!("ort: load model from {}", model_path.display()))?;
+        let model_path = model_path.as_ref().to_path_buf();
+        let session = build_ort_session(&model_path)?;
 
         // The wespeaker model exposes a single named input. Cache
         // the name rather than hard-coding "feats" — different
@@ -336,10 +343,13 @@ impl OnnxDiarizer {
             );
         }
         Ok(Self {
-            session: Mutex::new(session),
+            model_path,
+            session: Mutex::new(Some(session)),
             mel: MelExtractor::new(),
             clusters: Mutex::new(SessionClusterState::new(threshold)),
             input_name,
+            embeds_on_current_session: AtomicU64::new(0),
+            session_recreate_interval: session_recreate_interval(),
         })
     }
 
@@ -368,44 +378,87 @@ impl OnnxDiarizer {
 
         let input_value = Value::from_array(input).context("ort: wrap ndarray as a Value")?;
 
-        // The lock is held for the duration of one inference call
-        // (~50–100 ms on CPU). The meeting pump is the sole caller
-        // so there's no real contention surface. Recover from
-        // poison via `into_inner` so a transient panic in one call
-        // doesn't kill diarization for the rest of the session;
-        // ort's run path is C++ behind a Result-returning shim, so
-        // poisoning is unlikely in practice but cheap to defend
-        // against.
-        let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        // Reverted from #631's `run_with_options` + per-run arena
-        // shrinkage. The shrinkage released the output tensor's
-        // backing memory before `try_extract_tensor` could read
-        // it, causing `embed()` to silently fail on every
-        // utterance — which made the leak APPEAR fixed (no
-        // successful inferences = no allocations) while actually
-        // breaking diarization (every utterance fell back to the
-        // source-derived "mic"/"system" label). #630's build-time
-        // `with_arena_allocator(false)` + `with_memory_pattern(false)`
-        // are the fix we ship; the per-run shrinkage is too
-        // dangerous given how ORT's allocator interacts with
-        // output tensor lifetime.
-        let outputs = session
-            .run(ort::inputs![self.input_name.as_str() => input_value])
-            .context("ort: session.run")?;
-
-        // Single output (the embedding). `try_extract_array` gives a
-        // typed view we can copy out of without unsafe.
-        let (_, view): (_, &[f32]) = outputs[0]
-            .try_extract_tensor::<f32>()
-            .context("ort: extract f32 output tensor")?;
-
-        if view.len() != EMBEDDING_DIM {
-            return Err(anyhow!(
-                "ort: unexpected embedding length {} (expected {EMBEDDING_DIM})",
-                view.len()
-            ));
+        // Acquire the session lock. `None` here means the previous
+        // embed dropped the session for recreation (see below) — lazy-
+        // init a fresh one now. The session mutex is held for the full
+        // inference call (~50–100 ms on CPU); the meeting pump is the
+        // sole caller so contention isn't a concern in practice. Recover
+        // from poison via `into_inner` so a transient panic in one call
+        // doesn't kill diarization for the rest of the meeting.
+        let mut session_guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        if session_guard.is_none() {
+            let rebuilt = build_ort_session(&self.model_path)
+                .context("OnnxDiarizer: rebuild ORT session (#641)")?;
+            *session_guard = Some(rebuilt);
+            tracing::info!(
+                "OnnxDiarizer: ORT session recreated to flush Metal/MPS IOAccelerator regions (#641)"
+            );
         }
-        Ok(view.to_vec())
+
+        // Scoped block so the `session` borrow of `session_guard` ends
+        // before we potentially set `session_guard = None` below. The
+        // `outputs` extraction (including the `.to_vec()` copy) must
+        // complete while the session is still alive.
+        let embedding: Vec<f32> = {
+            let session = session_guard.as_mut().unwrap();
+            // Reverted from #631's `run_with_options` + per-run arena
+            // shrinkage. The shrinkage released the output tensor's
+            // backing memory before `try_extract_tensor` could read
+            // it, causing `embed()` to silently fail on every
+            // utterance — which made the leak APPEAR fixed (no
+            // successful inferences = no allocations) while actually
+            // breaking diarization (every utterance fell back to the
+            // source-derived "mic"/"system" label). #630's build-time
+            // `with_arena_allocator(false)` + `with_memory_pattern(false)`
+            // are the fix we ship; the per-run shrinkage is too
+            // dangerous given how ORT's allocator interacts with
+            // output tensor lifetime.
+            let outputs = session
+                .run(ort::inputs![self.input_name.as_str() => input_value])
+                .context("ort: session.run")?;
+
+            // Single output (the embedding). `try_extract_array` gives a
+            // typed view we can copy out of without unsafe.
+            let (_, view): (_, &[f32]) = outputs[0]
+                .try_extract_tensor::<f32>()
+                .context("ort: extract f32 output tensor")?;
+
+            if view.len() != EMBEDDING_DIM {
+                return Err(anyhow!(
+                    "ort: unexpected embedding length {} (expected {EMBEDDING_DIM})",
+                    view.len()
+                ));
+            }
+            view.to_vec()
+        }; // outputs drops here; borrow on session_guard ends
+
+        // Periodic session recreation (#641): after every
+        // `session_recreate_interval` successful embeds, drop the ORT
+        // session so the next call lazy-recreates a fresh one. This
+        // forces Metal/MPS command buffers to retire and IOAccelerator
+        // regions to be released. The cluster state is separate and
+        // unaffected — speaker-label continuity is preserved.
+        //
+        // Counter uses Relaxed ordering: we only need approximate
+        // threshold detection; no other state is synchronised on this
+        // counter. Off-by-one across threads is impossible here (sole
+        // caller is the meeting-pump blocking task) and inconsequential
+        // even if it weren't.
+        let count = self
+            .embeds_on_current_session
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if self.session_recreate_interval > 0 && count >= self.session_recreate_interval {
+            *session_guard = None; // drop Session; cluster state untouched
+            self.embeds_on_current_session.store(0, Ordering::Relaxed);
+            tracing::info!(
+                embeds = count,
+                interval = self.session_recreate_interval,
+                "OnnxDiarizer: ORT session dropped; next embed will recreate (#641)"
+            );
+        }
+
+        Ok(embedding)
     }
 }
 
@@ -454,6 +507,50 @@ impl Diarize for OnnxDiarizer {
             }
         }
     }
+}
+
+/// Build an ORT [`Session`] from `model_path` with the standard
+/// options used by every `OnnxDiarizer` instance (arena disabled,
+/// memory-pattern cache disabled). Shared by [`OnnxDiarizer::new`]
+/// and the periodic session-recreation path (#641) so the options
+/// stay in sync.
+///
+/// Verifies the file's SHA-256 against the catalog before handing
+/// it to ort on every call — both at initial load and on recreation
+/// (#111 defence-in-depth: a sibling app could replace the model
+/// file between constructions).
+///
+/// `with_execution_providers` and `with_memory_pattern` return
+/// `Result<SessionBuilder, ort::Error<SessionBuilder>>` where the
+/// error variant carries the partially-built session back to the
+/// caller. anyhow's `.context()` doesn't apply because that error
+/// type isn't `StdError` the way anyhow expects, so we convert via
+/// `.map_err(|e| e.into_inner())` — `into_inner` returns the
+/// underlying `ort::Error` which IS `StdError`.
+fn build_ort_session(model_path: &Path) -> Result<Session> {
+    // Defence-in-depth: verify SHA-256 before each (re)load so a
+    // substituted model file is caught even if it was written after
+    // the first boot-time check. ~80 ms cost per call at 26 MB.
+    verify_model_sha256(model_path)
+        .with_context(|| format!("verify SHA-256 of model at {}", model_path.display()))?;
+
+    // Disable the CPU EP's arena allocator and ORT's memory-pattern
+    // cache (#612). The wespeaker model takes variable-length log-Mel
+    // features per utterance — the textbook trigger for ORT's
+    // dynamic-shape arena growth (microsoft/onnxruntime#11627, #22271).
+    // Arena disabled: allocations route through plain malloc/free and
+    // return to the OS at end of `run`. Memory-pattern disabled: no
+    // per-shape plan cache accumulating. 2–10 % latency hit per `run`,
+    // invisible at our once-per-utterance cadence.
+    let mut builder = Session::builder()
+        .context("ort: build session")?
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+        .map_err(|e| anyhow!("ort: register CPU EP with arena disabled (#612): {}", e))?
+        .with_memory_pattern(false)
+        .map_err(|e| anyhow!("ort: disable memory pattern cache (#612): {}", e))?;
+    builder
+        .commit_from_file(model_path)
+        .with_context(|| format!("ort: load model from {}", model_path.display()))
 }
 
 /// Hash the file at `path` and reject if its SHA-256 doesn't match
@@ -674,5 +771,19 @@ mod tests {
         let samples = vec![0.0_f32; 16_000];
         let emb = diarizer.embed(&samples).expect("embed silence");
         assert_eq!(emb.len(), EMBEDDING_DIM);
+    }
+
+    #[test]
+    fn session_recreate_interval_env_var_and_default() {
+        // Override: set → assert custom value, then unset → assert default.
+        // Single test avoids the env-var race that would occur if the
+        // override and defaults cases ran concurrently in separate tests.
+        std::env::set_var("HUSH_DIARIZER_SESSION_RECREATE_INTERVAL", "10");
+        assert_eq!(session_recreate_interval(), 10);
+        std::env::remove_var("HUSH_DIARIZER_SESSION_RECREATE_INTERVAL");
+        assert_eq!(
+            session_recreate_interval(),
+            DEFAULT_SESSION_RECREATE_INTERVAL
+        );
     }
 }

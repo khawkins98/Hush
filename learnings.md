@@ -53,13 +53,13 @@ The pattern repeated: see leak → assume malloc-side → ship fix → measure �
 
 Without #639 + mimalloc-override, the malloc side would still leak unboundedly. The PR is correct for what it targets; it just doesn't target the dominant source.
 
-### Possible fixes for the GPU leak (tracked in a fresh issue)
+### Possible fixes for the GPU leak — and the one that shipped (#641)
 
-1. **Build ORT without GPU support.** Drop `download-binaries`, build from source with cmake configured to disable Metal / CoreML providers entirely. Cost: significant build infrastructure change.
-2. **Runtime env var to disable Metal.** ORT may honor an env var to disable specific providers; needs investigation. Cheapest if it works.
-3. **Periodic mid-meeting `OnnxDiarizer` recreation.** Same shape as #623's `WhisperState` recreation but for the diarizer. Drop + reload every N utterances; ~80 ms per recreation. Forces Metal command buffers to retire and IOAccelerator regions to release.
+1. **Runtime env var to disable Metal.** Investigated first (cheapest path). ORT's `CPU::default()` EP doesn't expose a "no Metal dispatch" knob; the `download-binaries` prebuilts for Apple Silicon bake in Metal support unconditionally. No env var or `SessionOptions::AddConfigEntry` key was found that suppresses MPS dispatch from within the CPU EP in ORT 2.0.0-rc.12. Dead end without a custom ORT build.
+2. **Periodic mid-meeting `OnnxDiarizer` recreation (#641 — shipped).** Same shape as #623's `WhisperState` recreation but for the diarizer. After every `DEFAULT_SESSION_RECREATE_INTERVAL` (25) successful `embed` calls (~2.5 min at typical meeting cadence), the ORT `Session` is dropped and lazy-recreated on the next call. This forces Metal command buffers to retire and IOAccelerator regions to release. `SessionClusterState` (the speaker-label history) is deliberately separate from `Session` and is preserved across recreations — speaker identity stays consistent throughout the meeting. Env-var tunable: `HUSH_DIARIZER_SESSION_RECREATE_INTERVAL=0` disables for A/B testing.
+3. **Build ORT without GPU support.** Drop `download-binaries`, build from source with cmake configured to disable Metal / CoreML providers entirely. Cost: significant build infrastructure change. Not done.
 4. **Different model.** wespeaker is what we use; alternative speaker-embedding models may not have GPU-routed kernels. Switching is research effort.
-5. **Accept and document.** Pair with #639's per-meeting bound and call it survivable — a 30-min meeting hits ~38 GB physical footprint, which is uncomfortable but not catastrophic on a 32 GB+ Mac with swap. Cosmetic improvement: add a "Long meetings: stop and restart between sessions" note in Settings.
+5. **Accept and document.** With #641's periodic recreation, footprint is bounded rather than unbounded. Without it, a 30-min meeting hits ~38 GB physical footprint.
 
 ---
 
