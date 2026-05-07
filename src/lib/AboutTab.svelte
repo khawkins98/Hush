@@ -122,8 +122,10 @@
     try {
       const info = await invoke<BuildInfo>("get_build_info");
       buildTimestamp = info.buildTimestamp;
-    } catch {
-      // best-effort
+    } catch (e) {
+      // best-effort — if get_build_info isn't registered (stale dev
+      // build) warn so the omission is visible in dev tools.
+      console.warn("[hush] get_build_info failed — build timestamp unavailable", e);
     }
   }
 
@@ -350,7 +352,10 @@
               </button>
               <a
                 href={updateCheck.releaseUrl}
-                target="_blank"
+                onclick={(e) => {
+                  e.preventDefault();
+                  openExternal(e.currentTarget.href);
+                }}
                 rel="noopener noreferrer"
                 class="about-update-fallback"
               >Open release notes</a>
@@ -396,7 +401,10 @@
               <p class="about-install-actions">
                 <a
                   href={updateCheck.releaseUrl}
-                  target="_blank"
+                  onclick={(e) => {
+                    e.preventDefault();
+                    openExternal(e.currentTarget.href);
+                  }}
                   rel="noopener noreferrer"
                 >Open release notes</a>
               </p>
@@ -416,7 +424,10 @@
                 </button>
                 <a
                   href={updateCheck.releaseUrl}
-                  target="_blank"
+                  onclick={(e) => {
+                    e.preventDefault();
+                    openExternal(e.currentTarget.href);
+                  }}
                   rel="noopener noreferrer"
                   class="about-update-fallback"
                 >Open release notes</a>
@@ -475,6 +486,17 @@
           openExternal("https://github.com/khawkins98/Hush");
         }}
         rel="noopener noreferrer">github.com/khawkins98/Hush</a
+      >
+    </dd>
+    <dt>Changelog</dt>
+    <dd>
+      <a
+        href="https://github.com/khawkins98/Hush/releases"
+        onclick={(e) => {
+          e.preventDefault();
+          openExternal("https://github.com/khawkins98/Hush/releases");
+        }}
+        rel="noopener noreferrer">Release notes</a
       >
     </dd>
     <dt>Report a bug</dt>

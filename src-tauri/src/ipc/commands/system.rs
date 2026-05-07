@@ -306,6 +306,89 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Open an http(s) URL in the system browser (#648).
+///
+/// Replaces `tauri-plugin-shell`'s `open()` which called
+/// `open::that_detached()` → `fork()` in a multithreaded Tokio process →
+/// SIGSEGV at `_malloc_fork_child + 184`. Spawning `open`/`xdg-open`
+/// directly via `std::process::Command` uses `posix_spawn()` (no
+/// `pre_exec` hook), which is safe from multithreaded callers.
+///
+/// URL validation: http(s) scheme + non-empty host required. Any other
+/// scheme is rejected with `IpcError::Internal` to prevent accidental
+/// deep-link or file:// exposure.
+#[tauri::command]
+pub fn open_url(url: String) -> IpcResult<()> {
+    let is_https = url.starts_with("https://") && url.len() > 8;
+    let is_http = url.starts_with("http://") && url.len() > 7;
+    if !is_https && !is_http {
+        return Err(IpcError::Internal(
+            "open_url: only http(s) URLs with a non-empty host are allowed".into(),
+        ));
+    }
+    open_url_impl(&url)
+}
+
+#[cfg(target_os = "macos")]
+fn open_url_impl(url: &str) -> IpcResult<()> {
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| IpcError::Internal(format!("open_url: spawn failed: {e}")))
+}
+
+#[cfg(target_os = "linux")]
+fn open_url_impl(url: &str) -> IpcResult<()> {
+    std::process::Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| IpcError::Internal(format!("open_url: spawn failed: {e}")))
+}
+
+#[cfg(target_os = "windows")]
+fn open_url_impl(url: &str) -> IpcResult<()> {
+    // `rundll32 url.dll,FileProtocolHandler <url>` opens URLs without routing
+    // through cmd.exe shell expansion (avoids `&|^%` injection risk).
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| IpcError::Internal(format!("open_url: spawn failed: {e}")))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn open_url_impl(_url: &str) -> IpcResult<()> {
+    Err(IpcError::Internal("open_url: unsupported platform".into()))
+}
+
+/// Reveal the log directory in Finder (#648).
+///
+/// Uses `open <dir>` directly — same safe `posix_spawn()` path as
+/// `open_url` — rather than the `tauri-plugin-shell` route that causes
+/// SIGSEGV in multithreaded processes. The log dir is resolved
+/// server-side (same logic as `get_log_dir`) so the frontend doesn't
+/// pass an arbitrary path. No-op on non-macOS.
+#[tauri::command]
+pub fn reveal_log_dir() -> IpcResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(dir) = crate::resolve_log_dir() else {
+            return Ok(());
+        };
+        std::process::Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| IpcError::Internal(format!("reveal_log_dir: spawn failed: {e}")))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
+}
+
 /// Version + build timestamp bundled together for the debug surfaces.
 ///
 /// `buildTimestamp` is Unix seconds set by `build.rs` at compile time
