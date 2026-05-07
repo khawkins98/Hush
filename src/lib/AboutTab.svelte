@@ -276,11 +276,8 @@
     -->
     <h3 class="about-name">{appName}</h3>
     {#if appVersion}
-      <p class="about-version">Version {appVersion}</p>
-    {/if}
-    {#if buildTimestamp > 0}
-      <p class="about-build-timestamp" data-testid="about-build-timestamp">
-        Built {formatBuildTimestamp(buildTimestamp)}
+      <p class="about-version">
+        Version {appVersion}{#if buildTimestamp > 0} · <span data-testid="about-build-timestamp">Built {formatBuildTimestamp(buildTimestamp)}</span>{/if}
       </p>
     {/if}
   </header>
