@@ -12,7 +12,7 @@ Hush is a [Tauri 2](https://tauri.app/) desktop app:
 - **Frontend:** SvelteKit + Svelte 5 (`src/`), runes-based (`$state`, `$derived`, `$effect`, `$props()`).
 - **IPC:** Tauri commands (Rust ↔ TS), serde-encoded with `camelCase` rename.
 - **Persistence:** SQLite via `sqlx`, with FTS5 for history search.
-- **Inference:** [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-rs`. Optional ONNX speaker-embedding (wespeaker ResNet34-LM) via `ort`.
+- **Inference:** [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-rs`. Optional ONNX speaker-embedding (wespeaker ResNet34-LM) via `tract-onnx` (pure Rust; replaces ORT as of #641).
 
 Primary target: **macOS 26+ on Apple Silicon.** Linux and Windows compile cleanly in CI but are not hands-on tested.
 
@@ -153,8 +153,6 @@ Tracing events flow into three independent sinks, composed in `lib.rs::init_trac
 1. **stderr fmt layer** — `tracing_subscriber::fmt`, filtered by `RUST_LOG` (defaults to `info`). The dev-loop default; visible when running `cargo tauri dev` or via `Console.app` for bundled builds.
 2. **Daily-rolling file appender** — writes plain-text logs to `~/Library/Logs/io.github.khawkins98.hush/hush.log.<YYYY-MM-DD>` on macOS, via `tracing-appender` (#624). Same `RUST_LOG` filter, ANSI stripped, non-blocking writer with a guard returned from `init_tracing`. macOS-only by `cfg`; gracefully no-ops on other platforms. Disable with `HUSH_LOG_FILE=off`. The Settings → Debug tab surfaces the path with "Reveal in Finder" + "Copy grep command" buttons (#627).
 3. **`DebugLogLayer` in-memory ring** — `src-tauri/src/debug_log/`, captures the last N events into a `Mutex<VecDeque>` and emits each event over the `log:event` Tauri event so the floating debug-console window can render the live stream. Bounded ring; drops the oldest event when full. Survives the lifetime of the process only; for post-hoc grepping use sink 2.
-
-`ort`'s own tracing (`features = ["tracing"]`) routes into all three sinks via `tracing` macros. EP-registration / session-options events show up at INFO level.
 
 ---
 
