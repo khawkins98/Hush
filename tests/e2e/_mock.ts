@@ -101,6 +101,11 @@ export async function installMocks(
       // Debug log console (#532). Default returns empty array so
       // the DebugTab renders an empty (but valid) log view.
       get_log_entries: () => [],
+      // On-disk log dir info (#622-followup). Default is `null` so
+      // the Debug tab's Log file section stays hidden in tests
+      // that aren't specifically exercising it; specs that want
+      // to assert the section's controls override per-test.
+      get_log_dir: () => null,
       // Meeting auto-start mode (Settings → Meeting). Default
       // matches the backend's "off" default; specs that exercise
       // the dropdown override per-test.

@@ -46,6 +46,15 @@
   let audioTapResult = $state<string>("");
   let audioTapRunning = $state(false);
 
+  /// Resolved on-disk log dir + today's filename (#622-followup).
+  /// `null` means file logging is off (HUSH_LOG_FILE=off, non-macOS,
+  /// or path resolution failed). The Debug tab hides the whole
+  /// section in that case rather than advertising a path the user
+  /// disabled.
+  type LogDirInfo = { dir: string; todayFile: string };
+  let logDirInfo = $state<LogDirInfo | null>(null);
+  let logPathCopied = $state(false);
+
   function formatTime(ms: number): string {
     return new Date(ms).toISOString();
   }
@@ -101,6 +110,37 @@
     window.open(url, "_blank");
   }
 
+  /// Reveal the log directory in Finder so the user can grep the
+  /// daily file with whatever tool they prefer (`tail`, `less`,
+  /// QuickLook). Routes through `tauri-plugin-shell::open` which
+  /// macOS treats as `open <path>` — Finder is the registered
+  /// handler for directories.
+  async function onRevealLogDir() {
+    if (!logDirInfo) return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(logDirInfo.dir);
+    } catch (e) {
+      console.warn("[hush] reveal log dir failed", e);
+    }
+  }
+
+  /// Copy a ready-to-run grep command for today's file. Cheaper
+  /// than copying the path alone — most uses of the path are "I
+  /// want to find a specific event" rather than "I want to look
+  /// at the directory."
+  async function onCopyGrepSnippet() {
+    if (!logDirInfo) return;
+    const cmd = `grep "" "${logDirInfo.dir}/${logDirInfo.todayFile}"`;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      logPathCopied = true;
+      setTimeout(() => (logPathCopied = false), 2000);
+    } catch (e) {
+      console.warn("[hush] clipboard write failed", e);
+    }
+  }
+
   async function onProbeAudioTap() {
     audioTapRunning = true;
     audioTapResult = "";
@@ -131,6 +171,13 @@
       startupTimings = await invoke<StartupPhase[]>("get_startup_timings");
     } catch {
       startupTimings = [];
+    }
+    // #622-followup: surface the on-disk log path. None means file
+    // logging is off — section stays hidden in that case.
+    try {
+      logDirInfo = await invoke<LogDirInfo | null>("get_log_dir");
+    } catch {
+      logDirInfo = null;
     }
     await generateReport();
   });
@@ -211,6 +258,40 @@
   </button>
 </section>
 
+{#if logDirInfo}
+  <section
+    class="settings-group"
+    aria-labelledby="debug-log-file-heading"
+    data-testid="debug-log-file-section"
+  >
+    <h2 id="debug-log-file-heading" class="group-heading">Log file</h2>
+    <p class="settings-row-note">
+      Hush writes a daily-rolling plain-text log here so you can
+      grep events after the fact (e.g. when filing a bug report).
+      Disable with <code>HUSH_LOG_FILE=off</code>.
+    </p>
+    <pre class="log-path" data-testid="debug-log-path">{logDirInfo.dir}/{logDirInfo.todayFile}</pre>
+    <div class="log-actions">
+      <button
+        type="button"
+        class="ghost small"
+        onclick={onRevealLogDir}
+        data-testid="debug-log-reveal"
+      >
+        Reveal in Finder ↗
+      </button>
+      <button
+        type="button"
+        class="ghost small"
+        onclick={onCopyGrepSnippet}
+        data-testid="debug-log-copy-grep"
+      >
+        {logPathCopied ? "Copied!" : "Copy grep command"}
+      </button>
+    </div>
+  </section>
+{/if}
+
 <section class="settings-group" aria-labelledby="debug-report-heading">
   <h2 id="debug-report-heading" class="group-heading">Issue report</h2>
   <p class="settings-row-note">
@@ -275,6 +356,28 @@
     display: flex;
     gap: 0.5rem;
     margin-bottom: 0.75rem;
+  }
+
+  /* Log file path display (#622-followup). Same monospace shell
+   * as `.report-block` but inline-sized for a single path. */
+  .log-path {
+    background: #141414;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.65rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: #e6edf3;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0 0 0.6rem;
+    user-select: all;
+  }
+
+  .log-actions {
+    display: flex;
+    gap: 0.5rem;
   }
 
   .report-block {

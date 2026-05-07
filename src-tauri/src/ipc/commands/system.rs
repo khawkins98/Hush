@@ -67,6 +67,85 @@ pub fn open_debug_window(app: AppHandle) -> IpcResult<()> {
     Ok(())
 }
 
+/// Wire shape for [`get_log_dir`] (#622-followup). `None` means
+/// "no on-disk log file is being written" — the file appender
+/// either isn't supported on this platform (non-macOS) or was
+/// disabled at startup via `HUSH_LOG_FILE=off`. The Debug tab uses
+/// this to decide whether to surface the reveal-in-Finder controls
+/// or hide the section.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogDirInfo {
+    /// Absolute path to the daily-rolling log directory.
+    pub dir: String,
+    /// Filename of *today's* log file (e.g. `hush.log.2026-05-07`).
+    /// Computed here so the frontend doesn't need to keep a date
+    /// parser in sync with `tracing-appender`'s rotation suffix.
+    pub today_file: String,
+}
+
+/// Resolve the on-disk log directory if file logging is engaged for
+/// this process. Mirrors the resolution logic used by `init_tracing`
+/// in `lib.rs` so the Debug tab points at exactly what's being
+/// written. macOS-only by design (matches `resolve_log_dir`).
+///
+/// Reads `HUSH_LOG_FILE` directly so a user who disabled file
+/// logging gets `None` and the Debug tab's "Open log dir" controls
+/// stay hidden — better than showing a path to a non-existent file.
+#[tauri::command]
+pub fn get_log_dir() -> IpcResult<Option<LogDirInfo>> {
+    // Honour the same opt-out env var as `init_tracing`. If file
+    // logging was off at process start, the directory may not even
+    // exist; surfacing it would be misleading.
+    let want_file_log = !matches!(
+        std::env::var("HUSH_LOG_FILE").as_deref(),
+        Ok(v) if v.eq_ignore_ascii_case("off") || v == "0"
+    );
+    if !want_file_log {
+        return Ok(None);
+    }
+    let Some(dir) = crate::resolve_log_dir() else {
+        return Ok(None);
+    };
+    // tracing-appender's daily rotator uses a UTC-date suffix in
+    // the form `hush.log.YYYY-MM-DD`. Match that so the user can
+    // tail / grep today's file without having to figure out the
+    // naming convention. UTC is what the rotator uses internally,
+    // so this stays correct across timezone boundaries.
+    let today = chrono_today_utc();
+    Ok(Some(LogDirInfo {
+        dir: dir.to_string_lossy().into_owned(),
+        today_file: format!("hush.log.{today}"),
+    }))
+}
+
+/// Get today's date in UTC as `YYYY-MM-DD`. Hand-rolled to avoid
+/// pulling `chrono` just for this — `time` would also work but
+/// neither is currently a dep. The format matches
+/// `tracing_appender::rolling::Rotation::DAILY`'s suffix.
+fn chrono_today_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // Days since 1970-01-01 (a Thursday).
+    let days = secs.div_euclid(86_400);
+    // Convert to civil date (Howard Hinnant's algorithm — public
+    // domain, exact, no leap-second weirdness because UTC days are
+    // 86_400 s by convention).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp.wrapping_sub(9) }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Returns whether the macOS first-run welcome has been shown and
 /// dismissed for this install. The value is stored under
 /// [`crate::settings::keys::FIRST_RUN_COMPLETED`] as the literal
@@ -276,4 +355,47 @@ pub struct StartupPhase {
 #[tauri::command]
 pub fn get_startup_timings(state: State<'_, AppState>) -> Vec<StartupPhase> {
     state.startup_timings.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chrono_today_utc_format_matches_tracing_appender() {
+        // Pin the format `YYYY-MM-DD` so the frontend's grep
+        // suggestion ("hush.log.<today>") matches the actual file
+        // tracing-appender writes. A drift here would silently
+        // surface a wrong filename in the Debug tab.
+        let today = chrono_today_utc();
+        assert_eq!(today.len(), 10, "expected YYYY-MM-DD; got {today:?}");
+        assert_eq!(today.chars().nth(4), Some('-'));
+        assert_eq!(today.chars().nth(7), Some('-'));
+        // All-numeric except the dashes.
+        for (i, c) in today.chars().enumerate() {
+            if i == 4 || i == 7 {
+                continue;
+            }
+            assert!(c.is_ascii_digit(), "non-digit at {i} in {today:?}");
+        }
+    }
+
+    #[test]
+    fn get_log_dir_returns_none_when_disabled() {
+        // HUSH_LOG_FILE=off must keep the Debug tab from advertising
+        // a path the user disabled. Save+restore the env var so
+        // parallel tests aren't poisoned.
+        let saved = std::env::var("HUSH_LOG_FILE").ok();
+        // Safety: tests in this module run in the same process; the
+        // remove + restore window is short and no other test reads
+        // the var. See the same idiom in `transcription::whisper`'s
+        // env-var tests.
+        unsafe { std::env::set_var("HUSH_LOG_FILE", "off") };
+        let result = get_log_dir();
+        match saved {
+            Some(prev) => unsafe { std::env::set_var("HUSH_LOG_FILE", prev) },
+            None => unsafe { std::env::remove_var("HUSH_LOG_FILE") },
+        }
+        assert!(matches!(result, Ok(None)), "got {result:?}");
+    }
 }
