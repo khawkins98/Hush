@@ -30,13 +30,26 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 **The disambiguating test is two consecutive meetings.** macOS `free()` doesn't unmap pages — RSS only drops when an entire allocator region empties and gets `madvise`'d, which is rare under fragmentation. So the post-stop 3.5 GB plateau is partly a measurement artifact (allocator hoarding), not necessarily a true leak. The clean test: start a second meeting after the first plateaus. If RSS climbs by another ~3.5 GB → real leak (whisper.cpp pure-CPU accumulation, file upstream). If it stays flat / grows much less → allocator hoarding, mostly cosmetic.
 
-**Things considered and not yet shipped:**
-- **Periodic `WhisperState` recreation** (e.g. every ~30 inferences ≈ 90 s of speech, paying the 76 MB init re-cost). Plausible mitigation, but firefighting until we know the test result.
-- **Model unload on idle** (Superwhisper-style). Drops the 1–2 GB floor after the user is idle for N minutes. Trades RSS for warm-start latency. Independent of the leak question — useful regardless, but bigger UX call than a fix.
-- **`malloc_zone_pressure_relief()` on session stop.** Fragile macOS-private API; a hammer that might shed pages but offers no contract.
-- **Debug-tab RSS + inference-count readout.** Cheap and useful regardless of which branch we end up in — turns "RSS feels high" into actual numbers in user reports.
+**Update — 2026-05-07 evening (third pass): real per-`whisper_full` leak confirmed, periodic state recreation shipped.** A hands-on long-recording test resolved the disambiguation question:
 
-Bottom line for the next session picking this up: do not ship a memory-mitigation fix without first running the two-meeting test. The right fix is structurally different in each branch, and the wrong fix would be both expensive (16 ms+ per inference for periodic recreation) and embarrassing (if it turns out to be allocator hoarding).
+- 6 GB at 3 min, 8 GB at 4 min on a two-source meeting (mic + system audio, both running ~19 inferences/min each ≈ 38 inferences/min total).
+- Math: 8 GB total − ~1 GB model floor = 7 GB unaccounted over ~152 inferences ≈ ~46 MB allocated and not returned per `whisper_full` call. Doubled inference rate (one inferer per source) explains why the previous 5-min meeting with light speech only hit 3.5 GB.
+- Growth rate is steady at ~2 GB/min — consistent with a real allocation pattern, not the page-fragmentation signature of macOS allocator hoarding.
+
+So the open follow-up I'd flagged is real: whisper.cpp's pure-CPU code path allocates substantial scratch within each `whisper_full` call that doesn't return to the heap even when the `WhisperState` is long-lived. Not surfaced as a known upstream issue because heavy users typically run Metal/CoreML paths.
+
+**Fix shipped: periodic `WhisperState` recreation.** After every `DEFAULT_STATE_RECREATE_INTERVAL = 30` calls (~90 s of speech per source at our ~3 s cadence), the inferer drops the state slot so the next call lazy-recreates a fresh one. Pay the ~76 MB init re-cost once per ~90 s instead of leaking ~46 MB every ~3 s. Net: bounded RSS oscillating around ~76 MB + ~30 × 46 MB ≈ 1.4 GB per source instead of unbounded growth.
+
+Tunable via `HUSH_WHISPER_STATE_RECREATE_INTERVAL` env var (read once at session construction so a mid-meeting toggle can't change behaviour partway). Set to 0 for "never recreate" — kept available so we can A/B against a recurrence of the leak symptom.
+
+**Things considered and explicitly NOT shipped:**
+- **Model unload on idle** (Superwhisper-style). Drops the ~1 GB model floor after the user is idle for N minutes. Trades RSS for warm-start latency on the next meeting. Independent of the leak question — useful regardless, but a bigger UX call than the periodic-recreation fix and not blocking the leak symptom.
+- **`malloc_zone_pressure_relief()` on session stop.** Fragile macOS-private API; a hammer that might shed pages but offers no contract.
+- **Debug-tab RSS + inference-count readout.** Cheap and useful for future debugging; would have made this third-pass investigation faster. Worth a follow-up but the periodic-recreation fix is the higher-leverage ship today.
+
+**Filing upstream:** worth opening a whisper.cpp issue with our reproducer (pure-CPU streaming pump, no Metal/CoreML, accumulates ~46 MB per `whisper_full` despite long-lived state). We'd be the first reporters of this specific shape, per the web research. Tracked as a follow-up.
+
+**Bottom line:** the periodic recreation is firefighting symptoms — the actual root cause is upstream — but the fix is small, well-bounded, and turns "RSS climbs forever" into "RSS hovers around 1.5 GB." Acceptable trade vs. waiting on an upstream fix.
 
 **Post-merge review caught two follow-ups (shipped same day):**
 1. **State retention on `state.full` error.** The first-cut fix reused the `WhisperState` even if `state.full(params, audio)` returned Err. whisper.cpp's contract on partial-failure state is undocumented — a state that errored mid-decode could carry KV-cache junk into the next inference and corrupt later transcripts. The follow-up restructures the err arm to clear the slot (`*self.whisper_state = None;`) before returning, so the next call lazy-recreates a clean state. The ~76 MB init re-cost is acceptable on the rare error path.
