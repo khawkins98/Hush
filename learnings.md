@@ -2086,3 +2086,16 @@ The wespeaker ResNet34-LM model uses only: `Add, Cast, Concat, Constant, Conv, D
 - `tract_ndarray::Array3::<f32>::from_shape_vec((1, frames, 80), flat_mel)?.into()` creates the input tensor. `model.run(tvec!(tensor.into()))` runs inference. Output is `result[0].to_array_view::<f32>()?`.
 - Binary size: ~45 MB smaller (no vendored ORT runtime).
 - SHA-256 verification is kept — same model file, same defence-in-depth.
+
+### Hands-on validation (2026-05-08, 18-minute meeting)
+
+Activity Monitor after 18 minutes with diarization enabled (tract-onnx build):
+
+- **Real Mem: 1.29 GB** — stable; previously this was growing ~1.25 GB/min with ORT
+- **Private Mem: 924.8 MB**
+- **Shared Mem: 109.7 MB**
+- **Mem... (Virtual): 1.25 GB** — previously 9+ GB at the same meeting duration
+
+At the old ORT rate (~1.25 GB/min), 18 minutes would have produced ~22+ GB virtual and likely an OOM event. The memory footprint is now **stable for the duration of the meeting**. Fix confirmed.
+
+**Lesson: `vmmap -summary` is unnecessary at this scale.** Activity Monitor's Real Mem column (RSIZE) is sufficient to confirm the fix — the growth was so severe before that even the coarser metric was diagnostic. For subtler leaks, `vmmap -summary $(pgrep hush) | grep IOAccelerator` remains the right tool.
