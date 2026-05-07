@@ -205,7 +205,43 @@ impl OnnxDiarizer {
         verify_model_sha256(model_path)
             .with_context(|| format!("verify SHA-256 of model at {}", model_path.display()))?;
 
-        let mut builder = Session::builder().context("ort: build session")?;
+        // Disable the CPU execution provider's arena allocator and
+        // ORT's memory-pattern cache before loading the model
+        // (#612). The wespeaker model takes variable-length log-Mel
+        // features per utterance, which is the textbook trigger for
+        // ORT's dynamic-shape memory growth: each new sequence
+        // length grows the per-session arena (which never returns
+        // pages to the OS by default) and adds a new entry in the
+        // shape-keyed memory-pattern cache.
+        //
+        // Hands-on profiling on 2026-05-07 nailed this as the
+        // dominant leak source: with diarization on, RSS climbed at
+        // ~1.25 GB/min and held at peak for 4+ min after meeting
+        // stop. With diarization toggled off (zero `session.run`
+        // calls) the rate dropped to ~0.25 GB/min. Disabling the
+        // arena routes allocations through plain malloc/free so
+        // they actually return to the OS at end of `run`; disabling
+        // the memory pattern stops the per-shape plan cache from
+        // accumulating.
+        //
+        // Documented behaviour, not an `ort`-Rust bug —
+        // microsoft/onnxruntime#11627 and #22271 are the canonical
+        // references. Perf cost is a 2–10% latency hit per
+        // `session.run`, which is invisible at our once-per-utterance
+        // cadence (the per-utterance run is already ~50–100 ms).
+        // `with_execution_providers` and `with_memory_pattern` return
+        // `Result<SessionBuilder, ort::Error<SessionBuilder>>` where the
+        // error variant carries the partially-built session back to the
+        // caller. anyhow's `.context()` doesn't apply because that
+        // error type isn't `StdError` the way anyhow expects, so we
+        // convert via `.map_err(|e| e.into_inner())` — `into_inner`
+        // returns the underlying `ort::Error` which IS `StdError`.
+        let mut builder = Session::builder()
+            .context("ort: build session")?
+            .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+            .map_err(|e| anyhow!("ort: register CPU EP with arena disabled (#612): {}", e))?
+            .with_memory_pattern(false)
+            .map_err(|e| anyhow!("ort: disable memory pattern cache (#612): {}", e))?;
         let session = builder
             .commit_from_file(model_path)
             .with_context(|| format!("ort: load model from {}", model_path.display()))?;
