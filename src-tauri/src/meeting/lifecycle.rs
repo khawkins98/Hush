@@ -260,6 +260,18 @@ impl SessionManager {
                             source_kind = source.kind_label(),
                             "meeting pump: drain_into pre-warm failed; streaming disabled for this source"
                         );
+                        // Downcast for DeviceLost so the frontend can
+                        // distinguish "device vanished between picker
+                        // and start" from generic capture failures
+                        // (#617). The mid-session pump path already
+                        // does this; the pre-warm path was the
+                        // asymmetric arm.
+                        let device_lost = e.downcast_ref::<crate::audio::DeviceLost>().is_some();
+                        let reason = if device_lost {
+                            "audio device disconnected before session start"
+                        } else {
+                            "audio capture pre-warm failed at session start"
+                        };
                         // Surface the failure to the frontend (#533). A
                         // pre-warm failure at startup means this source will
                         // produce 0 utterances for the entire session — not
@@ -271,7 +283,8 @@ impl SessionManager {
                             &MeetingSourceFailedPayload {
                                 session_id: session.id,
                                 source_kind: source.kind_label(),
-                                reason: "audio capture pre-warm failed at session start",
+                                reason,
+                                device_lost,
                             },
                         );
                         streaming_sessions.push(None);
@@ -295,6 +308,9 @@ impl SessionManager {
                                 session_id: session.id,
                                 source_kind: source.kind_label(),
                                 reason: "streaming session creation failed at session start",
+                                // start_stream is a transcriber-side
+                                // call — never carries DeviceLost.
+                                device_lost: false,
                             },
                         );
                         streaming_sessions.push(None);
