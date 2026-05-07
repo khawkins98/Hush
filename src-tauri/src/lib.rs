@@ -254,7 +254,7 @@ const BUNDLE_ID: &str = "io.github.khawkins98.hush";
 /// macOS HIG-recommended location for app-specific logs and shows
 /// up in Console.app under "Reports" → the bundle id.
 #[cfg(target_os = "macos")]
-fn resolve_log_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn resolve_log_dir() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     let dir = std::path::PathBuf::from(home)
         .join("Library")
@@ -264,7 +264,7 @@ fn resolve_log_dir() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn resolve_log_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn resolve_log_dir() -> Option<std::path::PathBuf> {
     None
 }
 
@@ -810,6 +810,7 @@ pub fn run() {
             ipc::commands::dictation::audio_list_sources,
             ipc::commands::system::show_main_window,
             ipc::commands::system::open_debug_window,
+            ipc::commands::system::get_log_dir,
             ipc::commands::dictation::start_dictation,
             ipc::commands::dictation::stop_dictation,
             ipc::commands::history::history_list,

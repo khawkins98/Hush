@@ -1286,6 +1286,72 @@ test.describe("settings window — Debug tab: startup phase timings", () => {
   });
 });
 
+test.describe("settings window — Debug tab: log file section (#622-followup)", () => {
+  // Hidden when get_log_dir returns null (file logging off /
+  // non-macOS / HUSH_LOG_FILE=off). Visible with reveal + copy
+  // controls when the IPC returns a path. Default mock returns
+  // null so other tests aren't accidentally exercising it.
+
+  test("log-file section is hidden when get_log_dir returns null", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("hush.debugConsole", "1");
+      } catch {
+        // sandbox-tolerant
+      }
+    });
+    await installMocks(page); // default get_log_dir = null
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator(`[data-testid="settings-tab-debug"]`).click();
+
+    await expect(
+      page.locator('[data-testid="debug-log-file-section"]'),
+    ).toHaveCount(0);
+  });
+
+  test("log-file section renders path + reveal/copy controls when get_log_dir returns a directory", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("hush.debugConsole", "1");
+      } catch {
+        // sandbox-tolerant
+      }
+    });
+    await installMocks(page, {
+      get_log_dir: () => ({
+        dir: "/Users/test/Library/Logs/io.github.khawkins98.hush",
+        todayFile: "hush.log.2026-05-07",
+      }),
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator(`[data-testid="settings-tab-debug"]`).click();
+
+    await expect(
+      page.locator('[data-testid="debug-log-file-section"]'),
+    ).toBeVisible();
+    // Path is rendered as a single line composed of dir + today's
+    // file. Pin the joined form so a regression to dir-only or
+    // date-mismatch fails the test.
+    await expect(
+      page.locator('[data-testid="debug-log-path"]'),
+    ).toContainText(
+      "/Users/test/Library/Logs/io.github.khawkins98.hush/hush.log.2026-05-07",
+    );
+    await expect(
+      page.locator('[data-testid="debug-log-reveal"]'),
+    ).toBeEnabled();
+    await expect(
+      page.locator('[data-testid="debug-log-copy-grep"]'),
+    ).toBeEnabled();
+  });
+});
+
 test.describe("settings window — Permissions tab: refresh button", () => {
   // perms-refresh triggers a fresh diagnose_macos_permissions call so the
   // user can re-check after granting/revoking a permission outside the app.
