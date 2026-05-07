@@ -579,3 +579,43 @@ fn log_overflow_if_set_resets_the_flag() {
     log_overflow_if_set(&flag); // no-op when unset
     assert!(!flag.load(Ordering::Relaxed));
 }
+
+// -- DeviceLost typed-error round-trip (#587 PR 1) --------------------
+//
+// The cpal error callback wraps `DeviceLost` in `anyhow::Error::new`;
+// the IPC layer downcasts back via `.downcast_ref::<DeviceLost>()` to
+// route to the typed `IpcError::AudioDeviceLost`. Pin both halves of
+// the round-trip so a future change that drops the `std::error::Error`
+// impl (or replaces it with a thiserror derive that doesn't preserve
+// the type identity) fails this test loudly rather than silently
+// downgrading the disconnect to the generic "audio: …" bucket.
+
+#[test]
+fn device_lost_round_trips_through_anyhow_downcast() {
+    let original = DeviceLost {
+        device: "MacBook Microphone".to_owned(),
+    };
+    let err: anyhow::Error = anyhow::Error::new(original);
+
+    let downcast = err
+        .downcast_ref::<DeviceLost>()
+        .expect("DeviceLost should round-trip via anyhow downcast");
+    assert_eq!(downcast.device, "MacBook Microphone");
+}
+
+#[test]
+fn device_lost_display_includes_device_name_for_log_lines() {
+    // The Display impl is what `tracing::error!(error = %e, ...)` and
+    // similar render. Pin the format so log scraping (and the
+    // `IpcError::Audio(e.to_string())` fallback path when downcasting
+    // fails for any reason) still produces a useful message.
+    let lost = DeviceLost {
+        device: "USB Headset".to_owned(),
+    };
+    let formatted = format!("{lost}");
+    assert!(formatted.contains("USB Headset"), "got: {formatted:?}");
+    assert!(
+        formatted.to_lowercase().contains("disconnect"),
+        "Display should clearly indicate disconnection; got: {formatted:?}"
+    );
+}

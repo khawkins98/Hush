@@ -136,13 +136,24 @@ pub(super) fn strip_whisper_brackets(input: &str) -> String {
 }
 
 /// Stop the audio stream and return the captured samples, mapping the
-/// backend error to [`IpcError::Audio`]. Split out so `stop_dictation`
-/// can keep its HUD-hide-on-error step a single line.
+/// backend error to the right [`IpcError`] variant. Split out so
+/// `stop_dictation` can keep its HUD-hide-on-error step a single line.
+///
+/// Routes [`crate::audio::DeviceLost`] (set by the cpal error
+/// callback when the user's selected mic disconnects mid-session,
+/// #587) to the typed [`IpcError::AudioDeviceLost`] so the frontend
+/// can render a clear "microphone disconnected" message instead of
+/// the generic "audio: …" bucket. Other audio failures stay in the
+/// `Audio(String)` bucket — that's the residual catch-all for the
+/// backend-error space we haven't typed yet.
 pub(super) fn stop_audio_capture(state: &AppState) -> IpcResult<crate::audio::CapturedAudio> {
-    state
-        .audio
-        .stop()
-        .map_err(|e| IpcError::Audio(e.to_string()))
+    state.audio.stop().map_err(|e| {
+        if let Some(lost) = e.downcast_ref::<crate::audio::DeviceLost>() {
+            IpcError::AudioDeviceLost(lost.device.clone())
+        } else {
+            IpcError::Audio(e.to_string())
+        }
+    })
 }
 
 /// Load the user's vocabulary terms and format them as the initial
