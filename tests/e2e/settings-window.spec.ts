@@ -755,16 +755,14 @@ test.describe("settings window — About section", () => {
     ).toHaveCount(0);
   });
 
-  test("build timestamp renders DD/MM/YYYY HH:MM when get_build_info returns a value (#589)", async ({
+  test("build timestamp renders D Month, YYYY HH:MM UTC when get_build_info returns a value (#589, #637)", async ({
     page,
   }) => {
     // Mock override functions are serialised via `.toString()` and
     // re-built with `new Function(...)` in the page context — see
     // tests/e2e/_mock.ts for the closure-capture caveat. Outer
     // variables don't survive, so the timestamp must be a literal.
-    // 1778149800 = 2026-05-06 18:30:00 UTC. Rendered in the
-    // runner's local time, so we assert on the date/time pattern
-    // rather than the literal string.
+    // 1778149800 = 2026-05-07 10:30:00 UTC → "7 May, 2026 10:30 UTC"
     await installMocks(page, {
       get_build_info: () => ({
         version: "0.0.0-test",
@@ -778,7 +776,7 @@ test.describe("settings window — About section", () => {
     ).toBeVisible();
     await expect(
       page.locator('[data-testid="about-build-timestamp"]'),
-    ).toHaveText(/Built\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}/);
+    ).toHaveText(/Built\s+\d+\s+\w+,\s+\d{4}\s+\d{2}:\d{2}\s+UTC/);
   });
 
   test("Check for updates — up-to-date branch", async ({ page }) => {
