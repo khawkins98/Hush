@@ -745,16 +745,62 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         if self.state_recreate_interval > 0
             && *self.inferences_on_current_state >= self.state_recreate_interval
         {
-            tracing::info!(
-                inferences = *self.inferences_on_current_state,
-                "whisper streaming session: recreating WhisperState (#612 periodic recreation)"
-            );
+            // Capture RSS before and after the state drop so the log
+            // shows whether dropping the state actually reclaims any
+            // memory (#612 follow-up). If `delta` is reliably ~0
+            // across recreations, the per-`whisper_full` accumulation
+            // is owned by something OTHER than the state — most
+            // likely `WhisperContext` itself — and a different lever
+            // is needed (per-context recreation, model unload on
+            // idle, or upstream fix). If `delta` is reliably negative
+            // (RSS dropped), the recreation is doing work and the
+            // remaining growth is coming from something else (audio
+            // buffers, diarizer, etc.). Reading `ps` shells out per
+            // recreation event (~once per 90 s of speech) — cost is
+            // immaterial relative to the 76 MB recreate cost.
+            let rss_before_mb = current_rss_mb();
             *self.whisper_state = None;
             *self.inferences_on_current_state = 0;
+            let rss_after_mb = current_rss_mb();
+            let delta_mb = match (rss_before_mb, rss_after_mb) {
+                (Some(b), Some(a)) => Some(a - b),
+                _ => None,
+            };
+            tracing::info!(
+                inferences = self.state_recreate_interval,
+                ?rss_before_mb,
+                ?rss_after_mb,
+                ?delta_mb,
+                "whisper streaming session: recreating WhisperState (#612 periodic recreation)"
+            );
         }
 
         Ok(out)
     }
+}
+
+/// Read current RSS (resident set size) of this process in MB.
+///
+/// Shells out to `ps -o rss= -p <pid>` because it's the simplest
+/// path that doesn't add a dep — `mach2`'s `mach_task_basic_info`
+/// would be the right cross-platform-ish answer but pulling a new
+/// crate just to log a number on macOS isn't worth it. `ps`'s
+/// `rss` column is in KB on macOS (and Linux); we convert to MB.
+///
+/// Returns `None` if the shell-out failed (parse error, missing
+/// `ps` binary). Callers degrade to "no number logged" in that
+/// case rather than blocking the recreation.
+fn current_rss_mb() -> Option<f64> {
+    let pid = std::process::id();
+    let output = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let kb: f64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
+    Some(kb / 1024.0)
 }
 
 impl std::fmt::Debug for WhisperTranscription {
