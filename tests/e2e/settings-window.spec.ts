@@ -713,15 +713,14 @@ test.describe("settings window — About section", () => {
     await page.goto("/");
     await page.locator(`[data-testid="sidebar-nav-about"]`).click();
 
-    // App-info plugin mocks return "Hush" / "0.1.0" / "2.10.3".
-    // Fail mode for this assertion is the silent-fallback path
-    // (loadAppMetadata threw) — the test would catch a regression
-    // where the @tauri-apps/api/app import broke entirely.
+    // get_build_info mock returns "0.0.0-test" / "2.11.1" (set in installMocks).
+    // Version and Tauri runtime row both come from that IPC — no @tauri-apps/api/app
+    // calls are made (main window capability intentionally excludes app:default).
     await expect(page.locator(".about-name")).toHaveText("Hush");
     await expect(page.locator(".about-version")).toHaveText(
-      /Version\s+0\.1\.0/,
+      /Version\s+0\.0\.0-test/,
     );
-    await expect(page.locator(".about-meta code")).toHaveText("2.10.3");
+    await expect(page.locator(".about-meta code")).toHaveText("2.11.1");
 
     // Outbound links the user is most likely to click. Locked to
     // the actual hrefs because a typo in the repo URL silently
@@ -766,6 +765,7 @@ test.describe("settings window — About section", () => {
     await installMocks(page, {
       get_build_info: () => ({
         version: "0.0.0-test",
+        tauriVersion: "2.11.1",
         buildTimestamp: 1778149800,
       }),
     });
@@ -960,22 +960,14 @@ test.describe("settings window — About section", () => {
     );
   });
 
-  test("falls back to static copy when app-info plugin throws", async ({
+  test("falls back to static copy when get_build_info throws", async ({
     page,
   }) => {
-    // If the Tauri app-info plugin fails (older runtime, missing
-    // capability), `loadAppMetadata` swallows the error and the
-    // About tab still renders the default app name + the static
-    // license/source links. Regression guard for the silent-catch
-    // path in `loadAppMetadata`.
+    // If get_build_info fails, `loadAppMetadata` swallows the error.
+    // The app name (hardcoded) still renders; version line is hidden
+    // because `appVersion` stays empty. The static links remain visible.
     await installMocks(page, {
-      "plugin:app|name": () => {
-        throw new Error("boom");
-      },
-      "plugin:app|version": () => {
-        throw new Error("boom");
-      },
-      "plugin:app|tauri_version": () => {
+      get_build_info: () => {
         throw new Error("boom");
       },
     });

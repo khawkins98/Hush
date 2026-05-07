@@ -19,13 +19,13 @@
   import DebugConsole from "$lib/DebugConsole.svelte";
   import { formatBuildTimestamp, type BuildInfo } from "$lib/utils/format";
 
-  let buildInfo = $state<BuildInfo>({ version: "…", buildTimestamp: 0 });
+  let buildInfo = $state<BuildInfo>({ version: "…", tauriVersion: "", buildTimestamp: 0 });
 
   onMount(async () => {
     try {
       buildInfo = await invoke<BuildInfo>("get_build_info");
     } catch {
-      buildInfo = { version: "unknown", buildTimestamp: 0 };
+      buildInfo = { version: "unknown", tauriVersion: "", buildTimestamp: 0 };
     }
   });
 </script>
