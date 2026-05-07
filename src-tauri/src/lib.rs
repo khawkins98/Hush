@@ -235,6 +235,12 @@ fn migrate_legacy_app_data_dir(new_path: &std::path::Path) {
 /// `identifier` field — kept as a const here so the pre-Tauri tracing
 /// init can resolve `~/Library/Logs/<id>/` without depending on
 /// `AppHandle::path()` (which only resolves inside the `setup` hook).
+///
+/// Gated to macOS because the only consumer (`resolve_log_dir`) is
+/// also macOS-only. Ungated, Linux/Windows clippy under
+/// `-D dead_code` rejects the const since the non-macOS
+/// `resolve_log_dir` stub returns `None` without using it.
+#[cfg(target_os = "macos")]
 const BUNDLE_ID: &str = "io.github.khawkins98.hush";
 
 /// Resolve the on-disk log directory for the file appender.
