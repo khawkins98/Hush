@@ -11,12 +11,13 @@ test.describe("first-run welcome modal", () => {
     await installMocks(page); // default: get_first_run_completed -> true
     await page.goto("/");
 
-    // The modal's heading is `<h2 id="first-run-heading">Welcome to Hush</h2>`.
-    // A returning user should not see it.
-    await expect(page.getByRole("heading", { name: "Welcome to Hush" })).toHaveCount(0);
+    // Returning users should never see the wizard. After #609 the
+    // wizard opens on the Permissions step rather than Welcome —
+    // assert against the heading the wizard now starts on.
+    await expect(page.getByRole("heading", { name: "Permissions" })).toHaveCount(0);
   });
 
-  test("renders for fresh installs and dismisses on Finish (#511 wizard)", async ({ page }) => {
+  test("renders for fresh installs and dismisses on Finish (#511 wizard, #609 reordered)", async ({ page }) => {
     let markCalled = false;
     await installMocks(page, {
       get_first_run_completed: () => false,
@@ -27,20 +28,24 @@ test.describe("first-run welcome modal", () => {
     });
     await page.goto("/");
 
-    const heading = page.getByRole("heading", { name: "Welcome to Hush" });
-    await expect(heading).toBeVisible();
+    // Wizard now opens on Permissions (#609). Get the mandatory grants
+    // out of the way before the explainer.
+    const permsHeading = page.getByRole("heading", { name: "Permissions" });
+    await expect(permsHeading).toBeVisible();
 
-    // Step 1 (welcome) → Continue advances to step 2 (permissions).
-    await page.locator('[data-testid="wizard-continue-welcome"]').click();
+    // Step 1 (permissions) → Continue advances to step 2 (welcome).
+    await page.locator('[data-testid="wizard-continue-permissions"]').click();
     await expect(
-      page.getByRole("heading", { name: "Permissions" }),
+      page.getByRole("heading", { name: "Welcome to Hush" }),
     ).toBeVisible();
 
-    // Step 2 → Finish dismisses the wizard. Continue is never
-    // hard-blocked even when permissions aren't granted (mic
-    // ungrant just shows a soft warning footer).
+    // Step 2 → "Start using Hush" dismisses the wizard. The IPC
+    // testid is unchanged (`wizard-finish`) since it's the same
+    // primary action — it just lives on a different step now.
     await page.locator('[data-testid="wizard-finish"]').click();
-    await expect(heading).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Welcome to Hush" }),
+    ).toHaveCount(0);
 
     // Confirm the IPC mark fired exactly once on the click — the
     // settings table backs the persistence, so the next launch
@@ -61,7 +66,8 @@ test.describe("first-run welcome modal", () => {
     });
     await page.goto("/");
 
-    const heading = page.getByRole("heading", { name: "Welcome to Hush" });
+    // Wizard opens on Permissions step (#609).
+    const heading = page.getByRole("heading", { name: "Permissions" });
     await expect(heading).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(heading).toHaveCount(0);
@@ -79,14 +85,18 @@ test.describe("first-run welcome modal", () => {
     await installMocks(page, { get_first_run_completed: () => false });
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "Welcome to Hush" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Permissions" })).toBeVisible();
 
-    // Step 1 (welcome) has two focusable buttons in DOM order:
-    //   1) Skip setup (ghost)
-    //   2) Continue (primary)
-    // Auto-focus lands on #1; one Shift+Tab from there must wrap
-    // to #2, not escape to whatever was on the page behind the
-    // backdrop.
+    // Step 1 (permissions) has the same two-button footer shape as the
+    // pre-#609 welcome step: Skip setup (ghost) + Continue (primary).
+    // Drive the focus trap by manually focusing the first button —
+    // the modal's $effect autofocus runs at mount but Playwright's
+    // page-load can race ahead of the focus call, leaving the trap
+    // precondition (`active === first`) unsatisfied. Once we focus
+    // Skip setup explicitly, Shift+Tab triggers the wrap to Continue.
+    const skipBtn = page.getByRole("button", { name: "Skip setup" });
+    await skipBtn.focus();
+    await expect(skipBtn).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(page.getByRole("button", { name: "Continue" })).toBeFocused();
 
@@ -104,6 +114,10 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
   // is NOT granted (i.e. status !== "granted" && status !== "not-applicable").
   // Overriding diagnose_macos_permissions to return "not-determined"
   // for all three permissions causes all Allow buttons to render.
+  //
+  // After #609 the wizard opens directly on the permissions step,
+  // so this helper no longer needs the welcome → permissions
+  // navigation it had pre-#609.
 
   async function openPermissionsStep(page: import("@playwright/test").Page) {
     await installMocks(page, {
@@ -125,8 +139,6 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
       prime_screen_recording_permission: () => undefined,
     });
     await page.goto("/");
-    // Advance from welcome step to permissions step.
-    await page.locator('[data-testid="wizard-continue-welcome"]').click();
     await expect(
       page.getByRole("heading", { name: "Permissions" }),
     ).toBeVisible();
@@ -165,7 +177,7 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
       get_first_run_completed: () => false,
     });
     await page.goto("/");
-    await page.locator('[data-testid="wizard-continue-welcome"]').click();
+    // Wizard opens directly on permissions step post-#609.
     await expect(
       page.getByRole("heading", { name: "Permissions" }),
     ).toBeVisible();
@@ -181,21 +193,54 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
 });
 
 test.describe("permissions dialog — perm-dialog-refresh", () => {
-  // The PermissionsDialog opens automatically after the first-run
-  // wizard is dismissed (dismissFirstRun() in +page.svelte sets
-  // showPermissionsDialog = true). The perm-dialog-refresh button
-  // is always rendered in the dialog header.
+  // The PermissionsDialog opens when a dictation or meeting start
+  // hits a permission-denied error (the +page.svelte $effect blocks
+  // that watch `dictation.pendingPermissionsDialogIntro` /
+  // `meeting.pendingPermissionsDialogIntro` set
+  // `showPermissionsDialog = true`).
+  //
+  // Pre-#609 the dialog also auto-opened after first-run wizard
+  // dismissal — that was the redundant third "permissions" surface
+  // the wizard now obviates. This test now drives the dialog open
+  // via the permission-error path, which is the remaining live
+  // trigger. The assertion (perm-dialog-refresh visible in the
+  // dialog header) is unchanged.
   test("perm-dialog-refresh button is visible in the permissions dialog", async ({
     page,
   }) => {
+    // Drive the dialog open via the same shape as
+    // recording-phase.spec.ts: list system-audio as supported, then
+    // throw a permission-denied error from meeting_start_manual.
+    // The +page.svelte $effect on `meeting.pendingPermissionsDialogIntro`
+    // sets `showPermissionsDialog = true` so the dialog appears.
     await installMocks(page, {
-      get_first_run_completed: () => false,
+      audio_list_sources: () => [
+        {
+          kind: "microphone",
+          id: "Built-in Microphone",
+          name: "Built-in Microphone",
+          isDefault: true,
+          isSupported: true,
+        },
+        {
+          kind: "system-audio",
+          id: "system",
+          name: "System audio",
+          isDefault: false,
+          isSupported: true,
+        },
+      ],
+      meeting_start_manual: () => {
+        throw { kind: "permission-denied", message: "screen-recording" };
+      },
     });
     await page.goto("/");
 
-    // Complete the wizard to open the permissions dialog.
-    await page.locator('[data-testid="wizard-continue-welcome"]').click();
-    await page.locator('[data-testid="wizard-finish"]').click();
+    const meetingStartBtn = page.getByRole("button", {
+      name: "Record meeting (mic plus system audio)",
+    });
+    await expect(meetingStartBtn).toBeEnabled();
+    await meetingStartBtn.click();
 
     await expect(
       page.locator('[data-testid="perm-dialog-refresh"]'),

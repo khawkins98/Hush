@@ -111,8 +111,12 @@ test.describe("UX walkthrough — main window", () => {
       get_first_run_completed: () => false,
     });
     await page.goto("/");
+    // Post-#609 the wizard opens directly on the Permissions step.
+    // Screenshot now captures that entry point; the welcome screen
+    // is reachable via Continue but the first-touch shot is what
+    // matters for the UX walkthrough.
     await expect(
-      page.getByRole("heading", { name: "Welcome to Hush" }),
+      page.getByRole("heading", { name: "Permissions" }),
     ).toBeVisible();
     await shot(page, "04-first-run-modal");
   });
