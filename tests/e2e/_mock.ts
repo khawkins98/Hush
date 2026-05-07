@@ -106,6 +106,10 @@ export async function installMocks(
       // that aren't specifically exercising it; specs that want
       // to assert the section's controls override per-test.
       get_log_dir: () => null,
+      // External URL opener and log-dir reveal (#648). Both are
+      // side-effect-only no-ops in tests.
+      open_url: () => undefined,
+      reveal_log_dir: () => undefined,
       // Meeting auto-start mode (Settings → Meeting). Default
       // matches the backend's "off" default; specs that exercise
       // the dropdown override per-test.

@@ -801,16 +801,28 @@ pub fn run() {
             // PTT runs through `rdev` on a dedicated thread (rdev's listen
             // is blocking and installs a low-level OS hook). On macOS the
             // first call triggers the Input Monitoring permission prompt.
-            // On Wayland the listener exits with an error and we proceed
-            // without PTT — toggle and button-driven dictation still work.
+            // Gate on an already-granted (or non-applicable) permission so
+            // the OS dialog doesn't fire before the user reaches the PTT
+            // toggle in Settings — on a fresh install `ptt_active` defaults
+            // to `true` but Input Monitoring is `NotDetermined`. The listener
+            // is spawned on demand via `ptt_set_config` when the user first
+            // enables PTT, which is the right moment to trigger the prompt
+            // (#647). On Wayland the listener exits with an error and we
+            // proceed without PTT — toggle and button-driven dictation still
+            // work.
             // See `hotkey::ptt` module header for the full rationale.
-            if let Err(e) = hotkey::register_ptt_listener(
-                app.handle(),
-                ptt_combo_for_listener,
-                ptt_active_for_listener,
-                ptt_spawned_for_listener,
-            ) {
-                tracing::error!(error = ?e, "failed to start PTT listener");
+            let im_status = crate::permissions::read_all().input_monitoring;
+            if im_status == crate::permissions::PermissionStatus::Granted
+                || im_status == crate::permissions::PermissionStatus::NotApplicable
+            {
+                if let Err(e) = hotkey::register_ptt_listener(
+                    app.handle(),
+                    ptt_combo_for_listener,
+                    ptt_active_for_listener,
+                    ptt_spawned_for_listener,
+                ) {
+                    tracing::error!(error = ?e, "failed to start PTT listener");
+                }
             }
             Ok(())
         })
@@ -871,6 +883,8 @@ pub fn run() {
             ipc::commands::system::get_app_version,
             ipc::commands::system::get_build_info,
             ipc::commands::system::get_startup_timings,
+            ipc::commands::system::open_url,
+            ipc::commands::system::reveal_log_dir,
             ipc::commands::ptt::ptt_get_config,
             ipc::commands::ptt::ptt_set_config,
             ipc::commands::permissions::open_macos_privacy_pane,
