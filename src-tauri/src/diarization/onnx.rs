@@ -143,16 +143,85 @@ impl SessionClusterState {
                 _ => {}
             }
         }
-        let assigned_id = match best {
-            Some((id, d)) if d <= self.distance_threshold => id,
-            _ => {
+        let (assigned_id, was_new, best_distance) = match best {
+            Some((id, d)) if d <= self.distance_threshold => (id, false, Some(d)),
+            Some((_, d)) => {
+                // A nearest neighbour exists but it's beyond the
+                // threshold — record the distance so a debug session
+                // can see how close we came (helps tune the
+                // threshold via HUSH_DIARIZER_THRESHOLD).
                 let id = self.next_id;
                 self.next_id += 1;
-                id
+                (id, true, Some(d))
+            }
+            None => {
+                let id = self.next_id;
+                self.next_id += 1;
+                (id, true, None)
             }
         };
+        // INFO-level so it lands in the on-disk log file by default
+        // (#316 diagnostic). Cheap — fires at most once per utterance,
+        // which is the same cadence the diarizer already runs at.
+        // Reads "Speaker N (new cluster)" or "Speaker N (matched, distance=0.42)".
+        match best_distance {
+            Some(d) if was_new => tracing::info!(
+                speaker = assigned_id + 1,
+                best_distance = d,
+                threshold = self.distance_threshold,
+                history_len = self.history.len(),
+                "diarizer: NEW cluster (best match was beyond threshold)"
+            ),
+            Some(d) => tracing::info!(
+                speaker = assigned_id + 1,
+                distance = d,
+                threshold = self.distance_threshold,
+                "diarizer: matched existing cluster"
+            ),
+            None => tracing::info!(
+                speaker = assigned_id + 1,
+                "diarizer: NEW cluster (first utterance)"
+            ),
+        }
         self.history.push((embedding, assigned_id));
         assigned_id
+    }
+}
+
+/// Resolve the diarizer's cosine-distance threshold, honouring an
+/// optional `HUSH_DIARIZER_THRESHOLD` env-var override (#316). Falls
+/// back to [`DEFAULT_DISTANCE_THRESHOLD`] when the var is unset or
+/// can't be parsed as an `f32` in the valid range `[0.0, 2.0]`.
+///
+/// Read once at `OnnxDiarizer::new` so a mid-session env-var toggle
+/// can't change behaviour partway through. Exposed as a tuning knob
+/// for users hitting the multi-speaker chaining issue documented in
+/// #316; lower values create more clusters (e.g. `0.3` for very
+/// aggressive splitting on short-utterance calls), higher values
+/// merge speakers (e.g. `0.6` to revert to the pre-#316 default).
+fn resolve_distance_threshold() -> f32 {
+    match std::env::var("HUSH_DIARIZER_THRESHOLD") {
+        Ok(raw) => match raw.parse::<f32>() {
+            Ok(v) if (0.0..=2.0).contains(&v) => v,
+            Ok(v) => {
+                tracing::warn!(
+                    raw = %raw,
+                    value = v,
+                    default = DEFAULT_DISTANCE_THRESHOLD,
+                    "HUSH_DIARIZER_THRESHOLD out of [0.0, 2.0]; falling back to default"
+                );
+                DEFAULT_DISTANCE_THRESHOLD
+            }
+            Err(_) => {
+                tracing::warn!(
+                    raw = %raw,
+                    default = DEFAULT_DISTANCE_THRESHOLD,
+                    "HUSH_DIARIZER_THRESHOLD not parseable as f32; falling back to default"
+                );
+                DEFAULT_DISTANCE_THRESHOLD
+            }
+        },
+        Err(_) => DEFAULT_DISTANCE_THRESHOLD,
     }
 }
 
@@ -258,10 +327,18 @@ impl OnnxDiarizer {
             .name()
             .to_owned();
 
+        let threshold = resolve_distance_threshold();
+        if (threshold - DEFAULT_DISTANCE_THRESHOLD).abs() > f32::EPSILON {
+            tracing::info!(
+                threshold,
+                default_threshold = DEFAULT_DISTANCE_THRESHOLD,
+                "OnnxDiarizer: using HUSH_DIARIZER_THRESHOLD override"
+            );
+        }
         Ok(Self {
             session: Mutex::new(session),
             mel: MelExtractor::new(),
-            clusters: Mutex::new(SessionClusterState::new(DEFAULT_DISTANCE_THRESHOLD)),
+            clusters: Mutex::new(SessionClusterState::new(threshold)),
             input_name,
         })
     }

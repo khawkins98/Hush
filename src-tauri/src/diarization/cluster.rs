@@ -24,10 +24,16 @@
 /// threshold → more clusters (over-segmentation); higher threshold
 /// → fewer clusters (speakers merge together).
 ///
-/// 0.6 is mid-range based on the published evaluation curves for
-/// this family of models. Exposed so future tuning can flow
-/// through a settings row without API churn.
-pub const DEFAULT_DISTANCE_THRESHOLD: f32 = 0.6;
+/// 0.4 is the empirical default after #316 hands-on testing showed
+/// 0.6 systematically merged distinct speakers into Speaker 1/2 on
+/// multi-person calls — system-audio sources from a single Zoom /
+/// Teams stream share codec characteristics that pull the cosine
+/// distances tighter than the wespeaker eval-curve mid-range
+/// suggests. 0.4 produces noticeably more clusters at a small risk
+/// of over-segmentation; tunable via `HUSH_DIARIZER_THRESHOLD` env
+/// var (read in `OnnxDiarizer::new`) so users can dial back to 0.6
+/// without a rebuild if over-segmentation surfaces.
+pub const DEFAULT_DISTANCE_THRESHOLD: f32 = 0.4;
 
 /// Cosine distance between two embedding vectors. Distance, not
 /// similarity: `0.0` is identical, `2.0` is anti-correlated.
