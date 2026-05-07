@@ -4,6 +4,25 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-07 — Stacked PRs + squash-merge auto-close the dependent PR irrecoverably
+
+**Symptom:** Stacked PR B against branch A. PR A squash-merged to main with `--delete-branch`. PR B auto-closed by GitHub the moment A's branch was deleted. Trying to recover via `gh pr reopen` returned `Could not open the pull request`; trying to retarget via `gh pr edit --base main` returned `Cannot change the base branch of a closed pull request`. The closure is permanent at the API level even when the branch and commits still exist.
+
+**Recovery:** rebase the dependent branch onto main (skipping the now-merged commits via `git reset --hard origin/main && git cherry-pick <unique-commit>`), force-push, and open a *new* PR. The original closed PR is a dead URL — review history is preserved on it but it can't be revived.
+
+**Why this happens:** GitHub treats "base branch deleted" as terminal for the PR object's state machine. Reopening would require re-creating the deleted base, which is out of scope for the API.
+
+**How to avoid:** for stacked PRs, either
+- merge them via `--rebase` rather than `--squash` (keeps commits + base branch intact during merge), or
+- merge A *without* `--delete-branch`, retarget B to main *first*, then delete A's branch manually, or
+- accept the close-and-reopen cycle as the cost of squash-merging stacks.
+
+The squash-merge route is what we use for everything else (`main` is squash-only) and the stack overhead is rare enough that the close-and-reopen recovery is fine. But the gotcha needs to live somewhere because the error messages from `gh` don't hint at the recovery path. Saw this concretely on PRs #624 → #625 → #627; #627 is the reincarnation of #625.
+
+**Related:** #626 (deferred — cross-target clippy in pre-push hook).
+
+---
+
 ## 2026-05-07 — Whisper streaming session leaked ~76 MB per inference cycle (#612)
 
 **Symptom (reported in #612):** A 35-minute meeting grew RSS to **53.3 GB** before the user terminated the session. Memory was not reclaimed when the meeting stopped. Mac OS swap usage shot through the roof.
