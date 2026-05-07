@@ -356,13 +356,19 @@ impl SessionManager {
             session_id: session.id,
             repo: Arc::clone(&self.repo),
             sources: sources.clone(),
-            handles,
+            // Wrap each handle in Some so the pump can `.take()` it
+            // before swapping on device-loss without losing the ability
+            // to detect that a slot is occupied (#611).
+            handles: handles.into_iter().map(Some).collect(),
             streaming_sessions,
             partials: Arc::clone(&self.partials),
             cancel: Arc::clone(&cancel),
             event_emitter: Arc::clone(&self.event_emitter),
             diarize: Arc::clone(&self.diarize),
             mic_gain_db: Arc::clone(&self.mic_gain_db),
+            audio: Arc::clone(&self.audio),
+            transcribe: transcriber_snapshot,
+            session_start: started_at,
         }));
 
         // Commit Active. The slot has been Opening since the start

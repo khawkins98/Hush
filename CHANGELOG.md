@@ -84,7 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When the cpal backend reports `StreamError::DeviceNotAvailable` (USB unplug, AirPods walked out of range, webcam disabled), Hush now propagates a typed `audio::DeviceLost` error with the captured device name through `Cmd::Stop` and `Cmd::DrainBuffer`.
 - **Dictation:** the IPC layer downcasts to `IpcError::AudioDeviceLost(deviceName)`. The frontend renders `Microphone disconnected — the selected input source ("Foo") is no longer available. Pick a different source and try again.` with the device name in the hint.
 - **Meeting mode:** the pump downcasts the same error and emits a typed `meeting:source-failed` event carrying a `deviceLost: true` flag (#617) so the frontend branches banner copy without substring-matching. The amber banner reads "Microphone disconnected — recording stopped" on single-source sessions, or "Microphone disconnected — system audio still recording" on multi-source ones (#618). Subsequent ticks skip the dead handle; other sources in the meeting keep going independently.
-- Auto-fallback (recreate the source on system default and reconnect to the original on replug) and an optional preferred-mic preference are tracked in #611.
+- Auto-fallback, reconnect-on-replug, and the `audio:device-lost` / `audio:device-restored` events are implemented in #611 (entry below).
+
+#### Meeting mode: mic auto-fallback and reconnect on replug (#611)
+
+- **Auto-fallback on disconnect:** when a mic source reports `DeviceLost` mid-meeting, the pump now `take()`s the old cpal handle (which triggers `Cmd::Stop` on the FIFO mpsc channel, releasing the singleton session slot) and immediately attempts to reopen the same `AudioSource` spec. `Microphone(None)` = "system default", so if AirPods disconnect and macOS has already switched the default to the built-in mic, reopening succeeds automatically.
+- **SystemAudio disconnect is final:** a `DeviceLost` on the system-audio source transitions to `Dead` — the pump never tries to fall back to a microphone.
+- **Reconnect watcher:** every ~5 s the pump lists available devices once (reused for all sources) and checks whether the original device has reappeared. On success it opens a fresh handle and streaming session, marks the source `Active`, and emits `audio:device-restored`.
+- **State machine:** `Active` → `Fallback{original_source, original_device_name}` (capturing from fallback while watching for original) or `LostAwaitingReconnect{…}` (no fallback, watching for replug) → `Active` on reconnect, or `Dead` on permanent failure.
+- **Frontend:** `audio:device-lost` (with optional `newDevice` name) shows an amber banner ("switched to Built-in Mic" or "recording stopped"); `audio:device-restored` dismisses it. New event constants in `events.ts`.
+- **Stream epoch offsets:** when a streaming session is recreated mid-meeting its internal timestamps restart from 0. The pump now tracks `stream_epoch_offsets_ms[i]` (elapsed meeting time at each swap point) and adds the offset to utterance timestamps before persistence — audio slicing still uses the pre-offset stream-local timestamps so the rolling buffer index stays aligned.
 
 #### Main window can be reopened after being closed/hidden (#590)
 
