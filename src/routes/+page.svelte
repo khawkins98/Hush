@@ -465,14 +465,20 @@
   }
 
   async function dismissFirstRun() {
+    // The first-run wizard now starts on the Permissions step (#609),
+    // so by the time it dismisses the user has already had a chance
+    // to grant the OS permissions inline. Pre-#609 we auto-opened
+    // PermissionsDialog right after the wizard, which produced a
+    // redundant third "permissions" surface — the user saw the same
+    // rows twice in a row. PermissionsDialog stays around for its
+    // other use cases (ad-hoc launches from permission-shaped errors,
+    // Settings → Permissions); it's just no longer auto-opened here.
     showFirstRun = false;
     try {
       await invoke("mark_first_run_completed");
     } catch (e) {
       console.error("mark_first_run_completed failed:", e);
     }
-    permissionsDialogIntro = undefined;
-    showPermissionsDialog = true;
   }
 
   async function openPrivacyPane(
