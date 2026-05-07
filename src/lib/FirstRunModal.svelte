@@ -186,6 +186,13 @@
   // permissions step. Stop the interval on close to avoid
   // leaking a tick that fires after dismiss.
   $effect(() => {
+    // Read `step` so this effect re-runs on step transitions
+    // (Svelte tracks reads inside the effect's scope). Without this
+    // the autofocus only fires on initial open — clicking Continue
+    // to advance Permissions → Welcome leaves focus on the now-
+    // removed button, which keyboard-only users have to Tab back
+    // out of. Caught by the post-merge UX review of #613.
+    void step;
     if (show && cardEl) {
       previousFocus =
         document.activeElement instanceof HTMLElement
