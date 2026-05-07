@@ -66,6 +66,46 @@ pub const MIN_INFERENCE_THREADS: i32 = 1;
 /// here at write-time so a malformed settings row can't push past it.
 pub const MAX_INFERENCE_THREADS: i32 = 16;
 
+/// Number of `whisper_full` calls a single `WhisperState` is reused
+/// for in streaming mode before it gets dropped and recreated (#612
+/// second-pass fix).
+///
+/// **Why this isn't infinite:** the state-reuse fix from #615 stopped
+/// the catastrophic per-state-init leak (53 GB → 3.5 GB on a 5-min
+/// meeting), but real-session profiling on 2026-05-07 showed RSS still
+/// climbing at ~2 GB/min on a two-source meeting (~38 inferences/min,
+/// ~44 MB allocated and not returned per `whisper_full`). whisper.cpp's
+/// pure-CPU code path appears to do scratch allocations within
+/// `whisper_full` that don't return to the heap even when the state is
+/// long-lived. Periodically dropping the state forces those
+/// allocations free; the next call's lazy-init pays the ~76 MB
+/// recreate cost once. Net: bounded RSS instead of unbounded.
+///
+/// **Why 30:** at our ~3 s inference cadence, 30 calls ≈ 90 s of
+/// speech per source. We pay 76 MB recreate + ~30 × 44 MB pre-recreate
+/// ≈ 1.4 GB peak between recreations, then drop back down. With one
+/// recreation per 90 s, peak/floor ratio stays small enough that the
+/// user experience is "RSS hovers" instead of "RSS climbs forever."
+/// The 76 MB recreate cost amortises over 30 calls so the per-call
+/// overhead is ~2.5 MB — negligible compared with the ~80 MB working
+/// set of the inference itself.
+///
+/// Tunable via `HUSH_WHISPER_STATE_RECREATE_INTERVAL` env var on
+/// startup (read once into the const-lookalike `state_recreate_interval`
+/// helper below) so we can A/B without rebuilding.
+pub const DEFAULT_STATE_RECREATE_INTERVAL: u64 = 30;
+
+/// Resolves [`DEFAULT_STATE_RECREATE_INTERVAL`] against an env-var
+/// override read at process start. Returns 0 to mean "never recreate"
+/// (legacy pre-#612-followup behavior — keep available for A/B tests
+/// against a recurrence of the leak symptom).
+fn state_recreate_interval() -> u64 {
+    std::env::var("HUSH_WHISPER_STATE_RECREATE_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_STATE_RECREATE_INTERVAL)
+}
+
 /// `whisper-rs` backed implementation of [`Transcribe`].
 ///
 /// Construct with [`WhisperTranscription::new`]; the constructor loads the
@@ -477,6 +517,18 @@ pub struct WhisperStreamingSession {
     /// reusing the state has no quality impact on the policy's
     /// converge-on-stable-transcript story.
     whisper_state: Option<WhisperState>,
+    /// Number of `whisper_full` calls run on the current
+    /// [`Self::whisper_state`] slot. Reset to 0 every time the slot
+    /// is dropped and lazy-recreated. Drives the periodic-recreation
+    /// loop bounded by [`DEFAULT_STATE_RECREATE_INTERVAL`] — see the
+    /// const's doc-comment and `learnings.md` (#612 second-pass) for
+    /// the per-`whisper_full` accumulation this works around.
+    inferences_on_current_state: u64,
+    /// Cached recreation interval for this session, captured from
+    /// the env var at session construction so a mid-meeting toggle
+    /// can't change behaviour partway through. 0 means "never
+    /// recreate" — used for A/B against a recurrence of the leak.
+    state_recreate_interval: u64,
 }
 
 impl WhisperStreamingSession {
@@ -494,6 +546,8 @@ impl WhisperStreamingSession {
             state: SlidingWindowState::new(WHISPER_SAMPLE_RATE, config),
             inference_threads,
             whisper_state: None,
+            inferences_on_current_state: 0,
+            state_recreate_interval: state_recreate_interval(),
         }
     }
 
@@ -524,6 +578,8 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
             whisper_state: &mut self.whisper_state,
+            inferences_on_current_state: &mut self.inferences_on_current_state,
+            state_recreate_interval: self.state_recreate_interval,
         };
         self.state.tick(&mut inferer)
     }
@@ -534,6 +590,8 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
             whisper_state: &mut self.whisper_state,
+            inferences_on_current_state: &mut self.inferences_on_current_state,
+            state_recreate_interval: self.state_recreate_interval,
         };
         self.state.finish(&mut inferer)
     }
@@ -554,6 +612,15 @@ struct WhisperInferer<'a> {
     /// whisper.cpp's per-init C-heap allocations don't accumulate
     /// across the meeting.
     whisper_state: &'a mut Option<WhisperState>,
+    /// Companion counter for the periodic-recreation loop bounded by
+    /// `state_recreate_interval`. Incremented after each successful
+    /// `whisper_full` call; when it reaches the interval, the state
+    /// slot is dropped so the next call lazy-recreates a fresh one.
+    inferences_on_current_state: &'a mut u64,
+    /// Number of inferences a single state is reused for before
+    /// recreation. 0 means "never recreate" (legacy pre-#612-followup
+    /// behaviour, available for A/B testing).
+    state_recreate_interval: u64,
 }
 
 impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
@@ -613,6 +680,7 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             .full(params, mono_16k_pcm);
         if let Err(e) = infer_result {
             *self.whisper_state = None;
+            *self.inferences_on_current_state = 0;
             return Err(anyhow!("whisper streaming inference failed: {e}"));
         }
         // Re-borrow for segment reading on the success path. The slot
@@ -621,6 +689,12 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             .whisper_state
             .as_mut()
             .expect("whisper_state is Some on the inference-success path");
+
+        // Inference ran successfully — bump the counter. We do this
+        // *before* segment reading because all the `state.full_*`
+        // calls below are read-only against the just-completed
+        // inference and don't allocate scratch the way `full` does.
+        *self.inferences_on_current_state += 1;
 
         let n_segments = state
             .full_n_segments()
@@ -659,6 +733,26 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
                 text,
             });
         }
+
+        // Periodic state recreation (#612 second-pass): after every
+        // `state_recreate_interval` calls, drop the state so the next
+        // call lazy-recreates a fresh one. Bounds whisper.cpp's
+        // per-`whisper_full` C-heap accumulation that the long-lived
+        // state from #615 doesn't address. The `state` borrow above
+        // is no longer used past the for-loop, so NLL ends it before
+        // we reassign `*self.whisper_state` here. interval == 0 means
+        // "never recreate" (A/B knob).
+        if self.state_recreate_interval > 0
+            && *self.inferences_on_current_state >= self.state_recreate_interval
+        {
+            tracing::info!(
+                inferences = *self.inferences_on_current_state,
+                "whisper streaming session: recreating WhisperState (#612 periodic recreation)"
+            );
+            *self.whisper_state = None;
+            *self.inferences_on_current_state = 0;
+        }
+
         Ok(out)
     }
 }
@@ -738,6 +832,52 @@ mod tests {
             msg.contains("does not exist"),
             "expected 'does not exist' in error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn state_recreate_interval_defaults_to_const_without_env_var() {
+        // Pin the default so a typo in the env-var name doesn't
+        // silently disable the periodic recreation that #612's
+        // second pass relies on. The env var is read at construction
+        // time, so to test the default we just need to make sure
+        // `state_recreate_interval()` returns DEFAULT when the var
+        // is unset. Wrapped in `with_var` semantics — we save and
+        // restore so a parallel test setting the var doesn't bleed.
+        let saved = std::env::var("HUSH_WHISPER_STATE_RECREATE_INTERVAL").ok();
+        // Safety: tests in this module run in the same process; the
+        // remove + restore window is short and no other test reads
+        // the var.
+        unsafe { std::env::remove_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL") };
+        assert_eq!(state_recreate_interval(), DEFAULT_STATE_RECREATE_INTERVAL);
+        if let Some(prev) = saved {
+            unsafe { std::env::set_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL", prev) };
+        }
+    }
+
+    #[test]
+    fn state_recreate_interval_env_var_override_parses() {
+        let saved = std::env::var("HUSH_WHISPER_STATE_RECREATE_INTERVAL").ok();
+
+        unsafe { std::env::set_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL", "5") };
+        assert_eq!(state_recreate_interval(), 5);
+
+        unsafe { std::env::set_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL", "0") };
+        assert_eq!(
+            state_recreate_interval(),
+            0,
+            "0 must be honoured as the explicit 'never recreate' A/B knob"
+        );
+
+        // Garbage should fall back to the default rather than panic.
+        unsafe { std::env::set_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL", "not-a-number") };
+        assert_eq!(state_recreate_interval(), DEFAULT_STATE_RECREATE_INTERVAL);
+
+        match saved {
+            Some(prev) => unsafe {
+                std::env::set_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL", prev)
+            },
+            None => unsafe { std::env::remove_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL") },
+        }
     }
 
     /// Smoke test that requires a real GGUF model. Ignored by default; run
