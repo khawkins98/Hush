@@ -55,8 +55,15 @@
 
   let { show, onDismiss, onOpenPrivacyPane }: Props = $props();
 
-  type Step = "welcome" | "permissions";
-  let step = $state<Step>("welcome");
+  // Step order is permissions → welcome (#609). The previous order
+  // was welcome → permissions, but the post-welcome flow then opened
+  // a third PermissionsDialog modal redundantly. Reversing puts the
+  // mandatory grant ask first (Hush is unusable without Microphone)
+  // and the explainer second (now the user understands what they
+  // just enabled), and lets `dismissFirstRun` skip the auto-open
+  // of PermissionsDialog entirely.
+  type Step = "permissions" | "welcome";
+  let step = $state<Step>("permissions");
 
   let cardEl: HTMLElement | undefined = $state();
   let previousFocus: HTMLElement | null = null;
@@ -225,16 +232,22 @@
       <!-- Step indicator. Two dots; the active one fills, the
            inactive one stays outlined. Read aloud as "Step 1 of 2"
            via aria-label so screen readers get the position too. -->
+      <!--
+        Step indicator. Permissions is step 1, welcome is step 2 (#609).
+        The dots are rendered in display order — dot 1 highlights on
+        permissions, dot 2 on welcome — so the visual progression
+        matches the new flow.
+      -->
       <div
         class="wizard-steps"
         role="progressbar"
-        aria-label={`Step ${step === "welcome" ? 1 : 2} of 2`}
+        aria-label={`Step ${step === "permissions" ? 1 : 2} of 2`}
         aria-valuemin="1"
         aria-valuemax="2"
-        aria-valuenow={step === "welcome" ? 1 : 2}
+        aria-valuenow={step === "permissions" ? 1 : 2}
       >
-        <span class="wizard-step-dot" class:active={step === "welcome"}></span>
         <span class="wizard-step-dot" class:active={step === "permissions"}></span>
+        <span class="wizard-step-dot" class:active={step === "welcome"}></span>
       </div>
 
       {#if step === "welcome"}
@@ -251,8 +264,8 @@
           Hush captures your microphone for dictation and (on macOS)
           your call's system audio for meeting transcription. Both
           stay on your device — no upload, no account, no telemetry.
-          The next step is granting the OS permissions Hush needs to
-          do its job.
+          You've granted the permissions Hush needs — you're ready
+          to dictate.
         </p>
 
         <footer class="first-run-footer">
@@ -261,13 +274,18 @@
             click Download on a model card.
           </p>
           <div class="footer-actions">
-            <button class="ghost" onclick={dismiss}>Skip setup</button>
             <button
-              class="primary"
-              data-testid="wizard-continue-welcome"
+              class="ghost"
               onclick={() => (step = "permissions")}
             >
-              Continue
+              Back
+            </button>
+            <button
+              class="primary"
+              data-testid="wizard-finish"
+              onclick={dismiss}
+            >
+              Start using Hush
             </button>
           </div>
         </footer>
@@ -275,9 +293,9 @@
         <header>
           <h2 id="first-run-heading">Permissions</h2>
           <p class="first-run-tagline">
-            Three OS permissions Hush asks for. You can skip any of
-            them — Hush stays usable, just with the matching feature
-            disabled.
+            Hush needs a couple of OS permissions to work. You can
+            skip any of them — Hush stays usable, just with the
+            matching feature disabled.
           </p>
         </header>
 
@@ -356,18 +374,13 @@
             {/if}
           </p>
           <div class="footer-actions">
-            <button
-              class="ghost"
-              onclick={() => (step = "welcome")}
-            >
-              Back
-            </button>
+            <button class="ghost" onclick={dismiss}>Skip setup</button>
             <button
               class="primary"
-              data-testid="wizard-finish"
-              onclick={dismiss}
+              data-testid="wizard-continue-permissions"
+              onclick={() => (step = "welcome")}
             >
-              Finish
+              Continue
             </button>
           </div>
         </footer>
