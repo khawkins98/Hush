@@ -552,6 +552,18 @@ fn worker_loop(
 }
 
 fn list_devices(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
+    // On macOS 14+, CoreAudio input device enumeration triggers the TCC
+    // microphone prompt even for passive listing — not just when recording
+    // starts. Guard here so cold-start source listing (called from the
+    // frontend's onMount before the user has taken any recording action)
+    // stays side-effect-free. The caller gets an empty device list until
+    // the user grants mic access; `list_audio_sources` still appends the
+    // system-audio entry, which doesn't require mic permission.
+    #[cfg(target_os = "macos")]
+    if crate::permissions::microphone_status() != crate::permissions::PermissionStatus::Granted {
+        return Ok(vec![]);
+    }
+
     // Capture the default device's name once so we can flag it in the list.
     // We use the name as the comparison key because that is also our public
     // identifier; see the doc comment on [`AudioDevice::id`].

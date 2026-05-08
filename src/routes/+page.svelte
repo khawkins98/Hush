@@ -80,6 +80,22 @@
   let showPermissionsDialog = $state(false);
   let permissionsDialogIntro: string | undefined = $state(undefined);
 
+  // When mic permission transitions to granted but we have no mic devices
+  // yet (the async TCC race on first-launch: the user grants permission
+  // inside the first-run wizard and the PermissionHealthSection poll
+  // catches it before our source list has re-enumerated), reload sources.
+  // The guard on audio.sources prevents a perpetual reload loop: once
+  // loadSources() succeeds with permission granted it populates sources
+  // with at least one microphone entry and the condition becomes false.
+  $effect(() => {
+    if (
+      permStatuses?.microphone === "granted" &&
+      audio.sources.filter((s) => s.kind === "microphone").length === 0
+    ) {
+      void dictation.loadSources();
+    }
+  });
+
   let unlistenToggle: UnlistenFn | null = null;
   let unlistenPttPress: UnlistenFn | null = null;
   let unlistenPttRelease: UnlistenFn | null = null;
@@ -523,20 +539,17 @@
   }
 
   async function dismissFirstRun() {
-    // The first-run wizard now starts on the Permissions step (#609),
-    // so by the time it dismisses the user has already had a chance
-    // to grant the OS permissions inline. Pre-#609 we auto-opened
-    // PermissionsDialog right after the wizard, which produced a
-    // redundant third "permissions" surface — the user saw the same
-    // rows twice in a row. PermissionsDialog stays around for its
-    // other use cases (ad-hoc launches from permission-shaped errors,
-    // Settings → Permissions); it's just no longer auto-opened here.
     showFirstRun = false;
     try {
       await invoke("mark_first_run_completed");
     } catch (e) {
       console.error("mark_first_run_completed failed:", e);
     }
+    // Reload audio sources: the user has just gone through the permissions
+    // wizard and may have granted mic access. If the TCC prompt is still
+    // in-flight, the $effect above will catch the permission-health
+    // transition once PermissionHealthSection polls after focus returns.
+    void dictation.loadSources();
   }
 
   async function openPrivacyPane(
