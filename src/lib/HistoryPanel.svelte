@@ -1,16 +1,19 @@
 <script lang="ts">
+  import { formatTimestamp } from "$lib/format";
+  import { dictation } from "$lib/state/dictation.svelte";
+  import { history } from "$lib/state/history.svelte";
+  import { meeting } from "$lib/state/meeting-sessions.svelte";
+
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import ExportOptionsDialog from "./ExportOptionsDialog.svelte";
   import HistoryDictationRow from "./HistoryDictationRow.svelte";
   import HistoryMeetingRow from "./HistoryMeetingRow.svelte";
-  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import type {
     BundleSelection,
     HistoryEntry,
     MeetingExportFormat,
     MeetingSession,
     MeetingSessionDetail,
-    ModelCard,
   } from "./types";
 
   /// Filter chip values for the unified History feed (#357 phase 2).
@@ -22,32 +25,6 @@
   export type HistoryFilter = "all" | "dictation" | "meetings";
 
   type Props = {
-    historyEntries: HistoryEntry[];
-    historyLoaded: boolean;
-    historyQuery: string;
-    historySearching: boolean;
-    historyError: ErrorDisplayShape | null;
-    historyVersion: number;
-    /// Unfiltered total — drives the "Clear all 7" confirmation
-    /// copy. Different from `historyEntries.length` when the user
-    /// has a search query active.
-    historyTotalCount: number;
-    /// Meeting sessions to interleave with dictation entries (#357
-    /// phase 2). Sorted by `startedAt` desc on the parent side; the
-    /// panel reconciles the two streams by recency before rendering.
-    /// Empty array when no meetings have been captured yet.
-    meetingSessions: MeetingSession[];
-    /// True after the parent's `meeting_sessions_list` IPC has
-    /// resolved at least once, so the panel can distinguish "still
-    /// loading" from "actually empty".
-    meetingSessionsLoaded: boolean;
-    /// Model catalog. Used to render a friendly display name in
-    /// each row's meta line ("Whisper Base") instead of the raw
-    /// filename ("ggml-base.bin"); the latter leaks implementation
-    /// detail to end users. Empty array is fine — the lookup
-    /// falls back to the stored filename.
-    models: ModelCard[];
-    formatTimestamp: (iso: string) => string;
     onSearchInput: (e: Event) => void;
     onCopy: (entry: HistoryEntry) => void | Promise<void>;
     onDelete: (entry: HistoryEntry) => void | Promise<void>;
@@ -84,17 +61,6 @@
   };
 
   let {
-    historyEntries,
-    historyLoaded,
-    historyQuery,
-    historySearching,
-    historyError,
-    historyVersion,
-    historyTotalCount,
-    meetingSessions,
-    meetingSessionsLoaded,
-    models,
-    formatTimestamp,
     onSearchInput,
     onCopy,
     onDelete,
@@ -125,7 +91,7 @@
     });
   }
 
-  let hasQuery = $derived(historyQuery.trim().length > 0);
+  let hasQuery = $derived(history.historyQuery.trim().length > 0);
   // #357 phase 2 step 3 lifted the search-time forced filter:
   // both streams now run their own searches (history FTS5 +
   // utterance FTS5 rolled up to sessions), so the user's chip
@@ -152,14 +118,14 @@
       // Fast path: only one stream active — map directly, no merge.
       if (!includeMeetings) {
         if (!includeDictation) return [];
-        return historyEntries.map((entry) => ({
+        return history.entries.map((entry) => ({
           kind: "dictation" as const,
           sortKey: Date.parse(entry.createdAt) || 0,
           entry,
         }));
       }
       if (!includeDictation) {
-        return meetingSessions.map((session) => ({
+        return meeting.sessions.map((session) => ({
           kind: "meeting" as const,
           sortKey: Date.parse(session.startedAt) || 0,
           session,
@@ -169,12 +135,12 @@
       // Both streams active. Both arrive newest-first from the
       // backend, so a two-pointer merge produces a sorted result in
       // O(N) rather than the previous O(N log N) rebuild+sort.
-      const d: FeedRow[] = historyEntries.map((entry) => ({
+      const d: FeedRow[] = history.entries.map((entry) => ({
         kind: "dictation" as const,
         sortKey: Date.parse(entry.createdAt) || 0,
         entry,
       }));
-      const m: FeedRow[] = meetingSessions.map((session) => ({
+      const m: FeedRow[] = meeting.sessions.map((session) => ({
         kind: "meeting" as const,
         sortKey: Date.parse(session.startedAt) || 0,
         session,
@@ -259,7 +225,7 @@
   }
 
   function startClear() {
-    if (historyTotalCount === 0) return;
+    if (history.totalCount === 0) return;
     if (!clearConfirming) {
       clearConfirming = true;
       window.clearTimeout(clearTimer);
@@ -278,7 +244,6 @@
     window.clearTimeout(clearTimer);
     clearConfirming = false;
   }
-
 </script>
 
 <section class="history panel-history" aria-labelledby="history-heading">
@@ -289,19 +254,19 @@
         <input
           type="search"
           placeholder="Search history…"
-          value={historyQuery}
+          value={history.historyQuery}
           oninput={onSearchInput}
           aria-label="Search history"
         />
-        {#if historySearching}
+        {#if history.searching}
           <span class="search-spinner" aria-label="Searching" role="status"></span>
         {/if}
       </div>
-      {#if historyTotalCount > 0}
+      {#if history.totalCount > 0}
         {#if clearConfirming}
           <div class="clear-confirm" role="group" aria-label="Confirm clear history">
             <span class="clear-confirm-text">
-              Delete all {historyTotalCount}?
+              Delete all {history.totalCount}?
             </span>
             <button
               type="button"
@@ -321,7 +286,7 @@
             </button>
           </div>
         {:else}
-          {#if onExportBundle && (historyTotalCount > 0 || meetingSessions.length > 0)}
+          {#if onExportBundle && (history.totalCount > 0 || meeting.sessions.length > 0)}
             <button
               type="button"
               class="ghost"
@@ -354,7 +319,7 @@
     nothing); the search-active state forces the filter to
     "Dictation" because cross-stream FTS lands in a follow-up.
   -->
-  {#if historyTotalCount > 0 || meetingSessions.length > 0}
+  {#if history.totalCount > 0 || meeting.sessions.length > 0}
     <div class="history-filters" role="group" aria-label="Filter history">
       {#each [{ value: "all", label: "All" }, { value: "dictation", label: "Dictation" }, { value: "meetings", label: "Meetings" }] as chip (chip.value)}
         <button
@@ -371,16 +336,16 @@
     </div>
   {/if}
 
-  {#if historyError}
-    <ErrorDisplay error={historyError} scope="History" />
+  {#if history.error}
+    <ErrorDisplay error={history.error} scope="History" />
   {/if}
 
-  {#if !historyLoaded || !meetingSessionsLoaded}
+  {#if !history.loaded || !meeting.sessionsLoaded}
     <p class="loading-skeleton">Loading history…</p>
   {:else if mergedFeed.length === 0}
     <p class="empty-history">
-      {#if historyQuery.trim().length > 0}
-        No matches for "<em>{historyQuery}</em>". Try a shorter query.
+      {#if hasQuery}
+        No matches for "<em>{history.historyQuery}</em>". Try a shorter query.
       {:else if effectiveFilter === "dictation"}
         No dictation transcripts yet. Press the toggle hotkey or
         the Start button on the Dictation panel — the transcript
@@ -396,13 +361,13 @@
       {/if}
     </p>
   {:else}
-    <ul class="history-list" data-version={historyVersion}>
+    <ul class="history-list" data-version={history.version}>
       {#each mergedFeed as row (row.kind + ":" + (row.kind === "dictation" ? row.entry.id : row.session.id))}
         {#if row.kind === "dictation"}
           <HistoryDictationRow
             entry={row.entry}
             confirming={isConfirming("dictation", row.entry.id)}
-            {models}
+            models={dictation.models}
             {formatTimestamp}
             {onCopy}
             onDelete={handleRowDelete}

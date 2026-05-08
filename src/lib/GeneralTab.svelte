@@ -22,15 +22,12 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
-  import {
-    enable as enableAutostart,
-    disable as disableAutostart,
-    isEnabled as isAutostartEnabled,
-  } from "@tauri-apps/plugin-autostart";
   import { platform } from "@tauri-apps/plugin-os";
 
   import AdvancedSection from "./AdvancedSection.svelte";
   import DictationStatsBar from "./DictationStatsBar.svelte";
+  import GeneralInterfaceSection from "./GeneralInterfaceSection.svelte";
+  import GeneralStartupSection from "./GeneralStartupSection.svelte";
   import PttHotkeyEditor from "./PttHotkeyEditor.svelte";
   import { formatErrorMessage } from "./errors";
   import {
@@ -53,37 +50,8 @@
 
   let { onDebugConsoleChange }: Props = $props();
 
-  let autostartEnabled = $state(false);
-  let autostartBusy = $state(false);
-  let autostartError = $state<string | null>(null);
-  // Stale-LaunchAgent recovery (#317): set when boot-time re-
-  // register failed; cleared by a successful retry.
-  let autostartPathStale = $state(false);
-  let autostartRetryBusy = $state(false);
-  let autostartRetryFailed = $state(false);
-
   let firstRunResetBusy = $state(false);
   let firstRunResetMessage = $state<string | null>(null);
-
-  let hudEnabled = $state(true);
-  let hudBusy = $state(false);
-  let hudError = $state<string | null>(null);
-
-  // Audio cues (#292) — opt-in default off; cues are intrusive
-  // in shared spaces / focus modes.
-  let soundCuesEnabled = $state(false);
-  let soundCuesBusy = $state(false);
-  let soundCuesError = $state<string | null>(null);
-
-  // Per-event sub-toggles (#463). Default true so master-on users
-  // hear both events without an explicit opt-in step. The checkboxes
-  // are visually nested beneath the master toggle and disabled when
-  // the master is off.
-  let soundCueStartEnabled = $state(true);
-  let soundCueCompleteEnabled = $state(true);
-  let soundCueStartBusy = $state(false);
-  let soundCueCompleteBusy = $state(false);
-  let soundCueSubError = $state<string | null>(null);
 
   // Two-cell slider (#348): `inferenceThreads` is the persisted
   // value; `inferenceThreadsDisplay` tracks the slider thumb live
@@ -170,182 +138,6 @@
       themePref = next;
     } finally {
       themeBusy = false;
-    }
-  }
-
-  async function loadAutostartState(): Promise<void> {
-    try {
-      autostartEnabled = await isAutostartEnabled();
-      autostartError = null;
-    } catch (e) {
-      autostartEnabled = false;
-      // Dev builds run as unsigned binaries — SMAppService (Login Items)
-      // requires a signed .app bundle with a stable bundle ID, so the call
-      // always fails in `npm run tauri dev`. Suppress the red error there;
-      // in production bundles a real failure is still worth surfacing.
-      if (!import.meta.env.DEV) {
-        autostartError = "Couldn't read autostart state on this platform.";
-      }
-      console.warn("[hush] isAutostartEnabled failed", e);
-    }
-  }
-
-  async function loadAutostartPathStatus(): Promise<void> {
-    try {
-      const status = await invoke<{ stale: boolean }>(
-        "get_autostart_path_status",
-      );
-      autostartPathStale = status.stale;
-    } catch (e) {
-      // Non-fatal — the warning just doesn't render.
-      console.warn("[hush] get_autostart_path_status failed", e);
-      autostartPathStale = false;
-    }
-  }
-
-  async function onRetryAutostartRegistration() {
-    if (autostartRetryBusy) return;
-    autostartRetryBusy = true;
-    autostartRetryFailed = false;
-    try {
-      const ok = await invoke<boolean>("retry_autostart_registration");
-      if (ok) {
-        autostartPathStale = false;
-      } else {
-        autostartRetryFailed = true;
-      }
-    } catch (e) {
-      autostartRetryFailed = true;
-      console.warn("[hush] retry_autostart_registration failed", e);
-    } finally {
-      autostartRetryBusy = false;
-    }
-  }
-
-  async function onAutostartToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    autostartBusy = true;
-    autostartError = null;
-    try {
-      if (checked) await enableAutostart();
-      else await disableAutostart();
-      autostartEnabled = checked;
-    } catch (err) {
-      autostartError = formatErrorMessage(err);
-      // Re-read so the checkbox reverts to truth rather than the
-      // optimistic state that didn't persist.
-      await loadAutostartState();
-    } finally {
-      autostartBusy = false;
-    }
-  }
-
-  async function loadHudEnabled(): Promise<void> {
-    try {
-      hudEnabled = await invoke<boolean>("get_hud_enabled");
-      hudError = null;
-    } catch (e) {
-      hudError = "Couldn't read HUD setting.";
-      console.warn("[hush] get_hud_enabled failed", e);
-    }
-  }
-
-  async function onHudToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    hudBusy = true;
-    hudError = null;
-    try {
-      await invoke("set_hud_enabled", { enabled: checked });
-      hudEnabled = checked;
-    } catch (err) {
-      hudError = formatErrorMessage(err);
-      await loadHudEnabled();
-    } finally {
-      hudBusy = false;
-    }
-  }
-
-  async function loadSoundCuesEnabled(): Promise<void> {
-    try {
-      soundCuesEnabled = await invoke<boolean>("get_sound_cues_enabled");
-      soundCuesError = null;
-    } catch (e) {
-      soundCuesError = "Couldn't read audio-cues setting.";
-      console.warn("[hush] get_sound_cues_enabled failed", e);
-    }
-  }
-
-  async function onSoundCuesToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    soundCuesBusy = true;
-    soundCuesError = null;
-    try {
-      await invoke("set_sound_cues_enabled", { enabled: checked });
-      soundCuesEnabled = checked;
-    } catch (err) {
-      soundCuesError = formatErrorMessage(err);
-      await loadSoundCuesEnabled();
-    } finally {
-      soundCuesBusy = false;
-    }
-  }
-
-  async function loadSoundCueSubEnabled(): Promise<void> {
-    try {
-      const [start, complete] = await Promise.all([
-        invoke<boolean>("get_sound_cue_start_enabled"),
-        invoke<boolean>("get_sound_cue_complete_enabled"),
-      ]);
-      soundCueStartEnabled = start;
-      soundCueCompleteEnabled = complete;
-      soundCueSubError = null;
-    } catch (e) {
-      soundCueSubError = "Couldn't read per-event audio-cue settings.";
-      console.warn("[hush] get_sound_cue_*_enabled failed", e);
-    }
-  }
-
-  async function onSoundCueStartToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    soundCueStartBusy = true;
-    soundCueSubError = null;
-    try {
-      await invoke("set_sound_cue_start_enabled", { enabled: checked });
-      soundCueStartEnabled = checked;
-    } catch (err) {
-      soundCueSubError = formatErrorMessage(err);
-      await loadSoundCueSubEnabled();
-    } finally {
-      soundCueStartBusy = false;
-    }
-  }
-
-  // Preview-cue button (#498). Bypasses the toggle gate
-  // entirely — the user is explicitly asking to hear the chime,
-  // so it should play regardless of master / sub-toggle state.
-  // Best-effort: a failed IPC logs but doesn't surface; the
-  // most likely failure is the no-default-audio-device path
-  // that's already silent for the production cue path.
-  async function onPreviewCue(kind: "start" | "done") {
-    try {
-      await invoke("preview_sound_cue", { kind });
-    } catch (e) {
-      console.warn("[hush] preview_sound_cue failed", e);
-    }
-  }
-
-  async function onSoundCueCompleteToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    soundCueCompleteBusy = true;
-    soundCueSubError = null;
-    try {
-      await invoke("set_sound_cue_complete_enabled", { enabled: checked });
-      soundCueCompleteEnabled = checked;
-    } catch (err) {
-      soundCueSubError = formatErrorMessage(err);
-      await loadSoundCueSubEnabled();
-    } finally {
-      soundCueCompleteBusy = false;
     }
   }
 
@@ -452,11 +244,6 @@
     // the PTT-editor glyph copy; failure is non-fatal (the
     // editor falls back to its own default).
     void Promise.all([
-      loadAutostartState(),
-      loadAutostartPathStatus(),
-      loadHudEnabled(),
-      loadSoundCuesEnabled(),
-      loadSoundCueSubEnabled(),
       loadInferenceThreads(),
       loadMicGainDb(),
       loadDictationStats(),
@@ -480,192 +267,9 @@
   </section>
 {/if}
 
-<section class="settings-group" aria-labelledby="settings-startup-heading">
-  <h2 id="settings-startup-heading" class="group-heading">Startup</h2>
-  <label class="toggle-row">
-    <input
-      type="checkbox"
-      data-testid="settings-autostart-toggle"
-      disabled={autostartBusy}
-      checked={autostartEnabled}
-      onchange={onAutostartToggle}
-    />
-    <span class="toggle-label">
-      <span class="toggle-name">Launch Hush at login</span>
-      <span class="toggle-desc">
-        Hush opens automatically when you sign in. The window
-        stays in the background — your hotkey still works.
-      </span>
-    </span>
-  </label>
-  {#if autostartError}
-    <p class="settings-error">{autostartError}</p>
-  {/if}
+<GeneralStartupSection />
 
-  {#if autostartPathStale}
-    <!--
-      Stale-LaunchAgent warning (#317). The setup hook re-
-      registers the plist on every launch; if that re-register
-      failed (read-only home, fs permission), the LaunchAgent
-      still points at whatever path it had before. Surface the
-      failure with a retry button so the user isn't left with
-      a silent broken autostart.
-    -->
-    <div
-      class="settings-warning-row"
-      data-testid="autostart-path-stale-warning"
-      role="alert"
-    >
-      <p class="settings-row-name">⚠ Autostart path is out of date</p>
-      <p class="settings-row-desc">
-        Hush couldn't refresh the LaunchAgent at startup, so
-        "Launch at Login" may not work after the next restart.
-        Click below to retry — usually a one-click fix.
-      </p>
-      <button
-        type="button"
-        class="ghost"
-        data-testid="autostart-retry-button"
-        disabled={autostartRetryBusy}
-        onclick={onRetryAutostartRegistration}
-      >
-        {autostartRetryBusy ? "Retrying…" : "Click to update"}
-      </button>
-      {#if autostartRetryFailed}
-        <p
-          class="settings-error"
-          data-testid="autostart-retry-error"
-        >
-          Retry failed too. Check that <code
-            >~/Library/LaunchAgents/</code
-          > is writable, then try again.
-        </p>
-      {/if}
-    </div>
-  {/if}
-</section>
-
-<section class="settings-group" aria-labelledby="settings-interface-heading">
-  <h2 id="settings-interface-heading" class="group-heading">Interface</h2>
-  <label class="toggle-row">
-    <input
-      type="checkbox"
-      data-testid="settings-hud-toggle"
-      disabled={hudBusy}
-      checked={hudEnabled}
-      onchange={onHudToggle}
-    />
-    <span class="toggle-label">
-      <span class="toggle-name">Show recording HUD</span>
-      <span class="toggle-desc">
-        The floating pill that appears in the top-right corner
-        while Hush is capturing audio. Off hides it for both
-        dictation and meeting mode; recording itself is
-        unaffected.
-      </span>
-    </span>
-  </label>
-  {#if hudError}
-    <p class="settings-error">{hudError}</p>
-  {/if}
-
-  <!--
-    Audio cues toggle (#292). Sits in the Interface group
-    alongside the HUD toggle since both are sensory-feedback
-    settings the user calibrates to their environment. Off by
-    default — opt-in deliberately because cues are intrusive
-    in shared spaces / meeting rooms / focus modes.
-  -->
-  <label class="toggle-row">
-    <input
-      type="checkbox"
-      data-testid="settings-sound-cues-toggle"
-      disabled={soundCuesBusy}
-      checked={soundCuesEnabled}
-      onchange={onSoundCuesToggle}
-    />
-    <span class="toggle-label">
-      <span class="toggle-name">Audio cues</span>
-      <span class="toggle-desc">
-        Plays a short chime when recording starts and a
-        second chime when the transcript is on the
-        clipboard. Honours your system volume and Do Not
-        Disturb. Off keeps Hush silent.
-      </span>
-    </span>
-  </label>
-  {#if soundCuesError}
-    <p class="settings-error">{soundCuesError}</p>
-  {/if}
-
-  <!--
-    Per-event sub-toggles (#463). Visually nested beneath the master
-    so the relationship reads at a glance; both rows default to on
-    so the user only sees them when picking which cue to silence.
-    Disabled (and dimmed) when the master is off — the master is
-    the kill-switch, the sub-toggles only select among allowed cues.
-  -->
-  <div
-    class="sound-cue-subtoggles"
-    class:is-disabled={!soundCuesEnabled}
-    aria-label="Per-event audio cues"
-  >
-    <div class="toggle-row toggle-row-sub">
-      <label class="toggle-row-inner">
-        <input
-          type="checkbox"
-          data-testid="settings-sound-cue-start-toggle"
-          disabled={!soundCuesEnabled || soundCueStartBusy}
-          checked={soundCueStartEnabled}
-          onchange={onSoundCueStartToggle}
-        />
-        <span class="toggle-label">
-          <span class="toggle-name">Recording-start cue</span>
-          <span class="toggle-desc">
-            Plays a chime the moment the mic goes hot.
-          </span>
-        </span>
-      </label>
-      <button
-        type="button"
-        class="cue-preview-btn"
-        data-testid="settings-cue-preview-start"
-        onclick={() => onPreviewCue("start")}
-        aria-label="Preview the recording-start cue"
-        title="Preview the recording-start cue"
-      >▶</button>
-    </div>
-    <div class="toggle-row toggle-row-sub">
-      <label class="toggle-row-inner">
-        <input
-          type="checkbox"
-          data-testid="settings-sound-cue-complete-toggle"
-          disabled={!soundCuesEnabled || soundCueCompleteBusy}
-          checked={soundCueCompleteEnabled}
-          onchange={onSoundCueCompleteToggle}
-        />
-        <span class="toggle-label">
-          <span class="toggle-name">Transcription-complete cue</span>
-          <span class="toggle-desc">
-            Plays a chime once the transcript is on the clipboard
-            — the "safe to paste" signal.
-          </span>
-        </span>
-      </label>
-      <button
-        type="button"
-        class="cue-preview-btn"
-        data-testid="settings-cue-preview-done"
-        onclick={() => onPreviewCue("done")}
-        aria-label="Preview the transcription-complete cue"
-        title="Preview the transcription-complete cue"
-      >▶</button>
-    </div>
-  </div>
-  {#if soundCueSubError}
-    <p class="settings-error">{soundCueSubError}</p>
-  {/if}
-</section>
+<GeneralInterfaceSection />
 
 <section class="settings-group" aria-labelledby="settings-appearance-heading">
   <h2 id="settings-appearance-heading" class="group-heading">Appearance</h2>

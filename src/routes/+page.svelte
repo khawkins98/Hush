@@ -18,7 +18,6 @@
   import MeetingSection from "$lib/MeetingSection.svelte";
   import PermissionHealthSection from "$lib/PermissionHealthSection.svelte";
   import { Events } from "$lib/events";
-  import { formatTimestamp } from "$lib/format";
   import { motionDuration } from "$lib/motion";
   import type {
     PermissionStatuses,
@@ -653,22 +652,10 @@
   {#if nav.activeSection === "dictation"}
   <DictationSection
     {isMacOS}
-    sources={audio.sources}
-    sourcesLoaded={audio.sourcesLoaded}
-    bind:selected={audio.selected}
-    recording={dictation.recording}
-    busy={dictation.busy}
-    transcribing={dictation.transcribing}
-    noModelInstalled={dictation.noModelInstalled}
-    error={dictation.error}
-    result={dictation.result}
-    recordMode={dictation.recordMode}
-    activeModelName={dictation.activeModel?.displayName ?? null}
     {permissionHealth}
     {macosCapable}
     {allPermsGranted}
     {anyPermsDenied}
-    meetingActiveDetail={meeting.activeDetail}
     onStart={() => dictation.startRecord(screenRecordingLive)}
     onStop={() => dictation.stop(TRAILING_SILENCE_MS)}
     onScrollToModelPicker={openModelSettings}
@@ -714,17 +701,6 @@
     <MeetingSection bind:notice={meeting.copyNotice} />
 
     <HistoryPanel
-      historyEntries={history.entries}
-      historyLoaded={history.loaded}
-      historyQuery={history.historyQuery}
-      historySearching={history.searching}
-      historyError={history.error}
-      historyVersion={history.version}
-      historyTotalCount={history.totalCount}
-      meetingSessions={meeting.sessions}
-      meetingSessionsLoaded={meeting.sessionsLoaded}
-      models={dictation.models}
-      {formatTimestamp}
       {onSearchInput}
       onCopy={history.copyEntry}
       onDelete={history.deleteEntry}
