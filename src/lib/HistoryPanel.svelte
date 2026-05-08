@@ -148,27 +148,51 @@
         effectiveFilter === "all" || effectiveFilter === "dictation";
       const includeMeetings =
         effectiveFilter === "all" || effectiveFilter === "meetings";
-      const rows: FeedRow[] = [];
-      if (includeDictation) {
-        for (const entry of historyEntries) {
-          rows.push({
-            kind: "dictation",
-            sortKey: Date.parse(entry.createdAt) || 0,
-            entry,
-          });
+
+      // Fast path: only one stream active — map directly, no merge.
+      if (!includeMeetings) {
+        if (!includeDictation) return [];
+        return historyEntries.map((entry) => ({
+          kind: "dictation" as const,
+          sortKey: Date.parse(entry.createdAt) || 0,
+          entry,
+        }));
+      }
+      if (!includeDictation) {
+        return meetingSessions.map((session) => ({
+          kind: "meeting" as const,
+          sortKey: Date.parse(session.startedAt) || 0,
+          session,
+        }));
+      }
+
+      // Both streams active. Both arrive newest-first from the
+      // backend, so a two-pointer merge produces a sorted result in
+      // O(N) rather than the previous O(N log N) rebuild+sort.
+      const d: FeedRow[] = historyEntries.map((entry) => ({
+        kind: "dictation" as const,
+        sortKey: Date.parse(entry.createdAt) || 0,
+        entry,
+      }));
+      const m: FeedRow[] = meetingSessions.map((session) => ({
+        kind: "meeting" as const,
+        sortKey: Date.parse(session.startedAt) || 0,
+        session,
+      }));
+
+      const out: FeedRow[] = [];
+      let di = 0,
+        mi = 0;
+      while (di < d.length && mi < m.length) {
+        if (d[di].sortKey >= m[mi].sortKey) {
+          out.push(d[di++]);
+        } else {
+          out.push(m[mi++]);
         }
       }
-      if (includeMeetings) {
-        for (const session of meetingSessions) {
-          rows.push({
-            kind: "meeting",
-            sortKey: Date.parse(session.startedAt) || 0,
-            session,
-          });
-        }
-      }
-      rows.sort((a, b) => b.sortKey - a.sortKey);
-      return rows;
+      while (di < d.length) out.push(d[di++]);
+      while (mi < m.length) out.push(m[mi++]);
+      return out;
     })(),
   );
 
