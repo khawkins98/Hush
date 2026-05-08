@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **About tab version and Tauri runtime now display correctly** (#649 follow-up). Version and "Tauri runtime" rows were silently hidden because the main window capability intentionally excludes `app:default`, causing `getVersion()`/`getTauriVersion()` to fail without error. These values are now read from the existing `get_build_info` IPC command (no capability required); `tauri_version` is baked in at compile time by `build.rs` parsing `Cargo.lock`.
 
+### Changed
+
+- **History timestamps no longer show seconds.** History row dates now render as "Apr 29, 2026, 1:00 PM" instead of "4/29/2026, 1:00:00 PM". Consistent with the format already used in meeting session rows.
+- **Model picker: speed/accuracy numeric labels removed.** The "5.0" / "1.0" values next to each rating bar were redundant — the bar graph already encodes the ranking. Removed to reduce visual clutter.
+- **Settings section headings: sentence case instead of ALL CAPS.** Section labels such as "STARTUP", "INTERFACE", "APPEARANCE", "HOTKEYS", "AUTO-START", and "SPEAKERS" now render in the casing they are authored in (e.g. "Startup", "Interface"). Applies to all six Settings tabs.
+
 ## [0.5.1] - 2026-05-08
 
 ### Fixed
