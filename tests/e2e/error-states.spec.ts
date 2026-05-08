@@ -177,12 +177,10 @@ test.describe("first-time setup banner", () => {
     });
     await page.goto("/");
 
-    // Banner is visible with the action button. The button copy
-    // mirrors where the user actually has to go (Settings → Model)
-    // since the in-page picker moved out under #163-#167.
+    // Banner is visible with the action button.
     await expect(page.getByText("Set up your first model")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: /Open Settings/i }),
+      page.getByRole("button", { name: "Choose a model", exact: true }),
     ).toBeVisible();
 
     // Start is disabled — clicking through to a "no model" error is
