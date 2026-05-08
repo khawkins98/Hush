@@ -82,7 +82,13 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "dmg": {
+        "background": "assets/dmg-background.png",
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 160, "y": 185 },
+        "applicationFolderPosition": { "x": 500, "y": 185 }
+      }
     },
     "resources": [
       "resources/hush-audio-tap-capture"
