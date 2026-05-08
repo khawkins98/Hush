@@ -58,10 +58,7 @@
 
 <section class="models panel-models" aria-labelledby="models-heading">
   <header class="history-header">
-    <h2 id="models-heading">
-      <span class="panel-tag panel-tag-models" aria-hidden="true">M</span>
-      Model
-    </h2>
+    <h2 id="models-heading">Model</h2>
   </header>
   <p class="hint-prose">
     Pick a Whisper model. Larger models are more accurate but slower — click
@@ -130,9 +127,6 @@
                 <span class="badge default-badge">Selected</span>
               {/if}
             </h3>
-            {#if card.isSelected}
-              <span class="model-card-current" aria-hidden="true">●</span>
-            {/if}
           </header>
           <p class="model-stats">
             <span>{card.sizeMb} MB</span>
@@ -253,24 +247,6 @@
   font-size: 1.1rem;
   font-weight: 600;
   color: var(--text-primary);
-}
-
-.panel-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 5px;
-  font-size: 0.75em;
-  font-weight: 700;
-  background-color: var(--bg-sidebar);
-  color: var(--text-secondary);
-  margin-right: 0.5rem;
-}
-.panel-tag-models {
-  background-color: #d6ecd6;
-  color: #1f5a1f;
 }
 
 button {
@@ -465,11 +441,6 @@ button.ghost.primary:hover:not(:disabled) {
   border-radius: 999px;
   background-color: var(--info-border);
   color: var(--info-text);
-}
-
-.model-card-current {
-  color: var(--accent);
-  font-size: 0.85rem;
 }
 
 .model-stats {

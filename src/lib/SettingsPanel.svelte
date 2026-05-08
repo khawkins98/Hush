@@ -289,25 +289,23 @@
 </script>
 
 <div class="settings-panel">
-  <header class="settings-panel-header">
-    <h1 class="settings-panel-title">Settings</h1>
-    <nav class="settings-panel-toolbar" aria-label="Settings categories">
-      {#each tabs as tab (tab.key)}
-        <button
-          type="button"
-          class="tab-button"
-          class:active={activeTab === tab.key}
-          aria-current={activeTab === tab.key ? "page" : undefined}
-          data-testid={tab.testId}
-          onclick={() => (activeTab = tab.key)}
-        >
-          {tab.label}
-        </button>
-      {/each}
-    </nav>
-  </header>
+  <nav class="settings-sidebar" aria-label="Settings categories">
+    <span class="settings-sidebar-title">Settings</span>
+    {#each tabs as tab (tab.key)}
+      <button
+        type="button"
+        class="settings-sidebar-btn"
+        class:active={activeTab === tab.key}
+        aria-current={activeTab === tab.key ? "page" : undefined}
+        data-testid={tab.testId}
+        onclick={() => (activeTab = tab.key)}
+      >
+        {tab.label}
+      </button>
+    {/each}
+  </nav>
 
-  <section class="tab-body" aria-live="polite">
+  <section class="settings-content" aria-live="polite">
     {#if activeTab === "general"}
       <GeneralTab {onDebugConsoleChange} />
     {:else if activeTab === "model"}
@@ -341,89 +339,87 @@
 <style>
   .settings-panel {
     display: flex;
-    flex-direction: column;
-    /* No fixed height — the host (`<main class="settings-window">`
-       on /settings, `<main class="app-main">` on the inline shell)
-       owns the scrolling container. */
+    flex-direction: row;
+    align-items: flex-start;
   }
 
-  .settings-panel-header {
+  /* Left sidebar nav — sticks in place while content scrolls in the
+     outer `.app-main` scroll container. Same left-chrome accent
+     indicator style as the main SidebarNav. */
+  .settings-sidebar {
+    width: 140px;
+    flex-shrink: 0;
     position: sticky;
     top: 0;
-    z-index: 1;
+    max-height: 100vh;
+    overflow-y: auto;
     background-color: var(--bg-sidebar);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    padding: 0.85rem 0 2rem;
+    display: flex;
+    flex-direction: column;
   }
-  .settings-panel-title {
-    margin: 0;
-    padding: 0.85rem 1.1rem 0.25rem;
-    font-size: 1.55rem;
+
+  .settings-sidebar-title {
+    display: block;
+    padding: 0 1.1rem 0.75rem;
+    font-size: 1.4rem;
     font-weight: 700;
     color: var(--text-primary);
     letter-spacing: -0.015em;
   }
 
-  .settings-panel-toolbar {
-    display: flex;
-    gap: 0.25rem;
-    padding: 0.4rem 0.75rem 0.6rem;
-    background-color: transparent;
-    overflow-x: auto;
-    flex-shrink: 0;
-  }
-
-  .tab-button {
-    padding: 0.4rem 0.85rem;
-    border: 1px solid transparent;
-    background-color: transparent;
-    color: var(--text-secondary);
+  .settings-sidebar-btn {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    padding: 0.5rem 1rem;
+    width: 100%;
+    text-align: left;
+    font-size: 0.875rem;
     font-family: inherit;
-    font-size: 0.85rem;
     font-weight: 500;
-    border-radius: 6px;
+    color: var(--text-muted);
     cursor: pointer;
     white-space: nowrap;
-    transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    transition: color 120ms ease, border-color 120ms ease;
   }
-  .tab-button:hover {
-    background-color: var(--accent-subtle);
+  .settings-sidebar-btn:hover {
     color: var(--text-primary);
   }
-  .tab-button.active {
-    background-color: var(--bg-surface);
-    border-color: var(--border);
+  .settings-sidebar-btn.active {
     color: var(--accent);
+    border-left-color: var(--accent);
     font-weight: 600;
   }
-  .tab-button:focus-visible {
+  .settings-sidebar-btn:focus-visible {
     outline: 2px solid var(--accent);
-    outline-offset: 1px;
+    outline-offset: -3px;
   }
 
-  .tab-body {
+  .settings-content {
     flex: 1;
     padding: 2rem 2.5rem;
     width: 100%;
     box-sizing: border-box;
-    overflow-y: auto;
+    min-width: 0;
   }
 
-  /* Inner panels were originally tuned for the standalone window's
-     720 px width; match that here so the model cards / lists
-     breathe inside the inline panel too. */
-  .tab-body :global(section.panel-models),
-  .tab-body :global(section.panel-vocabulary),
-  .tab-body :global(section.panel-replacements),
-  .tab-body :global(section.panel-macos-diagnostic) {
+  /* Inner panels tuned for ~560 px available width; centred so
+     model cards / lists breathe inside the inline panel too. */
+  .settings-content :global(section.panel-models),
+  .settings-content :global(section.panel-vocabulary),
+  .settings-content :global(section.panel-replacements),
+  .settings-content :global(section.panel-macos-diagnostic) {
     max-width: 44rem;
     margin-left: auto;
     margin-right: auto;
   }
-  .tab-body :global(.panel-models),
-  .tab-body :global(.panel-vocabulary),
-  .tab-body :global(.panel-replacements),
-  .tab-body :global(.panel-macos-diagnostic) {
+  .settings-content :global(.panel-models),
+  .settings-content :global(.panel-vocabulary),
+  .settings-content :global(.panel-replacements),
+  .settings-content :global(.panel-macos-diagnostic) {
     margin-top: 0;
   }
 </style>
