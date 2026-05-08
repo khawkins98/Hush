@@ -48,10 +48,7 @@
 
 <section class="vocabulary panel-vocabulary" aria-labelledby="vocabulary-heading">
   <header class="history-header">
-    <h2 id="vocabulary-heading">
-      <span class="panel-tag panel-tag-vocabulary" aria-hidden="true">V</span>
-      Vocabulary
-    </h2>
+    <h2 id="vocabulary-heading">Vocabulary</h2>
   </header>
   <p class="hint-prose">
     Words Whisper should be primed to recognise — proper nouns,
@@ -131,24 +128,6 @@
   font-size: 1.1rem;
   font-weight: 600;
   color: var(--text-primary);
-}
-
-.panel-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 5px;
-  font-size: 0.75em;
-  font-weight: 700;
-  background-color: var(--bg-sidebar);
-  color: var(--text-secondary);
-  margin-right: 0.5rem;
-}
-.panel-tag-vocabulary {
-  background-color: #fff0d4;
-  color: #6a4500;
 }
 
 input,

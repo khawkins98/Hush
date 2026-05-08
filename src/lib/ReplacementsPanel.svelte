@@ -48,10 +48,7 @@
 
 <section class="replacements panel-replacements" aria-labelledby="replacements-heading">
   <header class="history-header">
-    <h2 id="replacements-heading">
-      <span class="panel-tag panel-tag-replacements" aria-hidden="true">R</span>
-      Replacements
-    </h2>
+    <h2 id="replacements-heading">Replacements</h2>
   </header>
   <p class="hint-prose">
     Find/replace pairs applied to every transcription before it's
@@ -143,24 +140,6 @@
   font-size: 1.1rem;
   font-weight: 600;
   color: var(--text-primary);
-}
-
-.panel-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 5px;
-  font-size: 0.75em;
-  font-weight: 700;
-  background-color: var(--bg-sidebar);
-  color: var(--text-secondary);
-  margin-right: 0.5rem;
-}
-.panel-tag-replacements {
-  background-color: #dde5ff;
-  color: var(--info-text);
 }
 
 input,

@@ -1,12 +1,10 @@
 <!--
   Left navigation sidebar (#479 slice 1, refreshed for #494).
 
-  Three top-level surfaces — Dictation, History, Settings — each
-  represented by a 22 px outlined icon. Clicking an item swaps
-  the active panel; the orchestrator owns \`active\` as a
-  \`$bindable\` state so other inputs (native menu's "View"
-  submenu, ⌘K palette Show-History action, deep links from
-  FirstRunModal) drive the same selection.
+  Two groups of nav items:
+  - **Primary** (top): Dictation, History — the core workflow surfaces.
+  - **Utility/footer** (bottom, divider-separated): Settings, About — chrome
+    and metadata, not part of the dictation/history workflow.
 
   ## Two states (#494)
 
@@ -17,19 +15,13 @@
     that #494 filed. Panic-style left-chrome accent on the
     active row.
   - **Collapsed.** 56 px icon-only column with native
-    \`title=\` tooltips. For users who want screen real estate
+    `title=` tooltips. For users who want screen real estate
     over labels (the pre-#494 shape).
 
   A chevron toggle lives at the top of the sidebar; clicking
-  flips the open state, fires the \`onToggle\` callback so the
-  orchestrator can persist the choice (\`localStorage["hush.sidebar.open"]\`),
+  flips the open state, fires the `onToggle` callback so the
+  orchestrator can persist the choice (`localStorage["hush.sidebar.open"]`),
   and keeps focus on the toggle for keyboard ergonomics.
-
-  ## Settings tab
-
-  Settings is a single top-level item rather than exploding the
-  seven existing tabs into the sidebar; the Settings panel keeps
-  its own tab strip when the user lands on it.
 -->
 <script lang="ts">
   export type SidebarSection = "dictation" | "history" | "settings" | "about";
@@ -65,9 +57,12 @@
   let { active = $bindable(), recording, open, onSelect, onToggle }: Props =
     $props();
 
-  let items = $derived<Item[]>([
+  let primaryItems = $derived<Item[]>([
     { id: "dictation", label: "Dictation", showRecordingDot: recording },
     { id: "history", label: "History" },
+  ]);
+
+  let footerItems = $derived<Item[]>([
     { id: "settings", label: "Settings" },
     { id: "about", label: "About" },
   ]);
@@ -123,7 +118,7 @@
   </button>
 
   <ul class="sidebar-nav-list">
-    {#each items as item (item.id)}
+    {#each primaryItems as item (item.id)}
       <li>
         <button
           type="button"
@@ -150,7 +145,34 @@
                 <path d="M3 4v5h5" />
                 <path d="M12 7v5l3 2" />
               </svg>
-            {:else if item.id === "settings"}
+            {/if}
+            {#if item.showRecordingDot}
+              <span class="sidebar-nav-recording-dot" aria-hidden="true"></span>
+            {/if}
+          </span>
+          {#if open}
+            <span class="sidebar-nav-label">{item.label}</span>
+          {/if}
+        </button>
+      </li>
+    {/each}
+  </ul>
+
+  <ul class="sidebar-nav-footer">
+    {#each footerItems as item (item.id)}
+      <li>
+        <button
+          type="button"
+          class="sidebar-nav-item"
+          class:active={active === item.id}
+          aria-label={item.label}
+          aria-current={active === item.id ? "page" : undefined}
+          title={open ? undefined : item.label}
+          data-testid="sidebar-nav-{item.id}"
+          onclick={() => handleClick(item.id)}
+        >
+          <span class="sidebar-nav-icon" aria-hidden="true">
+            {#if item.id === "settings"}
               <!-- Settings gear -->
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" />
@@ -163,9 +185,6 @@
                 <line x1="12" y1="8" x2="12" y2="8" stroke-width="2.5" stroke-linecap="round" />
                 <path d="M11 12h1v5h1" />
               </svg>
-            {/if}
-            {#if item.showRecordingDot}
-              <span class="sidebar-nav-recording-dot" aria-hidden="true"></span>
             {/if}
           </span>
           {#if open}
@@ -235,6 +254,19 @@
     list-style: none;
     margin: 0;
     padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  /* Utility items (Settings, About) pushed to the bottom of the
+     column with a subtle top divider to signal they're secondary
+     to the core workflow items above. */
+  .sidebar-nav-footer {
+    list-style: none;
+    margin: auto 0 0;
+    padding: 0.5rem 0 0;
+    border-top: 1px solid var(--border-subtle);
     display: flex;
     flex-direction: column;
     gap: 0.25rem;

@@ -192,10 +192,7 @@
   aria-labelledby="overrides-heading"
 >
   <header class="history-header">
-    <h2 id="overrides-heading">
-      <span class="panel-tag panel-tag-overrides" aria-hidden="true">A</span>
-      App classification
-    </h2>
+    <h2 id="overrides-heading">App classification</h2>
   </header>
   <p class="hint-prose">
     Hush ships a built-in list of well-known meeting apps (Zoom, Teams,
@@ -481,24 +478,6 @@
   gap: 0.4rem;
 }
 
-.panel-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 5px;
-  font-size: 0.75em;
-  font-weight: 700;
-  background-color: var(--bg-sidebar);
-  color: var(--text-secondary);
-}
-
-.panel-tag-overrides {
-  background-color: #f0e1f7;
-  color: #743ea0;
-}
-
 .hint-prose {
   margin: 0 0 1rem;
   color: var(--text-secondary);
@@ -660,10 +639,6 @@ button.ghost.danger.confirming {
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .panel-tag-overrides {
-    background-color: #3a2a4a;
-    color: #d4a8e8;
-  }
   :root:not([data-theme="light"]) .override-row {
     border-color: #3a3a3a;
   }
@@ -687,10 +662,6 @@ button.ghost.danger.confirming {
     border-color: var(--danger);
     color: #ffb0b0;
   }
-}
-:root[data-theme="dark"] .panel-tag-overrides {
-  background-color: #3a2a4a;
-  color: #d4a8e8;
 }
 :root[data-theme="dark"] .override-row {
   border-color: #3a3a3a;

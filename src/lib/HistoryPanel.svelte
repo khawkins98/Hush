@@ -259,10 +259,7 @@
 
 <section class="history panel-history" aria-labelledby="history-heading">
   <header class="history-header">
-    <h2 id="history-heading">
-      <span class="panel-tag" aria-hidden="true">H</span>
-      History
-    </h2>
+    <h2 id="history-heading">History</h2>
     <div class="header-actions">
       <div class="search-wrap">
         <input
@@ -608,20 +605,6 @@ button.ghost.danger:hover:not(:disabled) {
   border-left: 3px solid #c0c0c0;
   padding-left: 1rem;
   padding-bottom: 0.25rem;
-}
-
-.panel-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 5px;
-  font-size: 0.75em;
-  font-weight: 700;
-  background-color: var(--bg-sidebar);
-  color: var(--text-secondary);
-  margin-right: 0.5rem;
 }
 
 .loading-skeleton {
