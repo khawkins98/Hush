@@ -13,6 +13,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:tauri": "wdio run wdio.conf.ts",
+    "test:uxwalk": "playwright test tests/e2e/zz-uxwalk.spec.ts --reporter=list && echo 'Screenshots → /tmp/hush-uxwalk-shots/'",
     "dev-cleanup": "bash scripts/dev-cleanup.sh",
     "dev-reset": "bash scripts/dev-reset.sh",
     "tauri": "tauri",

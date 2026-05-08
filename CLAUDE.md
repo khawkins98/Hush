@@ -64,6 +64,11 @@ npm run test:e2e:ui                                              # interactive
 # Run a single Path A spec
 npx playwright test tests/e2e/meeting-panel.spec.ts
 
+# UX screenshot walkthrough — captures ~16 PNGs of every significant
+# screen state to /tmp/hush-uxwalk-shots/. Use for visual review after
+# UI changes. Script: tests/e2e/zz-uxwalk.spec.ts
+npm run test:uxwalk
+
 # Frontend e2e — Path B (tauri-driver + WebdriverIO, real binary)
 # Prereq: `cargo install tauri-driver --locked` and a debug build:
 #   npm run tauri build -- --debug
