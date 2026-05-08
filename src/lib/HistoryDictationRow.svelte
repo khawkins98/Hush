@@ -72,7 +72,7 @@
   }
 </script>
 
-<li class="history-row" data-kind="dictation">
+<li class="history-row" class:confirming-active={confirming} data-kind="dictation">
   <p class="history-text">{entry.transcript}</p>
   <p class="history-meta">
     {formatTimestamp(entry.createdAt)}
@@ -131,6 +131,21 @@
   .history-actions {
     display: flex;
     gap: 0.4rem;
+  }
+
+  /* On pointer devices, hide actions until the row is hovered or
+     keyboard-focused. `confirming-active` keeps them visible while
+     the delete confirm state is armed, even if the cursor leaves. */
+  @media (hover: hover) {
+    .history-actions {
+      opacity: 0;
+      transition: opacity 0.12s;
+    }
+    .history-row:hover .history-actions,
+    .history-row:focus-within .history-actions,
+    .history-row.confirming-active .history-actions {
+      opacity: 1;
+    }
   }
 
   button.ghost {

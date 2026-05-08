@@ -164,8 +164,8 @@
     onOpenPrivacyPane={openPrivacyPane}
   />
   <p class="perm-recovery-intro">
-    Stuck? Open the diagnostic below to reset all three
-    permission grants (Microphone, Screen Recording, Input
+    Stuck? Open the diagnostic below to reset both
+    permission grants (Microphone and Input
     Monitoring) at once, or learn why a permission row might
     not appear in System Settings.
   </p>

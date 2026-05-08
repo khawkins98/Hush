@@ -12,8 +12,8 @@
 
   Render-only by design: the orchestrator owns dictation IPC and
   hotkey listeners. This section composes the leaves and computes
-  the cross-leaf deriveds (`hasUsableSource`, `badgeVisible`,
-  `willRecordMeeting`, `selectedSourceLabel`).
+  the cross-leaf deriveds (`hasUsableSource`, `willRecordMeeting`,
+  `selectedSourceLabel`).
 -->
 <script lang="ts">
   import { backOut, cubicIn } from "svelte/easing";
@@ -96,11 +96,6 @@
     mics.length > 0 || (systemAudio?.isSupported ?? false),
   );
 
-  // System audio is always available via CoreAudio tap (#600) — no
-  // Screen Recording permission needed.  Badge is never shown.
-  const badgeVisible = false;
-  const badgeIsStale = false;
-
   let willRecordMeeting = $derived(
     !recording
       && selected !== null
@@ -147,8 +142,6 @@
     {hasUsableSource}
     {noModelInstalled}
     {willRecordMeeting}
-    {badgeVisible}
-    {badgeIsStale}
     {recordMode}
     {selectedSourceLabel}
     {activeModelName}
