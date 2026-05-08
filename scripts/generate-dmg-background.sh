@@ -2,8 +2,8 @@
 #
 # generate-dmg-background.sh
 #
-# Rasterises src-tauri/assets/dmg-background.svg to a 1320×800 PNG
-# (2× Retina for a 660×400 DMG window).
+# Rasterises src-tauri/assets/dmg-background.svg to a 580×340 PNG
+# (1:1 with the DMG window — Finder renders backgrounds at 1 px = 1 logical pt).
 #
 # Requires: rsvg-convert  (brew install librsvg)
 # Usage: bash scripts/generate-dmg-background.sh
@@ -21,5 +21,5 @@ if ! command -v rsvg-convert &>/dev/null; then
     exit 1
 fi
 
-rsvg-convert -w 1000 -h 560 "$SVG" -o "$PNG"
+rsvg-convert -w 580 -h 340 "$SVG" -o "$PNG"
 echo "Generated: $PNG  ($(du -sh "$PNG" | cut -f1))"
