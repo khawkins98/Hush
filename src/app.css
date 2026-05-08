@@ -1,3 +1,13 @@
+/* Prevent body-level scroll behind the app-shell's constrained
+   100vh layout. Without this the browser body can produce its own
+   scrollbar alongside .app-main's overflow-y:auto one, giving the
+   appearance of a double scrollbar at the right edge. */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 /* Global accent palette + theme tokens (#208 / #468).
  *
  * One source of truth for the accent and surface stack, then

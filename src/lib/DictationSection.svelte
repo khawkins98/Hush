@@ -1,23 +1,10 @@
-<!--
-  Dictation page-section render. Top-to-bottom layout: setup
-  banner (when no model installed) → centerpiece RecordPanel
-  (waveform on top + button + adjuncts row + status) → shortcut
-  hint → result block → macOS perms pill.
-
-  The pre-r3 sidebar/content two-column grid is gone — the
-  source picker and model chip are now adjunct snippets passed
-  into RecordPanel so they render flanking the centerpiece
-  button on a single row. The page reads top-to-bottom rather
-  than fighting between columns.
-
-  Render-only by design: the orchestrator owns dictation IPC and
-  hotkey listeners. This section composes the leaves and computes
-  the cross-leaf deriveds (`hasUsableSource`, `badgeVisible`,
-  `willRecordMeeting`, `selectedSourceLabel`).
--->
 <script lang="ts">
   import { backOut, cubicIn } from "svelte/easing";
   import { fade, fly } from "svelte/transition";
+
+  import { audio } from "$lib/state/audio.svelte";
+  import { dictation } from "$lib/state/dictation.svelte";
+  import { meeting } from "$lib/state/meeting-sessions.svelte";
 
   import AudioSourcePicker from "./AudioSourcePicker.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
@@ -25,37 +12,15 @@
   import ModelChip from "./ModelChip.svelte";
   import RecordPanel from "./RecordPanel.svelte";
   import ResultBlock from "./ResultBlock.svelte";
-  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import { motionDuration } from "./motion";
-  import type {
-    AudioSourceListing,
-    DictationResult,
-    MeetingSessionDetail,
-    PermissionsHealth,
-  } from "./types";
+  import type { PermissionsHealth } from "./types";
 
   type Props = {
     isMacOS: boolean;
-    sources: AudioSourceListing[];
-    sourcesLoaded: boolean;
-    selected: string | null;
-    recording: boolean;
-    busy: boolean;
-    transcribing: boolean;
-    noModelInstalled: boolean;
-    error: ErrorDisplayShape | null;
-    result: DictationResult | null;
-    recordMode: "dictation" | "meeting" | null;
-    activeModelName: string | null;
     permissionHealth: PermissionsHealth | null;
     macosCapable: boolean;
     allPermsGranted: boolean;
     anyPermsDenied: boolean;
-    /// Live meeting-pump session detail — finalized utterances +
-    /// in-flight partials. Threaded through to RecordPanel which
-    /// renders it as a live transcript while recording. `null`
-    /// when no meeting session is active.
-    meetingActiveDetail?: MeetingSessionDetail | null;
     onStart: () => void | Promise<void>;
     onStop: () => void | Promise<void>;
     onScrollToModelPicker: () => void;
@@ -64,64 +29,41 @@
 
   let {
     isMacOS,
-    sources,
-    sourcesLoaded,
-    selected = $bindable(),
-    recording,
-    busy,
-    transcribing,
-    noModelInstalled,
-    error,
-    result,
-    recordMode,
-    activeModelName,
-    permissionHealth,
     macosCapable,
     allPermsGranted,
     anyPermsDenied,
-    meetingActiveDetail = null,
     onStart,
     onStop,
     onScrollToModelPicker,
     onOpenPermissionsTab,
   }: Props = $props();
 
-  // Cross-leaf deriveds — computed once here so each leaf
-  // receives concrete props rather than re-deriving from
-  // `sources` + `selected` + the screen-recording health.
-  let mics = $derived(sources.filter((s) => s.kind === "microphone"));
-  let systemAudio = $derived(sources.find((s) => s.kind === "system-audio"));
-
+  let mics = $derived(audio.sources.filter((s) => s.kind === "microphone"));
+  let systemAudio = $derived(audio.sources.find((s) => s.kind === "system-audio"));
   let hasUsableSource = $derived(
     mics.length > 0 || (systemAudio?.isSupported ?? false),
   );
-
-  // System audio is always available via CoreAudio tap (#600) — no
-  // Screen Recording permission needed.  Badge is never shown.
-  const badgeVisible = false;
-  const badgeIsStale = false;
-
   let willRecordMeeting = $derived(
-    !recording
-      && selected !== null
-      && selected !== "system"
+    !dictation.recording
+      && audio.selected !== null
+      && audio.selected !== "system"
       && (systemAudio?.isSupported ?? false),
   );
-
   let selectedSourceLabel = $derived.by(() => {
-    if (selected === null) return null;
-    if (selected === "system") return systemAudio?.name ?? "System Audio";
-    return sources.find((s) => s.id === selected)?.name ?? null;
+    if (audio.selected === null) return null;
+    if (audio.selected === "system") return systemAudio?.name ?? "System Audio";
+    return audio.sources.find((s) => s.id === audio.selected)?.name ?? null;
   });
+  let activeModelName = $derived(dictation.activeModel?.displayName ?? null);
 </script>
 
 <section id="dictation-section" class="page-section">
   <header class="section-header">
-    <h1>Dictation</h1>
+    <h1>Transcribe</h1>
     <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
   </header>
 
-  {#if noModelInstalled}
+  {#if dictation.noModelInstalled}
     <aside class="setup-banner" role="status" aria-label="First-time setup">
       <div class="setup-banner-text">
         <strong>Set up your first model</strong>
@@ -141,30 +83,28 @@
     column grid — the page now reads top-to-bottom.
   -->
   <RecordPanel
-    {recording}
-    {busy}
-    {transcribing}
+    recording={dictation.recording}
+    busy={dictation.busy}
+    transcribing={dictation.transcribing}
     {hasUsableSource}
-    {noModelInstalled}
+    noModelInstalled={dictation.noModelInstalled}
     {willRecordMeeting}
-    {badgeVisible}
-    {badgeIsStale}
-    {recordMode}
+    recordMode={dictation.recordMode}
     {selectedSourceLabel}
     {activeModelName}
-    {error}
-    {meetingActiveDetail}
+    error={dictation.error}
+    meetingActiveDetail={meeting.activeDetail}
     {onStart}
     {onStop}
     onOpenPermissions={onOpenPermissionsTab}
   >
     {#snippet leftAdjunct()}
       <AudioSourcePicker
-        {sources}
-        {sourcesLoaded}
-        bind:selected
-        {recording}
-        {busy}
+        sources={audio.sources}
+        sourcesLoaded={audio.sourcesLoaded}
+        bind:selected={audio.selected}
+        recording={dictation.recording}
+        busy={dictation.busy}
       />
     {/snippet}
     {#snippet rightAdjunct()}
@@ -185,12 +125,12 @@
     to push-to-talk.
   </p>
 
-  {#if result}
+  {#if dictation.result}
     <div
       in:fly={{ y: 8, duration: motionDuration(200), easing: backOut }}
       out:fade={{ duration: motionDuration(150), easing: cubicIn }}
     >
-      <ResultBlock {result} />
+      <ResultBlock result={dictation.result} />
     </div>
   {/if}
 
@@ -201,9 +141,9 @@
     onOpenPermissions={onOpenPermissionsTab}
   />
 
-  {#if error}
+  {#if dictation.error}
     <ErrorDisplay
-      {error}
+      error={dictation.error}
       onAction={(key) => {
         if (key === "open-model-settings") {
           onScrollToModelPicker();

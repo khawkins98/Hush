@@ -169,7 +169,7 @@
             );
           }}
           rel="noopener noreferrer"
-        >docs/macos-permissions.md</a>.
+        >Permissions troubleshooting guide</a>.
       </p>
     </div>
   </details>

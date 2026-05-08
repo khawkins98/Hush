@@ -201,6 +201,20 @@ pub fn read_all() -> PermissionStatuses {
     }
 }
 
+/// Read the current microphone permission status without triggering
+/// a TCC prompt. Safe to call at any time including before the user
+/// has interacted with any audio API.
+pub fn microphone_status() -> PermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        macos::microphone_status()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionStatus::NotApplicable
+    }
+}
+
 /// Synchronous Input-Monitoring TCC prompt (#511). Blocks the
 /// caller until the user clicks Allow / Deny on the system
 /// dialog. `true` = granted by the call (or already-granted

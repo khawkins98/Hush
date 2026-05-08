@@ -7,7 +7,7 @@
 **Local voice-to-text and meeting transcription.**
 macOS, Linux, and Windows. Free. Open source. No account. No cloud.
 
-Dictate anywhere with a hotkey. Capture meetings with mic + system audio in parallel. Label You vs Remote.
+Dictate anywhere with a hotkey. Capture meetings with mic + system audio in parallel (macOS). Label You vs Remote.
 
 [Download](https://github.com/khawkins98/Hush/releases) · [Privacy](#privacy-grep-the-source) · [Engineering](#engineering) · [Contribute](./CONTRIBUTING.md)
 
@@ -18,7 +18,7 @@ Dictate anywhere with a hotkey. Capture meetings with mic + system audio in para
 ## What it is
 
 - **A push-to-talk dictation tool.** Hold your hotkey (default `Right ⌘` on macOS, `Right Ctrl` on Linux + Windows), speak, release. The transcript is on your clipboard, ready to paste, before you've moved your hands. No browser tab, no web service, no upload.
-- **A meeting transcription tool.** Click Record while you're in a call. Hush captures your mic and the call's system audio in parallel, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model. *(Parallel system-audio capture currently ships on macOS via ScreenCaptureKit; Linux + Windows system-audio support is tracked in [#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107) — meeting mode runs mic-only there for now.)*
+- **A meeting transcription tool.** Click Record while you're in a call. Hush captures your mic and the call's system audio in parallel, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model. *(Parallel system-audio capture currently ships on macOS via a CoreAudio process tap — no Screen Recording permission required. Linux + Windows system-audio support is tracked in [#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107) — meeting mode runs mic-only there for now.)*
 - **Both, in one app, sharing one history.** Most tools pick one lane. Hush is dictation **and** meetings, with the same model loaded once and the same on-disk history.
 
 The audio never leaves your machine. The audio never lands on disk either — it's processed in RAM (a 30-second rolling ring during meetings; for dictation, drained directly through the transcriber and dropped when the call returns) and is gone as soon as the transcript is on your clipboard.
@@ -31,7 +31,7 @@ The table splits "Free?" (no-cost tier exists) from "Open source?" (source publi
 
 |  | Local? | Dictation? | Meetings? | Free? | Open source? | Platforms |
 |---|---|---|---|---|---|---|
-| **Hush** | ✅ | ✅ hotkey | ✅ mic + system audio in parallel | ✅ | ✅ Apache 2.0 | macOS · Linux · Windows |
+| **Hush** | ✅ | ✅ hotkey | ✅ mic + system audio in parallel (macOS) | ✅ | ✅ Apache 2.0 | macOS · Linux · Windows |
 | [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ✅ | ✅ | ✅ auto-detect Zoom / Teams | ✅ local unlimited; cloud tier: 2k words/wk free, $8/mo Pro | ✅ MIT | macOS · Linux · Windows |
 | [Whispering](https://github.com/EpicenterHQ/epicenter) | ✅ | ✅ | — | ✅ | ✅ AGPLv3 | macOS · Linux · Windows |
 | [Buzz](https://github.com/chidiwilliams/buzz) | ✅ | partial (live mic, no PTT into other apps) | file import only | ✅ | ✅ MIT | macOS · Linux · Windows |
@@ -85,7 +85,7 @@ Pre-built binaries: **[GitHub Releases](https://github.com/khawkins98/Hush/relea
 | **Linux** | `.AppImage` or `.deb` | Any distro / Debian + Ubuntu; CI-built, not hands-on tested |
 | **Windows** | `.msi` (recommended) or `.exe` | CI-built, not hands-on tested |
 
-Early releases are not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project and the membership fee doesn't make sense yet). On macOS, right-click `Hush.app` → **Open** on first launch to bypass the Gatekeeper warning; subsequent launches are silent. After an update, one or more permissions (Microphone, Screen Recording, Input Monitoring) may show "Was granted — now revoked" in Settings → Permissions — this is a macOS TCC side-effect of ad-hoc signing. Re-grant each one in System Settings or use the Reset button in Settings → Permissions. Full troubleshooting steps are in [`docs/macos-permissions.md`](./docs/macos-permissions.md). Code-signing would eliminate this entirely; if you'd like to sponsor it, GitHub Sponsors is at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
+Early releases are not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project and the membership fee doesn't make sense yet). On macOS, right-click `Hush.app` → **Open** on first launch to bypass the Gatekeeper warning; subsequent launches are silent. After an update, one or more permissions (Microphone, Input Monitoring) may show "Was granted — now revoked" in Settings → Permissions — this is a macOS TCC side-effect of ad-hoc signing. Re-grant each one in System Settings or use the Reset button in Settings → Permissions. Full troubleshooting steps are in [`docs/macos-permissions.md`](./docs/macos-permissions.md). Code-signing would eliminate this entirely; if you'd like to sponsor it, GitHub Sponsors is at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
 
 Windows shows a SmartScreen warning — click **More info** → **Run anyway**. A Windows EV cert is also on the roadmap.
 

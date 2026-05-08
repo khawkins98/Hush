@@ -58,7 +58,7 @@
     $props();
 
   let primaryItems = $derived<Item[]>([
-    { id: "dictation", label: "Dictation", showRecordingDot: recording },
+    { id: "dictation", label: "Transcribe", showRecordingDot: recording },
     { id: "history", label: "History" },
   ]);
 

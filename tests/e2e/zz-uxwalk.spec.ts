@@ -54,7 +54,7 @@ test.describe("UX walkthrough — main window", () => {
       ],
     });
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Dictation" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Transcribe" })).toBeVisible();
     await shot(page, "01-dictation-no-model");
   });
 
@@ -88,7 +88,7 @@ test.describe("UX walkthrough — main window", () => {
       }),
     });
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Dictation" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Transcribe" })).toBeVisible();
     await shot(page, "02-dictation-perms-ok");
   });
 

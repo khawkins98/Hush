@@ -647,7 +647,7 @@
 <AdvancedSection
   label="Advanced — app overrides"
   testId="settings-meeting-advanced-toggle"
-  open={true}
+  open={false}
 >
   <MeetingAppOverridesPanel
     overrides={appOverrides}
