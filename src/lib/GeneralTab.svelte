@@ -179,7 +179,13 @@
       autostartError = null;
     } catch (e) {
       autostartEnabled = false;
-      autostartError = "Couldn't read autostart state on this platform.";
+      // Dev builds run as unsigned binaries — SMAppService (Login Items)
+      // requires a signed .app bundle with a stable bundle ID, so the call
+      // always fails in `npm run tauri dev`. Suppress the red error there;
+      // in production bundles a real failure is still worth surfacing.
+      if (!import.meta.env.DEV) {
+        autostartError = "Couldn't read autostart state on this platform.";
+      }
       console.warn("[hush] isAutostartEnabled failed", e);
     }
   }
