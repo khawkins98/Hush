@@ -59,7 +59,7 @@
 
 <section id="dictation-section" class="page-section">
   <header class="section-header">
-    <h1>Dictation</h1>
+    <h1>Transcribe</h1>
     <p class="tagline">Press, talk, paste. Local Whisper transcription.</p>
   </header>
 

@@ -116,9 +116,9 @@
   let paletteActions = $derived<CommandAction[]>([
     {
       id: "dictation.start",
-      label: "Start dictation",
+      label: "Start transcription",
       subtitle: dictation.noModelInstalled ? "Choose a model first" : undefined,
-      group: "Dictation",
+      group: "Transcribe",
       enabled:
         !dictation.recording && !dictation.busy && !dictation.noModelInstalled,
       run: () => {
@@ -127,9 +127,9 @@
     },
     {
       id: "dictation.stop",
-      label: "Stop dictation",
+      label: "Stop transcription",
       subtitle: "Stop the current recording and transcribe",
-      group: "Dictation",
+      group: "Transcribe",
       enabled: dictation.recording,
       run: () => {
         void dictation.stop(TRAILING_SILENCE_MS);
@@ -146,8 +146,8 @@
     },
     {
       id: "navigate.dictation",
-      label: "Show Dictation",
-      subtitle: "Switch back to the dictation panel",
+      label: "Show Transcribe",
+      subtitle: "Switch back to the Transcribe panel",
       group: "Navigate",
       enabled: nav.activeSection !== "dictation",
       run: () => {

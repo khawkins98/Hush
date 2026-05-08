@@ -321,7 +321,7 @@
   -->
   {#if history.totalCount > 0 || meeting.sessions.length > 0}
     <div class="history-filters" role="group" aria-label="Filter history">
-      {#each [{ value: "all", label: "All" }, { value: "dictation", label: "Dictation" }, { value: "meetings", label: "Meetings" }] as chip (chip.value)}
+      {#each [{ value: "all", label: "All" }, { value: "dictation", label: "Transcriptions" }, { value: "meetings", label: "Meetings" }] as chip (chip.value)}
         <button
           type="button"
           class="filter-chip"

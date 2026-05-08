@@ -262,7 +262,7 @@
 <h2 class="tab-title">General</h2>
 
 {#if dictationStats}
-  <section class="settings-group" aria-label="Dictation activity">
+  <section class="settings-group" aria-label="Transcription activity">
     <DictationStatsBar stats={dictationStats} />
   </section>
 {/if}
