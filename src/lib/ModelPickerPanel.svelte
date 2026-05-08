@@ -64,13 +64,12 @@
     </h2>
   </header>
   <p class="hint-prose">
-    Pick a Whisper variant. Bigger models are slower but more
-    accurate. Click Download on a card and Hush fetches the file
-    from Hugging Face (SHA-256 verified) into
+    Pick a Whisper model. Larger models are more accurate but slower — click
+    <strong>Download</strong> to fetch it from Hugging Face. Verification and
+    installation are automatic. To use your own, drop a GGUF file into the
     <code class="path-hint" title={models[0]?.expectedPath ?? ""}
       >&lt;app-data&gt;/models/</code
-    >. You can also drop a GGUF file there manually if you'd
-    rather provide your own.
+    > folder.
   </p>
 
   {#if modelsError}

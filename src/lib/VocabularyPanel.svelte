@@ -51,7 +51,6 @@
     <h2 id="vocabulary-heading">
       <span class="panel-tag panel-tag-vocabulary" aria-hidden="true">V</span>
       Vocabulary
-      <span class="panel-subtitle">biases the recognition</span>
     </h2>
   </header>
   <p class="hint-prose">
@@ -150,14 +149,6 @@
 .panel-tag-vocabulary {
   background-color: #fff0d4;
   color: #6a4500;
-}
-
-.panel-subtitle {
-  margin-left: 0.6rem;
-  font-size: 0.7em;
-  font-weight: 400;
-  color: var(--text-muted);
-  font-style: italic;
 }
 
 input,

@@ -51,7 +51,6 @@
     <h2 id="replacements-heading">
       <span class="panel-tag panel-tag-replacements" aria-hidden="true">R</span>
       Replacements
-      <span class="panel-subtitle">rewrites the output</span>
     </h2>
   </header>
   <p class="hint-prose">
@@ -162,14 +161,6 @@
 .panel-tag-replacements {
   background-color: #dde5ff;
   color: var(--info-text);
-}
-
-.panel-subtitle {
-  margin-left: 0.6rem;
-  font-size: 0.7em;
-  font-weight: 400;
-  color: var(--text-muted);
-  font-style: italic;
 }
 
 input,

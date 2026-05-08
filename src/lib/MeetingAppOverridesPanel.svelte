@@ -195,7 +195,6 @@
     <h2 id="overrides-heading">
       <span class="panel-tag panel-tag-overrides" aria-hidden="true">A</span>
       App classification
-      <span class="panel-subtitle">teaches Meeting Mode about your apps</span>
     </h2>
   </header>
   <p class="hint-prose">
@@ -480,13 +479,6 @@
   display: flex;
   align-items: center;
   gap: 0.4rem;
-}
-
-.panel-subtitle {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-weight: 400;
-  margin-left: 0.4rem;
 }
 
 .panel-tag {

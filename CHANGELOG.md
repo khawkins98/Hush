@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **History timestamps no longer show seconds.** History row dates now render as "Apr 29, 2026, 1:00 PM" instead of "4/29/2026, 1:00:00 PM". Consistent with the format already used in meeting session rows.
 - **Model picker: speed/accuracy numeric labels removed.** The "5.0" / "1.0" values next to each rating bar were redundant — the bar graph already encodes the ranking. Removed to reduce visual clutter.
 - **Settings section headings: sentence case instead of ALL CAPS.** Section labels such as "STARTUP", "INTERFACE", "APPEARANCE", "HOTKEYS", "AUTO-START", and "SPEAKERS" now render in the casing they are authored in (e.g. "Startup", "Interface"). Applies to all six Settings tabs.
+- **UX polish: reduced copy clutter across multiple panels.** Removed decorative panel sub-labels ("biases the recognition", "rewrites the output", "teaches Meeting Mode about your apps") — the hint paragraphs below each heading explain the same thing more clearly. History search placeholder shortened to "Search history…". Setup banner button renamed from "Open Settings → Model" to "Choose a model". Model picker intro simplified: technical detail (SHA-256, raw app-data path) moved to secondary copy; key action stays front-and-centre. Keyboard shortcut hint on the Dictation page now uses native Mac glyphs (⌃⌥H) instead of cross-platform "Ctrl/⌥/Alt" copy.
 
 ## [0.5.1] - 2026-05-08
 

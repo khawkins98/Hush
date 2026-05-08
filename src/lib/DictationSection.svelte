@@ -125,13 +125,10 @@
     <aside class="setup-banner" role="status" aria-label="First-time setup">
       <div class="setup-banner-text">
         <strong>Set up your first model</strong>
-        <span>
-          Hush needs a Whisper model to transcribe. Open Settings →
-          Model to pick one — Whisper Base is a solid default.
-        </span>
+        <span>Hush needs a Whisper model to transcribe.</span>
       </div>
       <button class="primary" onclick={onScrollToModelPicker}>
-        Open Settings → Model
+        Choose a model
       </button>
     </aside>
   {/if}
@@ -181,7 +178,8 @@
     compete with the centerpiece waveform + button above.
   -->
   <p class="shortcut-hint" aria-label="Keyboard shortcuts">
-    <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd> to toggle,
+    {#if isMacOS}<kbd>⌃</kbd> + <kbd>⌥</kbd>{:else}<kbd>Ctrl</kbd> + <kbd>Alt</kbd>{/if}
+    + <kbd>H</kbd> to toggle,
     or hold
     {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
     to push-to-talk.
