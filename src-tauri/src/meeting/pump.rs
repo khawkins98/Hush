@@ -51,6 +51,7 @@ use crate::audio::{apply_mic_gain, AudioCapture, AudioSession, AudioSource, Capt
 use crate::transcription::{StreamingTranscribeSession, Transcribe, Utterance};
 
 use super::manager::{MeetingSourceFailedPayload, MEETING_SOURCE_FAILED_EVENT};
+use super::recovery::SourceRecoveryState;
 use super::{MeetingSessionRepository, NewPersistedUtterance};
 
 /// Fired when a mic source is lost mid-session and the pump has switched
@@ -79,30 +80,6 @@ pub(super) struct AudioDeviceRestoredPayload<'a> {
     pub session_id: i64,
     pub source_kind: &'a str,
     pub restored_device: String,
-}
-
-/// Per-source recovery state for the fallback / reconnect machine.
-#[derive(Debug, Clone)]
-enum SourceRecoveryState {
-    /// Source is capturing normally.
-    Active,
-    /// DeviceLost occurred and the pump is now capturing from a
-    /// different (fallback) device. Holds the original source info so
-    /// the reconnect watcher can swap back when the original returns.
-    Fallback {
-        original_source: AudioSource,
-        original_device_name: String,
-    },
-    /// DeviceLost occurred and no fallback was available. The pump is
-    /// NOT capturing for this source. Holds the original info so the
-    /// reconnect watcher can reopen it when the device is replugged.
-    LostAwaitingReconnect {
-        original_source: AudioSource,
-        original_device_name: String,
-    },
-    /// Permanently dead (non-device-loss failure, or SystemAudio
-    /// disconnect). The reconnect watcher ignores this state.
-    Dead,
 }
 
 /// Pump tick interval — how often the streaming pump pulls samples
@@ -197,6 +174,53 @@ pub(super) struct PumpContext {
     pub session_start: Instant,
 }
 
+/// Per-tick mutable working state for [`run_pump`]. Bundled so the
+/// sub-functions (`tick_drain_sources`, `tick_inference`,
+/// `tick_recovery_check`, `flush_sessions`) share one `&mut` rather
+/// than a long list of individual `&mut` parameters (#655).
+struct PumpTickState {
+    /// Per-source scratch buffer reused across ticks.
+    drain_buffers: Vec<Vec<f32>>,
+    /// Rolling audio buffer in canonical 16 kHz mono (#111 PR-F).
+    audio_buffers: Vec<crate::meeting::audio_buffer::AudioRollingBuffer>,
+    /// Last successful drain format per source (used for zero-fill
+    /// when `drain_into` fails so the diarizer buffer stays aligned).
+    last_known_formats: Vec<Option<CaptureFormat>>,
+    /// Accumulated final-utterance count per source (#533 diagnostic).
+    final_counts: Vec<u64>,
+    /// Accumulated blank-final count per source (#533 diagnostic).
+    blank_counts: Vec<u64>,
+    /// Per-source device-loss / reconnect state machine.
+    recovery_states: Vec<SourceRecoveryState>,
+    /// Stream epoch offset in ms per source. Non-zero after a
+    /// mid-session handle swap (fallback or reconnect) so that
+    /// stream-relative timestamps become meeting-relative.
+    stream_epoch_offsets_ms: Vec<u64>,
+    /// Whether the first-drain RMS diagnostic was already logged
+    /// per source (#533).
+    first_drain_logged: Vec<bool>,
+}
+
+impl PumpTickState {
+    fn new(ctx: &PumpContext) -> Self {
+        let n = ctx.handles.len();
+        debug_assert_eq!(n, ctx.sources.len());
+        debug_assert_eq!(n, ctx.streaming_sessions.len());
+        PumpTickState {
+            drain_buffers: (0..n).map(|_| Vec::new()).collect(),
+            audio_buffers: (0..n)
+                .map(|_| crate::meeting::audio_buffer::AudioRollingBuffer::new())
+                .collect(),
+            last_known_formats: vec![None; n],
+            final_counts: vec![0; n],
+            blank_counts: vec![0; n],
+            recovery_states: vec![SourceRecoveryState::Active; n],
+            stream_epoch_offsets_ms: vec![0; n],
+            first_drain_logged: vec![false; n],
+        }
+    }
+}
+
 /// Pump task body. Loops on a `PUMP_TICK` cadence: drain each audio
 /// handle into its per-source buffer, feed the buffer into the
 /// streaming inference session, dispatch returned utterances
@@ -229,79 +253,8 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         }
     }
 
-    // Per-source scratch buffer reused across ticks. Sized at first
-    // drain; subsequent drains amortize the capacity. Indexed
-    // parallel to `handles` / `sources`.
-    let mut drain_buffers: Vec<Vec<f32>> = (0..ctx.handles.len()).map(|_| Vec::new()).collect();
-
-    // Per-source rolling audio buffer in canonical 16 kHz mono
-    // (#111 PR-F). The diarizer needs each utterance's audio to
-    // run its embedding model; the streaming session doesn't
-    // surface that, so we keep an independent buffer here. Drained
-    // tick samples are appended every iteration; when finals come
-    // out, each utterance's `[started_at_ms, ended_at_ms)` is
-    // sliced out of the buffer for the diarize call. Bounded at
-    // 30 s (matches the streaming session's window).
-    let mut audio_buffers: Vec<crate::meeting::audio_buffer::AudioRollingBuffer> =
-        (0..ctx.handles.len())
-            .map(|_| crate::meeting::audio_buffer::AudioRollingBuffer::new())
-            .collect();
-
-    // Last successful drain format per source (#553). Used to zero-fill
-    // the diarizer buffer on drain failure so its timeline stays aligned
-    // with the transcription session's internal clock. Without this,
-    // transient drain failures cause `audio_buffer.slice_ms()` to return
-    // stale/misaligned audio when finals arrive, degrading speaker labelling.
-    let mut last_known_formats: Vec<Option<CaptureFormat>> = vec![None; ctx.handles.len()];
-
-    // Per-source final-utterance counter (#533 diagnostic). Partials are
-    // not counted — they're in-flight revisions, not committed speech.
-    // Logged at session end alongside the source kind so a future bug
-    // report can immediately tell which source (mic vs system) went dark.
-    let mut final_counts: Vec<u64> = vec![0; ctx.handles.len()];
-    // Counts finals whose text is the Whisper silence token or empty.
-    // A session where real_finals=0 and blank_finals=N means the tap
-    // delivered silence — distinct from finals=0 (no audio at all).
-    let mut blank_counts: Vec<u64> = vec![0; ctx.handles.len()];
-
-    // Per-source recovery state machine for fallback / reconnect (#611).
-    // Replaces the old `device_lost: Vec<bool>`. The states control:
-    // - Active / Fallback: drain and infer normally.
-    // - LostAwaitingReconnect: no handle; skip drain; reconnect watcher checks.
-    // - Dead: permanently gone (SystemAudio disconnect, non-device-loss failure).
-    let mut recovery_states: Vec<SourceRecoveryState> =
-        vec![SourceRecoveryState::Active; ctx.handles.len()];
-
-    // Per-source stream epoch offset (ms). When a streaming session is
-    // recreated mid-meeting (fallback or reconnect), its internal clock
-    // restarts at 0. Adding this offset before persistence makes
-    // utterance timestamps relative to meeting start rather than to the
-    // replacement stream's start. Reset to the elapsed meeting time on
-    // each handle swap.
-    let mut stream_epoch_offsets_ms: Vec<u64> = vec![0; ctx.handles.len()];
-
-    // Tick counter used to throttle the reconnect watcher check.
+    let mut state = PumpTickState::new(&ctx);
     let mut tick_count: u32 = 0;
-
-    // Per-source first-drain RMS (#533 diagnostic). Logged once on the
-    // first drain that returns audio for each source. A near-zero RMS
-    // (<0.001) on the first tick means "capture returned silence", which
-    // distinguishes "audio device opened but isn't producing samples" from
-    // "samples flowing but Whisper's no_speech_thold gated everything".
-    // Logged even for an empty drain (samples = 0) so a device that
-    // never produces audio is also visible.
-    let mut first_drain_logged: Vec<bool> = vec![false; ctx.handles.len()];
-
-    // Per-tick scratch for the merge-sort-label-split pattern (#206).
-    // Accumulates `(source_label, utterances)` pairs from each
-    // source's inference, then `diarize_and_dispatch_merged` runs the
-    // diarizer once over the chronologically-merged batch before
-    // splitting back per source for dispatch. Pre-#206 this lived
-    // inside the per-source loop, which meant the diarizer never saw
-    // mic + system audio interleaved — its alternating-talker
-    // heuristic produced "Speaker A/B" inside each source's stream
-    // without coordination, so "Speaker A" meant different people
-    // depending on which source the chunk came from.
     let mut tick_buckets: Vec<TickBucket> = Vec::new();
 
     loop {
@@ -317,531 +270,9 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             break;
         }
 
-        // Drain audio for every source first (cheap, no inference),
-        // then run inference per source. The drain step takes
-        // microseconds; the inference step takes milliseconds-to-
-        // seconds inside the streaming session's `drain` if a new
-        // inference window has matured. Splitting the loop bounds
-        // each source's audio buffer to the tick window plus the
-        // few-ms drain.
-        let mut tick_formats: Vec<Option<CaptureFormat>> = vec![None; ctx.handles.len()];
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..ctx.sources.len() {
-            // Skip sources with no active handle (Dead or LostAwaitingReconnect).
-            // Calling drain_into on a dead handle produces the same error every
-            // tick — running through the whole inference / zero-fill /
-            // event-emission path on every tick would spam logs.
-            let Some(handle) = ctx.handles[i].as_ref() else {
-                continue;
-            };
-            let buf = &mut drain_buffers[i];
-            buf.clear();
-            match handle.drain_into(buf) {
-                Ok(format) => {
-                    tracing::debug!(
-                        session_id = ctx.session_id,
-                        source_kind = ctx.sources[i].kind_label(),
-                        samples = buf.len(),
-                        "meeting pump: drained"
-                    );
-                    tick_formats[i] = Some(format);
-                    last_known_formats[i] = Some(format);
-                    // Log first-drain RMS once per source (#533 diagnostic).
-                    // Near-zero RMS = device opened but producing silence;
-                    // non-zero = audio flowing, so any 0-utterance result
-                    // means Whisper's no_speech_thold is gating the output.
-                    if !first_drain_logged[i] {
-                        let rms = if buf.is_empty() {
-                            0.0
-                        } else {
-                            let sum_sq: f64 = buf.iter().map(|s| (*s as f64) * (*s as f64)).sum();
-                            (sum_sq / buf.len() as f64).sqrt()
-                        };
-                        tracing::info!(
-                            session_id = ctx.session_id,
-                            source_kind = ctx.sources[i].kind_label(),
-                            samples = buf.len(),
-                            rms,
-                            "meeting pump: first-drain RMS (#533 diagnostic; <0.001 suggests capture silence)"
-                        );
-                        first_drain_logged[i] = true;
-                    }
-                }
-                Err(e) => {
-                    // Log the first-drain diagnostic even on failure so
-                    // a device that never returns audio produces a line.
-                    if !first_drain_logged[i] {
-                        tracing::info!(
-                            session_id = ctx.session_id,
-                            source_kind = ctx.sources[i].kind_label(),
-                            samples = 0usize,
-                            rms = 0.0f64,
-                            "meeting pump: first-drain RMS (#533 diagnostic; drain failed)"
-                        );
-                        first_drain_logged[i] = true;
-                    }
-                    // Device-disconnect detection (#587 / #611). The cpal
-                    // backend signals device-gone via the typed
-                    // [`crate::audio::DeviceLost`] error wrapped in
-                    // anyhow. Distinguishing it from transient drain
-                    // failures matters because:
-                    //
-                    // - A genuine disconnect will keep returning the
-                    //   same error every tick — zero-filling forever
-                    //   is wasteful and surfaces no signal.
-                    // - The user needs an unambiguous "your mic
-                    //   disconnected" signal, not a generic
-                    //   "drain_into failed" warn-log.
-                    //
-                    // For microphone sources we attempt auto-fallback to
-                    // the system default first (#611). For SystemAudio the
-                    // source is permanently Dead — there is no "system
-                    // default system audio" fallback concept.
-                    //
-                    // Handle swap ordering: we must stop the old handle
-                    // BEFORE calling start_session for the fallback.
-                    // The cpal worker rejects Cmd::Start while its
-                    // singleton mic Session slot is occupied, and
-                    // DrainBuffer returning DeviceLost does NOT release
-                    // the slot. Drop triggers CpalMicSessionHandle::Drop
-                    // which sends Cmd::Stop via the same mpsc channel;
-                    // FIFO ordering guarantees Stop is processed before
-                    // the subsequent Start from start_session.
-                    if let Some(lost) = e.downcast_ref::<crate::audio::DeviceLost>() {
-                        let lost_device = lost.device.clone();
-                        match &ctx.sources[i] {
-                            AudioSource::Microphone(_) => {
-                                tracing::warn!(
-                                    device = %lost_device,
-                                    source_kind = ctx.sources[i].kind_label(),
-                                    session_id = ctx.session_id,
-                                    "meeting pump: mic disconnected; attempting fallback"
-                                );
-                                let original_source = ctx.sources[i].clone();
-                                // Release the dead handle first (see comment above).
-                                drop(ctx.handles[i].take());
-                                ctx.streaming_sessions[i] = None;
+        let tick_formats = tick_drain_sources(&mut ctx, &mut state);
 
-                                let fallback_source = AudioSource::default_microphone();
-                                match open_source_handle(
-                                    &ctx.audio,
-                                    ctx.transcribe.as_ref(),
-                                    &fallback_source,
-                                ) {
-                                    Ok((new_handle, new_stream)) => {
-                                        let fallback_device_name = ctx
-                                            .audio
-                                            .list_input_devices()
-                                            .ok()
-                                            .and_then(|devs| {
-                                                devs.into_iter()
-                                                    .find(|d| d.is_default)
-                                                    .map(|d| d.name)
-                                            })
-                                            .unwrap_or_else(|| "default microphone".to_owned());
-                                        tracing::info!(
-                                            fallback = %fallback_device_name,
-                                            source_kind = ctx.sources[i].kind_label(),
-                                            session_id = ctx.session_id,
-                                            "meeting pump: fallback opened; continuing capture"
-                                        );
-                                        stream_epoch_offsets_ms[i] =
-                                            ctx.session_start.elapsed().as_millis() as u64;
-                                        audio_buffers[i] =
-                                            crate::meeting::audio_buffer::AudioRollingBuffer::new();
-                                        last_known_formats[i] = None;
-                                        first_drain_logged[i] = false;
-                                        if let Ok(mut guard) = ctx.partials.write() {
-                                            if let Some(per_session) =
-                                                guard.get_mut(&ctx.session_id)
-                                            {
-                                                per_session.remove(ctx.sources[i].speaker_tag());
-                                            }
-                                        }
-                                        ctx.handles[i] = Some(new_handle);
-                                        ctx.streaming_sessions[i] = new_stream;
-                                        recovery_states[i] = SourceRecoveryState::Fallback {
-                                            original_source,
-                                            original_device_name: lost_device.clone(),
-                                        };
-                                        ctx.event_emitter.emit(
-                                            AUDIO_DEVICE_LOST_EVENT,
-                                            &AudioDeviceLostPayload {
-                                                session_id: ctx.session_id,
-                                                source_kind: ctx.sources[i].kind_label(),
-                                                lost_device,
-                                                new_device: Some(fallback_device_name),
-                                            },
-                                        );
-                                    }
-                                    Err(fe) => {
-                                        tracing::warn!(
-                                            error = ?fe,
-                                            source_kind = ctx.sources[i].kind_label(),
-                                            session_id = ctx.session_id,
-                                            "meeting pump: fallback open failed; awaiting reconnect"
-                                        );
-                                        recovery_states[i] =
-                                            SourceRecoveryState::LostAwaitingReconnect {
-                                                original_source,
-                                                original_device_name: lost_device.clone(),
-                                            };
-                                        ctx.event_emitter.emit(
-                                            AUDIO_DEVICE_LOST_EVENT,
-                                            &AudioDeviceLostPayload {
-                                                session_id: ctx.session_id,
-                                                source_kind: ctx.sources[i].kind_label(),
-                                                lost_device,
-                                                new_device: None,
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                            _ => {
-                                // SystemAudio and any future non-mic sources
-                                // have no fallback concept; mark Dead.
-                                tracing::error!(
-                                    device = %lost_device,
-                                    source_kind = ctx.sources[i].kind_label(),
-                                    session_id = ctx.session_id,
-                                    "meeting pump: audio device disconnected; ending source"
-                                );
-                                ctx.event_emitter.emit(
-                                    MEETING_SOURCE_FAILED_EVENT,
-                                    &MeetingSourceFailedPayload {
-                                        session_id: ctx.session_id,
-                                        source_kind: ctx.sources[i].kind_label(),
-                                        reason: "audio device disconnected mid-session",
-                                        device_lost: true,
-                                    },
-                                );
-                                drop(ctx.handles[i].take());
-                                recovery_states[i] = SourceRecoveryState::Dead;
-                                ctx.streaming_sessions[i] = None;
-                            }
-                        }
-                        continue;
-                    }
-                    tracing::warn!(
-                        error = ?e,
-                        source_kind = ctx.sources[i].kind_label(),
-                        session_id = ctx.session_id,
-                        "meeting pump: drain_into failed for tick"
-                    );
-                    // Zero-fill the diarizer buffer for this tick (#553).
-                    // The streaming transcription session continues advancing
-                    // its internal timeline even when drain fails, so without
-                    // a compensating append the diarizer buffer falls behind
-                    // and slice_ms() returns misaligned audio for subsequent
-                    // utterances. Silence is a better approximation than a gap.
-                    if let Some(fmt) = last_known_formats[i] {
-                        let zero_samples = (fmt.sample_rate as f64
-                            * PUMP_TICK.as_secs_f64()
-                            * fmt.channels as f64)
-                            as usize;
-                        let zeros = vec![0f32; zero_samples];
-                        audio_buffers[i].append(&zeros, fmt);
-                        tracing::debug!(
-                            session_id = ctx.session_id,
-                            source_kind = ctx.sources[i].kind_label(),
-                            zero_samples,
-                            "meeting pump: zero-filled diarizer buffer to compensate for drain failure"
-                        );
-                    }
-                }
-            }
-        }
-
-        // Reconnect watcher: every RECONNECT_CHECK_INTERVAL ticks,
-        // scan the device list for any source that is in Fallback or
-        // LostAwaitingReconnect state and check whether the original
-        // device has come back (#611). List devices once per interval
-        // and reuse across all sources to avoid redundant OS queries.
-        tick_count = tick_count.wrapping_add(1);
-        if tick_count % RECONNECT_CHECK_INTERVAL == 0 {
-            let maybe_devs = ctx.audio.list_input_devices().ok();
-            if let Some(devs) = maybe_devs {
-                let dev_names: std::collections::HashSet<String> =
-                    devs.iter().map(|d| d.name.clone()).collect();
-                for i in 0..ctx.sources.len() {
-                    let (original_source, original_device_name) = match &recovery_states[i] {
-                        SourceRecoveryState::Fallback {
-                            original_source,
-                            original_device_name,
-                        }
-                        | SourceRecoveryState::LostAwaitingReconnect {
-                            original_source,
-                            original_device_name,
-                        } => (original_source.clone(), original_device_name.clone()),
-                        _ => continue,
-                    };
-
-                    if !dev_names.contains(&original_device_name) {
-                        continue;
-                    }
-
-                    // Original device is back. Drop any fallback handle
-                    // first (same FIFO-ordering reason as the DeviceLost arm).
-                    drop(ctx.handles[i].take());
-                    ctx.streaming_sessions[i] = None;
-
-                    match open_source_handle(&ctx.audio, ctx.transcribe.as_ref(), &original_source)
-                    {
-                        Ok((new_handle, new_stream)) => {
-                            tracing::info!(
-                                device = %original_device_name,
-                                source_kind = ctx.sources[i].kind_label(),
-                                session_id = ctx.session_id,
-                                "meeting pump: original device reconnected; restoring"
-                            );
-                            stream_epoch_offsets_ms[i] =
-                                ctx.session_start.elapsed().as_millis() as u64;
-                            audio_buffers[i] =
-                                crate::meeting::audio_buffer::AudioRollingBuffer::new();
-                            last_known_formats[i] = None;
-                            first_drain_logged[i] = false;
-                            if let Ok(mut guard) = ctx.partials.write() {
-                                if let Some(per_session) = guard.get_mut(&ctx.session_id) {
-                                    per_session.remove(ctx.sources[i].speaker_tag());
-                                }
-                            }
-                            ctx.handles[i] = Some(new_handle);
-                            ctx.streaming_sessions[i] = new_stream;
-                            recovery_states[i] = SourceRecoveryState::Active;
-                            ctx.event_emitter.emit(
-                                AUDIO_DEVICE_RESTORED_EVENT,
-                                &AudioDeviceRestoredPayload {
-                                    session_id: ctx.session_id,
-                                    source_kind: ctx.sources[i].kind_label(),
-                                    restored_device: original_device_name,
-                                },
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = ?e,
-                                device = %original_device_name,
-                                source_kind = ctx.sources[i].kind_label(),
-                                session_id = ctx.session_id,
-                                "meeting pump: reconnect attempt failed despite device being listed"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // For each source with a streaming session, feed the drained
-        // samples and run an inference tick. Move the session into
-        // `spawn_blocking` so whisper inference doesn't block the
-        // tokio worker; the helper returns the session along with
-        // its drained utterances so we can put it back.
-        //
-        // Index loop rather than `iter().enumerate()` because we
-        // mutate three parallel `Vec`s — `streaming_sessions`,
-        // `drain_buffers`, and `sources` — and need split-borrow
-        // semantics on each. Restructuring to a single iterator
-        // would either require interior mutability on each slot
-        // or unsafe pointer arithmetic; the indexed loop is the
-        // clearest shape for this pattern.
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..ctx.sources.len() {
-            // Skip sources without a streaming session — drained
-            // samples are discarded. Logging only on the first
-            // skipped tick per source to avoid flooding the
-            // tracing layer (every 500 ms for the whole session).
-            if ctx.streaming_sessions[i].is_none() {
-                continue;
-            }
-            // Take the session out so we can move it into
-            // spawn_blocking. The `Option` slot stays None until we
-            // put it back at the bottom of this iteration.
-            // Defensive take: pre-#246 this was `.unwrap()`, but
-            // a future refactor that drains in a different order
-            // would panic the pump task. Skip the source for this
-            // tick if the slot was already taken.
-            let Some(session) = ctx.streaming_sessions[i].take() else {
-                tracing::warn!(
-                    source_kind = ctx.sources[i].speaker_tag(),
-                    "meeting pump: streaming session slot already empty; skipping tick"
-                );
-                continue;
-            };
-
-            // Apply mic gain to the drained raw samples (#531) before
-            // feeding them to both the diarizer buffer and the streaming
-            // inference session. A single application here means neither
-            // consumer needs its own gain path.
-            let gain_db = f32::from_bits(ctx.mic_gain_db.load(Ordering::Relaxed));
-            apply_mic_gain(&mut drain_buffers[i], gain_db);
-
-            let samples = std::mem::take(&mut drain_buffers[i]);
-            let source_label = ctx.sources[i].speaker_tag().to_owned();
-            let session_id = ctx.session_id;
-
-            // Mirror the drained samples into the diarizer's rolling
-            // buffer (#111 PR-F). Done before the `samples` move so
-            // we don't have to clone — `audio_buffer::append` does
-            // its own resample/downmix copy. Skip if drain_into
-            // failed and we don't know the format for this tick.
-            if let Some(format) = tick_formats[i] {
-                audio_buffers[i].append(&samples, format);
-            }
-
-            // spawn_blocking isolates whisper inference from the tokio
-            // worker pool. infer_start/elapsed_ms are recorded here so
-            // the "inference tick" log can distinguish "pump ran, whisper
-            // was slow" (elapsed_ms large) from "pump ran, gate never
-            // opened" (no "inference ran" lines in streaming.rs at all).
-            let infer_start = std::time::Instant::now();
-            let join =
-                tokio::task::spawn_blocking(
-                    move || -> (
-                        Box<dyn StreamingTranscribeSession>,
-                        Vec<f32>,
-                        Result<Vec<Utterance>>,
-                    ) {
-                        let mut session = session;
-                        if !samples.is_empty() {
-                            if let Err(e) = session.feed(&samples) {
-                                return (session, samples, Err(e));
-                            }
-                        }
-                        let result = session.drain();
-                        (session, samples, result)
-                    },
-                )
-                .await;
-            let infer_elapsed_ms = infer_start.elapsed().as_millis();
-
-            let (returned_session, returned_buf, drain_result) = match join {
-                Ok(triple) => triple,
-                Err(join_err) => {
-                    tracing::error!(
-                        error = ?join_err,
-                        session_id,
-                        source_kind = source_label,
-                        "meeting pump: streaming inference task panicked; \
-                         leaving streaming disabled for this source for the rest of the session"
-                    );
-                    // Session is gone (panicked closure dropped it).
-                    // Leave the slot None so subsequent ticks skip
-                    // this source. Notify the frontend so the panel
-                    // can surface "this source dropped" rather than
-                    // silently rendering "still recording".
-                    ctx.event_emitter.emit(
-                        MEETING_SOURCE_FAILED_EVENT,
-                        &MeetingSourceFailedPayload {
-                            session_id,
-                            source_kind: &source_label,
-                            reason: "transcription task panicked",
-                            device_lost: false,
-                        },
-                    );
-                    continue;
-                }
-            };
-
-            // Restore the session + buffer for the next tick.
-            ctx.streaming_sessions[i] = Some(returned_session);
-            drain_buffers[i] = returned_buf;
-
-            let utterances = match drain_result {
-                Ok(u) => {
-                    tracing::debug!(
-                        session_id,
-                        source_kind = source_label,
-                        utterances = u.len(),
-                        elapsed_ms = infer_elapsed_ms,
-                        // utterances = 0 here + "inference ran" in streaming.rs
-                        // means the gate opened but produced nothing. Cross with
-                        // raw_segments from streaming.rs to distinguish "whisper
-                        // filtered via no_speech_thold" from "streaming gate
-                        // never opened".
-                        "meeting pump: inference tick"
-                    );
-                    u
-                }
-                Err(e) => {
-                    let reason = format!("{e}");
-                    tracing::warn!(
-                        error = ?e,
-                        session_id,
-                        source_kind = source_label,
-                        "meeting pump: streaming feed/drain failed for tick"
-                    );
-                    // Drop the session so subsequent ticks skip this
-                    // source — keeping a wedged session in the slot
-                    // would loop the same warning every 500 ms for
-                    // the rest of the meeting.
-                    ctx.streaming_sessions[i] = None;
-                    ctx.event_emitter.emit(
-                        MEETING_SOURCE_FAILED_EVENT,
-                        &MeetingSourceFailedPayload {
-                            session_id,
-                            source_kind: &source_label,
-                            reason: &reason,
-                            // The streaming feed/drain path returns
-                            // whisper.cpp errors, not audio-capture
-                            // errors — DeviceLost would have been
-                            // caught in the drain_into arm above.
-                            device_lost: false,
-                        },
-                    );
-                    continue;
-                }
-            };
-
-            // Slice each utterance's audio out of the rolling
-            // buffer for the diarizer (#111 PR-F). Parallel to
-            // `utterances`. Empty `Vec` if the utterance's audio
-            // dropped past the buffer horizon (very rare — would
-            // require a >30 s utterance + late drain).
-            // Audio is sliced using LOCAL stream-relative timestamps
-            // before the epoch offset is applied — the rolling buffer
-            // index matches the per-stream clock.
-            let audio: Vec<Vec<f32>> = utterances
-                .iter()
-                .map(|u| audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
-                .collect();
-
-            // Apply per-source epoch offset (#611): when a streaming
-            // session is recreated mid-meeting (fallback or reconnect),
-            // its internal timestamps restart from 0. Adding the offset
-            // makes persisted timestamps relative to meeting start.
-            let epoch_ms = stream_epoch_offsets_ms[i];
-            let utterances: Vec<Utterance> = if epoch_ms > 0 {
-                utterances
-                    .into_iter()
-                    .map(|mut u| {
-                        u.started_at_ms += epoch_ms;
-                        u.ended_at_ms += epoch_ms;
-                        u
-                    })
-                    .collect()
-            } else {
-                utterances
-            };
-
-            // Accumulate this source's utterances into the tick
-            // bucket. The per-tick `diarize_and_dispatch_merged`
-            // call below runs the diarizer once over the merged +
-            // chronologically-sorted batch, then splits the labelled
-            // result back per source for dispatch (#206).
-            // Count finals before moving utterances into the bucket
-            // (#533 diagnostic — logged at session end).
-            final_counts[i] += utterances.iter().filter(|u| u.is_final).count() as u64;
-            blank_counts[i] += utterances
-                .iter()
-                .filter(|u| u.is_final && (u.text == "[BLANK_AUDIO]" || u.text.trim().is_empty()))
-                .count() as u64;
-            tick_buckets.push(TickBucket {
-                source_label,
-                utterances,
-                audio,
-            });
-        }
+        tick_inference(&mut ctx, &mut state, &tick_formats, &mut tick_buckets).await;
 
         if !tick_buckets.is_empty() {
             diarize_and_dispatch_merged(
@@ -853,15 +284,589 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             )
             .await;
         }
+
+        tick_count = tick_count.wrapping_add(1);
+        if tick_count % RECONNECT_CHECK_INTERVAL == 0 {
+            tick_recovery_check(&mut ctx, &mut state);
+        }
     }
 
+    // Tail flush: finish each streaming session, merge-sort-label-split, dispatch.
+    let mut tail_buckets: Vec<TickBucket> = Vec::new();
+    flush_sessions(&mut ctx, &mut state, &mut tail_buckets).await;
+    if !tail_buckets.is_empty() {
+        diarize_and_dispatch_merged(
+            ctx.session_id,
+            tail_buckets,
+            &ctx.diarize,
+            &ctx.partials,
+            &ctx.repo,
+        )
+        .await;
+    }
+
+    // Belt-and-braces: clear partials for this session id.
+    if let Ok(mut guard) = ctx.partials.write() {
+        guard.remove(&ctx.session_id);
+    }
+
+    // Per-source final-utterance summary (#533 diagnostic).
+    for (source, (count, blanks)) in ctx
+        .sources
+        .iter()
+        .zip(state.final_counts.iter().zip(state.blank_counts.iter()))
+    {
+        let real_finals = count.saturating_sub(*blanks);
+        tracing::info!(
+            session_id = ctx.session_id,
+            source_kind = source.kind_label(),
+            finals = count,
+            real_finals = real_finals,
+            blank_finals = blanks,
+            "meeting pump: per-source utterance summary (#533 diagnostic)"
+        );
+    }
+    tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
+}
+
+fn tick_drain_sources(
+    ctx: &mut PumpContext,
+    state: &mut PumpTickState,
+) -> Vec<Option<CaptureFormat>> {
+    // Drain audio for every source first (cheap, no inference),
+    // then run inference per source. The drain step takes
+    // microseconds; the inference step takes milliseconds-to-
+    // seconds inside the streaming session's `drain` if a new
+    // inference window has matured. Splitting the loop bounds
+    // each source's audio buffer to the tick window plus the
+    // few-ms drain.
+    let mut tick_formats: Vec<Option<CaptureFormat>> = vec![None; ctx.handles.len()];
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..ctx.sources.len() {
+        // Skip sources with no active handle (Dead or LostAwaitingReconnect).
+        // Calling drain_into on a dead handle produces the same error every
+        // tick — running through the whole inference / zero-fill /
+        // event-emission path on every tick would spam logs.
+        let Some(handle) = ctx.handles[i].as_ref() else {
+            continue;
+        };
+        let buf = &mut state.drain_buffers[i];
+        buf.clear();
+        match handle.drain_into(buf) {
+            Ok(format) => {
+                tracing::debug!(
+                    session_id = ctx.session_id,
+                    source_kind = ctx.sources[i].kind_label(),
+                    samples = buf.len(),
+                    "meeting pump: drained"
+                );
+                tick_formats[i] = Some(format);
+                state.last_known_formats[i] = Some(format);
+                // Log first-drain RMS once per source (#533 diagnostic).
+                // Near-zero RMS = device opened but producing silence;
+                // non-zero = audio flowing, so any 0-utterance result
+                // means Whisper's no_speech_thold is gating the output.
+                if !state.first_drain_logged[i] {
+                    let rms = if buf.is_empty() {
+                        0.0
+                    } else {
+                        let sum_sq: f64 = buf.iter().map(|s| (*s as f64) * (*s as f64)).sum();
+                        (sum_sq / buf.len() as f64).sqrt()
+                    };
+                    tracing::info!(
+                        session_id = ctx.session_id,
+                        source_kind = ctx.sources[i].kind_label(),
+                        samples = buf.len(),
+                        rms,
+                        "meeting pump: first-drain RMS (#533 diagnostic; <0.001 suggests capture silence)"
+                    );
+                    state.first_drain_logged[i] = true;
+                }
+            }
+            Err(e) => {
+                // Log the first-drain diagnostic even on failure so
+                // a device that never returns audio produces a line.
+                if !state.first_drain_logged[i] {
+                    tracing::info!(
+                        session_id = ctx.session_id,
+                        source_kind = ctx.sources[i].kind_label(),
+                        samples = 0usize,
+                        rms = 0.0f64,
+                        "meeting pump: first-drain RMS (#533 diagnostic; drain failed)"
+                    );
+                    state.first_drain_logged[i] = true;
+                }
+                // Device-disconnect detection (#587 / #611). The cpal
+                // backend signals device-gone via the typed
+                // [`crate::audio::DeviceLost`] error wrapped in
+                // anyhow. Distinguishing it from transient drain
+                // failures matters because:
+                //
+                // - A genuine disconnect will keep returning the
+                //   same error every tick — zero-filling forever
+                //   is wasteful and surfaces no signal.
+                // - The user needs an unambiguous "your mic
+                //   disconnected" signal, not a generic
+                //   "drain_into failed" warn-log.
+                //
+                // For microphone sources we attempt auto-fallback to
+                // the system default first (#611). For SystemAudio the
+                // source is permanently Dead — there is no "system
+                // default system audio" fallback concept.
+                //
+                // Handle swap ordering: we must stop the old handle
+                // BEFORE calling start_session for the fallback.
+                // The cpal worker rejects Cmd::Start while its
+                // singleton mic Session slot is occupied, and
+                // DrainBuffer returning DeviceLost does NOT release
+                // the slot. Drop triggers CpalMicSessionHandle::Drop
+                // which sends Cmd::Stop via the same mpsc channel;
+                // FIFO ordering guarantees Stop is processed before
+                // the subsequent Start from start_session.
+                if let Some(lost) = e.downcast_ref::<crate::audio::DeviceLost>() {
+                    let lost_device = lost.device.clone();
+                    match &ctx.sources[i] {
+                        AudioSource::Microphone(_) => {
+                            tracing::warn!(
+                                device = %lost_device,
+                                source_kind = ctx.sources[i].kind_label(),
+                                session_id = ctx.session_id,
+                                "meeting pump: mic disconnected; attempting fallback"
+                            );
+                            let original_source = ctx.sources[i].clone();
+                            // Release the dead handle first (see comment above).
+                            drop(ctx.handles[i].take());
+                            ctx.streaming_sessions[i] = None;
+
+                            let fallback_source = AudioSource::default_microphone();
+                            match open_source_handle(
+                                &ctx.audio,
+                                ctx.transcribe.as_ref(),
+                                &fallback_source,
+                            ) {
+                                Ok((new_handle, new_stream)) => {
+                                    let fallback_device_name = ctx
+                                        .audio
+                                        .list_input_devices()
+                                        .ok()
+                                        .and_then(|devs| {
+                                            devs.into_iter().find(|d| d.is_default).map(|d| d.name)
+                                        })
+                                        .unwrap_or_else(|| "default microphone".to_owned());
+                                    tracing::info!(
+                                        fallback = %fallback_device_name,
+                                        source_kind = ctx.sources[i].kind_label(),
+                                        session_id = ctx.session_id,
+                                        "meeting pump: fallback opened; continuing capture"
+                                    );
+                                    state.stream_epoch_offsets_ms[i] =
+                                        ctx.session_start.elapsed().as_millis() as u64;
+                                    state.audio_buffers[i] =
+                                        crate::meeting::audio_buffer::AudioRollingBuffer::new();
+                                    state.last_known_formats[i] = None;
+                                    state.first_drain_logged[i] = false;
+                                    if let Ok(mut guard) = ctx.partials.write() {
+                                        if let Some(per_session) = guard.get_mut(&ctx.session_id) {
+                                            per_session.remove(ctx.sources[i].speaker_tag());
+                                        }
+                                    }
+                                    ctx.handles[i] = Some(new_handle);
+                                    ctx.streaming_sessions[i] = new_stream;
+                                    state.recovery_states[i] = SourceRecoveryState::Fallback {
+                                        original_source,
+                                        original_device_name: lost_device.clone(),
+                                    };
+                                    ctx.event_emitter.emit(
+                                        AUDIO_DEVICE_LOST_EVENT,
+                                        &AudioDeviceLostPayload {
+                                            session_id: ctx.session_id,
+                                            source_kind: ctx.sources[i].kind_label(),
+                                            lost_device,
+                                            new_device: Some(fallback_device_name),
+                                        },
+                                    );
+                                }
+                                Err(fe) => {
+                                    tracing::warn!(
+                                        error = ?fe,
+                                        source_kind = ctx.sources[i].kind_label(),
+                                        session_id = ctx.session_id,
+                                        "meeting pump: fallback open failed; awaiting reconnect"
+                                    );
+                                    state.recovery_states[i] =
+                                        SourceRecoveryState::LostAwaitingReconnect {
+                                            original_source,
+                                            original_device_name: lost_device.clone(),
+                                        };
+                                    ctx.event_emitter.emit(
+                                        AUDIO_DEVICE_LOST_EVENT,
+                                        &AudioDeviceLostPayload {
+                                            session_id: ctx.session_id,
+                                            source_kind: ctx.sources[i].kind_label(),
+                                            lost_device,
+                                            new_device: None,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            // SystemAudio and any future non-mic sources
+                            // have no fallback concept; mark Dead.
+                            tracing::error!(
+                                device = %lost_device,
+                                source_kind = ctx.sources[i].kind_label(),
+                                session_id = ctx.session_id,
+                                "meeting pump: audio device disconnected; ending source"
+                            );
+                            ctx.event_emitter.emit(
+                                MEETING_SOURCE_FAILED_EVENT,
+                                &MeetingSourceFailedPayload {
+                                    session_id: ctx.session_id,
+                                    source_kind: ctx.sources[i].kind_label(),
+                                    reason: "audio device disconnected mid-session",
+                                    device_lost: true,
+                                },
+                            );
+                            drop(ctx.handles[i].take());
+                            state.recovery_states[i] = SourceRecoveryState::Dead;
+                            ctx.streaming_sessions[i] = None;
+                        }
+                    }
+                    continue;
+                }
+                tracing::warn!(
+                    error = ?e,
+                    source_kind = ctx.sources[i].kind_label(),
+                    session_id = ctx.session_id,
+                    "meeting pump: drain_into failed for tick"
+                );
+                // Zero-fill the diarizer buffer for this tick (#553).
+                // The streaming transcription session continues advancing
+                // its internal timeline even when drain fails, so without
+                // a compensating append the diarizer buffer falls behind
+                // and slice_ms() returns misaligned audio for subsequent
+                // utterances. Silence is a better approximation than a gap.
+                if let Some(fmt) = state.last_known_formats[i] {
+                    let zero_samples = (fmt.sample_rate as f64
+                        * PUMP_TICK.as_secs_f64()
+                        * fmt.channels as f64) as usize;
+                    let zeros = vec![0f32; zero_samples];
+                    state.audio_buffers[i].append(&zeros, fmt);
+                    tracing::debug!(
+                        session_id = ctx.session_id,
+                        source_kind = ctx.sources[i].kind_label(),
+                        zero_samples,
+                        "meeting pump: zero-filled diarizer buffer to compensate for drain failure"
+                    );
+                }
+            }
+        }
+    }
+
+    tick_formats
+}
+
+async fn tick_inference(
+    ctx: &mut PumpContext,
+    state: &mut PumpTickState,
+    tick_formats: &[Option<CaptureFormat>],
+    tick_buckets: &mut Vec<TickBucket>,
+) {
+    // For each source with a streaming session, feed the drained
+    // samples and run an inference tick. Move the session into
+    // `spawn_blocking` so whisper inference doesn't block the
+    // tokio worker; the helper returns the session along with
+    // its drained utterances so we can put it back.
+    //
+    // Index loop rather than `iter().enumerate()` because we
+    // mutate three parallel `Vec`s — `streaming_sessions`,
+    // `drain_buffers`, and `sources` — and need split-borrow
+    // semantics on each. Restructuring to a single iterator
+    // would either require interior mutability on each slot
+    // or unsafe pointer arithmetic; the indexed loop is the
+    // clearest shape for this pattern.
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..ctx.sources.len() {
+        // Skip sources without a streaming session — drained
+        // samples are discarded. Logging only on the first
+        // skipped tick per source to avoid flooding the
+        // tracing layer (every 500 ms for the whole session).
+        if ctx.streaming_sessions[i].is_none() {
+            continue;
+        }
+        // Take the session out so we can move it into
+        // spawn_blocking. The `Option` slot stays None until we
+        // put it back at the bottom of this iteration.
+        // Defensive take: pre-#246 this was `.unwrap()`, but
+        // a future refactor that drains in a different order
+        // would panic the pump task. Skip the source for this
+        // tick if the slot was already taken.
+        let Some(session) = ctx.streaming_sessions[i].take() else {
+            tracing::warn!(
+                source_kind = ctx.sources[i].speaker_tag(),
+                "meeting pump: streaming session slot already empty; skipping tick"
+            );
+            continue;
+        };
+
+        // Apply mic gain to the drained raw samples (#531) before
+        // feeding them to both the diarizer buffer and the streaming
+        // inference session. A single application here means neither
+        // consumer needs its own gain path.
+        let gain_db = f32::from_bits(ctx.mic_gain_db.load(Ordering::Relaxed));
+        apply_mic_gain(&mut state.drain_buffers[i], gain_db);
+
+        let samples = std::mem::take(&mut state.drain_buffers[i]);
+        let source_label = ctx.sources[i].speaker_tag().to_owned();
+        let session_id = ctx.session_id;
+
+        // Mirror the drained samples into the diarizer's rolling
+        // buffer (#111 PR-F). Done before the `samples` move so
+        // we don't have to clone — `audio_buffer::append` does
+        // its own resample/downmix copy. Skip if drain_into
+        // failed and we don't know the format for this tick.
+        if let Some(format) = tick_formats[i] {
+            state.audio_buffers[i].append(&samples, format);
+        }
+
+        // spawn_blocking isolates whisper inference from the tokio
+        // worker pool. infer_start/elapsed_ms are recorded here so
+        // the "inference tick" log can distinguish "pump ran, whisper
+        // was slow" (elapsed_ms large) from "pump ran, gate never
+        // opened" (no "inference ran" lines in streaming.rs at all).
+        let infer_start = std::time::Instant::now();
+        let join =
+            tokio::task::spawn_blocking(
+                move || -> (
+                    Box<dyn StreamingTranscribeSession>,
+                    Vec<f32>,
+                    Result<Vec<Utterance>>,
+                ) {
+                    let mut session = session;
+                    if !samples.is_empty() {
+                        if let Err(e) = session.feed(&samples) {
+                            return (session, samples, Err(e));
+                        }
+                    }
+                    let result = session.drain();
+                    (session, samples, result)
+                },
+            )
+            .await;
+        let infer_elapsed_ms = infer_start.elapsed().as_millis();
+
+        let (returned_session, returned_buf, drain_result) = match join {
+            Ok(triple) => triple,
+            Err(join_err) => {
+                tracing::error!(
+                    error = ?join_err,
+                    session_id,
+                    source_kind = source_label,
+                    "meeting pump: streaming inference task panicked; \
+                     leaving streaming disabled for this source for the rest of the session"
+                );
+                // Session is gone (panicked closure dropped it).
+                // Leave the slot None so subsequent ticks skip
+                // this source. Notify the frontend so the panel
+                // can surface "this source dropped" rather than
+                // silently rendering "still recording".
+                ctx.event_emitter.emit(
+                    MEETING_SOURCE_FAILED_EVENT,
+                    &MeetingSourceFailedPayload {
+                        session_id,
+                        source_kind: &source_label,
+                        reason: "transcription task panicked",
+                        device_lost: false,
+                    },
+                );
+                continue;
+            }
+        };
+
+        // Restore the session + buffer for the next tick.
+        ctx.streaming_sessions[i] = Some(returned_session);
+        state.drain_buffers[i] = returned_buf;
+
+        let utterances = match drain_result {
+            Ok(u) => {
+                tracing::debug!(
+                    session_id,
+                    source_kind = source_label,
+                    utterances = u.len(),
+                    elapsed_ms = infer_elapsed_ms,
+                    // utterances = 0 here + "inference ran" in streaming.rs
+                    // means the gate opened but produced nothing. Cross with
+                    // raw_segments from streaming.rs to distinguish "whisper
+                    // filtered via no_speech_thold" from "streaming gate
+                    // never opened".
+                    "meeting pump: inference tick"
+                );
+                u
+            }
+            Err(e) => {
+                let reason = format!("{e}");
+                tracing::warn!(
+                    error = ?e,
+                    session_id,
+                    source_kind = source_label,
+                    "meeting pump: streaming feed/drain failed for tick"
+                );
+                // Drop the session so subsequent ticks skip this
+                // source — keeping a wedged session in the slot
+                // would loop the same warning every 500 ms for
+                // the rest of the meeting.
+                ctx.streaming_sessions[i] = None;
+                ctx.event_emitter.emit(
+                    MEETING_SOURCE_FAILED_EVENT,
+                    &MeetingSourceFailedPayload {
+                        session_id,
+                        source_kind: &source_label,
+                        reason: &reason,
+                        // The streaming feed/drain path returns
+                        // whisper.cpp errors, not audio-capture
+                        // errors — DeviceLost would have been
+                        // caught in the drain_into arm above.
+                        device_lost: false,
+                    },
+                );
+                continue;
+            }
+        };
+
+        // Slice each utterance's audio out of the rolling
+        // buffer for the diarizer (#111 PR-F). Parallel to
+        // `utterances`. Empty `Vec` if the utterance's audio
+        // dropped past the buffer horizon (very rare — would
+        // require a >30 s utterance + late drain).
+        // Audio is sliced using LOCAL stream-relative timestamps
+        // before the epoch offset is applied — the rolling buffer
+        // index matches the per-stream clock.
+        let audio: Vec<Vec<f32>> = utterances
+            .iter()
+            .map(|u| state.audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
+            .collect();
+
+        // Apply per-source epoch offset (#611): when a streaming
+        // session is recreated mid-meeting (fallback or reconnect),
+        // its internal timestamps restart from 0. Adding the offset
+        // makes persisted timestamps relative to meeting start.
+        let epoch_ms = state.stream_epoch_offsets_ms[i];
+        let utterances: Vec<Utterance> = if epoch_ms > 0 {
+            utterances
+                .into_iter()
+                .map(|mut u| {
+                    u.started_at_ms += epoch_ms;
+                    u.ended_at_ms += epoch_ms;
+                    u
+                })
+                .collect()
+        } else {
+            utterances
+        };
+
+        // Accumulate this source's utterances into the tick
+        // bucket. The per-tick `diarize_and_dispatch_merged`
+        // call below runs the diarizer once over the merged +
+        // chronologically-sorted batch, then splits the labelled
+        // result back per source for dispatch (#206).
+        // Count finals before moving utterances into the bucket
+        // (#533 diagnostic — logged at session end).
+        state.final_counts[i] += utterances.iter().filter(|u| u.is_final).count() as u64;
+        state.blank_counts[i] += utterances
+            .iter()
+            .filter(|u| u.is_final && (u.text == "[BLANK_AUDIO]" || u.text.trim().is_empty()))
+            .count() as u64;
+        tick_buckets.push(TickBucket {
+            source_label,
+            utterances,
+            audio,
+        });
+    }
+}
+
+fn tick_recovery_check(ctx: &mut PumpContext, state: &mut PumpTickState) {
+    // Reconnect watcher: every RECONNECT_CHECK_INTERVAL ticks,
+    // scan the device list for any source that is in Fallback or
+    // LostAwaitingReconnect state and check whether the original
+    // device has come back (#611). List devices once per interval
+    // and reuse across all sources to avoid redundant OS queries.
+    let maybe_devs = ctx.audio.list_input_devices().ok();
+    if let Some(devs) = maybe_devs {
+        let dev_names: std::collections::HashSet<String> =
+            devs.iter().map(|d| d.name.clone()).collect();
+        for i in 0..ctx.sources.len() {
+            let Some((original_source, original_device_name)) =
+                state.recovery_states[i].reconnect_target()
+            else {
+                continue;
+            };
+
+            if !dev_names.contains(&original_device_name) {
+                continue;
+            }
+
+            // Original device is back. Drop any fallback handle
+            // first (same FIFO-ordering reason as the DeviceLost arm).
+            drop(ctx.handles[i].take());
+            ctx.streaming_sessions[i] = None;
+
+            match open_source_handle(&ctx.audio, ctx.transcribe.as_ref(), &original_source) {
+                Ok((new_handle, new_stream)) => {
+                    tracing::info!(
+                        device = %original_device_name,
+                        source_kind = ctx.sources[i].kind_label(),
+                        session_id = ctx.session_id,
+                        "meeting pump: original device reconnected; restoring"
+                    );
+                    state.stream_epoch_offsets_ms[i] =
+                        ctx.session_start.elapsed().as_millis() as u64;
+                    state.audio_buffers[i] =
+                        crate::meeting::audio_buffer::AudioRollingBuffer::new();
+                    state.last_known_formats[i] = None;
+                    state.first_drain_logged[i] = false;
+                    if let Ok(mut guard) = ctx.partials.write() {
+                        if let Some(per_session) = guard.get_mut(&ctx.session_id) {
+                            per_session.remove(ctx.sources[i].speaker_tag());
+                        }
+                    }
+                    ctx.handles[i] = Some(new_handle);
+                    ctx.streaming_sessions[i] = new_stream;
+                    state.recovery_states[i] = SourceRecoveryState::Active;
+                    ctx.event_emitter.emit(
+                        AUDIO_DEVICE_RESTORED_EVENT,
+                        &AudioDeviceRestoredPayload {
+                            session_id: ctx.session_id,
+                            source_kind: ctx.sources[i].kind_label(),
+                            restored_device: original_device_name,
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        device = %original_device_name,
+                        source_kind = ctx.sources[i].kind_label(),
+                        session_id = ctx.session_id,
+                        "meeting pump: reconnect attempt failed despite device being listed"
+                    );
+                }
+            }
+        }
+    }
+}
+
+async fn flush_sessions(
+    ctx: &mut PumpContext,
+    state: &mut PumpTickState,
+    tail_buckets: &mut Vec<TickBucket>,
+) {
     // Cancel — flush each streaming session. `finish` drains
     // anything still in the rolling window as finals; we persist
     // those before returning so `stop_manual` sees the
     // tail-of-conversation utterances. Same merge-sort-label-split
     // shape as the per-tick path (#206) so the tail flush can't
     // re-introduce the per-source independent-A/B regression.
-    let mut tail_buckets: Vec<TickBucket> = Vec::new();
     #[allow(clippy::needless_range_loop)] // see explanation in the tick loop above
     for i in 0..ctx.sources.len() {
         let Some(session) = ctx.streaming_sessions[i].take() else {
@@ -892,11 +897,11 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         };
         let tail_audio: Vec<Vec<f32>> = finals
             .iter()
-            .map(|u| audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
+            .map(|u| state.audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
             .collect();
         // Apply epoch offset (same as tick path) so tail utterances
         // from a replaced stream have meeting-relative timestamps.
-        let epoch_ms = stream_epoch_offsets_ms[i];
+        let epoch_ms = state.stream_epoch_offsets_ms[i];
         let finals: Vec<Utterance> = if epoch_ms > 0 {
             finals
                 .into_iter()
@@ -910,8 +915,8 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             finals
         };
         // All tail utterances from finish() are finals (#533 diagnostic).
-        final_counts[i] += finals.len() as u64;
-        blank_counts[i] += finals
+        state.final_counts[i] += finals.len() as u64;
+        state.blank_counts[i] += finals
             .iter()
             .filter(|u| u.text == "[BLANK_AUDIO]" || u.text.trim().is_empty())
             .count() as u64;
@@ -921,47 +926,6 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             audio: tail_audio,
         });
     }
-
-    if !tail_buckets.is_empty() {
-        diarize_and_dispatch_merged(
-            ctx.session_id,
-            tail_buckets,
-            &ctx.diarize,
-            &ctx.partials,
-            &ctx.repo,
-        )
-        .await;
-    }
-
-    // Belt-and-braces: clear partials for this session id. The
-    // dispatch loop above removes per-source entries on each final
-    // commit; this drops the (now-empty) per-session HashMap so the
-    // partials store doesn't grow unbounded across many sessions.
-    if let Ok(mut guard) = ctx.partials.write() {
-        guard.remove(&ctx.session_id);
-    }
-    // Per-source final-utterance summary (#533 diagnostic). Logged at
-    // info level so it appears in standard debug runs without
-    // RUST_LOG=hush::meeting=debug. "source_kind=mic finals=0" is
-    // the first thing to check when a user reports a silent session.
-    // "real_finals=0 blank_finals=N" means the tap delivered silence
-    // (the audio pipeline is running but the content is empty).
-    for (source, (count, blanks)) in ctx
-        .sources
-        .iter()
-        .zip(final_counts.iter().zip(blank_counts.iter()))
-    {
-        let real_finals = count.saturating_sub(*blanks);
-        tracing::info!(
-            session_id = ctx.session_id,
-            source_kind = source.kind_label(),
-            finals = count,
-            real_finals = real_finals,
-            blank_finals = blanks,
-            "meeting pump: per-source utterance summary (#533 diagnostic)"
-        );
-    }
-    tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
 }
 
 /// One source's worth of utterances for the merge-sort-label-split
