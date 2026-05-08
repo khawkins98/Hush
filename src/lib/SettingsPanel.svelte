@@ -352,7 +352,6 @@
     position: sticky;
     top: 0;
     max-height: 100vh;
-    overflow-y: auto;
     background-color: var(--bg-sidebar);
     border-right: 1px solid var(--border);
     padding: 0.85rem 0 2rem;
