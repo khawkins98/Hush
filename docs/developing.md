@@ -271,6 +271,18 @@ Playwright + Chromium drives the SvelteKit dev server in `HUSH_E2E=1` mode, whic
 
 Before merging anything that touches the dictation hot path, run through the manual checklist in [`STATUS.md`](../STATUS.md) §c. Requires a real microphone and optionally a Whisper model — neither of which CI has access to.
 
+### UX screenshot walkthrough (`npm run test:uxwalk`)
+
+Captures a PNG of every significant screen and state (empty, populated, error, dialogs, etc.) into `/tmp/hush-uxwalk-shots/`. Use it to spot visual regressions, layout gaps, or stale copy across a branch or after a large refactor.
+
+```bash
+npm run test:uxwalk
+# Opens ~16 PNGs in /tmp/hush-uxwalk-shots/
+# On macOS: open /tmp/hush-uxwalk-shots/
+```
+
+The script is `tests/e2e/zz-uxwalk.spec.ts`. It runs as part of the normal CI suite (all tests pass/fail the spec, but no screenshot diffing is enforced — screenshots are for human review only). Meeting panel shots are `test.skip`'d pending real meeting-state mocking.
+
 ### Type check (`npm run check`)
 
 Runs `svelte-check` across the full frontend including `vite.config.js`. Required clean for every PR; CI runs the same command.

@@ -1,14 +1,17 @@
 // Hands-off UX walkthrough — captures a screenshot of every
 // significant screen / state so a reviewer can flip through them
-// and flag visual / interaction polish work. NOT part of the CI
-// suite (the `_` prefix excludes it from the default testMatch).
+// and flag visual / interaction polish work. Runs as part of the
+// normal CI suite (zz- prefix means it sorts last, after all other
+// specs, but it is not excluded).
 //
-// Run: `npx playwright test tests/e2e/_uxwalk.spec.ts --reporter=list`
+// Run:   `npm run test:uxwalk`
+//   or:  `npx playwright test tests/e2e/zz-uxwalk.spec.ts --reporter=list`
 // Output: PNGs in /tmp/hush-uxwalk-shots/
 //
 // Each step covers one branch worth showing: empty state, populated
 // state, error state, dialog open, click-to-confirm armed, etc.
-// Designed to be re-runnable as the UI evolves.
+// Designed to be re-runnable as the UI evolves — captures a
+// snapshot index you can compare across branches or releases.
 
 import { expect, test } from "@playwright/test";
 import { installMocks } from "./_mock";
