@@ -89,7 +89,7 @@ Design memo at `docs/system-audio-meeting-mode-proposal.md`. The privacy framing
 
 **Backend (Rust).** Tauri command handlers exposing audio capture, transcription, history queries, hotkey registration, foreground-app polling, dictionary application, and clipboard writes.
 
-**Transcription.** whisper.cpp via the `whisper-rs` crate. Quantised GGUF models stored in the platform's app-data directory, downloaded on first use. Default to `base` Q5_0; let the user pick `tiny`, `base`, `small`, `medium`, `large-v3`.
+**Transcription.** whisper.cpp via the `whisper-rs` crate. Quantised GGUF models stored in the platform's app-data directory, downloaded on first use. Default to `small` Q5_0; let the user pick `tiny`, `base`, `small`, `medium`, `large-v3`.
 
 **Audio.** `cpal` for cross-platform input enumeration and capture. 16 kHz mono PCM into a ring buffer, flushed to whisper-rs at recording stop.
 
