@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-08
+
 ### Added
 
 - **HUD pill: double-click to raise the main Hush window.** Double-clicking anywhere on the recording overlay brings the main app window forward (show + unminimize + focus) so the user can check history or settings without navigating away from the document they're dictating into. Single-clicking the pill still drags it; single-clicking ✕ still dismisses it.
@@ -14,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Microphone permission prompt no longer fires before the first-run wizard.** On macOS 14+, CPAL's `host.input_devices()` / `default_input_device()` triggers the TCC microphone dialog even for passive device listing. The cold-start `loadSources()` call in `onMount` was firing this before the first-run wizard appeared. `list_devices()` now returns an empty vec if microphone access has not yet been granted on macOS; a reactive `$effect` re-loads sources when the permission health poll sees the microphone transition to Authorized so the list populates as soon as the user grants access during the wizard.
+- **Main window double-scrollbar eliminated.** A missing `overflow: hidden` on `html, body` allowed the browser body to produce its own scrollbar alongside the `.app-main` scroll region, resulting in two scrollbars on the main window. Fixed with `html, body { overflow: hidden }` in `app.css`.
 - **About tab version and Tauri runtime now display correctly** (#649 follow-up). Version and "Tauri runtime" rows were silently hidden because the main window capability intentionally excludes `app:default`, causing `getVersion()`/`getTauriVersion()` to fail without error. These values are now read from the existing `get_build_info` IPC command (no capability required); `tauri_version` is baked in at compile time by `build.rs` parsing `Cargo.lock`.
 - **Settings sidebar: double-scrollbar eliminated.** The settings sidebar had its own `overflow-y: auto` scroll container nested inside the panel's main scroll region, producing two side-by-side scrollbars on short windows. The inner overflow is removed; the panel scrolls as a single unit.
 - **Meeting tab: dropdown + label no longer overflow on narrow windows.** At the settings panel's ~400 px inner width (800 px window − sidebars − padding), the "Auto-start mode" select row clipped its label. The row now wraps with `flex-wrap: wrap` and a `min-width: 10rem` label floor so both elements render legibly at any window width.
@@ -21,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Permissions tab: "Screen Recording" removed from copy** (#658). The copy that instructed users to "reset all three permission grants (Microphone, Screen Recording, Input Monitoring)" now reads "Microphone and Input Monitoring" — Screen Recording is no longer required since the system-audio backend switched to the CoreAudio process tap in v0.5.0.
 - **Permissions troubleshooting link: now shows human-readable text** (#658). The anchor text previously showed the raw file path `docs/macos-permissions.md`; it now reads "Permissions troubleshooting guide".
 - **Dead Screen Recording badge code removed** (#659). `RecordPanel.svelte` carried a `{#if badgeVisible}` template block and ~70 lines of badge CSS that were permanently unreachable since v0.5.0 (badge was never shown — `badgeVisible` was a `const false`). All dead code removed.
+- **First-run dialog: permission count corrected to "two macOS permissions".** The dialog intro previously said "three macOS permissions"; Screen Recording has not been required since v0.5.0. The intro now correctly reads "two macOS permissions".
+- **First-run welcome text now reflects actual microphone state.** The welcome step previously showed fixed success copy regardless of whether microphone access had actually been granted. The text is now derived from the live permission diagnostic so it accurately tells the user whether they're ready to go or still need to grant access.
+- **First-run network disclosure mentions diarizer auto-download.** After a Whisper model download completes, Hush silently fetches the ~26 MB wespeaker speaker-diarization model if it is not already present. The network disclosure in the first-run flow now mentions this second download so users on metered connections are not surprised.
 
 ### Performance
 
@@ -28,14 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **"Dictation" renamed to "Transcribe" in all user-visible labels.** The sidebar nav item, command palette group, page title, and all related copy now use "Transcribe" to better reflect what the feature does — transcribing spoken words to text — and to distinguish it from the Meeting transcription mode.
 - **Default transcription model changed to Whisper Small** (#660). New installs now default to `whisper-small` (466 MB) instead of `whisper-base` (142 MB). Small delivers noticeably better accuracy on accents and technical vocabulary at near-real-time speed on Apple Silicon; base remains available for users who need maximum speed or are on lower-end hardware. Existing users with a saved model choice are unaffected. History row dates now render as "Apr 29, 2026, 1:00 PM" instead of "4/29/2026, 1:00:00 PM". Consistent with the format already used in meeting session rows.
 - **Model picker: speed/accuracy numeric labels removed.** The "5.0" / "1.0" values next to each rating bar were redundant — the bar graph already encodes the ranking. Removed to reduce visual clutter.
 - **Settings section headings: sentence case instead of ALL CAPS.** Section labels such as "STARTUP", "INTERFACE", "APPEARANCE", "HOTKEYS", "AUTO-START", and "SPEAKERS" now render in the casing they are authored in (e.g. "Startup", "Interface"). Applies to all six Settings tabs.
-- **UX polish: reduced copy clutter across multiple panels.** Removed decorative panel sub-labels ("biases the recognition", "rewrites the output", "teaches Meeting Mode about your apps") — the hint paragraphs below each heading explain the same thing more clearly. History search placeholder shortened to "Search history…". Setup banner button renamed from "Open Settings → Model" to "Choose a model". Model picker intro simplified: technical detail (SHA-256, raw app-data path) moved to secondary copy; key action stays front-and-centre. Keyboard shortcut hint on the Dictation page now uses native Mac glyphs (⌃⌥H) instead of cross-platform "Ctrl/⌥/Alt" copy.
+- **UX polish: reduced copy clutter across multiple panels.** Removed decorative panel sub-labels ("biases the recognition", "rewrites the output", "teaches Meeting Mode about your apps") — the hint paragraphs below each heading explain the same thing more clearly. History search placeholder shortened to "Search history…". Setup banner button renamed from "Open Settings → Model" to "Choose a model". Model picker intro simplified: technical detail (SHA-256, raw app-data path) moved to secondary copy; key action stays front-and-centre. Keyboard shortcut hint on the Transcribe page now uses native Mac glyphs (⌃⌥H) instead of cross-platform "Ctrl/⌥/Alt" copy.
 - **Settings panel: horizontal tab strip replaced with macOS-style left sidebar nav.** Switching settings categories now uses a sticky 140 px left sidebar with a left-chrome accent indicator, matching the main navigation sidebar. The horizontal overflow-scrolling tab strip is gone.
-- **Main sidebar: Settings and About moved to footer.** Dictation and History remain as primary workflow items at the top; Settings and About are now separated by a divider and pinned to the bottom of the sidebar, following macOS native app conventions for utility/chrome items.
+- **Main sidebar: Settings and About moved to footer.** Transcribe and History remain as primary workflow items at the top; Settings and About are now separated by a divider and pinned to the bottom of the sidebar, following macOS native app conventions for utility/chrome items.
 - **Panel headers: letter badge treatment removed.** The coloured letter circles (H, M, V, R, A) that decorated each Settings panel heading have been removed; the section heading alone is sufficient.
 - **Model picker: redundant selected-state indicator removed.** The selected model card previously showed three simultaneous "selected" signals (border highlight, "Selected" badge, and a ● dot). The ● dot has been removed; border + badge is sufficient.
+- **About tab: "Open release notes" promoted to primary action.** The "Install update" button is demoted to a ghost button. Users can always navigate to the release notes manually even when auto-install is unavailable; the primary slot now reflects the always-available path.
+- **Meeting settings: advanced app overrides panel defaults to collapsed.** The panel was previously expanded on every settings open, making it feel like a required step. It now opens collapsed; users who need to customise per-app behaviour can expand it.
+- **README: system-audio capture qualified as macOS-only.** The hero copy and comparison table now clarify that simultaneous mic + system audio capture is a macOS feature (CoreAudio process tap); the cross-platform transcription path uses microphone only.
 
 ## [0.5.1] - 2026-05-08
 
