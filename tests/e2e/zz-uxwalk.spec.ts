@@ -20,7 +20,8 @@ const SHOT_DIR = "/tmp/hush-uxwalk-shots";
 
 // Each test is independent; no `serial` so a single failure
 // doesn't skip the rest of the walkthrough.
-test.use({ viewport: { width: 1280, height: 800 } });
+// Viewport matches the actual macOS window size from tauri.conf.json (800×600).
+test.use({ viewport: { width: 800, height: 600 } });
 
 async function shot(page: import("@playwright/test").Page, name: string) {
   // Wait for the network to settle (Promise.all of mount fetches in
@@ -451,6 +452,8 @@ test.describe("UX walkthrough — settings window", () => {
 });
 
 test.describe("UX walkthrough — HUD", () => {
+  // HUD is a 290×60 transparent floating pill — match the real window size.
+  test.use({ viewport: { width: 290, height: 60 } });
   test("HUD page in isolation", async ({ page }) => {
     await installMocks(page);
     await page.goto("/hud");
