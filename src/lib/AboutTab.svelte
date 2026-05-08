@@ -323,14 +323,6 @@
 
           {#if installState === "idle"}
             <div class="about-install-actions">
-              <button
-                type="button"
-                class="primary"
-                data-testid="about-install-update"
-                onclick={onInstallUpdate}
-              >
-                Install update
-              </button>
               <a
                 href={updateCheck.releaseUrl}
                 onclick={(e) => {
@@ -338,8 +330,16 @@
                   openExternal(e.currentTarget.href);
                 }}
                 rel="noopener noreferrer"
-                class="about-update-fallback"
+                class="primary about-release-notes-btn"
               >Open release notes</a>
+              <button
+                type="button"
+                class="ghost"
+                data-testid="about-install-update"
+                onclick={onInstallUpdate}
+              >
+                Install update
+              </button>
             </div>
             {#if isMacOS}
               <!--
@@ -619,6 +619,23 @@
     color: var(--text-secondary, #555);
     background-color: var(--bg-surface, #f4f4f6);
     border: 1px solid var(--border, #e1e1e6);
+  }
+  .about-release-notes-btn {
+    display: inline-block;
+    padding: 0.45em 0.85em;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background-color: var(--accent);
+    color: white;
+    font-size: 0.88rem;
+    font-weight: 500;
+    line-height: 1.2;
+    text-decoration: none;
+  }
+  .about-release-notes-btn:hover {
+    background-color: var(--accent-hover, #5c4fd4);
+    border-color: var(--accent-hover, #5c4fd4);
+    color: white;
   }
   .about-update-fallback {
     font-size: 0.88rem;

@@ -7,7 +7,7 @@
 **Local voice-to-text and meeting transcription.**
 macOS, Linux, and Windows. Free. Open source. No account. No cloud.
 
-Dictate anywhere with a hotkey. Capture meetings with mic + system audio in parallel. Label You vs Remote.
+Dictate anywhere with a hotkey. Capture meetings with mic + system audio in parallel (macOS). Label You vs Remote.
 
 [Download](https://github.com/khawkins98/Hush/releases) · [Privacy](#privacy-grep-the-source) · [Engineering](#engineering) · [Contribute](./CONTRIBUTING.md)
 
@@ -31,7 +31,7 @@ The table splits "Free?" (no-cost tier exists) from "Open source?" (source publi
 
 |  | Local? | Dictation? | Meetings? | Free? | Open source? | Platforms |
 |---|---|---|---|---|---|---|
-| **Hush** | ✅ | ✅ hotkey | ✅ mic + system audio in parallel | ✅ | ✅ Apache 2.0 | macOS · Linux · Windows |
+| **Hush** | ✅ | ✅ hotkey | ✅ mic + system audio in parallel (macOS) | ✅ | ✅ Apache 2.0 | macOS · Linux · Windows |
 | [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ✅ | ✅ | ✅ auto-detect Zoom / Teams | ✅ local unlimited; cloud tier: 2k words/wk free, $8/mo Pro | ✅ MIT | macOS · Linux · Windows |
 | [Whispering](https://github.com/EpicenterHQ/epicenter) | ✅ | ✅ | — | ✅ | ✅ AGPLv3 | macOS · Linux · Windows |
 | [Buzz](https://github.com/chidiwilliams/buzz) | ✅ | partial (live mic, no PTT into other apps) | file import only | ✅ | ✅ MIT | macOS · Linux · Windows |

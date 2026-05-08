@@ -78,8 +78,8 @@
       <div class="permissions-banner-text">
         <strong>Permission needed</strong>
         <span>
-          On macOS, dictation needs Microphone access (and Screen
-          Recording for system-audio capture in meetings).
+          On macOS, dictation needs Microphone access. Input
+          Monitoring enables push-to-talk while you're in another app.
         </span>
       </div>
       <button

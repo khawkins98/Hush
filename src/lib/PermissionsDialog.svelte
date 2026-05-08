@@ -54,7 +54,7 @@
     show,
     onDismiss,
     onOpenPrivacyPane,
-    intro = "Hush uses three macOS permissions. Grant or revoke each below; you can also wait for Hush to prompt on first use.",
+    intro = "Hush uses two macOS permissions. Grant or revoke each below; you can also wait for Hush to prompt on first use.",
   }: Props = $props();
 
   let diagnostic: MacosPermissionDiagnostic | null = $state(null);
