@@ -1,0 +1,85 @@
+<!--
+  DMG installer background for Hush.
+  Design target: 660×400 pt window (rendered at 2× → 1320×800 px for Retina).
+
+  Finder icon positions (tauri.conf.json bundle.macOS.dmg):
+    Hush.app        → x:160, y:185
+    Applications/   → x:500, y:185
+
+  To regenerate the PNG:
+    bash scripts/generate-dmg-background.sh
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 660 400"
+  width="1320"
+  height="800"
+>
+  <defs>
+    <!-- Dark background gradient — top-left slightly lighter than bottom-right -->
+    <radialGradient id="bg" cx="30%" cy="30%" r="80%">
+      <stop offset="0%"   stop-color="#1a2236"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </radialGradient>
+
+    <!-- Subtle vignette around the edges -->
+    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+      <stop offset="60%"  stop-color="black" stop-opacity="0"/>
+      <stop offset="100%" stop-color="black" stop-opacity="0.45"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="660" height="400" fill="url(#bg)"/>
+
+  <!-- Large Hush icon as a centred watermark.
+       Icon viewBox is 1024×1024; scale(0.215) maps it to ~220 px,
+       then translate(-512,-512) recentres the 1024-unit paths at origin
+       before the outer translate(330,195) places the whole thing. -->
+  <g transform="translate(330,195) scale(0.215) translate(-512,-512)"
+     fill="none"
+     stroke="#3b82f6"
+     stroke-linejoin="round"
+     opacity="0.09">
+    <!-- Outer shield / rounded-rectangle outline -->
+    <path stroke-width="64"
+          d="M214.4,84.5h595.2c78.2,0,117.2,39.1,117.2,117.2v286.3
+             c0,209.7-270.5,437.4-414.8,437.4S97.2,697.8,97.2,488.1
+             V201.8C97.2,123.6,136.2,84.5,214.4,84.5z"/>
+    <!-- Left chat bubble -->
+    <path stroke-width="50" stroke-linecap="round"
+          d="M577.5,400.3c0,23.2-18.8,42.1-42.1,42.1H384.5
+             c-11.2,0-21.9,4.4-29.8,12.3l-46.3,46.3
+             c-5.8,5.8-15.3,5.8-21.1,0c-2.8-2.8-4.4-6.6-4.4-10.6
+             V274.1c0-23.2,18.8-42.1,42.1-42.1h210.5
+             c23.2,0,42.1,18.8,42.1,42.1V400.3z"/>
+    <!-- Right chat bubble -->
+    <path stroke-width="50" stroke-linecap="round"
+          d="M661.7,379.3c23.2,0,42.1,18.8,42.1,42.1v216.5
+             c0,8.3-6.7,14.9-14.9,14.9c-4,0-7.8-1.6-10.6-4.4
+             L632,602.1c-7.9-7.9-18.6-12.3-29.8-12.3H451.3
+             c-23.2,0-42.1-18.8-42.1-42.1v-21"/>
+  </g>
+
+  <!-- Vignette overlay -->
+  <rect width="660" height="400" fill="url(#vignette)"/>
+
+  <!-- Drag hint: dashed arrow from Hush.app (x=160) to Applications (x=500)
+       Arrow body runs from x=215 to x=440, centred at y=185 (icon mid-line).
+       Kept subtle so it doesn't compete with the real Finder icons. -->
+  <g fill="none" stroke="#4b6cb7" stroke-width="1.5" opacity="0.45">
+    <line x1="215" y1="185" x2="440" y2="185" stroke-dasharray="5 4"/>
+    <!-- Arrowhead -->
+    <polyline points="432,178 441,185 432,192"/>
+  </g>
+
+  <!-- "Drag to Applications to install" — bottom centre, dim -->
+  <text
+    x="330" y="355"
+    text-anchor="middle"
+    font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
+    font-size="11"
+    letter-spacing="0.3"
+    fill="#6b7280"
+  >Drag Hush to Applications to install</text>
+</svg>

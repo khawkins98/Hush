@@ -42,6 +42,11 @@ npm run tauri:bundle
 # DMG lands at src-tauri/target/release/bundle/dmg/*.dmg.
 npm run tauri:dmg
 
+# Regenerate the DMG installer background PNG from its SVG source.
+# Requires rsvg-convert (brew install librsvg). Run after editing
+# src-tauri/assets/dmg-background.svg, then commit the updated PNG.
+bash scripts/generate-dmg-background.sh
+
 # Rust unit tests — fast, no real audio device needed.
 cd src-tauri && cargo test --lib
 cd src-tauri && cargo test --lib --features whisper             # plus whisper-gated paths
