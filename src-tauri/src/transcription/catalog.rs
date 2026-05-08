@@ -151,8 +151,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             size_mb: 142,
             speed_rating: 9,
             accuracy_rating: 6,
-            description: "Recommended default. Solid accuracy at near-real-time speed.".into(),
-            is_default: true,
+            description: "Fast and lightweight. Good for quick notes on lower-end hardware; weaker on accents and jargon.".into(),
+            is_default: false,
             download_url: download_url_for("ggml-base.bin"),
             sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe".into(),
         },
@@ -163,9 +163,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             size_mb: 466,
             speed_rating: 7,
             accuracy_rating: 8,
-            description: "Better accuracy for technical jargon and accents. ~3× slower than base."
-                .into(),
-            is_default: false,
+            description: "Recommended default. Noticeably better accuracy for accents and technical vocabulary at near-real-time speed on Apple Silicon.".into(),
+            is_default: true,
             download_url: download_url_for("ggml-small.bin"),
             sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b".into(),
         },
@@ -256,10 +255,10 @@ mod tests {
     }
 
     #[test]
-    fn default_model_is_whisper_base_per_prd() {
-        // PRD §6: "Default to `base` Q5_0". If we ever change the
+    fn default_model_is_whisper_small_per_prd() {
+        // PRD §6: "Default to `small` Q5_0". If we ever change the
         // default this test reminds us to update the PRD too.
-        assert_eq!(default_model().id, "whisper-base");
+        assert_eq!(default_model().id, "whisper-small");
     }
 
     #[test]

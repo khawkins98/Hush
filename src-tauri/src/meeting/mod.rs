@@ -42,6 +42,7 @@ pub mod classifier;
 pub mod lifecycle;
 pub mod manager;
 pub mod pump;
+pub(super) mod recovery;
 pub mod sqlite;
 
 pub use app_overrides::{

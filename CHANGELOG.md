@@ -7,13 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HUD pill: double-click to raise the main Hush window.** Double-clicking anywhere on the recording overlay brings the main app window forward (show + unminimize + focus) so the user can check history or settings without navigating away from the document they're dictating into. Single-clicking the pill still drags it; single-clicking ✕ still dismisses it.
+- **History rows: action buttons revealed on hover/focus.** Copy, Export, and Delete buttons in the history panel are now hidden by default and revealed when the mouse hovers over the row or a keyboard user tabs into it. The buttons always stay visible when the delete-confirm state is armed. Touch/pointer-only devices (no hover) see buttons at all times. Reduces visual clutter on rows where the user is just reading.
+
 ### Fixed
 
 - **About tab version and Tauri runtime now display correctly** (#649 follow-up). Version and "Tauri runtime" rows were silently hidden because the main window capability intentionally excludes `app:default`, causing `getVersion()`/`getTauriVersion()` to fail without error. These values are now read from the existing `get_build_info` IPC command (no capability required); `tauri_version` is baked in at compile time by `build.rs` parsing `Cargo.lock`.
+- **Settings sidebar: double-scrollbar eliminated.** The settings sidebar had its own `overflow-y: auto` scroll container nested inside the panel's main scroll region, producing two side-by-side scrollbars on short windows. The inner overflow is removed; the panel scrolls as a single unit.
+- **Meeting tab: dropdown + label no longer overflow on narrow windows.** At the settings panel's ~400 px inner width (800 px window − sidebars − padding), the "Auto-start mode" select row clipped its label. The row now wraps with `flex-wrap: wrap` and a `min-width: 10rem` label floor so both elements render legibly at any window width.
+- **"Couldn't read autostart state on this platform" error suppressed in dev builds** (#661). The error banner in Settings → General is no longer shown during `npm run tauri dev`. The underlying cause is structural — `tauri-plugin-autostart` requires a signed `.app` bundle with a stable bundle ID (`SMAppService`); unsigned dev binaries always throw. The banner remains visible in production builds where the failure is actionable.
+- **Permissions tab: "Screen Recording" removed from copy** (#658). The copy that instructed users to "reset all three permission grants (Microphone, Screen Recording, Input Monitoring)" now reads "Microphone and Input Monitoring" — Screen Recording is no longer required since the system-audio backend switched to the CoreAudio process tap in v0.5.0.
+- **Permissions troubleshooting link: now shows human-readable text** (#658). The anchor text previously showed the raw file path `docs/macos-permissions.md`; it now reads "Permissions troubleshooting guide".
+- **Dead Screen Recording badge code removed** (#659). `RecordPanel.svelte` carried a `{#if badgeVisible}` template block and ~70 lines of badge CSS that were permanently unreachable since v0.5.0 (badge was never shown — `badgeVisible` was a `const false`). All dead code removed.
+
+### Performance
+
+- **History feed merge: O(N log N) → O(N)** (#654). The merged dictation + meeting feed in `HistoryPanel.svelte` previously rebuilt the full combined array and called `.sort()` on every reactive change. Both source lists arrive pre-sorted newest-first from the backend; the `$derived` block now uses a two-pointer merge (O(N)) for the combined case and a plain map (O(N), no merge) when only one stream is active.
 
 ### Changed
 
-- **History timestamps no longer show seconds.** History row dates now render as "Apr 29, 2026, 1:00 PM" instead of "4/29/2026, 1:00:00 PM". Consistent with the format already used in meeting session rows.
+- **Default transcription model changed to Whisper Small** (#660). New installs now default to `whisper-small` (466 MB) instead of `whisper-base` (142 MB). Small delivers noticeably better accuracy on accents and technical vocabulary at near-real-time speed on Apple Silicon; base remains available for users who need maximum speed or are on lower-end hardware. Existing users with a saved model choice are unaffected. History row dates now render as "Apr 29, 2026, 1:00 PM" instead of "4/29/2026, 1:00:00 PM". Consistent with the format already used in meeting session rows.
 - **Model picker: speed/accuracy numeric labels removed.** The "5.0" / "1.0" values next to each rating bar were redundant — the bar graph already encodes the ranking. Removed to reduce visual clutter.
 - **Settings section headings: sentence case instead of ALL CAPS.** Section labels such as "STARTUP", "INTERFACE", "APPEARANCE", "HOTKEYS", "AUTO-START", and "SPEAKERS" now render in the casing they are authored in (e.g. "Startup", "Interface"). Applies to all six Settings tabs.
 - **UX polish: reduced copy clutter across multiple panels.** Removed decorative panel sub-labels ("biases the recognition", "rewrites the output", "teaches Meeting Mode about your apps") — the hint paragraphs below each heading explain the same thing more clearly. History search placeholder shortened to "Search history…". Setup banner button renamed from "Open Settings → Model" to "Choose a model". Model picker intro simplified: technical detail (SHA-256, raw app-data path) moved to secondary copy; key action stays front-and-centre. Keyboard shortcut hint on the Dictation page now uses native Mac glyphs (⌃⌥H) instead of cross-platform "Ctrl/⌥/Alt" copy.

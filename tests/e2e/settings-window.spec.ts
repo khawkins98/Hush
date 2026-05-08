@@ -449,7 +449,7 @@ test.describe("settings window — PTT editor", () => {
 });
 
 test.describe("settings window — Meeting tab (Phase E #112)", () => {
-  test("renders the empty-state hint when no overrides exist", async ({
+  test("advanced overrides mounts collapsed and shows the empty-state hint when expanded", async ({
     page,
   }) => {
     await installMocks(page);
@@ -459,6 +459,15 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await expect(
       page.locator('[data-testid="settings-tab-meeting"]'),
     ).toHaveAttribute("aria-current", "page");
+
+    const toggle = page.locator(
+      '[data-testid="settings-meeting-advanced-toggle"]',
+    );
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("section.panel-overrides")).toHaveCount(0);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator("section.panel-overrides")).toBeVisible();
     await expect(page.locator(".empty-history")).toContainText(
       /No overrides yet/i,
@@ -518,6 +527,7 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await page.goto("/");
     await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await page.locator('[data-testid="settings-meeting-advanced-toggle"]').click();
 
     await page
       .getByLabel("App identifier")
@@ -550,6 +560,7 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await page.goto("/");
     await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await page.locator('[data-testid="settings-meeting-advanced-toggle"]').click();
 
     const rows = page.locator(".override-row");
     await expect(rows).toHaveCount(2);
@@ -578,6 +589,7 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await page.goto("/");
     await page.locator('[data-testid="sidebar-nav-settings"]').click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await page.locator('[data-testid="settings-meeting-advanced-toggle"]').click();
 
     // Profile row container
     await expect(
@@ -602,6 +614,7 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await page.goto("/");
     await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await page.locator('[data-testid="settings-meeting-advanced-toggle"]').click();
 
     const disclosure = page.locator('[data-testid="override-defaults"]');
     await expect(disclosure).toBeVisible();
@@ -645,6 +658,7 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await page.goto("/");
     await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await page.locator('[data-testid="settings-meeting-advanced-toggle"]').click();
 
     // Suggestion box hidden until the user types a substring
     // matching multiple defaults.
@@ -682,6 +696,7 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await page.goto("/");
     await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
     await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await page.locator('[data-testid="settings-meeting-advanced-toggle"]').click();
 
     // Pre-warning: the input is empty, no notice.
     await expect(

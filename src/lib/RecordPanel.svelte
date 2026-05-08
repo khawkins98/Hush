@@ -33,8 +33,6 @@
     hasUsableSource: boolean;
     noModelInstalled: boolean;
     willRecordMeeting: boolean;
-    badgeVisible: boolean;
-    badgeIsStale: boolean;
     recordMode: "dictation" | "meeting" | null;
     selectedSourceLabel: string | null;
     activeModelName: string | null;
@@ -65,8 +63,6 @@
     hasUsableSource,
     noModelInstalled,
     willRecordMeeting,
-    badgeVisible,
-    badgeIsStale,
     recordMode,
     selectedSourceLabel,
     activeModelName,
@@ -346,26 +342,6 @@
     </header>
     <p class="live-transcript-body">{liveTranscriptText}</p>
   </section>
-{/if}
-
-{#if badgeVisible}
-  <button
-    type="button"
-    class="record-mode-badge"
-    data-health={badgeIsStale ? "stale" : "not-granted"}
-    onclick={onOpenPermissions}
-    aria-label="Open Permissions in Settings"
-    data-testid="record-mode-badge"
-  >
-    <span class="record-mode-badge-dot" aria-hidden="true"></span>
-    {#if badgeIsStale}
-      Mic only · Screen Recording access expired — re-grant to
-      also capture other people's audio in calls.
-    {:else}
-      Mic only · grant Screen Recording to also capture other
-      people's audio in calls.
-    {/if}
-  </button>
 {/if}
 
 {#if statusLineEnabled}
@@ -665,78 +641,6 @@
     color: var(--accent);
     border-radius: 999px;
     white-space: nowrap;
-  }
-
-  .record-mode-badge {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.45rem;
-    /* Use the full content-column width and align text left so the
-       pre-r2 "centre an inline-flex pill" trick stops squishing the
-       multi-line copy past the column boundary. */
-    align-self: stretch;
-    padding: 0.55rem 0.85rem;
-    font-size: 0.82rem;
-    line-height: 1.4;
-    font-family: inherit;
-    /* `--radius-md` (8 px) reads cleanly when the copy wraps;
-       the pre-r2 999 px pill stretched into an oblong on
-       multi-line text. */
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border-input);
-    background-color: var(--bg-surface);
-    color: var(--text-secondary);
-    text-align: left;
-    cursor: pointer;
-    text-align: left;
-    max-width: 100%;
-    transition: background-color 0.12s, border-color 0.12s, color 0.12s;
-  }
-  .record-mode-badge:hover {
-    background-color: var(--bg-elevated);
-    border-color: var(--accent-hover);
-    color: var(--text-primary);
-  }
-  .record-mode-badge:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: 0 0 0 3px var(--accent-subtle);
-  }
-  .record-mode-badge-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 50%;
-    background-color: var(--text-muted);
-    flex-shrink: 0;
-    margin-top: 0.2rem;
-  }
-  .record-mode-badge[data-health="stale"] .record-mode-badge-dot {
-    background-color: #e0a020;
-  }
-  .record-mode-badge[data-health="not-granted"] .record-mode-badge-dot {
-    background-color: var(--danger);
-  }
-  .record-mode-badge[data-health="stale"] {
-    background-color: var(--warning-bg);
-    border-color: var(--warning-border);
-    color: var(--warning-text);
-  }
-  .record-mode-badge[data-health="stale"]:hover {
-    background-color: #f9efce;
-    border-color: #d8b46a;
-    color: #5a3700;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .record-mode-badge[data-health="stale"]:hover {
-      background-color: #4a3a18;
-      color: #ffd790;
-      border-color: #8a6520;
-    }
-  }
-  :root[data-theme="dark"] .record-mode-badge[data-health="stale"]:hover {
-    background-color: #4a3a18;
-    color: #ffd790;
-    border-color: #8a6520;
   }
 
   .status-mode {

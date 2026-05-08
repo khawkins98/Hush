@@ -162,7 +162,7 @@
   });
 </script>
 
-<li class="history-row meeting-row" data-kind="meeting" data-meeting-id={session.id}>
+<li class="history-row meeting-row" class:confirming-active={confirming} data-kind="meeting" data-meeting-id={session.id}>
   <div class="meeting-meta">
     <span class="meeting-app">{session.appName}</span>
     <span class="meeting-started">{formatStarted(session.startedAt)}</span>
@@ -330,6 +330,23 @@
     display: flex;
     gap: 0.4rem;
     flex-wrap: wrap;
+  }
+
+  /* On pointer devices, hide actions until the row is hovered or
+     keyboard-focused. `confirming-active` keeps them visible while
+     the delete confirm state is armed, even if the cursor leaves.
+     The export popover is also inside .history-actions so it stays
+     visible while open. */
+  @media (hover: hover) {
+    .history-actions {
+      opacity: 0;
+      transition: opacity 0.12s;
+    }
+    .history-row:hover .history-actions,
+    .history-row:focus-within .history-actions,
+    .history-row.confirming-active .history-actions {
+      opacity: 1;
+    }
   }
 
   .export-popover {

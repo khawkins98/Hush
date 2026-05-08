@@ -154,3 +154,51 @@ test.describe("HUD transcription progress indicator (#566)", () => {
   });
 });
 
+// Double-click to raise main window (#662): double-clicking the HUD pill
+// calls `show_main_window` so the user can surface the Hush app without
+// leaving their active document.
+test.describe("HUD double-click raises main window", () => {
+  test("dblclick on pill body invokes show_main_window", async ({ page }) => {
+    let callCount = 0;
+    await page.exposeFunction("__hushTestTrackShowMain", () => {
+      callCount++;
+    });
+    await installMocks(page, {
+      // Must be an inline literal — no outer-scope variable capture.
+      show_main_window: () => {
+        (window as unknown as { __hushTestTrackShowMain: () => void }).__hushTestTrackShowMain();
+      },
+    });
+    await page.goto("/hud");
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
+
+    await page.locator(".hud-root").dblclick();
+
+    await expect
+      .poll(() => callCount, { timeout: 2000 })
+      .toBeGreaterThanOrEqual(1);
+  });
+
+  test("dblclick on dismiss button does not invoke show_main_window", async ({
+    page,
+  }) => {
+    let callCount = 0;
+    await page.exposeFunction("__hushTestTrackShowMain2", () => {
+      callCount++;
+    });
+    await installMocks(page, {
+      show_main_window: () => {
+        (window as unknown as { __hushTestTrackShowMain2: () => void }).__hushTestTrackShowMain2();
+      },
+    });
+    await page.goto("/hud");
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
+
+    // Double-click the dismiss button — should NOT bubble to .hud-root.
+    await page.locator("button.hud-dismiss").dblclick();
+
+    // Give a short window for any erroneous call to arrive.
+    await page.waitForTimeout(300);
+    expect(callCount).toBe(0);
+  });
+});

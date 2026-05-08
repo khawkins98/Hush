@@ -19,6 +19,7 @@
   to reason about.
 -->
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { onDestroy, onMount } from "svelte";
@@ -168,6 +169,17 @@
       // Hide failure is non-fatal — recording continues regardless.
     }
   }
+
+  // Double-click the HUD pill to bring the main Hush window forward.
+  // Useful when the user wants to check history or settings without
+  // navigating away from whatever app they're dictating into.
+  async function raiseMainWindow() {
+    try {
+      await invoke("show_main_window");
+    } catch {
+      // Best-effort — main window will still be accessible via tray.
+    }
+  }
 </script>
 
 <!--
@@ -196,6 +208,7 @@
       ? `Processing transcription ${transcriptionProgress}%`
       : "Processing transcription"
     : "Recording in progress"}
+  ondblclick={raiseMainWindow}
 >
   <!--
     Subtle 6-dot grip glyph at the leading edge. The whole pill is a
@@ -260,6 +273,7 @@
     aria-label="Hide recording overlay (recording continues)"
     title="Hide overlay"
     onclick={dismiss}
+    ondblclick={(e) => e.stopPropagation()}
   >
     <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
       <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />

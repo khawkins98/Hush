@@ -50,7 +50,7 @@
 </script>
 
 {#if visible && stats}
-  <section class="dictation-stats" aria-label="Dictation usage statistics">
+  <section class="dictation-stats" aria-label="Transcription usage statistics">
     <p class="stats-hero">
       You've dictated
       <strong>{stats.wordCount.toLocaleString()}</strong>

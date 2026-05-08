@@ -73,6 +73,7 @@
   // signals via NotApplicable on non-macOS, so a real `null` is
   // genuinely "haven't checked yet" rather than "denied").
   let diagnostic = $state<MacosPermissionDiagnostic | null>(null);
+  let micReady = $derived(diagnostic?.statuses.microphone === "granted");
   let pollHandle: ReturnType<typeof setInterval> | null = null;
 
   // Per-row "Allow click in flight" guards so a user mashing the
@@ -271,14 +272,20 @@
           Hush captures your microphone for dictation and (on macOS)
           your call's system audio for meeting transcription. Both
           stay on your device — no upload, no account, no telemetry.
-          You've granted the permissions Hush needs — you're ready
-          to dictate.
+          {#if micReady}
+            You're all set — press your hotkey to start dictating.
+          {:else}
+            Head to Settings → Permissions any time to grant Microphone
+            access, or try the hotkey and Hush will prompt you.
+          {/if}
         </p>
 
         <footer class="first-run-footer">
           <p class="first-run-meta">
-            Hush makes no other network requests except when you
-            click Download on a model card.
+            Hush makes no other network requests except when you click
+            Download on a model card. After downloading a speech
+            model, the companion speaker-labelling model (~26 MB)
+            also downloads automatically.
           </p>
           <div class="footer-actions">
             <button
