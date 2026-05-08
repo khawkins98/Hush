@@ -220,3 +220,32 @@ jobs:
           # native bundler — currently used to fan out per-arch
           # macOS builds.
           args: ${{ matrix.args }}
+
+      # Inject "Read Me First.txt" into the macOS DMG so users see
+      # Gatekeeper bypass instructions the moment they open the disk
+      # image.  tauri-action has already uploaded the original DMG to
+      # the draft release; we post-process the DMG still in the
+      # workspace and re-upload with --clobber to replace it.
+      #
+      # NOTE: this step must run before any DMG signing,
+      # notarisation, checksum generation, or updater-signature
+      # generation — modifying the DMG after those steps would
+      # invalidate their outputs.
+      - name: Inject README into macOS DMG
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DMG_PATH=$(find src-tauri/target/release/bundle/dmg \
+            -name "*_aarch64.dmg" -not -name "rw.*" | head -1)
+
+          if [[ -z "$DMG_PATH" || ! -f "$DMG_PATH" ]]; then
+            echo "No aarch64 DMG found in bundle output" >&2
+            exit 1
+          fi
+
+          bash scripts/inject-dmg-readme.sh "$DMG_PATH"
+
+          TAG="${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref_name }}"
+          gh release upload "$TAG" "$DMG_PATH" --clobber

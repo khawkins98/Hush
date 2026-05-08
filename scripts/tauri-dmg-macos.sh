@@ -66,6 +66,9 @@ if [[ -d "$RELEASE_APP" ]]; then
     codesign --force --deep --sign - "$RELEASE_APP"
 fi
 
+echo "[hush tauri:dmg] injecting 'Read Me First.txt' into DMG…"
+bash "$(dirname "$0")/inject-dmg-readme.sh" "$DMG_PATH"
+
 echo "[hush tauri:dmg] DMG ready: $DMG_PATH"
 open "$(dirname "$DMG_PATH")"
 
