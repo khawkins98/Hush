@@ -85,9 +85,9 @@
       "infoPlist": "Info.plist",
       "dmg": {
         "background": "assets/dmg-background.png",
-        "windowSize": { "width": 500, "height": 280 },
-        "appPosition": { "x": 130, "y": 120 },
-        "applicationFolderPosition": { "x": 370, "y": 120 }
+        "windowSize": { "width": 580, "height": 340 },
+        "appPosition": { "x": 150, "y": 130 },
+        "applicationFolderPosition": { "x": 430, "y": 130 }
       }
     },
     "resources": [
