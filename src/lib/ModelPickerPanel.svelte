@@ -144,7 +144,6 @@
                   <span class:on={i < card.speedRating}></span>
                 {/each}
               </span>
-              {card.speedRating.toFixed(1)}
             </span>
             <span class="stat">
               Accuracy
@@ -153,7 +152,6 @@
                   <span class:on={i < card.accuracyRating}></span>
                 {/each}
               </span>
-              {card.accuracyRating.toFixed(1)}
             </span>
           </p>
           <p class="model-desc">{card.description}</p>

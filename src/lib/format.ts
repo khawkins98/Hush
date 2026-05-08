@@ -11,11 +11,18 @@ export function formatMb(bytes: number): string {
 
 /** Format an ISO-8601 timestamp using the host locale. The backend
  *  stores `YYYY-MM-DDTHH:MM:SSZ`; this is the user-facing rendering
- *  for history rows, meeting sessions, etc. */
+ *  for history rows, meeting sessions, etc.
+ *  Intentionally omits seconds — they add noise without informational value. */
 export function formatTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString();
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /** Render a millisecond duration as a compact human string. Used by
