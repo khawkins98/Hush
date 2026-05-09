@@ -11,11 +11,12 @@
 #   2. Expands the writable image by 16 MB (Tauri sizes DMGs tightly).
 #   3. Mounts the writable image (visible to Finder so AppleScript can reach it).
 #   4. Copies docs/dmg-readme.txt → "Read Me First.txt" inside the volume.
-#   5. Runs AppleScript via osascript to:
-#        - Position user-visible files (Hush.app, Applications, Read Me First.txt)
-#        - Move hidden macOS bookkeeping files (e.g. .VolumeIcon.icns, .background)
-#          to coordinates (2000, 2000) — far outside the visible window — so
-#          developers with "Show Hidden Files" on don't see them in odd spots.
+#   5. Runs AppleScript via osascript to position "Read Me First.txt" inside
+#      the already-configured Finder window. Deliberately leaves all other
+#      window settings (background, bounds, icon size, Hush.app / Applications
+#      positions) intact — Tauri's bundler set those in the original .DS_Store
+#      and re-running "set current view" would reset the icon view options,
+#      erasing the background image reference.
 #   6. Detaches the volume via its device node (more reliable than detaching
 #      by mount path, which Finder can briefly hold).
 #   7. Converts back to a compressed UDZO image and replaces the original.
@@ -112,35 +113,11 @@ osascript << APPLESCRIPT || echo "[inject-dmg-readme] osascript warning (non-fat
 tell application "Finder"
   tell disk "$VOLUME_NAME"
     open
-    set current view of container window to icon view
-    -- Cosmetic overrides; some may fail on newer macOS — wrap in try so
-    -- icon-position assignments (below) always execute.
-    try
-      set toolbar visible of container window to false
-    end try
-    try
-      set statusbar visible of container window to false
-    end try
-    -- Window bounds: {left, top, right, bottom} — matches 660×500 pt DMG window.
-    set bounds of container window to {300, 100, 960, 600}
-    try
-      set arrangement of icons of container window to not arranged
-    end try
-    try
-      set icon size of icon view options of container window to 80
-    end try
-    -- User-visible files
-    set position of item "Hush.app"            to {165, 185}
-    set position of item "Applications"        to {495, 185}
-    set position of item "Read Me First.txt"   to {330, 340}
-    -- Hidden bookkeeping files: move way off-screen so developers with
-    -- "Show Hidden Files" on don't see them in the visible window area.
-    try
-      set position of item ".VolumeIcon.icns"  to {2000, 2000}
-    end try
-    try
-      set position of item ".background"       to {2000, 2100}
-    end try
+    -- Do NOT touch view/background/bounds/icon-size here.
+    -- Tauri's bundler already wrote those to .DS_Store and calling
+    -- "set current view" would reset the icon view options, erasing
+    -- the background image reference. Only add what we need.
+    set position of item "Read Me First.txt" to {330, 340}
     update without registering applications
     delay 2
     close
