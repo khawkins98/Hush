@@ -48,7 +48,7 @@ fi
 # ── temp workspace + cleanup trap ─────────────────────────────────────────
 TMPDIR_WORK="$(mktemp -d)"
 RW_DMG="$TMPDIR_WORK/rw.dmg"
-MOUNT_POINT="$TMPDIR_WORK/mnt"
+MOUNT_POINT=""   # populated after hdiutil attach (reads from plist)
 DEVICE_NODE=""
 
 cleanup() {
@@ -61,7 +61,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$MOUNT_POINT"
+mkdir -p "$TMPDIR_WORK"
 
 # ── convert to writable ────────────────────────────────────────────────────
 echo "[inject-dmg-readme] converting to writable image…"
@@ -72,24 +72,27 @@ hdiutil resize -size +16m "$RW_DMG" -quiet
 
 # ── mount ─────────────────────────────────────────────────────────────────
 echo "[inject-dmg-readme] mounting…"
-# No -nobrowse: Finder must be able to see the volume so osascript can reach it
-# for icon positioning. -noautoopen prevents the Finder window from popping up.
+# Do NOT use -mountpoint: mounting at a non-/Volumes path prevents Finder
+# from recognising the disk by name, so osascript `tell disk "…"` silently
+# fails and icon positions (including "Read Me First.txt") are never written.
+# Let hdiutil choose the standard /Volumes/<name> mount point instead.
 ATTACH_OUT=$(hdiutil attach "$RW_DMG" \
     -readwrite -noverify -noautoopen \
-    -mountpoint "$MOUNT_POINT" \
     -plist 2>/dev/null)
 
-# Extract the device node (e.g. /dev/disk3) so we can detach by node
-# rather than by mount path — more reliable when Finder holds the volume.
-DEVICE_NODE=$(echo "$ATTACH_OUT" \
+# Extract device node AND the actual mount point from the plist.
+PARSED=$(echo "$ATTACH_OUT" \
     | python3 -c "
 import sys, plistlib
 pl = plistlib.loads(sys.stdin.buffer.read())
 for entry in pl.get('system-entities', []):
     if entry.get('mount-point'):
         print(entry['dev-entry'])
+        print(entry['mount-point'])
         break
 ")
+DEVICE_NODE=$(echo "$PARSED" | sed -n '1p')
+MOUNT_POINT=$(echo "$PARSED" | sed -n '2p')
 
 # Get the volume name Finder knows this disk by.
 VOLUME_NAME=$(diskutil info "$DEVICE_NODE" \
