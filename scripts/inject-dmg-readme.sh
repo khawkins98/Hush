@@ -64,11 +64,12 @@ trap cleanup EXIT
 mkdir -p "$TMPDIR_WORK"
 
 # ── convert to writable ────────────────────────────────────────────────────
+# Convert UDZO → UDRW. The resulting UDRW has enough slack for the small
+# README file; the old `hdiutil resize +16m` step was removed because
+# hdiutil's relative-resize fails on converted images (exit 22) on
+# current macOS, and the text file (~3 KB) fits without expansion.
 echo "[inject-dmg-readme] converting to writable image…"
 hdiutil convert "$DMG_INPUT" -format UDRW -o "$RW_DMG" -quiet
-
-# Expand by 16 MB so the copy has room (Tauri sizes DMGs tightly).
-hdiutil resize -size +16m "$RW_DMG" -quiet
 
 # ── mount ─────────────────────────────────────────────────────────────────
 echo "[inject-dmg-readme] mounting…"
@@ -112,12 +113,22 @@ tell application "Finder"
   tell disk "$VOLUME_NAME"
     open
     set current view of container window to icon view
-    set toolbar visible of container window to false
-    set statusbar visible of container window to false
+    -- Cosmetic overrides; some may fail on newer macOS — wrap in try so
+    -- icon-position assignments (below) always execute.
+    try
+      set toolbar visible of container window to false
+    end try
+    try
+      set statusbar visible of container window to false
+    end try
     -- Window bounds: {left, top, right, bottom} — matches 660×500 pt DMG window.
     set bounds of container window to {300, 100, 960, 600}
-    set arrangement of icons of container window to not arranged
-    set icon size of icon view options of container window to 80
+    try
+      set arrangement of icons of container window to not arranged
+    end try
+    try
+      set icon size of icon view options of container window to 80
+    end try
     -- User-visible files
     set position of item "Hush.app"            to {165, 185}
     set position of item "Applications"        to {495, 185}
