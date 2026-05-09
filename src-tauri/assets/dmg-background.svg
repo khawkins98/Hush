@@ -66,9 +66,11 @@
     <polyline points="406,177 416,185 406,193"/>
   </g>
 
-  <!-- Footer — kept above y=460 so it clears the Finder toolbar -->
+  <!-- Footer — kept below the icon/readme rows but above the chrome dead-zone.
+       Finder chrome (title bar + toolbar) consumes ~70–75 pt of the window;
+       keep footer at y ≤ windowSize.height - 80 = 420 to stay visible. -->
   <text
-    x="330" y="455"
+    x="330" y="395"
     text-anchor="middle"
     font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
     font-size="13"
