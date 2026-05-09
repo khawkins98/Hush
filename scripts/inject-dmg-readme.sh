@@ -111,14 +111,14 @@ tell application "Finder"
     set current view of container window to icon view
     set toolbar visible of container window to false
     set statusbar visible of container window to false
-    -- Window bounds: {left, top, right, bottom} — matches 660×420 pt DMG window.
-    set bounds of container window to {300, 100, 960, 520}
+    -- Window bounds: {left, top, right, bottom} — matches 660×500 pt DMG window.
+    set bounds of container window to {300, 100, 960, 600}
     set arrangement of icons of container window to not arranged
     set icon size of icon view options of container window to 80
     -- User-visible files
-    set position of item "Hush.app"            to {165, 150}
-    set position of item "Applications"        to {495, 150}
-    set position of item "Read Me First.txt"   to {330, 280}
+    set position of item "Hush.app"            to {165, 185}
+    set position of item "Applications"        to {495, 185}
+    set position of item "Read Me First.txt"   to {330, 340}
     -- Hidden bookkeeping files: move way off-screen so developers with
     -- "Show Hidden Files" on don't see them in the visible window area.
     try

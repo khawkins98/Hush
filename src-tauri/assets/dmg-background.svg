@@ -1,43 +1,46 @@
 <!--
   DMG installer background for Hush.
-  Design target: 660×420 pt window — PNG is 1:1 (Finder renders DMG
+  Design target: 660×500 pt window — PNG is 1:1 (Finder renders DMG
   backgrounds at 1 px = 1 logical pt, so no 2× Retina scale here).
 
+  The Finder toolbar (~35 pt) overlaps the top of the content area, so
+  place footer no lower than (windowSize.height - 40) = ~460.
+
   Finder icon positions (tauri.conf.json bundle.macOS.dmg):
-    Hush.app        → x:165, y:150
-    Applications/   → x:495, y:150
+    Hush.app        → x:165, y:185
+    Applications/   → x:495, y:185
     Read Me First.txt (set via osascript in inject-dmg-readme.sh)
-                    → x:330, y:280
+                    → x:330, y:340
 
   To regenerate the PNG:
     bash scripts/generate-dmg-background.sh
 -->
 <svg
   xmlns="http://www.w3.org/2000/svg"
-  viewBox="0 0 660 420"
+  viewBox="0 0 660 500"
   width="660"
-  height="420"
+  height="500"
 >
   <defs>
     <radialGradient id="bg" cx="30%" cy="30%" r="85%">
-      <stop offset="0%"   stop-color="#1e3a5f"/>
-      <stop offset="100%" stop-color="#0d1f38"/>
+      <stop offset="0%"   stop-color="#224e8a"/>
+      <stop offset="100%" stop-color="#0f2542"/>
     </radialGradient>
     <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
       <stop offset="55%"  stop-color="black" stop-opacity="0"/>
-      <stop offset="100%" stop-color="black" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="black" stop-opacity="0.25"/>
     </radialGradient>
   </defs>
 
-  <rect width="660" height="420" fill="url(#bg)"/>
+  <rect width="660" height="500" fill="url(#bg)"/>
 
   <!-- Large Hush icon watermark, centred on the window.
-       Icon viewBox is 1024×1024; scale(0.21) ≈ 215 px wide. -->
-  <g transform="translate(330,200) scale(0.21) translate(-512,-512)"
+       Icon viewBox is 1024×1024; scale(0.22) ≈ 225 px wide. -->
+  <g transform="translate(330,238) scale(0.22) translate(-512,-512)"
      fill="none"
      stroke="#3b82f6"
      stroke-linejoin="round"
-     opacity="0.12">
+     opacity="0.14">
     <path stroke-width="64"
           d="M214.4,84.5h595.2c78.2,0,117.2,39.1,117.2,117.2v286.3
              c0,209.7-270.5,437.4-414.8,437.4S97.2,697.8,97.2,488.1
@@ -55,21 +58,21 @@
              c-23.2,0-42.1-18.8-42.1-42.1v-21"/>
   </g>
 
-  <rect width="660" height="420" fill="url(#vignette)"/>
+  <rect width="660" height="500" fill="url(#vignette)"/>
 
-  <!-- Drag hint arrow at y=150 (same as icon centres), from x=235 to x=425 -->
-  <g fill="none" stroke="#5b81c0" stroke-width="2" opacity="0.6">
-    <line x1="235" y1="150" x2="425" y2="150" stroke-dasharray="6 4"/>
-    <polyline points="416,142 426,150 416,158"/>
+  <!-- Drag hint arrow at y=185 (same as icon centres), from x=245 to x=415 -->
+  <g fill="none" stroke="#6b9bd2" stroke-width="2" opacity="0.65">
+    <line x1="245" y1="185" x2="415" y2="185" stroke-dasharray="6 4"/>
+    <polyline points="406,177 416,185 406,193"/>
   </g>
 
-  <!-- Footer -->
+  <!-- Footer — kept above y=460 so it clears the Finder toolbar -->
   <text
-    x="330" y="390"
+    x="330" y="455"
     text-anchor="middle"
     font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
     font-size="13"
     letter-spacing="0.3"
-    fill="#94a3b8"
+    fill="#aac0d8"
   >Drag Hush to Applications to install</text>
 </svg>
