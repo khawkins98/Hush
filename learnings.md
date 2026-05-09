@@ -2099,3 +2099,42 @@ Activity Monitor after 18 minutes with diarization enabled (tract-onnx build):
 At the old ORT rate (~1.25 GB/min), 18 minutes would have produced ~22+ GB virtual and likely an OOM event. The memory footprint is now **stable for the duration of the meeting**. Fix confirmed.
 
 **Lesson: `vmmap -summary` is unnecessary at this scale.** Activity Monitor's Real Mem column (RSIZE) is sufficient to confirm the fix — the growth was so severe before that even the coarser metric was diagnostic. For subtler leaks, `vmmap -summary $(pgrep hush) | grep IOAccelerator` remains the right tool.
+
+---
+
+## 2026-05-09 — DMG inject-readme script: four pitfalls
+
+Documented while building `scripts/inject-dmg-readme.sh` — a post-build step that adds a "Read Me First.txt" Gatekeeper guide to the Tauri-produced DMG.
+
+### 1. `-mountpoint` breaks `tell disk` in AppleScript
+
+`hdiutil attach -mountpoint /tmp/xxx` mounts the volume outside `/Volumes/`. Finder knows about the disk (no `-nobrowse`), but AppleScript's `tell disk "VolumeName"` locates disks by their `/Volumes/` path. The `tell` silently no-ops. Fix: omit `-mountpoint` and let hdiutil mount at `/Volumes/<name>`. Read the actual device node and mount path back from the plist:
+
+```bash
+ATTACH_OUT=$(hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen -plist 2>/dev/null)
+PARSED=$(echo "$ATTACH_OUT" | python3 -c "
+import sys, plistlib
+pl = plistlib.loads(sys.stdin.buffer.read())
+for entry in pl.get('system-entities', []):
+    if entry.get('mount-point'):
+        print(entry['dev-entry'])
+        print(entry['mount-point'])
+        break
+")
+DEVICE_NODE=$(echo "$PARSED" | sed -n '1p')
+MOUNT_POINT=$(echo "$PARSED" | sed -n '2p')
+```
+
+### 2. `hdiutil resize -size +16m` exits 22 on current macOS
+
+Relative-size resizing (`+Nm`) fails with exit code 22 (invalid argument) when applied to a UDRW image that was converted from UDZO. A small text file (< 10 KB) fits in the converted UDRW without resizing. Remove the resize step; if larger content ever needs to be injected use `hdiutil resize -sectors <absolute>` instead.
+
+### 3. `set current view … to icon view` erases the background image
+
+When Tauri's bundler creates the DMG it writes a `.DS_Store` that includes the background image path (`.background/dmg-background.png`). Calling `set current view of container window to icon view` in a subsequent osascript session recreates the icon view options record from defaults, discarding the background reference. The next time the DMG is opened, Finder shows a plain white window.
+
+Fix: don't touch view settings at all in the inject script. Only set the position of the injected file; leave everything else in the Tauri-written `.DS_Store` untouched.
+
+### 4. Backticks in unquoted heredoc content are shell-expanded
+
+An unquoted heredoc (`<< DELIMITER`) performs `$VAR`, `$(...)`, and `` `...` `` substitution on its body. A backtick inside an AppleScript comment (e.g. `` -- `current view` ``) gets expanded as a command substitution, corrupting the AppleScript source before `osascript` sees it. Either escape backticks with `\`` or (preferred) use different comment syntax — AppleScript comments don't need backtick-quoting, so just use plain words.
