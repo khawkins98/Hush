@@ -117,7 +117,7 @@ tell application "Finder"
     -- Tauri's bundler already wrote those to .DS_Store and calling
     -- "set current view" would reset the icon view options, erasing
     -- the background image reference. Only add what we need.
-    set position of item "Read Me First.txt" to {330, 340}
+    set position of item "Read Me First.txt" to {330, 305}
     update without registering applications
     delay 2
     close
