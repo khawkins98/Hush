@@ -21,5 +21,5 @@ if ! command -v rsvg-convert &>/dev/null; then
     exit 1
 fi
 
-rsvg-convert -w 580 -h 340 "$SVG" -o "$PNG"
+rsvg-convert -w 660 -h 420 "$SVG" -o "$PNG"
 echo "Generated: $PNG  ($(du -sh "$PNG" | cut -f1))"
