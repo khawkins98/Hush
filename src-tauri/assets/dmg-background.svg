@@ -3,14 +3,11 @@
   Design target: 660×500 pt window — PNG is 1:1 (Finder renders DMG
   backgrounds at 1 px = 1 logical pt, so no 2× Retina scale here).
 
-  The Finder toolbar (~35 pt) overlaps the top of the content area, so
-  place footer no lower than (windowSize.height - 40) = ~460.
-
   Finder icon positions (tauri.conf.json bundle.macOS.dmg):
     Hush.app        → x:165, y:185
     Applications/   → x:495, y:185
     Read Me First.txt (set via osascript in inject-dmg-readme.sh)
-                    → x:330, y:340
+                    → x:330, y:305
 
   To regenerate the PNG:
     bash scripts/generate-dmg-background.sh
@@ -29,6 +26,11 @@
     <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
       <stop offset="55%"  stop-color="black" stop-opacity="0"/>
       <stop offset="100%" stop-color="black" stop-opacity="0.25"/>
+    </radialGradient>
+    <!-- Amber glow centred on where Read Me First.txt icon sits (330, 305) -->
+    <radialGradient id="warn-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#f59e0b" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
     </radialGradient>
   </defs>
 
@@ -60,21 +62,53 @@
 
   <rect width="660" height="500" fill="url(#vignette)"/>
 
-  <!-- Drag hint arrow at y=185 (same as icon centres), from x=245 to x=415 -->
+  <!-- ── Step 2 warning zone (rendered before step badges so badges sit on top) ── -->
+
+  <!-- Amber radial glow centred on the README icon (330, 305) -->
+  <ellipse cx="330" cy="305" rx="115" ry="85" fill="url(#warn-glow)"/>
+  <!-- Amber dashed ring -->
+  <ellipse cx="330" cy="305" rx="82" ry="62"
+           fill="none" stroke="#f59e0b" stroke-width="1.5"
+           stroke-dasharray="8 5" opacity="0.55"/>
+
+  <!-- Warning triangle — tip at (330, 245), base at y=284; sits above the icon -->
+  <path d="M330,245 L308,284 L352,284 Z" fill="#f59e0b" opacity="0.88"/>
+  <!-- Exclamation mark inside triangle (dark navy on amber) -->
+  <rect x="327.5" y="255" width="5" height="16" rx="2.5" fill="#0c1e38"/>
+  <circle cx="330" cy="279" r="3" fill="#0c1e38"/>
+
+  <!-- ── Drag hint arrow at y=185 (same as icon centres), from x=245 to x=415 ── -->
   <g fill="none" stroke="#6b9bd2" stroke-width="2" opacity="0.65">
     <line x1="245" y1="185" x2="415" y2="185" stroke-dasharray="6 4"/>
     <polyline points="406,177 416,185 406,193"/>
   </g>
 
-  <!-- Footer — kept below the icon/readme rows but above the chrome dead-zone.
-       Finder chrome (title bar + toolbar) consumes ~70–75 pt of the window;
-       keep footer at y ≤ windowSize.height - 80 = 420 to stay visible. -->
+  <!-- ── Step number badges ── -->
+
+  <!-- Step 1 — upper-left of Hush.app icon (icon centre 165, 185) -->
+  <circle cx="112" cy="137" r="13" fill="#3b82f6" opacity="0.85"/>
+  <text x="112" y="142"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
+        font-size="14" font-weight="bold" fill="white" opacity="0.95">1</text>
+
+  <!-- Step 2 — upper-left of README icon (icon centre 330, 305) -->
+  <circle cx="277" cy="256" r="13" fill="#f59e0b" opacity="0.95"/>
+  <text x="277" y="261"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
+        font-size="14" font-weight="bold" fill="#0c1e38">2</text>
+
+  <!-- ── Footer ── -->
   <text
     x="330" y="395"
     text-anchor="middle"
     font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
-    font-size="13"
+    font-size="12"
     letter-spacing="0.3"
     fill="#aac0d8"
-  >Drag Hush to Applications to install</text>
+  >
+    <tspan>1  Drag Hush to Applications</tspan>
+    <tspan dx="22">2  Open 'Read Me First.txt'</tspan>
+  </text>
 </svg>
