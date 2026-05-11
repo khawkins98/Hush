@@ -2156,3 +2156,21 @@ with ds_store.DSStore.open(path, 'r+') as d:
 ```
 
 The coordinate system for Iloc positions is the same as `tauri.conf.json`'s `appPosition` / `applicationFolderPosition` fields: logical pixels from the top-left of the Finder window content area, 1:1 with the background PNG pixels.
+
+### 6. DMG background coordinate system and hidden-file bleed-through
+
+**Coordinate system (confirmed empirically):** DS_Store `Iloc` x/y values are 1:1 with background PNG logical pixels. The Finder window chrome (title bar + path bar) is ~70 pt — not 100 pt as initially assumed. So with `windowSize.height = 700` the usable content area is ~630 pt.
+
+**Hidden file positioning:** Tauri's `bundle_dmg.sh` creates a `.background/` folder inside the UDRW volume. Even with "Show Hidden Files" off this folder can appear in the Finder window if its Iloc record puts it within the visible content area. Fix: before writing the README Iloc, enumerate all dot-files in the volume root and set their positions to `(3000, 100)` — far to the right, off-screen regardless of window width.
+
+```python
+vol_dir = os.path.dirname(path)   # path = .DS_Store location
+for name in os.listdir(vol_dir):
+    if name.startswith('.') and name not in ('.DS_Store',):
+        try:
+            d[name]['Iloc'] = (3000, 100)
+        except Exception:
+            pass
+```
+
+**Finder filename label:** Finder renders the icon at the DS_Store y position and the filename label ~90–120 pt below the icon centre. Leave that much clearance before any caption SVG text or risk them overlapping. With icon at y=390 and 128 pt icon height, the label bottom edge is roughly y=450–510, so caption text should start no earlier than y=500.
