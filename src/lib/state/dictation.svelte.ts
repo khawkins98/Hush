@@ -395,7 +395,7 @@ async function _stopMeeting(snapshot: {
         meeting.setNotice({
           kind: "failure",
           message:
-            "Couldn't auto-copy the transcript — open the History meeting row below to copy it manually.",
+            "Transcript saved to History — use the 'Copy transcript' button on the meeting row below.",
         });
       }
       // Result block for single-source dictation via the meeting path.

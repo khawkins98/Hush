@@ -44,6 +44,11 @@
       session: MeetingSession,
       format: MeetingExportFormat,
     ) => void | Promise<void>;
+    /// Per-row clipboard copy for meeting transcripts. `null` if
+    /// the parent didn't pass a handler — the row hides its Copy
+    /// button in that case so embeddings without clipboard support
+    /// stay clean.
+    onMeetingCopy?: (session: MeetingSession) => void | Promise<void>;
     /// Bulk "Export filtered" (#357 phase 3c-1). The panel
     /// surfaces the dialog; the parent fires the OS folder
     /// picker + the IPC with the chosen options + the active
@@ -68,6 +73,7 @@
     onMeetingDelete,
     onMeetingLoadDetail,
     onMeetingExport,
+    onMeetingCopy,
     onExportBundle,
     onClearAll,
   }: Props = $props();
@@ -380,6 +386,7 @@
             onLoadDetail={onMeetingLoadDetail}
             onDelete={handleMeetingDelete}
             onExport={onMeetingExport}
+            onCopy={onMeetingCopy}
           />
         {/if}
       {/each}

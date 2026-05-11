@@ -151,13 +151,13 @@ export const meeting = {
       });
     } catch (err) {
       console.warn(
-        "[hush] auto-copy of meeting transcript failed; user can recopy from History",
+        "[hush] meeting transcript clipboard copy failed; user can export from History",
         err,
       );
       meeting.setNotice({
         kind: "failure",
         message:
-          "Couldn't auto-copy the transcript — open the History meeting row below to copy it manually.",
+          "Copy failed — the transcript is still in History. Try using the Export button on the row instead.",
       });
     }
   },
