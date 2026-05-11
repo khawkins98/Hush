@@ -44,9 +44,26 @@
       session: MeetingSession,
       format: MeetingExportFormat,
     ) => void | Promise<void>;
+    /// Copy the full transcript to the clipboard. `null` if the
+    /// parent didn't pass a handler — the Copy button hides so
+    /// embeddings without clipboard support stay clean.
+    onCopy?: (session: MeetingSession) => void | Promise<void>;
   };
 
-  let { session, confirming, onLoadDetail, onDelete, onExport }: Props = $props();
+  let { session, confirming, onLoadDetail, onDelete, onExport, onCopy }: Props = $props();
+
+  // Local copy-in-flight state so the button shows "Copying…" while
+  // the clipboard write (which may involve a fetch) is pending.
+  let copyPending = $state(false);
+
+  async function handleCopy() {
+    copyPending = true;
+    try {
+      await onCopy?.(session);
+    } finally {
+      copyPending = false;
+    }
+  }
 
   // Open/close state for the Export popover. Toggled by the
   // `Export ▾` button; closes itself once the user picks a
@@ -195,6 +212,17 @@
     >
       {expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount})`}
     </button>
+    {#if onCopy}
+      <button
+        class="ghost"
+        disabled={copyPending}
+        onclick={handleCopy}
+        aria-label="Copy full transcript to clipboard"
+        data-testid="meeting-copy-transcript-{session.id}"
+      >
+        {copyPending ? "Copying…" : "Copy transcript"}
+      </button>
+    {/if}
     {#if onExport}
       <div class="export-popover">
         <button

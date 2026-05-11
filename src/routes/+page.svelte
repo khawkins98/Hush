@@ -720,6 +720,7 @@
       onExportDictationCsv={history.exportDictationCsv}
       onMeetingDelete={meeting.deleteSession}
       onMeetingLoadDetail={meeting.loadSessionDetail}
+      onMeetingCopy={(s) => meeting.copyToClipboard(s.id)}
       onMeetingExport={history.exportMeetingSession}
       onExportBundle={history.exportBundle}
       onClearAll={history.clearAll}
