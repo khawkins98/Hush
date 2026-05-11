@@ -2138,3 +2138,21 @@ Fix: don't touch view settings at all in the inject script. Only set the positio
 ### 4. Backticks in unquoted heredoc content are shell-expanded
 
 An unquoted heredoc (`<< DELIMITER`) performs `$VAR`, `$(...)`, and `` `...` `` substitution on its body. A backtick inside an AppleScript comment (e.g. `` -- `current view` ``) gets expanded as a command substitution, corrupting the AppleScript source before `osascript` sees it. Either escape backticks with `\`` or (preferred) use different comment syntax — AppleScript comments don't need backtick-quoting, so just use plain words.
+
+### 5. osascript `set position` silently fails to persist to .DS_Store
+
+`osascript` runs successfully (exit 0, returns "done") when setting the Finder icon position of a newly-added file on a UDRW volume, but the position never appears in the volume's `.DS_Store`. Root cause: Finder writes DS_Store changes asynchronously after the window is closed; when `hdiutil detach` runs immediately after the osascript `close` command (even with 2–4 s of sleep), the in-memory DS_Store delta is discarded. The position appeared never to be written, even after investigating with the `ds_store` Python library.
+
+Fix: bypass Finder entirely. Use the `ds_store` Python library (`pip install ds_store`) to write the `Iloc` record directly into `.DS_Store` while the UDRW image is mounted. This is synchronous, reliable, and requires no Finder interaction at all.
+
+The library's `BookmarkCodec` fails on Apple's newer bookmark format stored in `pBBk` entries (`mac_alias.Bookmark.from_bytes` raises `ValueError: Not a bookmark file (truncated)`). Monkey-patch the codec to return raw bytes and skip decode so the B-tree traversal can proceed to insert the new record:
+
+```python
+import ds_store.store as _store
+_store.BookmarkCodec.decode = staticmethod(lambda b: b)
+import ds_store
+with ds_store.DSStore.open(path, 'r+') as d:
+    d['Read Me First.txt']['Iloc'] = (330, 305)
+```
+
+The coordinate system for Iloc positions is the same as `tauri.conf.json`'s `appPosition` / `applicationFolderPosition` fields: logical pixels from the top-left of the Finder window content area, 1:1 with the background PNG pixels.

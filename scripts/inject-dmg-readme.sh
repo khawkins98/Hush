@@ -8,19 +8,17 @@
 # The DMG must already exist (produced by `npx tauri build --bundles dmg`).
 # This script:
 #   1. Converts the read-only UDZO image to a writable UDRW copy.
-#   2. Expands the writable image by 16 MB (Tauri sizes DMGs tightly).
-#   3. Mounts the writable image (visible to Finder so AppleScript can reach it).
-#   4. Copies docs/dmg-readme.txt → "Read Me First.txt" inside the volume.
-#   5. Runs AppleScript via osascript to position "Read Me First.txt" inside
-#      the already-configured Finder window. Deliberately leaves all other
-#      window settings (background, bounds, icon size, Hush.app / Applications
-#      positions) intact — Tauri's bundler set those in the original .DS_Store
-#      and re-running "set current view" would reset the icon view options,
-#      erasing the background image reference.
-#   6. Detaches the volume via its device node (more reliable than detaching
+#   2. Mounts the writable image at a standard /Volumes/<name> path.
+#   3. Copies docs/dmg-readme.txt → "Read Me First.txt" inside the volume.
+#   4. Writes the README icon position directly into .DS_Store using Python
+#      (ds_store library), bypassing Finder entirely. Deliberately leaves all
+#      other window settings (background, bounds, icon size, Hush.app /
+#      Applications positions) intact — Tauri's bundler set those and we only
+#      add the one new Iloc entry we need.
+#   5. Detaches the volume via its device node (more reliable than detaching
 #      by mount path, which Finder can briefly hold).
-#   7. Converts back to a compressed UDZO image and replaces the original.
-#   8. Cleans up all temp files on exit via trap.
+#   6. Converts back to a compressed UDZO image and replaces the original.
+#   7. Cleans up all temp files on exit via trap.
 
 set -euo pipefail
 
@@ -44,6 +42,15 @@ README_SRC="$REPO_ROOT/docs/dmg-readme.txt"
 if [[ ! -f "$README_SRC" ]]; then
     echo "[inject-dmg-readme] ERROR: README source not found: $README_SRC" >&2
     exit 1
+fi
+
+# ── Python dependency check ───────────────────────────────────────────────
+# `ds_store` (pip install ds_store) is required for the DS_Store Iloc write.
+if ! python3 -c "import ds_store" 2>/dev/null; then
+    echo "[inject-dmg-readme] installing ds_store Python package…"
+    pip3 install --quiet ds_store --break-system-packages 2>/dev/null \
+        || pip3 install --quiet ds_store 2>/dev/null \
+        || { echo "[inject-dmg-readme] ERROR: could not install ds_store" >&2; exit 1; }
 fi
 
 # ── temp workspace + cleanup trap ─────────────────────────────────────────
@@ -74,10 +81,9 @@ hdiutil convert "$DMG_INPUT" -format UDRW -o "$RW_DMG" -quiet
 
 # ── mount ─────────────────────────────────────────────────────────────────
 echo "[inject-dmg-readme] mounting…"
-# Do NOT use -mountpoint: mounting at a non-/Volumes path prevents Finder
-# from recognising the disk by name, so osascript `tell disk "…"` silently
-# fails and icon positions (including "Read Me First.txt") are never written.
-# Let hdiutil choose the standard /Volumes/<name> mount point instead.
+# Use -plist to get device/mount info reliably; avoid -mountpoint so the
+# volume lands in the standard /Volumes hierarchy (Finder may briefly access
+# it after mount — a non-/Volumes path can confuse disk arbitration).
 ATTACH_OUT=$(hdiutil attach "$RW_DMG" \
     -readwrite -noverify -noautoopen \
     -plist 2>/dev/null)
@@ -96,37 +102,36 @@ for entry in pl.get('system-entities', []):
 DEVICE_NODE=$(echo "$PARSED" | sed -n '1p')
 MOUNT_POINT=$(echo "$PARSED" | sed -n '2p')
 
-# Get the volume name Finder knows this disk by.
-VOLUME_NAME=$(diskutil info "$DEVICE_NODE" \
-    | awk -F: '/Volume Name/{gsub(/^ +| +$/,"",$2); print $2}')
-
 # ── copy README ────────────────────────────────────────────────────────────
 echo "[inject-dmg-readme] adding 'Read Me First.txt'…"
 cp "$README_SRC" "$MOUNT_POINT/Read Me First.txt"
 
-# ── set Finder icon positions via osascript ────────────────────────────────
-# This positions the three user-visible files and pushes hidden macOS bookkeeping
-# files (e.g. .VolumeIcon.icns, .background folder) far off-screen so developers
-# who have "Show Hidden Files" enabled don't see them in awkward spots.
-echo "[inject-dmg-readme] setting icon positions…"
-osascript << APPLESCRIPT || echo "[inject-dmg-readme] osascript warning (non-fatal): $?"
-tell application "Finder"
-  tell disk "$VOLUME_NAME"
-    open
-    -- Do NOT touch view/background/bounds/icon-size here.
-    -- Tauri's bundler already wrote those to .DS_Store and calling
-    -- "set current view" would reset the icon view options, erasing
-    -- the background image reference. Only add what we need.
-    set position of item "Read Me First.txt" to {330, 305}
-    update without registering applications
-    delay 2
-    close
-  end tell
-end tell
-APPLESCRIPT
+# ── set Finder icon position via direct DS_Store write ────────────────────
+# We write the README icon position directly into .DS_Store using Python, which
+# is completely reliable (no Finder timing/flush issues). osascript was used
+# previously but Finder's DS_Store writes are async and the position silently
+# failed to persist before detach.
+#
+# The ds_store library's BookmarkCodec fails on Apple's newer bookmark format
+# stored in pBBk entries; we patch decode() to return raw bytes so traversal
+# can proceed to insert the Iloc record.
+echo "[inject-dmg-readme] writing icon position to .DS_Store…"
+python3 - "$MOUNT_POINT/.DS_Store" << 'PYEOF'
+import sys
+import ds_store.store as _store
 
-# Give the Finder / disk-arbitration layer a moment to flush .DS_Store.
-sleep 2
+# Apple's newer bookmark format (pBBk entries) is not supported by mac_alias;
+# patch the codec to pass through raw bytes instead of failing.
+_store.BookmarkCodec.decode = staticmethod(lambda b: b)
+
+import ds_store
+path = sys.argv[1]
+with ds_store.DSStore.open(path, 'r+') as d:
+    # Position: centred on the warning zone ellipse in dmg-background.svg (330, 305).
+    # Coordinate system matches the DS_Store values Tauri wrote for app icons
+    # (appPosition 165,185 / applicationFolderPosition 495,185) — same 1:1 mapping.
+    d['Read Me First.txt']['Iloc'] = (330, 305)
+PYEOF
 
 # ── detach ────────────────────────────────────────────────────────────────
 echo "[inject-dmg-readme] detaching…"
