@@ -118,6 +118,7 @@ cp "$README_SRC" "$MOUNT_POINT/Read Me First.txt"
 echo "[inject-dmg-readme] writing icon position to .DS_Store…"
 python3 - "$MOUNT_POINT/.DS_Store" << 'PYEOF'
 import sys
+import os
 import ds_store.store as _store
 
 # Apple's newer bookmark format (pBBk entries) is not supported by mac_alias;
@@ -127,10 +128,20 @@ _store.BookmarkCodec.decode = staticmethod(lambda b: b)
 import ds_store
 path = sys.argv[1]
 with ds_store.DSStore.open(path, 'r+') as d:
-    # Position: centred on the warning zone ellipse in dmg-background.svg (330, 305).
+    # Move any hidden dot-files (e.g. .background) far off-screen so they
+    # don't appear in the Finder window even when "Show Hidden Files" is on.
+    vol_dir = os.path.dirname(path)
+    for name in os.listdir(vol_dir):
+        if name.startswith('.') and name not in ('.DS_Store',):
+            try:
+                d[name]['Iloc'] = (3000, 100)
+            except Exception:
+                pass
+
+    # Position: centred inside the amber attention zone in dmg-background.svg (330, 390).
     # Coordinate system matches the DS_Store values Tauri wrote for app icons
     # (appPosition 165,185 / applicationFolderPosition 495,185) — same 1:1 mapping.
-    d['Read Me First.txt']['Iloc'] = (330, 305)
+    d['Read Me First.txt']['Iloc'] = (330, 390)
 PYEOF
 
 # ── detach ────────────────────────────────────────────────────────────────

@@ -1,48 +1,36 @@
 <!--
   DMG installer background for Hush.
-  Design target: 660×500 pt window — PNG is 1:1 (Finder renders DMG
+  Design target: 660×700 pt window — PNG is 1:1 (Finder renders DMG
   backgrounds at 1 px = 1 logical pt, so no 2× Retina scale here).
+  Finder window chrome (title bar + path bar) consumes ~70 pt, so the
+  visible content area is roughly y=0..630 within this 700 pt canvas.
 
   Finder icon positions (tauri.conf.json bundle.macOS.dmg):
     Hush.app        → x:165, y:185
     Applications/   → x:495, y:185
-    Read Me First.txt (set via osascript in inject-dmg-readme.sh)
-                    → x:330, y:305
+    Read Me First.txt (set via inject-dmg-readme.sh)
+                    → x:330, y:390
 
   To regenerate the PNG:
     bash scripts/generate-dmg-background.sh
 -->
 <svg
   xmlns="http://www.w3.org/2000/svg"
-  viewBox="0 0 660 500"
+  viewBox="0 0 660 700"
   width="660"
-  height="500"
+  height="700"
 >
-  <defs>
-    <radialGradient id="bg" cx="30%" cy="30%" r="85%">
-      <stop offset="0%"   stop-color="#224e8a"/>
-      <stop offset="100%" stop-color="#0f2542"/>
-    </radialGradient>
-    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
-      <stop offset="55%"  stop-color="black" stop-opacity="0"/>
-      <stop offset="100%" stop-color="black" stop-opacity="0.25"/>
-    </radialGradient>
-    <!-- Amber glow centred on where Read Me First.txt icon sits (330, 305) -->
-    <radialGradient id="warn-glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#f59e0b" stop-opacity="0.35"/>
-      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
 
-  <rect width="660" height="500" fill="url(#bg)"/>
+  <!-- ── Background: very light blue-grey ── -->
+  <rect width="660" height="700" fill="#edf2f7"/>
 
-  <!-- Large Hush icon watermark, centred on the window.
-       Icon viewBox is 1024×1024; scale(0.22) ≈ 225 px wide. -->
-  <g transform="translate(330,238) scale(0.22) translate(-512,-512)"
+  <!-- ── Faint Hush watermark, centred on the content area.
+       Icon viewBox is 1024×1024; scale(0.22) ≈ 225 px wide. ── -->
+  <g transform="translate(330,300) scale(0.22) translate(-512,-512)"
      fill="none"
-     stroke="#3b82f6"
+     stroke="#b0c4d8"
      stroke-linejoin="round"
-     opacity="0.14">
+     opacity="0.065">
     <path stroke-width="64"
           d="M214.4,84.5h595.2c78.2,0,117.2,39.1,117.2,117.2v286.3
              c0,209.7-270.5,437.4-414.8,437.4S97.2,697.8,97.2,488.1
@@ -60,55 +48,68 @@
              c-23.2,0-42.1-18.8-42.1-42.1v-21"/>
   </g>
 
-  <rect width="660" height="500" fill="url(#vignette)"/>
+  <!-- ── Install arrow: Hush.app (165,185) → Applications (495,185) ── -->
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="7"
+            refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#5b8fc4"/>
+    </marker>
+  </defs>
+  <line x1="250" y1="185" x2="414" y2="185"
+        stroke="#5b8fc4" stroke-width="2.5" marker-end="url(#ah)"/>
 
-  <!-- ── Step 2 warning zone (rendered before step badges so badges sit on top) ── -->
-
-  <!-- Amber radial glow centred on the README icon (330, 305) -->
-  <ellipse cx="330" cy="305" rx="115" ry="85" fill="url(#warn-glow)"/>
-  <!-- Amber dashed ring -->
-  <ellipse cx="330" cy="305" rx="82" ry="62"
-           fill="none" stroke="#f59e0b" stroke-width="1.5"
-           stroke-dasharray="8 5" opacity="0.55"/>
-
-  <!-- Warning triangle — tip at (330, 245), base at y=284; sits above the icon -->
-  <path d="M330,245 L308,284 L352,284 Z" fill="#f59e0b" opacity="0.88"/>
-  <!-- Exclamation mark inside triangle (dark navy on amber) -->
-  <rect x="327.5" y="255" width="5" height="16" rx="2.5" fill="#0c1e38"/>
-  <circle cx="330" cy="279" r="3" fill="#0c1e38"/>
-
-  <!-- ── Drag hint arrow at y=185 (same as icon centres), from x=245 to x=415 ── -->
-  <g fill="none" stroke="#6b9bd2" stroke-width="2" opacity="0.65">
-    <line x1="245" y1="185" x2="415" y2="185" stroke-dasharray="6 4"/>
-    <polyline points="406,177 416,185 406,193"/>
-  </g>
-
-  <!-- ── Step number badges ── -->
-
-  <!-- Step 1 — upper-left of Hush.app icon (icon centre 165, 185) -->
-  <circle cx="112" cy="137" r="13" fill="#3b82f6" opacity="0.85"/>
-  <text x="112" y="142"
+  <!-- Subtle drag hint below the arrow -->
+  <text x="330" y="222"
         text-anchor="middle"
         font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
-        font-size="14" font-weight="bold" fill="white" opacity="0.95">1</text>
+        font-size="10" fill="#7a9ab5">
+    Drag Hush.app to Applications
+  </text>
 
-  <!-- Step 2 — upper-left of README icon (icon centre 330, 305) -->
-  <circle cx="277" cy="256" r="13" fill="#f59e0b" opacity="0.95"/>
-  <text x="277" y="261"
+  <!-- ── Section divider ── -->
+  <line x1="90" y1="270" x2="570" y2="270"
+        stroke="#c8d8e8" stroke-width="0.75"/>
+
+  <!-- ── README attention zone (amber/yellow tinted) ──────────────────────
+       Finder will draw the "Read Me First.txt" icon at (330, 390) and its
+       filename label below it. Caption text sits well below that label.
+       No text above the icon — the ! badge and amber colour communicate
+       urgency without cluttering the space Finder uses for the icon/label.
+  ── -->
+  <rect x="175" y="288" width="310" height="248" rx="14"
+        fill="#fffbeb" stroke="#fbbf24" stroke-width="1.25" opacity="0.92"/>
+
+  <!-- Attention badge centred on zone top edge, half above / half below -->
+  <circle cx="330" cy="288" r="12"
+          fill="#f59e0b" stroke="#edf2f7" stroke-width="2.5"/>
+  <text x="330" y="293"
         text-anchor="middle"
         font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
-        font-size="14" font-weight="bold" fill="#0c1e38">2</text>
+        font-size="14" font-weight="bold" fill="white">!</text>
+
+  <!-- NOTE: Finder renders the README icon at (330, 390) and its label below -->
+  <!-- those are injected at build time via inject-dmg-readme.sh              -->
+
+  <!-- Caption — positioned well below where Finder will draw the icon label -->
+  <text x="330" y="506"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
+        font-size="11" fill="#78350f">
+    After installing, open this file for
+  </text>
+  <text x="330" y="522"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
+        font-size="11" fill="#78350f">
+    security setup and Gatekeeper bypass steps.
+  </text>
 
   <!-- ── Footer ── -->
-  <text
-    x="330" y="395"
-    text-anchor="middle"
-    font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
-    font-size="12"
-    letter-spacing="0.3"
-    fill="#aac0d8"
-  >
-    <tspan>1  Drag Hush to Applications</tspan>
-    <tspan dx="22">2  Open 'Read Me First.txt'</tspan>
+  <rect x="0" y="553" width="660" height="147" fill="#1b2d3e"/>
+  <text x="330" y="576"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif"
+        font-size="11" fill="#7090a8">
+    Hush — open-source privacy tool · github.com/khawkins98/Hush
   </text>
 </svg>
