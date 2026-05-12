@@ -6,12 +6,15 @@
 //! state machine, so it sits comfortably in its own peer file
 //! without any visibility / coupling concerns.
 //!
-//! v1 only uses this for the `app_kind` row stamped on new
-//! sessions (informational, drives the panel's coloured tag); the
-//! actual auto-start-on-meeting policy that this would also drive
-//! is deferred (still manual-start-only for the MVP).
+//! The classifier drives two things:
+//! 1. **`app_kind` row tag** stamped on new sessions (informational,
+//!    drives the panel's coloured tag in the frontend).
+//! 2. **Auto-start gate** in `run_meeting_detection_task` (#665):
+//!    the frontmost app's kind is one of the six guards in
+//!    `evaluate_mic_state` — only `MeetingAppKind::Meeting` unblocks
+//!    an automatic session start.
 //!
-//! Per-user overrides (Phase E, [#112]) write entries into the
+//! Per-user overrides (Phase E, [#112]) will write entries into the
 //! settings table that this struct reads on construction. Today
 //! the table is empty; the defaults are the only signal.
 //!

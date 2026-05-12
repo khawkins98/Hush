@@ -621,7 +621,7 @@ Two trip-hazards on the Permissions tab:
 
 #### Autostart poller: injectable probe trait + 9 wiring tests (#237)
 
-The meeting auto-start poller (`run_meeting_autostart_poller`) had untested wiring around `active-win-pos-rs::get_active_window` → classifier → `AutostartDecision::decide`. Extracted the pure logic into `meeting::autostart_poller::evaluate_autostart_tick`, gated the OS call behind a `ForegroundAppProbe` trait, and added 9 tests covering off-mode reset, probe-failure no-change, transition-into-meeting Start, steady-state silence, session-active block, and classifier-override propagation.
+The meeting auto-start poller (`run_meeting_autostart_poller`) had untested wiring around `active-win-pos-rs::get_active_window` → classifier → `AutostartDecision::decide`. Extracted the pure logic into `meeting::autostart_poller::evaluate_autostart_tick`, gated the OS call behind a `ForegroundAppProbe` trait, and added 9 tests covering off-mode reset, probe-failure no-change, transition-into-meeting Start, steady-state silence, session-active block, and classifier-override propagation. The `evaluate_autostart_tick` function, `ForegroundAppProbe` trait, and 9 associated tests were subsequently removed in #665 when the polling loop was replaced by the event-driven `mic_camera_monitor`.
 
 #### Updater HTTP coverage: 9 wiremock tests (#236)
 

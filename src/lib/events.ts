@@ -86,8 +86,8 @@ export const Events = {
   /// the `data-theme` attribute on `<html>`. Canonical helpers
   /// live in `lib/theme.ts`.
   Theme: "hush:theme",
-  /// Backend (autostart poller) → main window: a per-app audio
-  /// profile (#427 Item 5) just activated because focus moved to
+  /// Backend (profile auto-activate poller) → main window: a per-app
+  /// audio profile (#427 Item 5) just activated because focus moved to
   /// an app with a populated profile. Fires only on transitions
   /// (the just-focused-app's profile differs from the last
   /// activation). Payload: `{ appName, preferredAudioSource,

@@ -2229,7 +2229,9 @@ for name in os.listdir(vol_dir):
 
 ## 2026-05-12 — Meeting auto-detection: existing poller gaps and recommended replacement architecture
 
-### What exists (as of v0.5.3)
+> **Status: Implemented in PR #668 / commit d9fae1e.** The sections below document the pre-#665 state and the research that informed the replacement. They are historical context, not current architecture. For the current design see `ARCHITECTURE.md → Meeting auto-detection`.
+
+### What existed (v0.5.3, now removed)
 
 - `meeting/autostart_poller.rs`: 3-second tick using `active-win-pos-rs::get_active_window()` — returns the _frontmost_ app only
 - `meeting/classifier.rs`: `AppClassifier` bundle-ID/process-name table → `MeetingAppKind`
@@ -2262,12 +2264,12 @@ for name in os.listdir(vol_dir):
 
 **Windows:** `IAudioSessionManager2` + `IAudioSessionControl2::GetProcessId()` from WASAPI — full Rust implementation in `toeverything/AFFiNE:packages/frontend/native/media_capture/src/windows/microphone_listener.rs`.
 
-### What to retire when implementing #665
+### What was retired in #665
 
-- `meeting/autostart_poller.rs` — the polling loop
-- `meeting/autostart.rs` — foreground-app decision logic
-- Possibly `active-win-pos-rs` dep (check `lib.rs` — it also uses `get_active_window()` to stamp the app name on new session rows; either keep the dep for that use or replace with `NSWorkspace.frontmostApplication`)
-- Keep `meeting/classifier.rs` — the `AppClassifier` bundle-ID table is directly reusable for the Layer 2 process scan
+- `meeting/autostart_poller.rs` — the polling loop (deleted)
+- `AutostartDecision::decide()` in `meeting/autostart.rs` — foreground-app decision logic (deleted)
+- `active-win-pos-rs` dep retained — `lib.rs` also uses `get_active_window()` to stamp the app name on new session rows and for per-app profile detection
+- `meeting/classifier.rs` kept — the `AppClassifier` bundle-ID table is reused in the new event-driven path
 
 ---
 

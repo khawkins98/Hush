@@ -1088,19 +1088,35 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
     use tauri::Manager;
 
     // Classifier table is constant for the process lifetime.
+    // TODO(#112): Once user-classification overrides are implemented, reload
+    // from the override repository on each evaluation (or invalidate the cache
+    // on settings-panel writes) so the auto-start gate respects overrides, not
+    // just the built-in defaults. Today the override table is always empty so
+    // default_table() and with_overrides([]) are behaviourally identical.
     static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> = std::sync::OnceLock::new();
     let classifier = CLASSIFIER.get_or_init(meeting::AppClassifier::default_table);
 
-    let monitor = MicCameraMonitor::new();
+    let mut monitor = MicCameraMonitor::new();
 
-    // Initial mic state — emit a synthetic "changed" check so that if the
-    // mic is already active at startup the task doesn't wait for the first
-    // HAL notification.
     let mut session_emitted = false;
+    // On the first iteration skip the wait so that if the mic is already
+    // active when Hush launches (e.g. a Zoom call is already in progress)
+    // we evaluate and auto-start immediately rather than waiting for the
+    // next HAL notification.
+    let mut is_first_iteration = true;
 
     loop {
-        // Wait for any HAL property change notification.
-        monitor.wait_for_change().await;
+        if is_first_iteration {
+            is_first_iteration = false;
+        } else {
+            // Wait for any HAL property change notification.
+            monitor.wait_for_change().await;
+        }
+        // Re-enumerate input devices after every wake (and once at startup).
+        // Handles hot-plug / unplug: stale DeviceListenerHandles are dropped
+        // (which unregisters their CoreAudio listeners) and new handles are
+        // installed for any freshly discovered input devices.
+        monitor.refresh_devices();
 
         let Some(state) = app.try_state::<ipc::AppState>() else {
             continue;
