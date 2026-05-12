@@ -142,6 +142,15 @@
         const first = cardEl?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
         first?.focus();
       });
+
+      // Re-poll when the user returns from System Settings so the
+      // restart notice appears automatically — the dialog's initial
+      // refresh() only fires on open, not on window refocus.
+      function onFocus() {
+        if (!refreshing) void refresh();
+      }
+      window.addEventListener("focus", onFocus);
+      return () => window.removeEventListener("focus", onFocus);
     }
   });
 </script>

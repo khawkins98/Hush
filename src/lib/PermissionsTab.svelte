@@ -128,7 +128,7 @@
     // Only fires on the macOS-capable path (`diagnostic` is the
     // gate) — non-macOS builds skip the IPC entirely.
     focusHandler = () => {
-      if (diagnostic !== null && !refreshing) {
+      if (!refreshing) {
         void loadDiagnostic();
       }
     };
