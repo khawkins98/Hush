@@ -4,6 +4,44 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+# Learnings Log
+
+Engineering decision log for Hush. Append-only, dated entries. Captures dependency choices, platform quirks, false starts, and anything future contributors would benefit from knowing.
+
+---
+
+## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
+
+Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.
+
+**Why event-driven?** The poll-then-classify loop had two false-start vectors: (1) it classified Zoom/Teams as "Meeting" even when neither was the frontmost app (they run as background services), and (2) it fired on every transition even if the mic wasn't active. The new approach inverts the signal: the mic going active is the primary trigger; the frontmost app is a secondary guard.
+
+**Why `kAudioDevicePropertyDeviceIsRunningSomewhere`?** It fires when *any* process starts using the device — including system-level aggregates — unlike `kAudioDevicePropertyDeviceIsRunning` which only fires for the current process.
+
+**Input-only device filter (critical).** The HAL fires the property for output devices too. A simple `is_running_somewhere` on a speaker would false-positive whenever music plays. Filter via `kAudioDevicePropertyStreamConfiguration` + `kAudioObjectPropertyScopeInput`: if `AudioBufferList.mNumberBuffers == 0`, skip the device.
+
+**`active-win-pos-rs` still needed.** The original plan briefly considered using `NSWorkspace.runningApplications` to detect meeting apps. Don't: Zoom, Teams, and Slack all run persistent background processes, so they're always in the running-apps list. `get_active_window()` (frontmost app) is the right gate.
+
+**Memory safety pattern for CoreAudio callbacks.**
+The HAL callback receives a `*mut c_void` client-data pointer. Raw pointer + arbitrary callback thread = tightrope. The safe pattern:
+1. `Arc::new(Notify::new())` — allocate the notify on the heap.
+2. Pass `Arc::as_ptr(&notify) as *mut c_void` to `AudioObjectAddPropertyListener`.
+3. `DeviceListenerHandle` stores an `Arc<Notify>` clone — keeps the allocation alive.
+4. `Drop` calls `AudioObjectRemovePropertyListener` **first** (synchronous call; HAL waits for all in-flight callbacks to drain before returning), then drops the `Arc`.
+5. Multiple devices share the same `Arc` inner data (`Arc::as_ptr` returns the same address for all clones), so the HAL's `clientData` matches exactly on unregister.
+
+**`tokio::sync::Notify` coalescing.** Multiple `notify_one()` calls while the task is busy processing store at most one pending permit. The task checks `is_any_device_active()` after each notification, so coalesced events are fine — we always read fresh state.
+
+**Hot-plug (`kAudioHardwarePropertyDevices`).** Registered on `kAudioObjectSystemObject`. When devices are added/removed, the monitor re-enumerates input devices and updates listener registrations. Without this, plugging in a USB headset after launch wouldn't trigger auto-start.
+
+**`session_emitted` guard.** Without it, each HAL notification while the mic is active (device re-checks after state change) would try to start a second session. Set to `true` on start; reset to `false` only when `MicStateOutcome::ResetSessionEmitted` (mic went quiet) is returned.
+
+**Split the old poller.** `run_meeting_autostart_poller` did two unrelated things: per-app profile auto-activation AND meeting auto-start. They were extracted into `run_profile_autoactivate_poller` (3s poll, macOS + Linux + Windows) and `run_meeting_detection_task` (event-driven, macOS only). Per-app profile auto-activation doesn't need the mic signal; the separation makes each task's responsibility obvious.
+
+**Dead code removed.** `autostart_poller.rs` (325 lines, `ForegroundAppProbe` trait, `TickOutcome` enum, `evaluate_autostart_tick`) and `AutostartDecision::decide()` in `autostart.rs` were deleted. `active-win-pos-rs` dep retained — still used at 3 other call sites (dictation pipeline, manual meeting start, profile poller).
+
+---
+
 ## 2026-05-07 (late) — #612 actual root cause: ORT silently uses Metal/MPS even with `CPU::default()` EP
 
 After a full day of fixes targeting various malloc-side hypotheses, the **vmmap region breakdown** finally pointed at the right layer. Captured during a 5-min meeting with diarization on:

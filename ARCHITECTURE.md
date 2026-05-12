@@ -127,6 +127,36 @@ Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107
 
 ---
 
+## Meeting auto-detection (macOS, #665)
+
+Hush can auto-start a meeting session when a Meeting-classified app is frontmost and the microphone activates. Two independent background tasks handle this:
+
+**`run_profile_autoactivate_poller`** — a 3-second ticker that detects which app is in focus and, when it has a per-app profile (preferred audio source / model), emits `app:profile-activated` so the frontend updates its dropdowns. Independent of meeting auto-start mode.
+
+**`run_meeting_detection_task`** (macOS only) — event-driven via the CoreAudio HAL. Registers `AudioObjectAddPropertyListener` callbacks on `kAudioDevicePropertyDeviceIsRunningSomewhere` for all enumerated input devices, plus a hot-plug listener on `kAudioObjectSystemObject` for `kAudioHardwarePropertyDevices`. The callback posts `tokio::sync::Notify::notify_one()`; the task loop awaits each notification, then evaluates the pure state machine `evaluate_mic_state(inputs) -> MicStateOutcome`.
+
+```
+CoreAudio HAL thread  ──notify_one()──▶  Notify  ──notified().await──▶  task loop
+                                                                             │
+                                                             is_any_device_active()
+                                                                  + get_active_window()
+                                                                  + classifier.classify()
+                                                                             │
+                                                             evaluate_mic_state(inputs)
+                                                                             │
+                                                       MicStateOutcome::Start { app_name }
+                                                                             │
+                                                               start_manual(sources, ...)
+```
+
+**Input-only filter.** The HAL fires `kAudioDevicePropertyDeviceIsRunningSomewhere` for both input and output devices. `is_input_device()` checks `kAudioDevicePropertyStreamConfiguration` with `kAudioObjectPropertyScopeInput` to skip output-only devices (speakers) that would fire on music playback.
+
+**`session_emitted` guard.** A `bool` in the task loop prevents duplicate starts within one mic-activation cycle. Reset to `false` on `MicStateOutcome::ResetSessionEmitted` (mic went quiet).
+
+**Memory safety.** `DeviceListenerHandle` stores an `Arc<Notify>` clone. `Drop` calls `AudioObjectRemovePropertyListener` first (synchronous — waits for all in-flight callbacks), then drops the `Arc`. No dangling-pointer risk.
+
+---
+
 ## Diarization
 
 `FlagGatedDiarizer` reads the `diarization_enabled` `AtomicBool` from `AppState` and routes to:
@@ -193,7 +223,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `audio/` | cpal mic + macOS CoreAudio process tap (via Swift helper at `resources/macos-audio-tap.swift`) + `AudioSession` handle trait; `WavFileAudioCapture` test seam under `--features test-utils` |
 | `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
 | `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
-| `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides |
+| `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides + macOS CoreAudio event-driven auto-start (`mic_camera_monitor`) |
 | `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); parallel whisper context load at startup via `tokio::join!` |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |

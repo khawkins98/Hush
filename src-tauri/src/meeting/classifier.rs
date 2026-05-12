@@ -92,6 +92,7 @@ impl AppClassifier {
                 // Webex
                 ("Webex", MeetingAppKind::Meeting),
                 ("Cisco Webex Meetings", MeetingAppKind::Meeting),
+                ("com.cisco.webexmeetingsapp", MeetingAppKind::Meeting), // macOS bundle
                 ("webex", MeetingAppKind::Meeting),
                 ("Webex.exe", MeetingAppKind::Meeting),
                 ("CiscoCollabHost.exe", MeetingAppKind::Meeting),
@@ -110,7 +111,19 @@ impl AppClassifier {
                 // Loom (async video — not a live call but the
                 // recording surface is the same)
                 ("Loom", MeetingAppKind::Meeting),
+                ("com.loom.desktop", MeetingAppKind::Meeting), // macOS bundle
                 ("Loom.exe", MeetingAppKind::Meeting),
+                // FaceTime (macOS / iOS native video call)
+                ("FaceTime", MeetingAppKind::Meeting),
+                ("com.apple.FaceTime", MeetingAppKind::Meeting), // macOS bundle
+                // Tuple (pair-programming video call)
+                ("Tuple", MeetingAppKind::Meeting),
+                ("app.tuple.app", MeetingAppKind::Meeting), // macOS bundle
+                // Around (spatial video call)
+                ("Around", MeetingAppKind::Meeting),
+                ("co.around.Around", MeetingAppKind::Meeting), // macOS bundle
+                // Microsoft Teams (classic / legacy bundle ID)
+                ("com.microsoft.teams", MeetingAppKind::Meeting), // macOS bundle (classic)
                 // ---- Media apps ----
                 // Auto-start (when shipped) defaults to "no" for
                 // these — most users don't want a YouTube watch-

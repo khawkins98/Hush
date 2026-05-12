@@ -37,10 +37,11 @@
 pub mod app_overrides;
 pub mod audio_buffer;
 pub mod autostart;
-pub mod autostart_poller;
 pub mod classifier;
 pub mod lifecycle;
 pub mod manager;
+#[cfg(target_os = "macos")]
+pub mod mic_camera_monitor;
 pub mod pump;
 pub(super) mod recovery;
 pub mod sqlite;
@@ -49,8 +50,7 @@ pub use app_overrides::{
     MeetingAppOverride, MeetingAppOverrideRepository, NewMeetingAppOverride,
     SqliteMeetingAppOverrideRepository,
 };
-pub use autostart::{AutostartDecision, MeetingAutostartMode};
-pub use autostart_poller::{evaluate_autostart_tick, ForegroundAppProbe, TickOutcome};
+pub use autostart::MeetingAutostartMode;
 pub use classifier::AppClassifier;
 pub use manager::SessionManager;
 pub use sqlite::SqliteMeetingSessionRepository;

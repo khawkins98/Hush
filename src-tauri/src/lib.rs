@@ -764,17 +764,32 @@ pub fn run() {
                 }
             });
 
-            // Meeting auto-start poller (#112). Watches the foreground
-            // app every 3 s; on a transition into a Meeting-classified
-            // app, if the user has opted in via Settings → Meeting, it
-            // calls `meeting_manager.start_manual` automatically. See
-            // `meeting/autostart.rs` for the decision logic and the
-            // explicit list of what's deliberately deferred (auto-stop
-            // on blur, "ask" mode, permission pre-check).
-            let app_for_autostart = app.handle().clone();
+            // Per-app profile auto-activation poller (#427 / #457). Watches
+            // the foreground app on a 3-second tick; when the user focuses
+            // an app that has a per-app override with a preferred audio
+            // source or model, it emits `app:profile-activated` so the
+            // frontend can update its source/model dropdowns. Completely
+            // independent of meeting auto-start mode — the user doesn't need
+            // to enable Always to benefit from per-app profiles.
+            let app_for_profile = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                run_meeting_autostart_poller(app_for_autostart).await;
+                run_profile_autoactivate_poller(app_for_profile).await;
             });
+
+            // Event-driven meeting auto-start (#665). Listens for CoreAudio
+            // HAL property changes on `kAudioDevicePropertyDeviceIsRunningSomewhere`
+            // instead of polling every 3 s. When any input device activates,
+            // it checks the frontmost app and starts a session automatically
+            // if the user's mode is Always. macOS only; other platforms have
+            // no equivalent HAL API and compile-clean with no meeting
+            // detection task.
+            #[cfg(target_os = "macos")]
+            {
+                let app_for_detection = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    run_meeting_detection_task(app_for_detection).await;
+                });
+            }
 
             // Native macOS menu bar (no-op on other platforms).
             // Replaces Tauri's auto-generated minimal menu with one
@@ -965,122 +980,133 @@ pub fn run() {
         });
 }
 
-/// Foreground-app poller for Meeting Mode auto-start (#112).
+/// Per-app profile auto-activation poller (#427 / #457).
 ///
-/// Ticks every `MEETING_AUTOSTART_POLL_INTERVAL`. Snapshots the
-/// active window via `active-win-pos-rs::get_active_window`, runs
-/// it through the existing `AppClassifier`, and asks
-/// [`meeting::AutostartDecision::decide`] whether to start a
-/// session. On a `Start` verdict it calls
-/// `meeting_manager.start_manual` with the default sources
-/// (mic + system audio when supported by the platform).
+/// Ticks every [`PROFILE_AUTOACTIVATE_POLL_INTERVAL`]. When the foreground
+/// app has a per-app override row with a preferred audio source or model,
+/// it emits `app:profile-activated` so the frontend can update its
+/// source/model dropdowns. Only fires on transitions (app change), not every
+/// tick. Paused while a meeting session is active — a mid-session focus
+/// change shouldn't trigger a source/model swap.
 ///
-/// Loop never exits during normal operation; it terminates when
-/// the Tauri runtime tears down at app shutdown.
-/// Production [`meeting::ForegroundAppProbe`] backed by
-/// `active-win-pos-rs`. Returns `None` on no-active-window errors
-/// (lock screen, full-screen game) so the poller treats those as
-/// "no transition" and doesn't churn `last_kind` on transient gaps.
-struct ActiveWinProbe;
-
-impl meeting::ForegroundAppProbe for ActiveWinProbe {
-    fn current_app_name(&self) -> Option<String> {
-        active_win_pos_rs::get_active_window()
-            .ok()
-            .map(|w| w.app_name)
-    }
-}
-
-async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
-    use meeting::ForegroundAppProbe;
+/// Independent of meeting auto-start mode: the user doesn't need to enable
+/// Always to benefit from per-app profiles.
+async fn run_profile_autoactivate_poller(app: tauri::AppHandle) {
     use tauri::Emitter;
     use tauri::Manager;
-    let mut ticker = tokio::time::interval(MEETING_AUTOSTART_POLL_INTERVAL);
-    let mut last_kind: Option<meeting::MeetingAppKind> = None;
-    // Per-app profile auto-apply (#427 Item 5 / #457). Tracks the
-    // last app whose profile we activated so we emit
+    let mut ticker = tokio::time::interval(PROFILE_AUTOACTIVATE_POLL_INTERVAL);
+    // Tracks the last app whose profile we activated so we emit
     // `app:profile-activated` only on transitions, not every tick.
-    // Reset to `None` when the user focuses an app without a
-    // profile, so re-focusing the original app retriggers.
+    // Reset to `None` when the user focuses an app without a profile,
+    // so re-focusing the original app retriggers.
     let mut last_profile_app: Option<String> = None;
-
-    // Classifier table is constant for the life of the process
-    // (default rules don't pick up runtime overrides — that's a
-    // known limitation called out at `manager.rs`'s
-    // `with_overrides` doc-comment). Cache once instead of
-    // allocating ~50 string entries every 3 s.
-    static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> = std::sync::OnceLock::new();
-    let classifier = CLASSIFIER.get_or_init(meeting::AppClassifier::default_table);
-    let probe = ActiveWinProbe;
 
     loop {
         ticker.tick().await;
         let Some(state) = app.try_state::<ipc::AppState>() else {
-            // State hasn't been managed yet — race against
-            // setup. Try again on the next tick.
             continue;
         };
 
-        // Per-app profile auto-apply (#427 Item 5). Independent of
-        // the autostart-mode gate below — profile auto-apply is its
-        // own opt-in (the user added the override + populated the
-        // dropdowns), shouldn't require autostart mode = Always.
-        // Skipped while a session is active so a mid-dictation
-        // focus change doesn't trip the source/model swap; the
-        // event will fire on the next tick after the user stops.
-        if state.meeting_manager.active_session_id().is_none() {
-            if let Some(focused) = probe.current_app_name() {
-                if last_profile_app.as_ref() != Some(&focused) {
-                    // Look up the override row. List is small
-                    // (~handful of entries) and the read is
-                    // cheap; refreshing per-tick keeps the
-                    // poller stateless about the override
-                    // table, so a panel edit is observable on
-                    // the next tick without a refresh hook.
-                    if let Ok(rows) = state.data.meeting_app_overrides.list().await {
-                        if let Some(row) = rows.iter().find(|r| r.app_name == focused) {
-                            let has_profile = row.preferred_audio_source.is_some()
-                                || row.preferred_model_id.is_some();
-                            if has_profile {
-                                #[derive(Clone, serde::Serialize)]
-                                #[serde(rename_all = "camelCase")]
-                                struct ProfileActivatedPayload<'a> {
-                                    app_name: &'a str,
-                                    preferred_audio_source: Option<&'a str>,
-                                    preferred_model_id: Option<&'a str>,
-                                }
-                                if let Err(e) = app.emit(
-                                    "app:profile-activated",
-                                    ProfileActivatedPayload {
-                                        app_name: &row.app_name,
-                                        preferred_audio_source: row
-                                            .preferred_audio_source
-                                            .as_deref(),
-                                        preferred_model_id: row.preferred_model_id.as_deref(),
-                                    },
-                                ) {
-                                    tracing::warn!(
-                                        error = ?e,
-                                        app_name = %focused,
-                                        "failed to emit app:profile-activated"
-                                    );
-                                }
-                                last_profile_app = Some(focused);
-                            } else {
-                                // No profile on this app —
-                                // reset memory so refocusing
-                                // the previous profile-app
-                                // re-emits.
-                                last_profile_app = None;
-                            }
-                        } else {
-                            last_profile_app = None;
-                        }
-                    }
-                }
-            }
+        // Skip while a session is active.
+        if state.meeting_manager.active_session_id().is_some() {
+            continue;
         }
 
+        let Some(focused) = active_win_pos_rs::get_active_window()
+            .ok()
+            .map(|w| w.app_name)
+        else {
+            continue;
+        };
+
+        if last_profile_app.as_ref() == Some(&focused) {
+            continue;
+        }
+
+        let Ok(rows) = state.data.meeting_app_overrides.list().await else {
+            continue;
+        };
+
+        if let Some(row) = rows.iter().find(|r| r.app_name == focused) {
+            let has_profile =
+                row.preferred_audio_source.is_some() || row.preferred_model_id.is_some();
+            if has_profile {
+                #[derive(Clone, serde::Serialize)]
+                #[serde(rename_all = "camelCase")]
+                struct ProfileActivatedPayload<'a> {
+                    app_name: &'a str,
+                    preferred_audio_source: Option<&'a str>,
+                    preferred_model_id: Option<&'a str>,
+                }
+                if let Err(e) = app.emit(
+                    "app:profile-activated",
+                    ProfileActivatedPayload {
+                        app_name: &row.app_name,
+                        preferred_audio_source: row.preferred_audio_source.as_deref(),
+                        preferred_model_id: row.preferred_model_id.as_deref(),
+                    },
+                ) {
+                    tracing::warn!(
+                        error = ?e,
+                        app_name = %focused,
+                        "failed to emit app:profile-activated"
+                    );
+                }
+                last_profile_app = Some(focused);
+            } else {
+                // No profile on this app — reset memory so refocusing
+                // the previous profile-app re-emits.
+                last_profile_app = None;
+            }
+        } else {
+            last_profile_app = None;
+        }
+    }
+}
+
+/// Tick interval for the per-app profile auto-activation poller.
+/// 3 s is a good balance: fast enough that "I clicked into an app with
+/// a profile" feels instant, slow enough that idle CPU is unnoticeable.
+const PROFILE_AUTOACTIVATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Event-driven meeting auto-start task (#665, macOS only).
+///
+/// Listens for CoreAudio HAL property changes on
+/// `kAudioDevicePropertyDeviceIsRunningSomewhere` instead of polling the
+/// foreground app every 3 s. When any input device activates the task:
+/// 1. Checks the user's mode (must be `Always`).
+/// 2. Ensures no session is already active.
+/// 3. Reads the frontmost app and classifies it as Meeting/Other/Media.
+/// 4. On `Meeting` classification, calls `start_manual`.
+///
+/// A `session_emitted` bool prevents duplicate starts within one
+/// mic-activation cycle (the HAL may re-fire while the session is starting
+/// up). Resets when the mic goes quiet.
+#[cfg(target_os = "macos")]
+async fn run_meeting_detection_task(app: tauri::AppHandle) {
+    use meeting::mic_camera_monitor::{evaluate_mic_state, MicCameraMonitor, MicStateOutcome};
+    use tauri::Manager;
+
+    // Classifier table is constant for the process lifetime.
+    static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> = std::sync::OnceLock::new();
+    let classifier = CLASSIFIER.get_or_init(meeting::AppClassifier::default_table);
+
+    let monitor = MicCameraMonitor::new();
+
+    // Initial mic state — emit a synthetic "changed" check so that if the
+    // mic is already active at startup the task doesn't wait for the first
+    // HAL notification.
+    let mut session_emitted = false;
+
+    loop {
+        // Wait for any HAL property change notification.
+        monitor.wait_for_change().await;
+
+        let Some(state) = app.try_state::<ipc::AppState>() else {
+            continue;
+        };
+
+        let mic_active = monitor.is_any_device_active();
         let mode = ipc::decode_autostart_mode(
             state
                 .runtime_flags
@@ -1089,83 +1115,63 @@ async fn run_meeting_autostart_poller(app: tauri::AppHandle) {
         );
         let session_active = state.meeting_manager.active_session_id().is_some();
 
-        let outcome =
-            meeting::evaluate_autostart_tick(&probe, classifier, last_kind, mode, session_active);
+        let frontmost_app = active_win_pos_rs::get_active_window()
+            .ok()
+            .map(|w| w.app_name);
+        let app_kind = frontmost_app
+            .as_deref()
+            .map(|name| classifier.classify(name))
+            .unwrap_or(meeting::MeetingAppKind::Other);
+
+        let outcome = evaluate_mic_state(&meeting::mic_camera_monitor::MicStateInputs {
+            mic_is_active: mic_active,
+            mode,
+            session_active,
+            session_emitted,
+            frontmost_app_kind: app_kind,
+            frontmost_app_name: frontmost_app.clone().unwrap_or_default(),
+        });
 
         match outcome {
-            meeting::TickOutcome::ResetMemory => {
-                last_kind = None;
-            }
-            meeting::TickOutcome::NoChange => {
-                // Probe failure or transient gap — keep last_kind
-                // unchanged.
-            }
-            meeting::TickOutcome::UpdateMemory { last_kind: k } => {
-                last_kind = Some(k);
-            }
-            meeting::TickOutcome::Start {
-                app_name,
-                last_kind: k,
-            } => {
-                last_kind = Some(k);
+            MicStateOutcome::Start { app_name } => {
+                session_emitted = true;
 
-                // Pick the default capture sources. Mic always;
-                // system audio if the platform supports it.
-                // Mirrors the panel's default selection for
-                // manual starts.
                 let mic_source = audio::AudioSource::default_microphone();
-                // Linux / Windows builds today have only the mic
-                // source — system-audio capture lands under
-                // #106 / #107. The cfg-gated push below is the
-                // only mutator, so on those platforms `sources`
-                // would warn `unused_mut` (Ubuntu CI runs clippy
-                // with `-D warnings`); the branchless
-                // construction sidesteps it.
-                #[cfg(target_os = "macos")]
                 let sources = vec![mic_source, audio::AudioSource::SystemAudio];
-                #[cfg(not(target_os = "macos"))]
-                let sources = vec![mic_source];
 
-                // Snapshot the foreground window's title for
-                // #242 — second active-win call instead of
-                // extending the `ForegroundAppProbe` trait keeps
-                // the trait minimal (the autostart-decision logic
-                // genuinely only needs the app name; title is
-                // pure metadata for the persisted row). The OS
-                // call is single-millisecond synchronous, paid
-                // only when we're about to start a session.
+                // Snapshot the window title for the persisted session row.
                 let app_title = active_win_pos_rs::get_active_window()
                     .ok()
                     .map(|w| w.title.trim().to_owned())
                     .filter(|t| !t.is_empty());
+
                 if let Err(e) = state
                     .meeting_manager
                     .start_manual(sources, Some(app_name.clone()), app_title)
                     .await
                 {
-                    // Most likely cause: mic permission denied.
-                    // Log and keep the poller running — flipping
-                    // the toggle off is a single-click recovery
-                    // in Settings → Meeting.
                     tracing::warn!(
                         app_name,
                         error = ?e,
                         "auto-start meeting session failed"
                     );
+                    // Don't hold `session_emitted = true` on failure —
+                    // the next HAL event should retry.
+                    session_emitted = false;
                 } else {
                     tracing::info!(app_name, "auto-started meeting session");
                 }
             }
+            MicStateOutcome::ResetSessionEmitted => {
+                // Mic went quiet — reset so the next activation can start
+                // a new session.
+                session_emitted = false;
+            }
+            MicStateOutcome::Idle => {}
         }
     }
 }
 
-/// Tick interval for the foreground-app poller. 3 s is a good
-/// balance: fast enough that "I clicked into Zoom" feels instant,
-/// slow enough that idle CPU is unnoticeable. The OS APIs we're
-/// hitting (`active-win-pos-rs::get_active_window`) are a single
-/// IPC each.
-const MEETING_AUTOSTART_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
