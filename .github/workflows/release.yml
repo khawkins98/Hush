@@ -237,7 +237,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DMG_PATH=$(find src-tauri/target/release/bundle/dmg \
+          DMG_PATH=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg \
             -name "*_aarch64.dmg" -not -name "rw.*" | head -1)
 
           if [[ -z "$DMG_PATH" || ! -f "$DMG_PATH" ]]; then
