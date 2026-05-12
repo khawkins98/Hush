@@ -3,7 +3,12 @@
 # inject-dmg-readme.sh — add "Read Me First.txt" to a Tauri-built DMG
 #                         and set explicit Finder icon positions for all files.
 #
-# Usage: bash scripts/inject-dmg-readme.sh <path/to/Hush.dmg>
+# Usage: bash scripts/inject-dmg-readme.sh <path/to/Hush.dmg> [path/to/Hush.app]
+#
+# The optional second argument is a pre-signed Hush.app that will REPLACE the
+# .app inside the DMG, ensuring the TCC identifier is `io.github.khawkins98.hush`.
+# Signing on a real APFS filesystem (before injecting into the DMG) is more
+# reliable than signing inside a mounted DMG image.
 #
 # The DMG must already exist (produced by `npx tauri build --bundles dmg`).
 # This script:
@@ -29,6 +34,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 DMG_INPUT="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+SIGNED_APP_SRC="${2:-}"  # optional pre-signed .app path from tauri-dmg-macos.sh
 
 if [[ ! -f "$DMG_INPUT" ]]; then
     echo "[inject-dmg-readme] ERROR: DMG not found: $DMG_INPUT" >&2
@@ -102,20 +108,20 @@ for entry in pl.get('system-entities', []):
 DEVICE_NODE=$(echo "$PARSED" | sed -n '1p')
 MOUNT_POINT=$(echo "$PARSED" | sed -n '2p')
 
-# ── re-sign the .app bundle ───────────────────────────────────────────────
-# Tauri's release build leaves a linker-signed binary whose code-signing
-# identifier is a binary hash like `hush-44ac88ddc8db2594`, NOT the bundle
-# ID `io.github.khawkins98.hush`. TCC keys permission grants to this
-# identifier, so Input Monitoring (and other permissions) won't stick when
-# the user installs from the DMG. Re-signing while the DMG is mounted
-# writable binds Info.plist and fixes the TCC identifier before the image
-# is sealed back into the final read-only .dmg.
+# ── replace .app with pre-signed copy (if provided) ──────────────────────
+# Signing a .app on a real APFS filesystem (before injection) is more reliable
+# than codesigning inside a mounted DMG. tauri-dmg-macos.sh passes the path of
+# the pre-signed release bundle as the second argument.
 APP_IN_DMG="$MOUNT_POINT/Hush.app"
-if [[ -d "$APP_IN_DMG" ]]; then
-    echo "[inject-dmg-readme] re-signing Hush.app inside DMG (fixes TCC identifier)…"
-    codesign --force --deep --sign - "$APP_IN_DMG"
+if [[ -n "$SIGNED_APP_SRC" && -d "$SIGNED_APP_SRC" ]]; then
+    echo "[inject-dmg-readme] replacing Hush.app with pre-signed copy…"
+    rm -rf "$APP_IN_DMG"
+    cp -R "$SIGNED_APP_SRC" "$APP_IN_DMG"
+    echo "[inject-dmg-readme] TCC identifier in DMG: $(codesign -dv "$APP_IN_DMG" 2>&1 | grep '^Identifier' || echo '(check above)')"
+elif [[ -d "$APP_IN_DMG" ]]; then
+    echo "[inject-dmg-readme] WARNING: no pre-signed .app provided; DMG .app may have wrong TCC identifier" >&2
 else
-    echo "[inject-dmg-readme] WARNING: Hush.app not found at $APP_IN_DMG — skipping re-sign" >&2
+    echo "[inject-dmg-readme] WARNING: Hush.app not found at $APP_IN_DMG" >&2
 fi
 
 # ── copy README ────────────────────────────────────────────────────────────

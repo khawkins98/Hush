@@ -16,9 +16,9 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 **Root cause.** `tauri-dmg-macos.sh` re-signed the loose `.app` at `target/release/bundle/macos/Hush.app` *after* the DMG was already built. The `.app` baked into the DMG was the un-re-signed version with Tauri's linker-signed hash identifier (`hush-<hash>`) instead of `io.github.khawkins98.hush`. TCC keys grants to this identifier, so any permission granted to the DMG-installed app was effectively granted to a bundle the system couldn't find on the next launch.
 
-**Fix.** Moved the `codesign --force --deep --sign -` call into `inject-dmg-readme.sh`, which already mounts the DMG writable. The re-sign now happens while the DMG is open, before it's sealed back into read-only UDZO. The redundant re-sign of the loose `.app` in `tauri-dmg-macos.sh` was removed.
+**Fix (final).** Re-sign the loose `.app` on the regular APFS filesystem *first* (in `tauri-dmg-macos.sh`, before calling `inject-dmg-readme.sh`), then *replace* the `.app` inside the DMG with the pre-signed copy (`rm -rf` + `cp -R` while the DMG is mounted writable). Signing in-place inside a mounted DMG image was explored first but proved unreliable — the identity wasn't always preserved after `hdiutil convert` back to UDZO, and any subsequent Finder quarantine action can strip it again. Replacing the whole bundle with a clean APFS-signed copy is robust.
 
-**Key lesson.** When a script builds a DMG and then modifies the source `.app`, the DMG already has the old version. Any post-build signing must happen *inside* the DMG while it's mounted, not on the loose `.app` alongside it.
+**Key lesson.** Never sign a `.app` after it's been packaged into a DMG, and never sign inside a mounted DMG if you can avoid it. The correct order: build → sign on APFS → package signed bundle into DMG. This mirrors how `tauri:bundle` works (signs before installing to `~/Applications`).
 
 ---
 

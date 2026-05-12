@@ -57,8 +57,23 @@ if [[ -z "$DMG_PATH" ]]; then
     exit 1
 fi
 
-echo "[hush tauri:dmg] injecting 'Read Me First.txt' into DMG (+ re-signing embedded .app)…"
-bash "$(dirname "$0")/inject-dmg-readme.sh" "$DMG_PATH"
+# Re-sign the loose .app on the regular filesystem first.
+# Signing on a real filesystem (APFS) is more reliable than signing
+# inside a mounted DMG. The signed .app is then swapped into the DMG
+# by inject-dmg-readme.sh, replacing the unsigned original.
+RELEASE_APP="src-tauri/target/release/bundle/macos/Hush.app"
+if [[ -d "$RELEASE_APP" ]]; then
+    echo "[hush tauri:dmg] re-signing release bundle (fixes TCC identifier)…"
+    codesign --force --deep --sign - \
+        --identifier "io.github.khawkins98.hush" \
+        "$RELEASE_APP"
+    echo "[hush tauri:dmg] signing identity: $(codesign -dv "$RELEASE_APP" 2>&1 | grep '^Identifier' || echo '(check above)')"
+else
+    echo "[hush tauri:dmg] WARNING: $RELEASE_APP not found — skipping re-sign" >&2
+fi
+
+echo "[hush tauri:dmg] injecting 'Read Me First.txt' into DMG and replacing .app with signed copy…"
+bash "$(dirname "$0")/inject-dmg-readme.sh" "$DMG_PATH" "$RELEASE_APP"
 
 echo "[hush tauri:dmg] DMG ready: $DMG_PATH"
 open "$(dirname "$DMG_PATH")"
