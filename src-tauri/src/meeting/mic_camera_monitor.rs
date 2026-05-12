@@ -271,7 +271,11 @@ fn get_all_device_ids() -> Vec<AudioObjectID> {
             ids.as_mut_ptr() as *mut _,
         )
     };
-    if status != 0 { Vec::new() } else { ids }
+    if status != 0 {
+        Vec::new()
+    } else {
+        ids
+    }
 }
 
 /// Filters [`get_all_device_ids`] to only devices with at least one input

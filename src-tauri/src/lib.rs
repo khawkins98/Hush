@@ -1246,7 +1246,6 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
     }
 }
 
-
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
