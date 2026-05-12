@@ -2405,6 +2405,7 @@ dependencies = [
  "active-win-pos-rs",
  "anyhow",
  "async-trait",
+ "coreaudio-sys",
  "cpal",
  "csv",
  "futures-util",
