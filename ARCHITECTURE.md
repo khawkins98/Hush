@@ -149,11 +149,60 @@ CoreAudio HAL thread  ──notify_one()──▶  Notify  ──notified().awai
                                                                start_manual(sources, ...)
 ```
 
-**Input-only filter.** The HAL fires `kAudioDevicePropertyDeviceIsRunningSomewhere` for both input and output devices. `is_input_device()` checks `kAudioDevicePropertyStreamConfiguration` with `kAudioObjectPropertyScopeInput` to skip output-only devices (speakers) that would fire on music playback.
+### Detection logic matrix
 
-**`session_emitted` guard.** A `bool` in the task loop prevents duplicate starts within one mic-activation cycle. Reset to `false` on `MicStateOutcome::ResetSessionEmitted` (mic went quiet).
+`evaluate_mic_state` is a pure function; every auto-start decision passes through it. The table below is exhaustive — rows are evaluated **top-to-bottom**; the first matching row wins.
 
-**Memory safety.** `DeviceListenerHandle` stores an `Arc<Notify>` clone. `Drop` calls `AudioObjectRemovePropertyListener` first (synchronous — waits for all in-flight callbacks), then drops the `Arc`. No dangling-pointer risk.
+| # | `mic_is_active` | `mode` | `session_active` | `session_emitted` | `frontmost_app_kind` | Outcome | Side-effect on caller |
+|---|---|---|---|---|---|---|---|
+| 1 | ❌ false | any | any | any | any | `ResetSessionEmitted` | Caller resets `session_emitted = false` |
+| 2 | ✅ true | `Off` | any | any | any | `Idle` | — |
+| 3 | ✅ true | `Always` | ✅ true | any | any | `Idle` | — (session already running) |
+| 4 | ✅ true | `Always` | ❌ false | ✅ true | any | `Idle` | — (already started this cycle) |
+| 5 | ✅ true | `Always` | ❌ false | ❌ false | `Other`/`Media` | `Idle` | — (app not a meeting app) |
+| 6 | ✅ true | `Always` | ❌ false | ❌ false | `Meeting` | `Start { app_name }` | Caller sets `session_emitted = true`, calls `start_manual` |
+
+**Row 1 — mic quiet:** Any time the HAL reports the mic stopped, reset `session_emitted`. This means the next mic activation (e.g. next meeting) can start a fresh session even if the previous one was stopped manually.
+
+**Row 3 — session already running:** Prevents auto-start from racing with a manual start or from firing again if the user manually stopped and immediately re-triggered the mic.
+
+**Row 4 — `session_emitted` guard:** The HAL may fire multiple property-change events during a single activation cycle (e.g. device re-checks, hot-plug refresh). Without this guard, each event while the mic is active would re-call `start_manual`.
+
+**Row 5 — app classification:** The frontmost app at evaluation time must be classified as `Meeting` by `AppClassifier`. Apps classified as `Media` (music players, video editors) or `Other` do not trigger auto-start. See [App classification](#app-classification) below.
+
+### App classification
+
+`AppClassifier::default_table` classifies apps by executable name (Linux/Windows) or macOS bundle ID. The `Meeting` set covers:
+
+| App | macOS bundle ID | Other identifiers |
+|---|---|---|
+| Zoom | `us.zoom.xos` | `zoom.us`, `Zoom.exe` |
+| Microsoft Teams (new) | `com.microsoft.teams2` | `msteams`, `Teams.exe` |
+| Microsoft Teams (classic) | `com.microsoft.teams` | — |
+| Google Meet (Chrome) | `com.google.Chrome` | `google-chrome`, `chrome.exe` |
+| Slack (calls) | `com.tinyspeck.slackmacgap` | `slack`, `Slack.exe` |
+| Webex | `com.cisco.webexmeetingsapp` | `Webex`, `webex`, `CiscoCollabHost.exe` |
+| Discord | — | `Discord`, `discord`, `Discord.exe` |
+| Skype | — | `Skype`, `skype`, `Skype.exe` |
+| GoToMeeting | — | `GoToMeeting`, `Citrix GoToMeeting.exe` |
+| FaceTime | `com.apple.FaceTime` | — |
+| Tuple | `app.tuple.app` | — |
+| Around | `co.around.Around` | — |
+| Loom | `com.loom.desktop` | `Loom.exe` |
+
+Apps classified as `Media` (music players, video editors, etc.) never trigger auto-start even if the mic activates. Everything else is `Other` and also blocked.
+
+### Input-only device filter
+
+`kAudioDevicePropertyDeviceIsRunningSomewhere` fires for **both** input and output devices. The monitor registers listeners only for input devices (those with at least one input stream buffer), checked via `kAudioDevicePropertyStreamConfiguration` + `kAudioObjectPropertyScopeInput`. Output-only devices (speakers, display audio) are skipped — without this filter, playing music would trigger auto-start.
+
+### Hot-plug handling
+
+A `SystemListenerHandle` listens for `kAudioHardwarePropertyDevices` changes on `kAudioObjectSystemObject`. When a device is added or removed, `MicCameraMonitor::refresh_devices()` re-enumerates input devices and re-installs listeners. USB headsets and Bluetooth audio devices plugged in after launch are automatically covered.
+
+### Memory safety
+
+`DeviceListenerHandle` stores an `Arc<Notify>` clone. `Drop` calls `AudioObjectRemovePropertyListener` **first** (synchronous — the HAL waits for all in-flight callbacks to drain before returning), then drops the `Arc`. The HAL callback reconstructs the `Arc` from the raw pointer using `Arc::from_raw` + `Arc::into_raw` (no net reference-count change). No dangling-pointer risk regardless of callback scheduling.
 
 ---
 
