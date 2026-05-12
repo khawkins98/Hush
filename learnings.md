@@ -10,6 +10,18 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-13 — DMG-installed app had wrong TCC identity (permissions not sticking)
+
+**Symptom.** Input Monitoring (and other TCC permissions) granted via the DMG-installed app silently didn't stick. `npm run tauri:bundle` worked fine; `npm run tauri:dmg` didn't — and had been broken across multiple releases.
+
+**Root cause.** `tauri-dmg-macos.sh` re-signed the loose `.app` at `target/release/bundle/macos/Hush.app` *after* the DMG was already built. The `.app` baked into the DMG was the un-re-signed version with Tauri's linker-signed hash identifier (`hush-<hash>`) instead of `io.github.khawkins98.hush`. TCC keys grants to this identifier, so any permission granted to the DMG-installed app was effectively granted to a bundle the system couldn't find on the next launch.
+
+**Fix.** Moved the `codesign --force --deep --sign -` call into `inject-dmg-readme.sh`, which already mounts the DMG writable. The re-sign now happens while the DMG is open, before it's sealed back into read-only UDZO. The redundant re-sign of the loose `.app` in `tauri-dmg-macos.sh` was removed.
+
+**Key lesson.** When a script builds a DMG and then modifies the source `.app`, the DMG already has the old version. Any post-build signing must happen *inside* the DMG while it's mounted, not on the loose `.app` alongside it.
+
+---
+
 ## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
 
 Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.
