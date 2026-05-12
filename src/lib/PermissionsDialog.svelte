@@ -61,6 +61,9 @@
   let health: PermissionsHealth | null = $state(null);
   let loadError: string | null = $state(null);
   let refreshing = $state(false);
+  // Whether IM was granted when the dialog first loaded in this session.
+  // Used to detect a within-session grant that requires a restart.
+  let imGrantedAtLoad = $state<boolean | null>(null);
 
   let cardEl: HTMLElement | undefined = $state();
   let previousFocus: HTMLElement | null = null;
@@ -82,6 +85,10 @@
       ]);
       if (diagRes.status === "fulfilled") {
         diagnostic = diagRes.value;
+        if (imGrantedAtLoad === null) {
+          imGrantedAtLoad =
+            diagnostic.statuses.inputMonitoring === "granted";
+        }
       } else {
         loadError = String(diagRes.reason);
       }
@@ -165,7 +172,12 @@
       <p class="perm-dialog-intro">{intro}</p>
 
       {#if diagnostic}
-        <PermissionsRows {diagnostic} {health} {onOpenPrivacyPane} />
+        <PermissionsRows
+          {diagnostic}
+          {health}
+          {onOpenPrivacyPane}
+          imGrantedAtLoad={imGrantedAtLoad ?? undefined}
+        />
       {:else if loadError}
         <p class="perm-dialog-error" role="alert">
           Couldn't load permission status: {loadError}

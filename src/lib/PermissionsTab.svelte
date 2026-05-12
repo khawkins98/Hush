@@ -61,6 +61,8 @@
   // disabled-flicker is a deliberate hint that the click did
   // something even on a fast machine.
   let refreshing = $state(false);
+  // Whether IM was granted when the tab first mounted in this app session.
+  let imGrantedAtMount = $state<boolean | null>(null);
 
   let focusHandler: (() => void) | null = null;
 
@@ -77,6 +79,10 @@
           () => null,
         ),
       ]);
+      // Capture IM status at first load so we can detect within-session grants.
+      if (imGrantedAtMount === null) {
+        imGrantedAtMount = res.statuses.inputMonitoring === "granted";
+      }
       diagnostic = res.canReset ? res : null;
       health = healthRes?.health ?? null;
     } catch {
@@ -162,6 +168,7 @@
     {diagnostic}
     {health}
     onOpenPrivacyPane={openPrivacyPane}
+    imGrantedAtLoad={imGrantedAtMount ?? undefined}
   />
   <p class="perm-recovery-intro">
     Stuck? Open the diagnostic below to reset both

@@ -74,6 +74,15 @@
   // genuinely "haven't checked yet" rather than "denied").
   let diagnostic = $state<MacosPermissionDiagnostic | null>(null);
   let micReady = $derived(diagnostic?.statuses.microphone === "granted");
+  // Whether IM was granted when the permissions step first polled in
+  // this session. `null` until the first poll completes. Used to
+  // detect a within-session grant that requires a restart.
+  let imGrantedAtOpen = $state<boolean | null>(null);
+  let imNeedsRestart = $derived(
+    imGrantedAtOpen === false &&
+      (diagnostic?.statuses.inputMonitoring === "granted" ||
+        diagnostic?.statuses.inputMonitoring === "not-applicable"),
+  );
   let pollHandle: ReturnType<typeof setInterval> | null = null;
 
   // Per-row "Allow click in flight" guards so a user mashing the
@@ -90,6 +99,14 @@
       const next = await invoke<MacosPermissionDiagnostic>(
         "diagnose_macos_permissions",
       );
+      // Record IM status at the very first poll so we can detect
+      // a within-session grant (which requires a restart before
+      // rdev's CGEventTap can pick it up).
+      if (imGrantedAtOpen === null) {
+        imGrantedAtOpen =
+          next.statuses.inputMonitoring === "granted" ||
+          next.statuses.inputMonitoring === "not-applicable";
+      }
       diagnostic = next;
     } catch (e) {
       // Non-fatal — show whatever we last had. The next poll will
@@ -343,7 +360,7 @@
 
           <li
             class="wizard-perm-row"
-            class:granted={isGranted("inputMonitoring")}
+            class:granted={isGranted("inputMonitoring") && !imNeedsRestart}
             class:dimmed={!isGranted("microphone")}
             data-testid="wizard-perm-input-monitoring"
           >
@@ -382,6 +399,18 @@
                   Allow is disabled until Microphone permission is granted.
                 </span>
               {/if}
+            {/if}
+            {#if imNeedsRestart}
+              <!-- rdev's CGEventTap is established at startup; it
+                   needs a full relaunch to see the new IM grant. -->
+              <span class="wizard-perm-restart-hint" role="status">
+                Push-to-talk is ready — restart Hush to activate it.
+                <button
+                  type="button"
+                  class="wizard-restart-btn"
+                  onclick={() => void invoke("relaunch_app")}
+                >Restart Now</button>
+              </span>
             {/if}
           </li>
 
@@ -549,6 +578,38 @@
 }
 .wizard-allow-btn {
   white-space: nowrap;
+}
+/* Restart notice shown after a within-session IM grant.
+   Spans all three grid columns so the icon + text columns
+   aren't crammed. */
+.wizard-perm-restart-hint {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  color: #5a3e00;
+  background-color: #fffae8;
+  border-left: 3px solid #e0a020;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+}
+.wizard-restart-btn {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 5px;
+  background-color: #c88a10;
+  color: white;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.wizard-restart-btn:hover {
+  background-color: #a87010;
 }
 
 .first-run-footer {

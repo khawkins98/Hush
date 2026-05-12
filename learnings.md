@@ -22,6 +22,22 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-13 — Input Monitoring permission does not activate PTT without restart
+
+**Symptom.** After granting Input Monitoring (IM) permission in System Settings while Hush is running, push-to-talk (PTT) doesn't work. On macOS 26, there is no OS-level "Quit & Reopen" dialog from macOS after the grant, even though some users remember seeing one in earlier versions.
+
+**Root cause.** `ptt.rs::register_ptt_listener` spawns an rdev thread. On macOS, rdev installs a `CGEventTap`; if IM isn't granted at the moment `rdev::listen()` runs, `CGEventTap` creation fails and the rdev thread exits with an error. The `spawned: Arc<AtomicBool>` latch is set to `true` before the thread starts and is never reset to `false` on early exit — so there is no retry path, and no code path will re-run `register_ptt_listener` in the same session.
+
+**Why the OS dialog went away.** macOS shows a "Quit & Reopen" dialog only when an *active* `CGEventTap` gains or loses IM access. Since the tap failed at startup (Hush was already running without IM), there is no active tap to trigger that dialog. The user has to be told explicitly.
+
+**Fix.** Frontend-only: track `imGrantedAtLoad / imGrantedAtOpen` in all four IM permission surfaces (FirstRunModal, PermissionsRows, PermissionsDialog, PermissionsTab). When the value was `false` at mount and the diagnostic later shows `"granted"`, show an amber "Push-to-talk is ready — restart Hush to activate it" notice with a "Restart Now" button wired to the existing `relaunch_app` IPC.
+
+**Edge case accepted.** If a user grants IM, closes/reopens the Settings → Permissions tab (new mount), then the `imGrantedAtMount` baseline is `true` and no restart notice appears — even though PTT still doesn't work in the *current session*. This edge case is out-of-scope for now; the first-run flow and the window-focus-after-grant flow cover the primary paths. A global `.svelte.ts` startup-state module that tracks IM status at app-open is the right long-term fix.
+
+**macOS 15+ `IOHIDRequestAccess` behaviour change.** On macOS 15+, this call opens System Settings instead of showing an inline dialog. The change means the user leaves the app, grants, and returns — Hush sees the grant on the next diagnostic poll (the window-focus handler triggers `loadDiagnostic()` in PermissionsTab). This is why adding a "restart now" notice in the re-focus refresh path is sufficient coverage.
+
+---
+
 ## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
 
 Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.

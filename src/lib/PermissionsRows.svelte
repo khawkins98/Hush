@@ -20,15 +20,26 @@
     PermissionsHealth,
   } from "./types";
 
+  import { invoke } from "@tauri-apps/api/core";
+
   type Props = {
     diagnostic: MacosPermissionDiagnostic;
     health: PermissionsHealth | null;
     onOpenPrivacyPane: (
       target: "microphone" | "input-monitoring",
     ) => void | Promise<void>;
+    /**
+     * Whether Input Monitoring was granted when the parent component
+     * first loaded the diagnostic in this app session.  When `false`
+     * and IM is now granted, a "restart required" notice is shown so
+     * the user knows to relaunch before push-to-talk will work.
+     * `undefined` (default) suppresses the notice (unknown baseline).
+     */
+    imGrantedAtLoad?: boolean;
   };
 
-  let { diagnostic, health, onOpenPrivacyPane }: Props = $props();
+  let { diagnostic, health, onOpenPrivacyPane, imGrantedAtLoad }: Props =
+    $props();
 
   const ROWS = [
     {
@@ -88,6 +99,19 @@
             macOS no longer recognises a previous grant for Hush
             (common after app updates). Re-enable {row.label} in
             System Settings to restore access.
+          </span>
+        {/if}
+        {#if row.key === "inputMonitoring" && imGrantedAtLoad === false && status === "granted"}
+          <!-- rdev's CGEventTap was never established at startup
+               (IM was denied then). The OS won't prompt to relaunch
+               automatically on macOS 26+, so we must. -->
+          <span class="perm-restart-hint" role="status">
+            Push-to-talk is ready — restart Hush to activate it.
+            <button
+              type="button"
+              class="perm-restart-btn"
+              onclick={() => void invoke("relaunch_app")}
+            >Restart Now</button>
           </span>
         {/if}
       </div>
@@ -199,6 +223,34 @@
     border-left: 3px solid #e0a020;
     padding: 0.4rem 0.6rem;
     border-radius: 4px;
+  }
+  .perm-restart-hint {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.3rem;
+    font-size: 0.78rem;
+    color: #5a3e00;
+    background-color: #fffae8;
+    border-left: 3px solid #e0a020;
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+  }
+  .perm-restart-btn {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 5px;
+    background-color: #c88a10;
+    color: white;
+    border: none;
+    cursor: pointer;
+    white-space: nowrap;
+    line-height: 1.4;
+  }
+  .perm-restart-btn:hover {
+    background-color: #a87010;
   }
   .perm-why {
     display: block;
