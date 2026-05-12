@@ -2174,3 +2174,114 @@ for name in os.listdir(vol_dir):
 ```
 
 **Finder filename label:** Finder renders the icon at the DS_Store y position and the filename label ~90–120 pt below the icon centre. Leave that much clearance before any caption SVG text or risk them overlapping. With icon at y=390 and 128 pt icon height, the label bottom edge is roughly y=450–510, so caption text should start no earlier than y=500.
+
+---
+
+## 2026-05-12 — navigator.clipboard.writeText() fails silently for long meeting transcripts
+
+`_stopMeeting()` in `dictation.svelte.ts` calls `navigator.clipboard.writeText(transcript)` and catches failures. For long meetings the write silently fails — likely a WKWebView or macOS pasteboard size limit, though the exact limit was not confirmed. The failure is caught and a notice is shown.
+
+**Original bad UX:** The notice said to "copy it manually from the meeting row" — but no copy control existed there, sending the user to a dead end.
+
+**Fix:** Added a "Copy transcript" button (with `copyPending` loading state) to `HistoryMeetingRow.svelte`, wired through `HistoryPanel.onMeetingCopy` → `meeting.copyToClipboard(id)`. The failure notice now says "use the 'Copy transcript' button on the meeting row below". The manual-copy failure path in `meeting-sessions.svelte.ts` directs to Export instead (Export writes to disk, not clipboard, so it always succeeds regardless of transcript length).
+
+**Root cause not confirmed.** If the clipboard limit ever needs to be raised, start by checking WKWebView's `WKWebViewConfiguration` and whether the Tauri WebView has any clipboard size cap set.
+
+---
+
+## 2026-05-12 — Meeting auto-detection: existing poller gaps and recommended replacement architecture
+
+### What exists (as of v0.5.3)
+
+- `meeting/autostart_poller.rs`: 3-second tick using `active-win-pos-rs::get_active_window()` — returns the _frontmost_ app only
+- `meeting/classifier.rs`: `AppClassifier` bundle-ID/process-name table → `MeetingAppKind`
+- `meeting/autostart.rs`: `AutostartDecision::decide()` — fires only on transition _into_ `Meeting` kind
+- `MeetingAutostartMode::Always` implemented; `Ask` mode declared but not wired
+
+### Key gaps
+
+1. **Foreground-only**: detection fails the moment the user alt-tabs out of Zoom/Teams
+2. **Browser-based meetings**: Google Meet in Chrome has no distinctive bundle ID or process name — completely undetectable by the current approach
+3. **3s polling latency**: misses fast window switches
+4. **High maintenance**: bundle IDs change with app rebrands (Teams classic → Teams 2 was a real example)
+
+### Recommended replacement: event-driven multi-signal (see issue #665)
+
+**Primary signals — no permissions, event-driven, ~50ms latency:**
+
+| Signal | API | False-positive rate |
+|---|---|---|
+| Camera active | `kCMIODevicePropertyDeviceIsRunningSomewhere` (CoreMediaIO) | Near-zero |
+| Mic active | `kAudioDevicePropertyDeviceIsRunningSomewhere` (CoreAudio HAL) | High alone |
+| Mic + known meeting app | Above + `NSWorkspace.runningApplications` scan | Low |
+
+**Priority logic (from OpenOats production design doc):**
+- Camera ON → detect immediately (no debounce)
+- Mic ON + known meeting app running → detect after 5s debounce
+- Mic ON alone → suppress (dictation, voice messages, etc. all trigger mic-only)
+
+`kAudioDevicePropertyDeviceIsRunningSomewhere` property selector constant (Rust): `1735356005`. No TCC permission required — it is a status read, not a capture.
+
+**Windows:** `IAudioSessionManager2` + `IAudioSessionControl2::GetProcessId()` from WASAPI — full Rust implementation in `toeverything/AFFiNE:packages/frontend/native/media_capture/src/windows/microphone_listener.rs`.
+
+### What to retire when implementing #665
+
+- `meeting/autostart_poller.rs` — the polling loop
+- `meeting/autostart.rs` — foreground-app decision logic
+- Possibly `active-win-pos-rs` dep (check `lib.rs` — it also uses `get_active_window()` to stamp the app name on new session rows; either keep the dep for that use or replace with `NSWorkspace.frontmostApplication`)
+- Keep `meeting/classifier.rs` — the `AppClassifier` bundle-ID table is directly reusable for the Layer 2 process scan
+
+---
+
+## 2026-05-12 — Cross-session speaker identity (voice fingerprinting): research findings
+
+See issue #667. Key findings documented here for future implementers.
+
+### The wespeaker model already does the hard work
+
+`OnnxDiarizer` uses ResNet34-LM, which achieves **0.723% EER on VoxCeleb hard** (cross-session, diverse devices/conditions). The same model and the same `cosine_distance()` function work for both intra-session clustering and cross-session verification — no second model, no additional ML runtime.
+
+### Threshold calibration: cross-session is tighter than in-session
+
+In-session threshold is 0.4 (already lowered from 0.6 due to Zoom/Teams codec compression — see `cluster.rs:29-33`). For cross-session identity matching, tighter thresholds are required because a false-accept permanently attributes speech to the wrong person:
+
+- `< 0.25` → auto-accept (same person, high confidence)
+- `0.25–0.35` → user confirmation prompt ("Is this Alice?")
+- `≥ 0.35` → treat as new / unknown speaker
+
+These are informed estimates from EER curves — empirical calibration on real Hush recordings will be needed. Expose as `HUSH_IDENTITY_THRESHOLD` env var (analogous to `HUSH_DIARIZER_THRESHOLD`).
+
+### Welford online mean: update centroid without storing raw embeddings
+
+```rust
+fn welford_update(centroid: &mut [f32], new_embedding: &[f32], new_count: u64) {
+    let n = new_count as f32;
+    for (c, &x) in centroid.iter_mut().zip(new_embedding.iter()) {
+        *c += (x - *c) / n;
+    }
+    l2_normalize(centroid); // preserve cosine geometry
+}
+```
+
+`new_count` is the count AFTER this update. Storage per speaker: 256 × f32 = 1 KB centroid + metadata ≈ 1.1 KB. 100 known speakers = 100 KB — trivial.
+
+### Cold-start enrollment heuristic
+
+Only persist a new identity if the session cluster has ≥ 5 utterances AND within-cluster max cosine distance < 0.20. The cohesion check guards against 1-NN chaining drift (documented in `onnx.rs:139`) producing a contaminated centroid that poisons the identity database.
+
+### Implementation insertion point
+
+`SessionClusterState` in `onnx.rs` accumulates raw embeddings in `self.history` during a session but never returns them. Add `cluster_centroids() -> HashMap<usize, Vec<f32>>` to surface them at session close. Then a new `SpeakerStore` trait (+ `SqliteSpeakerStore` impl) in `src-tauri/src/speakers/` — follow the `HistoryRepository` pattern exactly.
+
+### Privacy: speaker embeddings are legally biometric data
+
+A 256-dim f32 centroid stored for the purpose of uniquely identifying a person is biometric data under **GDPR Article 9**, **CCPA §1798.140(c)**, and **Illinois BIPA**, regardless of the fact that it is not invertible to audio. The defining criterion is purpose (unique identification), not reconstruction possibility.
+
+Required design constraints (non-negotiable):
+- Feature must be **opt-in, default OFF**
+- Disclosure text must be shown before enabling
+- Per-speaker delete must be available
+- "Delete all speaker data" must be in Settings → Privacy
+- Auto-fingerprinting meeting participants without their knowledge is the primary legal exposure — consider scoping v1 to explicit enrollment only
+
+The local-first nature (no server, developer never receives the data) substantially reduces legal exposure, but the user may be subject to BIPA if they store voice fingerprints of Illinois residents. Document clearly.
