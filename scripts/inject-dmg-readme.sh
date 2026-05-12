@@ -102,6 +102,22 @@ for entry in pl.get('system-entities', []):
 DEVICE_NODE=$(echo "$PARSED" | sed -n '1p')
 MOUNT_POINT=$(echo "$PARSED" | sed -n '2p')
 
+# ── re-sign the .app bundle ───────────────────────────────────────────────
+# Tauri's release build leaves a linker-signed binary whose code-signing
+# identifier is a binary hash like `hush-44ac88ddc8db2594`, NOT the bundle
+# ID `io.github.khawkins98.hush`. TCC keys permission grants to this
+# identifier, so Input Monitoring (and other permissions) won't stick when
+# the user installs from the DMG. Re-signing while the DMG is mounted
+# writable binds Info.plist and fixes the TCC identifier before the image
+# is sealed back into the final read-only .dmg.
+APP_IN_DMG="$MOUNT_POINT/Hush.app"
+if [[ -d "$APP_IN_DMG" ]]; then
+    echo "[inject-dmg-readme] re-signing Hush.app inside DMG (fixes TCC identifier)…"
+    codesign --force --deep --sign - "$APP_IN_DMG"
+else
+    echo "[inject-dmg-readme] WARNING: Hush.app not found at $APP_IN_DMG — skipping re-sign" >&2
+fi
+
 # ── copy README ────────────────────────────────────────────────────────────
 echo "[inject-dmg-readme] adding 'Read Me First.txt'…"
 cp "$README_SRC" "$MOUNT_POINT/Read Me First.txt"
