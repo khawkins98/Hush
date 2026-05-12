@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-12
+
+### Added
+
+- **macOS DMG: Gatekeeper bypass guide included in installer.** A "Read Me First.txt" file is now injected into the DMG at build time explaining why macOS shows a security warning and exactly how to right-click → Open to bypass it. The guide links to the full permissions troubleshooting documentation on GitHub.
+- **macOS DMG: branded installer window.** The DMG window now shows a styled background with the Hush icon watermark, numbered installation steps (1 — drag app, 2 — read the guide), and an amber warning zone highlighting the README so users can't miss it.
+- **Meeting history: "Copy transcript" button.** Each meeting row in the History panel now has a "Copy transcript" button (revealed on hover, alongside the existing Export and Delete buttons). When the auto-copy-to-clipboard at session end fails (e.g. transcript too long for the macOS clipboard), the failure notice now directs users to this button rather than the old dead-end message.
+
+### Fixed
+
+- **Meeting session end: auto-copy failure notice now actionable.** Previously the notice said to "copy it manually from the meeting row" — but no copy button existed there. The message is now accurate and points to the new "Copy transcript" button on the meeting row.
+
 ## [0.5.2] - 2026-05-08
 
 ### Added
