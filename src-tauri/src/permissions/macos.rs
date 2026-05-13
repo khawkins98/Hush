@@ -133,3 +133,67 @@ pub fn request_microphone() {
         ];
     }
 }
+
+/// Strip `com.apple.quarantine` from the running `.app` bundle before
+/// any TCC API calls.
+///
+/// On macOS 26, `IOHIDRequestAccess` records the TCC grant under a
+/// quarantine-context identity for apps dragged out of a DMG. After
+/// Gatekeeper clears the quarantine xattr on the user's first run
+/// approval, subsequent `IOHIDCheckAccess` calls present the "clean"
+/// identity — which doesn't match the quarantine-keyed TCC entry —
+/// so the API returns `NotDetermined` or `Denied` even though the
+/// user already granted Input Monitoring.
+///
+/// Stripping the xattr here (before the first `IOHIDRequestAccess`
+/// call in the first-run modal) ensures both the grant and every
+/// future status check share the same clean identity.
+///
+/// Silently no-ops when:
+/// - The binary isn't inside an `.app` bundle (`cargo tauri dev`)
+/// - The xattr is already absent (normal non-DMG installs)
+/// - The process lacks write permission to the bundle path (e.g., a
+///   system-wide `/Applications` install; user may need to approve
+///   in Finder to let Gatekeeper clear quarantine natively)
+///
+/// See `learnings.md` 2026-05-13 for the full investigation.
+pub fn strip_app_quarantine() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    // Walk up the path looking for the .app bundle root (up to 5 levels).
+    // Typical layout: Hush.app/Contents/MacOS/hush — so the .app is 3 up.
+    let mut path = exe.as_path();
+    for _ in 0..5 {
+        let Some(parent) = path.parent() else { return };
+        if parent.extension().map(|e| e == "app").unwrap_or(false) {
+            let result = std::process::Command::new("xattr")
+                .args(["-dr", "com.apple.quarantine"])
+                .arg(parent)
+                .output();
+            match result {
+                Ok(o) if o.status.success() => {
+                    tracing::info!(
+                        bundle = ?parent,
+                        "stripped com.apple.quarantine from app bundle (TCC identity fix)"
+                    );
+                }
+                // xattr -d exits 1 when the attribute is not present — expected
+                // for non-DMG installs; not a warning.
+                Ok(o) if o.status.code() == Some(1) => {}
+                Ok(o) => {
+                    tracing::debug!(
+                        status = ?o.status,
+                        stderr = %String::from_utf8_lossy(&o.stderr),
+                        "xattr quarantine strip: unexpected exit status"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "xattr quarantine strip: failed to spawn");
+                }
+            }
+            return;
+        }
+        path = parent;
+    }
+}

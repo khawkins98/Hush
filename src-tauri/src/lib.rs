@@ -813,6 +813,17 @@ pub fn run() {
             if let Err(e) = hotkey::register_default(app.handle()) {
                 tracing::error!(error = ?e, "failed to register default toggle hotkey");
             }
+
+            // Strip com.apple.quarantine from the .app bundle before any TCC
+            // calls. On macOS 26, apps dragged from a DMG carry quarantine
+            // metadata that causes IOHIDRequestAccess to record the TCC grant
+            // under a quarantine-context identity. After Gatekeeper clears the
+            // xattr on first-run approval, IOHIDCheckAccess presents the "clean"
+            // identity which doesn't match — returning Denied/NotDetermined even
+            // though the user already granted. Stripping here ensures the grant
+            // and all future checks share the same identity. No-op outside .app
+            // bundles or when already unquarantined. See learnings.md 2026-05-13.
+            crate::permissions::strip_app_quarantine();
             // PTT runs through `rdev` on a dedicated thread (rdev's listen
             // is blocking and installs a low-level OS hook). On macOS 12+,
             // `CGEventTapCreate` (called internally by rdev) does NOT show an

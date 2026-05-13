@@ -156,13 +156,13 @@ pub fn evaluate_permissions_health(
             statuses.screen_recording,
             screen_recording_last_confirmed,
         ),
-        // Input Monitoring isn't covered by the staleness story —
-        // the IOHIDCheckAccess API already exposes Denied vs
-        // NotDetermined accurately, so the three-state mapping is
-        // mechanical: Granted → Confirmed, Denied → NotGranted,
-        // NotDetermined → NotGranted, NotApplicable → NotApplicable.
-        // Future-proofed in `classify_health` by passing `None` for
-        // last_confirmed; the helper handles it.
+        // Input Monitoring: on macOS 26, `IOHIDCheckAccess` can return stale
+        // values for ad-hoc-signed apps installed from a DMG (see
+        // `learnings.md` 2026-05-13 and `strip_app_quarantine`). We pass
+        // `None` for `last_confirmed` so the health state maps to NotGranted
+        // (not Stale) — the user action is "re-grant in System Settings",
+        // which `strip_app_quarantine` at startup should prevent ever being
+        // needed after a fresh install.
         input_monitoring: classify_health(statuses.input_monitoring, None),
     }
 }
@@ -240,6 +240,18 @@ pub fn request_microphone_permission() {
     {
         macos::request_microphone();
     }
+}
+
+/// Strip `com.apple.quarantine` from the running `.app` bundle.
+///
+/// Call this at startup, before any `IOHIDRequestAccess` / TCC
+/// interactions, so that TCC records permission grants under the
+/// clean (unquarantined) code identity that all future launches
+/// will also present. No-op on non-macOS. See `macos::strip_app_quarantine`
+/// for the full rationale and `learnings.md` 2026-05-13.
+pub fn strip_app_quarantine() {
+    #[cfg(target_os = "macos")]
+    macos::strip_app_quarantine();
 }
 
 #[cfg(test)]

@@ -52,6 +52,22 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-13 — Quarantine xattr causes TCC grant/check identity mismatch on macOS 26 (DMG installs)
+
+**Symptom.** After granting IM from the first-run modal in a DMG-installed build and restarting, `IOHIDCheckAccess` returned `Denied` at the new launch. The user had explicitly granted, but the grant was invisible to the relaunched process. `npm run tauri:bundle` did not reproduce the issue.
+
+**Root cause.** When Finder copies an app from a DMG, it adds a `com.apple.quarantine` xattr to every file in the bundle. On macOS 26, `IOHIDRequestAccess` records the TCC grant under a quarantine-context identity (incorporating the xattr state). After Gatekeeper clears the quarantine xattr on first-run approval, subsequent launches present the "clean" identity — which has no matching TCC entry — so `IOHIDCheckAccess` returns `Denied` or `NotDetermined` even though the grant was made.
+
+The same effect causes `tccutil reset ListenEvent io.github.khawkins98.hush` (bundle-ID-scoped) to fail to clear these quarantine-context entries, leaving stale `Denied` rows in TCC that survive `npm run dev-reset` and block IM from ever reaching `NotDetermined` for developer retesting.
+
+**Fix — app startup.** Added `crate::permissions::strip_app_quarantine()` (see `permissions/macos.rs`) called early in the `lib.rs` `setup` hook, before any TCC API calls. It walks up from `current_exe()` to the `.app` bundle and runs `xattr -dr com.apple.quarantine <bundle>`. This ensures that by the time the first-run modal calls `IOHIDRequestAccess`, the grant is recorded under the clean identity that all future launches will also present. No-op when not in an `.app` bundle or when quarantine is already absent.
+
+**Fix — dev-reset.** Changed `scripts/dev-reset.sh` to use `tccutil reset ListenEvent` (no bundle ID) for the IM service instead of the bundle-ID-scoped form. This is a nuclear reset (clears all apps' IM grants for the user) but is the only reliable way to ensure quarantine-context TCC entries are cleared. Developers will need to re-grant IM for other apps (e.g. iTerm) after `npm run dev-reset`. Accessibility stays bundle-scoped to avoid losing unrelated system grants.
+
+**Edge case: `/Applications` (system-owned).** The `xattr -dr` call will fail silently with a permission error if the bundle is in `/Applications` (owned by root:admin). In that case, Gatekeeper's own quarantine-clear flow (triggered automatically when the user first opens the app via Finder) should handle it. The quarantine-TCC mismatch is therefore most acute for `~/Applications` and user-owned paths — exactly the case for DMG-drag installs.
+
+---
+
 ## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
 
 Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.

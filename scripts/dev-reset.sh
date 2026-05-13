@@ -119,7 +119,19 @@ _tccutil() {
 
 _tccutil reset ScreenCapture "$BUNDLE_ID" && echo "  ScreenCapture cleared" || true
 _tccutil reset Microphone    "$BUNDLE_ID" && echo "  Microphone cleared"    || true
-_tccutil reset ListenEvent   "$BUNDLE_ID" && echo "  ListenEvent cleared"   || true
+# ListenEvent: a bundle-ID-scoped reset misses TCC entries that macOS 26
+# records under a quarantine-context identity for ad-hoc signed apps
+# copied from a DMG (see learnings.md 2026-05-13). A nuclear reset (no
+# bundle ID) clears all Input Monitoring grants for the user, ensuring a
+# clean slate regardless of which identity was recorded. Developers will
+# need to re-grant IM for other apps (e.g. iTerm) after dev-reset.
+if _tccutil reset ListenEvent; then
+    echo "  ListenEvent cleared (all apps)"
+elif _tccutil reset ListenEvent "$BUNDLE_ID"; then
+    echo "  ListenEvent cleared (bundle only)"
+else
+    echo "  ListenEvent clear skipped (tccutil unavailable)"
+fi
 _tccutil reset Accessibility "$BUNDLE_ID" && echo "  Accessibility cleared" || true
 
 # Also purge any lingering TCC entries from the legacy bundle ID.
