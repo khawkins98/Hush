@@ -165,6 +165,20 @@ pub(super) struct MeetingSourceFailedPayload<'a> {
 /// drift.
 pub(super) const MEETING_SOURCE_FAILED_EVENT: &str = "meeting:source-failed";
 
+/// Payload emitted by [`SessionManager::start_manual`] when a new session
+/// opens successfully (both manual button-press and HAL auto-start paths).
+/// Centralised so the frontend's listener (`Events.MeetingSessionStarted`)
+/// and every backend emit site stay in sync.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MeetingSessionStartedPayload {
+    pub session_id: i64,
+}
+
+/// Tauri event name for [`MeetingSessionStartedPayload`]. Matches the
+/// TypeScript constant `Events.MeetingSessionStarted` in `events.ts`.
+pub(super) const MEETING_SESSION_STARTED_EVENT: &str = "meeting:session-started";
+
 pub struct SessionManager {
     // All fields are `pub(super)` so the lifecycle peer
     // (`crate::meeting::lifecycle`) can drive `start_manual` /

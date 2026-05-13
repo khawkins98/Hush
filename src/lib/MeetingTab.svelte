@@ -432,12 +432,13 @@
   <h2 id="settings-autostart-heading" class="group-heading">Auto-start</h2>
   <div class="select-row">
     <label class="select-label" for="settings-meeting-autostart">
-      <span class="select-name">When a meeting app focuses</span>
+      <span class="select-name">When mic activates in a meeting app</span>
       <span class="select-desc">
         Off keeps every meeting manual. Always opens a
-        Meeting Mode session whenever a known meeting app
-        (Zoom, Teams, Discord, …) comes to the foreground.
-        Sessions stop manually either way.
+        Meeting Mode session whenever your microphone
+        activates while a known meeting app (Zoom, Teams,
+        Discord, …) is running. Sessions stop manually
+        either way.
       </span>
     </label>
     <select

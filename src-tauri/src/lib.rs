@@ -1266,6 +1266,29 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                     session_emitted = false;
                 } else {
                     tracing::info!(app_name, "auto-started meeting session");
+                    // Show the recording HUD — the session-started event
+                    // (emitted by SessionManager::start_manual) tells the
+                    // frontend to refresh, but the HUD is Tauri/window-
+                    // specific so it must be driven here rather than inside
+                    // the manager. Same logic as `meeting_start_manual`.
+                    if state
+                        .runtime_flags
+                        .hud_enabled
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        crate::hud::show_async(&app);
+                        if let Err(e) = crate::hud::set_state(
+                            &app,
+                            crate::hud::HudState::Recording {
+                                started_at_ms: crate::hud::now_unix_ms(),
+                            },
+                        ) {
+                            tracing::warn!(
+                                error = ?e,
+                                "emit hud:state(recording) failed for auto-start"
+                            );
+                        }
+                    }
                 }
             }
             MicStateOutcome::ResetSessionEmitted => {

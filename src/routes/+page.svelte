@@ -106,6 +106,7 @@
   let unlistenMeetingSourceFailed: UnlistenFn | null = null;
   let unlistenAudioDeviceLost: UnlistenFn | null = null;
   let unlistenAudioDeviceRestored: UnlistenFn | null = null;
+  let unlistenMeetingSessionStarted: UnlistenFn | null = null;
 
   // PTT state machine.
   //
@@ -324,6 +325,19 @@
       console.error("get_first_run_completed failed:", e);
     }
 
+    // Register before the initial refresh so that an auto-start event
+    // that fires in the narrow window between refresh and listener
+    // setup is never lost. The listener immediately sets `meeting.activeId`
+    // from the payload (shows the Stop button without a round-trip wait)
+    // and then calls `meeting.refresh()` for the full session list.
+    unlistenMeetingSessionStarted = await listen<{ sessionId: number }>(
+      Events.MeetingSessionStarted,
+      (e) => {
+        meeting.activeId = e.payload.sessionId;
+        void meeting.refresh();
+      },
+    );
+
     await Promise.all([
       dictation.loadSources(),
       history.refresh(),
@@ -514,6 +528,7 @@
     unlistenMeetingSourceFailed?.();
     unlistenAudioDeviceLost?.();
     unlistenAudioDeviceRestored?.();
+    unlistenMeetingSessionStarted?.();
     if (pttPressTimer !== null) {
       clearTimeout(pttPressTimer);
       pttPressTimer = null;
