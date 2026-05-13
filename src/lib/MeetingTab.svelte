@@ -48,7 +48,7 @@
   // ("off" / "always") so values bind directly to <option>
   // strings.
   type MeetingAutostartMode = "off" | "always";
-  let meetingAutostartMode = $state<MeetingAutostartMode>("off");
+  let meetingAutostartMode = $state<MeetingAutostartMode>("always");
   let meetingAutostartBusy = $state(false);
   let meetingAutostartError = $state<string | null>(null);
 
@@ -437,8 +437,9 @@
         Off keeps every meeting manual. Always opens a
         Meeting Mode session whenever your microphone
         activates while a known meeting app (Zoom, Teams,
-        Discord, …) is running. Sessions stop manually
-        either way.
+        Discord, …) is running. Auto-started sessions stop
+        when the meeting app releases the mic; manually
+        started sessions stop when you click Stop.
       </span>
     </label>
     <select
