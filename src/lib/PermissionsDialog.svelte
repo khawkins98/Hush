@@ -62,6 +62,12 @@
   let loadError: string | null = $state(null);
   let refreshing = $state(false);
 
+  function handleOpenPrivacyPane(
+    target: "microphone" | "input-monitoring",
+  ): void | Promise<void> {
+    return onOpenPrivacyPane(target);
+  }
+
   let cardEl: HTMLElement | undefined = $state();
   let previousFocus: HTMLElement | null = null;
 
@@ -135,6 +141,15 @@
         const first = cardEl?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
         first?.focus();
       });
+
+      // Re-poll when the user returns from System Settings so the
+      // restart notice appears automatically — the dialog's initial
+      // refresh() only fires on open, not on window refocus.
+      function onFocus() {
+        if (!refreshing) void refresh();
+      }
+      window.addEventListener("focus", onFocus);
+      return () => window.removeEventListener("focus", onFocus);
     }
   });
 </script>
@@ -165,7 +180,11 @@
       <p class="perm-dialog-intro">{intro}</p>
 
       {#if diagnostic}
-        <PermissionsRows {diagnostic} {health} {onOpenPrivacyPane} />
+        <PermissionsRows
+          {diagnostic}
+          {health}
+          onOpenPrivacyPane={handleOpenPrivacyPane}
+        />
       {:else if loadError}
         <p class="perm-dialog-error" role="alert">
           Couldn't load permission status: {loadError}

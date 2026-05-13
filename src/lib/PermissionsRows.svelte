@@ -28,7 +28,11 @@
     ) => void | Promise<void>;
   };
 
-  let { diagnostic, health, onOpenPrivacyPane }: Props = $props();
+  let {
+    diagnostic,
+    health,
+    onOpenPrivacyPane,
+  }: Props = $props();
 
   const ROWS = [
     {

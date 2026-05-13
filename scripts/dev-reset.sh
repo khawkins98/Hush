@@ -119,7 +119,19 @@ _tccutil() {
 
 _tccutil reset ScreenCapture "$BUNDLE_ID" && echo "  ScreenCapture cleared" || true
 _tccutil reset Microphone    "$BUNDLE_ID" && echo "  Microphone cleared"    || true
-_tccutil reset ListenEvent   "$BUNDLE_ID" && echo "  ListenEvent cleared"   || true
+# ListenEvent: a bundle-ID-scoped reset misses TCC entries that macOS 26
+# records under a quarantine-context identity for ad-hoc signed apps
+# copied from a DMG (see learnings.md 2026-05-13). A nuclear reset (no
+# bundle ID) clears all Input Monitoring grants for the user, ensuring a
+# clean slate regardless of which identity was recorded. Developers will
+# need to re-grant IM for other apps (e.g. iTerm) after dev-reset.
+if _tccutil reset ListenEvent; then
+    echo "  ListenEvent cleared (all apps)"
+elif _tccutil reset ListenEvent "$BUNDLE_ID"; then
+    echo "  ListenEvent cleared (bundle only)"
+else
+    echo "  ListenEvent clear skipped (tccutil unavailable)"
+fi
 _tccutil reset Accessibility "$BUNDLE_ID" && echo "  Accessibility cleared" || true
 
 # Also purge any lingering TCC entries from the legacy bundle ID.
@@ -204,14 +216,27 @@ for launch_agent in \
   fi
 done
 
-# ── 7. ~/Applications dev install ────────────────────────────────────────────
-# npm run tauri:bundle now installs to ~/Applications/Hush.app for reliable
-# TCC behaviour. Remove it so a fresh launch starts with no prior state.
-DEV_APP="$TARGET_HOME/Applications/Hush.app"
-if [[ -d "$DEV_APP" ]]; then
-  rm -rf "$DEV_APP"
-  echo "  removed dev install: $DEV_APP"
-fi
+# ── 7. App installs ───────────────────────────────────────────────────────────
+# Remove ALL known Hush.app locations so stale binaries with different
+# codesign identities can't pollute TCC during permission testing.
+#
+# Background: every Tauri build without --sign leaves a linker-signed binary
+# whose codesign identifier is `hush-<hash>` (not `io.github.khawkins98.hush`).
+# TCC keys ListenEvent/Microphone/etc rows to the codesign identifier, so a
+# linker-signed /Applications/Hush.app carries separate TCC rows from the
+# re-signed binaries produced by tauri:bundle / tauri:dmg. If the old install
+# is still present it creates a confusing "two binaries with different permission
+# states" situation — one app sees Denied, the other sees NotDetermined — and
+# macOS may auto-focus or single-instance-redirect to the wrong one.
+# (see learnings.md 2026-05-13 "linker-signed vs re-signed TCC identity")
+for app_loc in \
+  "$TARGET_HOME/Applications/Hush.app" \
+  "/Applications/Hush.app"; do
+  if [[ -d "$app_loc" ]]; then
+    rm -rf "$app_loc"
+    echo "  removed app install: $app_loc"
+  fi
+done
 
 echo ""
 echo "[dev-reset] done. Next launch of Hush will behave as a first-ever install."
