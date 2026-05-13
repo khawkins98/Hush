@@ -319,7 +319,13 @@
             class:granted={isGranted("microphone")}
             data-testid="wizard-perm-microphone"
           >
-            <div class="wizard-perm-icon" aria-hidden="true">🎙</div>
+            <div class="wizard-perm-icon" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="2" width="6" height="12" rx="3" />
+                <path d="M5 11a7 7 0 0 0 14 0" />
+                <path d="M12 18v4" />
+              </svg>
+            </div>
             <div class="wizard-perm-text">
               <span class="wizard-perm-title">Microphone</span>
               <span class="wizard-perm-why">
@@ -347,7 +353,13 @@
             class:dimmed={!isGranted("microphone")}
             data-testid="wizard-perm-input-monitoring"
           >
-            <div class="wizard-perm-icon" aria-hidden="true">⌨️</div>
+            <div class="wizard-perm-icon" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001" />
+                <path d="M7 16h10" />
+              </svg>
+            </div>
             <div class="wizard-perm-text">
               <span class="wizard-perm-title">Input Monitoring</span>
               <span class="wizard-perm-why">
@@ -515,8 +527,10 @@
   opacity: 0.55;
 }
 .wizard-perm-icon {
-  font-size: 1.4rem;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
   user-select: none;
 }
 .wizard-perm-text {
