@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-13
+
 ### Added
 
 - **Meeting auto-detection on by default.** The CoreAudio HAL listener that triggers a meeting session when the microphone activates in a recognised meeting app (Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, Skype) is now enabled out of the box. New installs default to "Always" auto-start mode instead of the previous "Off". Toggle it under Settings → Meeting → Auto-start mode.
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Input Monitoring grant activates PTT immediately — no restart required.** Previously users had to quit and reopen Hush after granting Input Monitoring before push-to-talk would work. The PTT listener now starts in the same session the moment the grant is confirmed.
 - **Removed stale "Restart Now" prompt after Input Monitoring grant.** With the in-session PTT fix above, the hint was both misleading and unnecessary.
 - **Meeting auto-detection half-state eliminated.** When meeting auto-detection started a session, the frontend was never notified — the Stop button never appeared and users could not end the session without quitting. The backend now emits a `meeting:session-started` event after every session start (manual and auto), and the frontend listener sets the active session ID immediately (no refresh round-trip needed).
+- **Permissions cards: layout no longer cramps description text** (#671). Settings → Permissions switched from a two-column grid (text left, button floating right) to a vertical stack. The description now has full width; the action button right-aligns below it; the stale-grant restart notice spans the full card width.
+- **First-run wizard: Microphone and Input Monitoring icons are now SVGs** (#674). Replaced the 🎙 and ⌨️ emoji in the permissions wizard with inline SVG icons (Lucide-style Mic and Keyboard, matching the app's existing icon style). Avoids emoji rendering variance across OS versions.
 
 ## [0.5.3] - 2026-05-12
 
