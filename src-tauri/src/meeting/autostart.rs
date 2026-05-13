@@ -37,9 +37,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum MeetingAutostartMode {
     /// Never auto-start. The user clicks Start manually each time.
-    /// This is the default for new installs — auto-recording the
-    /// mic without the user explicitly opting in is the kind of
-    /// surprise that costs trust.
     Off,
     /// Auto-start whenever a Meeting-classified app is frontmost
     /// and the mic activates, no prompt. Most useful for users who
@@ -49,15 +46,16 @@ pub enum MeetingAutostartMode {
 
 impl MeetingAutostartMode {
     /// Parse the persisted settings row into the enum. Absent
-    /// rows or any unrecognised value fall through to `Off` — the
-    /// safer default. A garbage row should not silently make the
-    /// mic spontaneously turn on.
+    /// rows fall through to `Always` (the default). Any
+    /// unrecognised value falls through to `Always` rather than
+    /// silently disabling a feature the user expects to work.
     pub fn from_setting(raw: Option<&str>) -> Self {
         match raw {
-            Some("always") => Self::Always,
-            // Reserved for the prompt UI; for now treat it as Off.
-            Some("ask") => Self::Off,
-            _ => Self::Off,
+            Some("always") | None => Self::Always,
+            Some("off") => Self::Off,
+            // Reserved for the prompt UI; for now treat it as Always.
+            Some("ask") => Self::Always,
+            _ => Self::Always,
         }
     }
 
@@ -78,7 +76,7 @@ mod tests {
     fn from_setting_handles_all_branches() {
         assert_eq!(
             MeetingAutostartMode::from_setting(None),
-            MeetingAutostartMode::Off
+            MeetingAutostartMode::Always
         );
         assert_eq!(
             MeetingAutostartMode::from_setting(Some("off")),
@@ -89,15 +87,15 @@ mod tests {
             MeetingAutostartMode::Always
         );
         // "ask" is reserved for the future prompt UI; treat as
-        // off for now — never silently start without an explicit opt-in.
+        // Always for now.
         assert_eq!(
             MeetingAutostartMode::from_setting(Some("ask")),
-            MeetingAutostartMode::Off
+            MeetingAutostartMode::Always
         );
-        // Garbage row falls back to Off (the safer default).
+        // Unknown row falls back to Always (the default).
         assert_eq!(
             MeetingAutostartMode::from_setting(Some("garbage")),
-            MeetingAutostartMode::Off
+            MeetingAutostartMode::Always
         );
     }
 
