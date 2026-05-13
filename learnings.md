@@ -76,9 +76,44 @@ Accessibility stays bundle-scoped to avoid losing unrelated system grants (Acces
 
 **Edge case: `/Applications` (system-owned).** The `xattr -dr` call will fail silently with a permission error if the bundle is in `/Applications` (owned by root:admin). In that case, Gatekeeper's own quarantine-clear flow (triggered automatically when the user first opens the app via Finder) should handle it. The quarantine-TCC mismatch is therefore most acute for `~/Applications` and user-owned paths — exactly the case for DMG-drag installs.
 
+## 2026-05-13 — CGEventTap auto-deny: calling rdev with NotDetermined IM status on macOS 26
+
+**Symptom.** After installing from DMG and launching, the first-run modal appeared correctly for Input Monitoring. The user clicked Allow, the OS prompt appeared, they granted it — but after relaunching, IM showed as Denied in the permissions UI (not Granted, not NotDetermined).
+
+Logs showed the transition happening 12 seconds after launch with no user action possible:
+
+```
+11:31:34 UTC — status=NotDetermined → PTT listener attempted
+11:31:46 UTC — status=Denied       → PTT not started
+```
+
+**Root cause.** `register_ptt_listener` calls `rdev::listen`, which internally calls `CGEventTapCreate`. On macOS 26, calling `CGEventTapCreate` when Input Monitoring is `NotDetermined` auto-creates a TCC `Deny` entry. This is NOT the user denying the prompt — macOS itself generates the deny at the kernel/TCC layer when the unapproved tap request arrives. The 12-second window is exactly the time it takes for the app to warm up to the PTT listener attempt after startup.
+
+**Why this didn't affect tauri:bundle.** Development testing with `tauri:bundle` typically happens with IM already granted (from previous testing cycles). The `NotDetermined` first-run path is only exercised from a clean install (DMG + `dev-reset`).
+
+**Fix.** The PTT startup gate in `lib.rs` was changed from:
+
+```rust
+if im_status != Denied {   // included NotDetermined — wrong!
+    register_ptt_listener()
+}
+```
+
+to:
+
+```rust
+if im_status == Granted || im_status == NotApplicable {  // safe
+    register_ptt_listener()
+}
+```
+
+**Companion fix: in-session PTT start after grant.** Since we no longer attempt the PTT listener at boot for `NotDetermined`, the first-run modal's `request_input_monitoring_permission` IPC now immediately calls `register_ptt_listener` when `IOHIDRequestAccess` returns `true`. This gives the user a working PTT in the same session without needing a restart.
+
+**Developer impact.** None for normal iteration. If testing the first-run IM grant flow, use `npm run dev-reset` (nuclear reset), then `npm run tauri:dmg` → copy → launch → grant IM → PTT should work immediately in that same session.
+
 ---
 
-## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
+
 
 Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.
 

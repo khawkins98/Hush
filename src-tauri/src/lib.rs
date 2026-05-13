@@ -835,34 +835,33 @@ pub fn run() {
             // OS permission dialog when IM is not granted — it simply returns
             // NULL and rdev exits with an error. The OS dialog is only
             // triggered by an explicit `IOHIDRequestAccess` call, which the
-            // first-run modal handles (#647). We therefore attempt the
-            // listener for all statuses except Denied:
+            // first-run modal handles (#647).
             //
-            //   Granted        → start normally.
-            //   NotApplicable  → start (non-macOS platform).
-            //   NotDetermined  → attempt anyway; on macOS 26, IOHIDCheckAccess
-            //                    may return stale not-determined for release
-            //                    binaries after a TCC grant (the grant was
-            //                    created in a session where the binary had a
-            //                    quarantine-influenced identity; the next
-            //                    startup's identity is clean and IOHIDCheckAccess
-            //                    doesn't find the entry). rdev succeeds if IM is
-            //                    truly granted; fails gracefully if not.
-            //   Denied         → skip; the user explicitly revoked IM.
+            // IMPORTANT: Do NOT attempt the PTT listener for NotDetermined.
+            // On macOS 26, calling CGEventTapCreate (via rdev) when IM status
+            // is NotDetermined causes macOS to auto-create a TCC Deny entry.
+            // This silently transitions the status to Denied before the user
+            // has had any chance to grant IM via the first-run modal, making
+            // the grant unreachable without a nuclear dev-reset. See
+            // learnings.md 2026-05-13 (auto-deny entry).
             //
-            // See `hotkey::ptt` module header and learnings.md for full detail.
+            // The first-run flow handles NotDetermined correctly:
+            //   1. User sees modal → clicks Allow → IOHIDRequestAccess fires
+            //   2. `request_input_monitoring_permission` IPC starts the PTT
+            //      listener immediately on grant (same session, no restart)
+            //   3. On subsequent launches, IOHIDCheckAccess → Granted → PTT
+            //      starts here normally
+            //
+            //   Denied  → skip; the user explicitly revoked IM.
+            //   NotApplicable → start (non-macOS platform, no TCC layer).
             let im_status = crate::permissions::read_all().input_monitoring;
             tracing::info!(
                 status = ?im_status,
                 "input monitoring status at startup (IOHIDCheckAccess)"
             );
-            if im_status != crate::permissions::PermissionStatus::Denied {
-                if im_status == crate::permissions::PermissionStatus::NotDetermined {
-                    tracing::info!(
-                        "IOHIDCheckAccess returned not-determined at startup; \
-                         attempting PTT listener (may be stale on macOS 26 after a TCC grant)"
-                    );
-                }
+            if im_status == crate::permissions::PermissionStatus::Granted
+                || im_status == crate::permissions::PermissionStatus::NotApplicable
+            {
                 if let Err(e) = hotkey::register_ptt_listener(
                     app.handle(),
                     ptt_combo_for_listener,
@@ -872,7 +871,11 @@ pub fn run() {
                     tracing::error!(error = ?e, "failed to start PTT listener");
                 }
             } else {
-                tracing::info!("input monitoring denied; PTT listener not started");
+                tracing::info!(
+                    status = ?im_status,
+                    "PTT listener not started at boot; \
+                     awaiting IM grant (NotDetermined) or revoked (Denied)"
+                );
             }
             Ok(())
         })

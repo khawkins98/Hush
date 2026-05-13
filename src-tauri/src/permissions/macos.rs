@@ -173,7 +173,9 @@ pub fn strip_app_quarantine() -> bool {
     // Typical layout: Hush.app/Contents/MacOS/hush — so the .app is 3 up.
     let mut path = exe.as_path();
     for _ in 0..5 {
-        let Some(parent) = path.parent() else { return false };
+        let Some(parent) = path.parent() else {
+            return false;
+        };
         if parent.extension().map(|e| e == "app").unwrap_or(false) {
             // First CHECK if the bundle root has quarantine set.
             // `xattr -p` exits 0 if the named attribute exists on the path,
