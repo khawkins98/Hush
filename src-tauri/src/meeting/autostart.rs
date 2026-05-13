@@ -17,8 +17,6 @@
 //!
 //! ## What's deliberately NOT here
 //!
-//! - **Auto-stop on app blur.** Users alt-tab during meetings; auto-stop
-//!   needs a debounce state machine. Manual stop only for now.
 //! - **`"ask"` mode.** Reserved in the wire format; treated as `Off` until
 //!   the prompt UI ships.
 //! - **Permission pre-check.** If the mic is denied, `start_manual` fails

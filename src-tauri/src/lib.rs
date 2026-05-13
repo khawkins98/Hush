@@ -1291,6 +1291,23 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                     }
                 }
             }
+            MicStateOutcome::AutoStop => {
+                // Mic went quiet while we hold an auto-started session.
+                // Stop the session so users aren't left with a ghost
+                // recording after their call ends. Uses the same helper
+                // as the manual Stop button so transcribers and diarizer
+                // are rebuilt in the background, ready for the next call.
+                session_emitted = false;
+                tracing::info!("meeting detection: mic inactive — auto-stopping session");
+                if let Err(e) =
+                    crate::ipc::commands::meeting::do_stop_and_rebuild(&app, &state).await
+                {
+                    tracing::warn!(
+                        error = ?e,
+                        "meeting detection: auto-stop failed"
+                    );
+                }
+            }
             MicStateOutcome::ResetSessionEmitted => {
                 // Mic went quiet — reset so the next activation can start
                 // a new session.
