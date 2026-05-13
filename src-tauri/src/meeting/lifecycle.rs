@@ -38,8 +38,8 @@ use crate::transcription::StreamingTranscribeSession;
 
 use super::classifier::AppClassifier;
 use super::manager::{
-    ActiveSession, MeetingSourceFailedPayload, SessionManager, SessionState,
-    MEETING_SOURCE_FAILED_EVENT,
+    ActiveSession, MeetingSessionStartedPayload, MeetingSourceFailedPayload, SessionManager,
+    SessionState, MEETING_SESSION_STARTED_EVENT, MEETING_SOURCE_FAILED_EVENT,
 };
 use super::pump;
 use super::{MeetingSession, NewMeetingSession, NewPersistedUtterance};
@@ -386,6 +386,20 @@ impl SessionManager {
             close_attempted: false,
         });
         drop(guard);
+
+        // Notify the frontend so it immediately syncs its session state
+        // (shows the Stop button, starts the live-transcript poll, etc.).
+        // Emitted after the Active commit so that `meeting_active_session`
+        // IPC always finds the session if the frontend calls it in response.
+        // Covers both the manual button path (IPC command) and the HAL
+        // auto-start path — the frontend listener only needs to call
+        // `meeting.refresh()` once regardless of which path fired.
+        self.event_emitter.emit(
+            MEETING_SESSION_STARTED_EVENT,
+            &MeetingSessionStartedPayload {
+                session_id: session.id,
+            },
+        );
 
         Ok(session)
     }

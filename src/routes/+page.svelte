@@ -76,6 +76,15 @@
   // or after granting fresh) re-evaluates it naturally.
   let staleBannerDismissed = $state(false);
 
+  // True when a meeting-only recording is active (no dictation session).
+  // Mirrors the same derivation in DictationSection so global controls
+  // (hotkey, tray, document title, sidebar dot) stay in sync.
+  let meetingOnlyActive = $derived(
+    meeting.activeId !== null && !dictation.recording && !dictation.busy,
+  );
+  // True whenever the mic is hot for any reason.
+  let anyRecordingActive = $derived(dictation.recording || meetingOnlyActive);
+
   // Reusable permissions dialog (#232).
   let showPermissionsDialog = $state(false);
   let permissionsDialogIntro: string | undefined = $state(undefined);
@@ -106,6 +115,7 @@
   let unlistenMeetingSourceFailed: UnlistenFn | null = null;
   let unlistenAudioDeviceLost: UnlistenFn | null = null;
   let unlistenAudioDeviceRestored: UnlistenFn | null = null;
+  let unlistenMeetingSessionStarted: UnlistenFn | null = null;
 
   // PTT state machine.
   //
@@ -136,19 +146,25 @@
       subtitle: dictation.noModelInstalled ? "Choose a model first" : undefined,
       group: "Transcribe",
       enabled:
-        !dictation.recording && !dictation.busy && !dictation.noModelInstalled,
+        !dictation.recording &&
+        !dictation.busy &&
+        !dictation.noModelInstalled &&
+        meeting.activeId === null,
       run: () => {
         void dictation.startRecord(screenRecordingLive);
       },
     },
     {
       id: "dictation.stop",
-      label: "Stop transcription",
-      subtitle: "Stop the current recording and transcribe",
+      label: meetingOnlyActive ? "Stop meeting recording" : "Stop transcription",
+      subtitle: meetingOnlyActive
+        ? "Stop the current meeting recording"
+        : "Stop the current recording and transcribe",
       group: "Transcribe",
-      enabled: dictation.recording,
+      enabled: dictation.recording || meetingOnlyActive,
       run: () => {
-        void dictation.stop(TRAILING_SILENCE_MS);
+        if (meetingOnlyActive) void meeting.stopSession();
+        else void dictation.stop(TRAILING_SILENCE_MS);
       },
     },
     {
@@ -259,13 +275,13 @@
   // have the window in the background — at-a-glance signal that the mic
   // is hot. Tauri exposes `window.document` like a regular browser.
   $effect(() => {
-    document.title = dictation.recording ? "Hush ● Recording" : "Hush";
+    document.title = anyRecordingActive ? "Hush ● Recording" : "Hush";
   });
 
   // Push recording state to the backend so the tray's "Start / Stop
   // Recording" menu item label can mirror the UI.
   $effect(() => {
-    void emit(Events.UiRecordingState, dictation.recording);
+    void emit(Events.UiRecordingState, anyRecordingActive);
   });
 
   $effect(() => {
@@ -324,6 +340,19 @@
       console.error("get_first_run_completed failed:", e);
     }
 
+    // Register before the initial refresh so that an auto-start event
+    // that fires in the narrow window between refresh and listener
+    // setup is never lost. The listener immediately sets `meeting.activeId`
+    // from the payload (shows the Stop button without a round-trip wait)
+    // and then calls `meeting.refresh()` for the full session list.
+    unlistenMeetingSessionStarted = await listen<{ sessionId: number }>(
+      Events.MeetingSessionStarted,
+      (e) => {
+        meeting.activeId = e.payload.sessionId;
+        void meeting.refresh();
+      },
+    );
+
     await Promise.all([
       dictation.loadSources(),
       history.refresh(),
@@ -332,8 +361,9 @@
     ]);
 
     unlistenToggle = await listen(Events.HotkeyToggle, () => {
-      if (dictation.busy) return;
+      if (dictation.busy || meeting.busy) return;
       if (dictation.recording) void dictation.stop(TRAILING_SILENCE_MS);
+      else if (meeting.activeId !== null) void meeting.stopSession();
       else void dictation.start();
     });
 
@@ -514,6 +544,7 @@
     unlistenMeetingSourceFailed?.();
     unlistenAudioDeviceLost?.();
     unlistenAudioDeviceRestored?.();
+    unlistenMeetingSessionStarted?.();
     if (pttPressTimer !== null) {
       clearTimeout(pttPressTimer);
       pttPressTimer = null;
@@ -599,7 +630,7 @@
 <div class="app-shell">
   <SidebarNav
     bind:active={nav.activeSection}
-    recording={dictation.recording}
+    recording={anyRecordingActive}
     open={nav.sidebarOpen}
     onSelect={nav.onSidebarSelect}
     onToggle={nav.onSidebarToggle}

@@ -283,4 +283,11 @@ objc2-foundation = "0.3"
 # Used by `audio::core_audio_tap` to send SIGTERM to the tap binary
 # child process for clean shutdown.
 libc = "0.2"
+# HAL-level CoreAudio bindings for the event-driven mic-activity monitor
+# (#665). `cpal` already compiles `coreaudio-rs` with `core_audio` feature
+# on macOS (which activates the `coreaudio-sys/core_audio` bindgen path),
+# so this adds no incremental build cost — we're just declaring a direct
+# dependency on what's already in the build graph to access the generated
+# bindings from our own code.
+coreaudio-sys = { version = "0.2", features = ["core_audio"] }
 

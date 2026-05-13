@@ -57,7 +57,11 @@ When Parakeet lands, the model picker grows a second engine card alongside the W
 
 Hush v1's core flow is one-shot dictation: the user holds a hotkey, talks, gets a transcript on the clipboard. v1.x adds a passive-transcription surface ("Meeting Mode") that captures system audio + microphone during meetings, transcribes streaming, and persists per-utterance transcripts grouped into sessions. Audio never lands on disk — only transcripts and timestamps.
 
-Meeting Mode is **opt-in per app**. The first time the user runs a meeting (Zoom, Teams, Meet, Discord, Slack-call) Hush prompts: "Audio detected in Zoom — start a transcript session?" The user can answer once or set "always for this app." Media apps (YouTube, Spotify, Apple Music) default to "no" and the user can opt them in.
+Meeting auto-start is controlled by a **global Always / Off toggle** in Settings → Meeting → Auto-start mode. The default for new installs is **Always** (enabled out of the box). When `Always` is active, Hush monitors CoreAudio device state via the HAL property listener; when the microphone activates and the frontmost app is a recognised meeting client (Zoom, Teams, Meet, Discord, Slack-call, Webex, FaceTime, Skype), Hush automatically starts a meeting session and auto-stops it when the meeting app releases the mic. The user can turn this off globally, or manually start/stop sessions regardless of the mode.
+
+Media apps (YouTube, Spotify, Apple Music) are intentionally absent from the default classifier table, so playback does not trigger auto-start.
+
+**Phase E (#112)** — per-app policy overrides ("always for Zoom, never for Discord") — is the next layer on top and is not yet shipped. The global toggle is the shipped v1.x design.
 
 Streaming transcription depends on either the Whisper.cpp sliding-window pattern or Parakeet (the streaming-friendly second engine — see §5). Whichever ships first is the v1.x default; the other becomes a settable preference.
 
@@ -75,7 +79,7 @@ Out of scope for v1.x:
 
 Phased delivery (each phase independently shippable; tracked under #33):
 
-- **Phase A** — System audio capture per platform. macOS via ScreenCaptureKit (#105), Linux via PulseAudio monitor (#106), Windows via WASAPI loopback (#107).
+- **Phase A** — System audio capture per platform. macOS via CoreAudio process tap (#105 — ScreenCaptureKit replaced in v0.5.0), Linux via PulseAudio monitor (#106), Windows via WASAPI loopback (#107).
 - **Phase B** — Streaming transcription (#108). Whisper sliding-window first; Parakeet later.
 - **Phase C** — Sessions + meeting-mode UI (#110). Foundation (data layer + IPC + scaffolded panel) shipped post-v0.1.0.
 - **Phase D** — Diarization (#111). Mic-vs-system bubble UI ships in Phase C; real per-speaker labels via wespeaker ONNX shipped 2026-04-30 across #295–#300 + audit follow-ups #303–#305.
@@ -87,7 +91,7 @@ Design memo at `docs/system-audio-meeting-mode-proposal.md`. The privacy framing
 
 **Frontend.** Tauri webview rendering an SPA. Proposed stack: Svelte + Tailwind (smaller bundle than React, better for the HUD overlay). Handles settings, history view, dictionary management, and the floating recording HUD.
 
-**Backend (Rust).** Tauri command handlers exposing audio capture, transcription, history queries, hotkey registration, foreground-app polling, dictionary application, and clipboard writes.
+**Backend (Rust).** Tauri command handlers exposing audio capture, transcription, history queries, hotkey registration, meeting auto-detection (CoreAudio HAL listener on macOS), dictionary application, and clipboard writes.
 
 **Transcription.** whisper.cpp via the `whisper-rs` crate. Quantised GGUF models stored in the platform's app-data directory, downloaded on first use. Default to `small` Q5_0; let the user pick `tiny`, `base`, `small`, `medium`, `large-v3`.
 

@@ -1,7 +1,7 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-05-08, current v0.5.x handoff
-**Latest release:** v0.5.1
+**Snapshot:** 2026-05-13, current v0.5.x handoff
+**Latest release:** v0.5.3
 
 A working handoff doc, not the canonical changelog or PRD. The goal is still: *what's the project state right now, what changed recently, and what should the next contributor verify or pick up?* This file is meant to **rot fast** — rewrite it on the next pickup instead of trying to preserve every old bullet forever.
 
@@ -80,6 +80,15 @@ These are worth knowing because they change where to look when debugging:
 - **`GeneralTab` was decomposed and prop-drilling from `+page.svelte` was reduced** (`30473ff`).
 - **User-visible "Dictation" labels were renamed to "Transcribe"** (`8553acd`).
 - **The microphone / Input Monitoring prompt flow was tightened again** (`221d1c5`).
+- **TCC identity fixed for DMG installs on macOS 26** (PR #672, commit `b818384`). Quarantine-xattr strip + `exec()` on first launch ensures the stable bundle ID `io.github.khawkins98.hush` is seen by TCC; CGEventTap blocked until Input Monitoring is `Granted` to prevent a silent TCC Deny.
+
+### In-draft work (PR #673, branch `feat/event-driven-meeting-detection-v2`)
+
+These are not on `main` yet — real-device testing needed before merge:
+
+- **Meeting auto-detection enabled by default.** `from_setting(None)` now returns `Always` instead of `Off`. New installs start detecting meetings immediately without any settings change.
+- **Event-driven detection via CoreAudio HAL.** The `MicCameraMonitor` registers a `kAudioDevicePropertyDeviceIsRunningSomewhere` listener on every input device. The `evaluate_mic_state` pure function (6 guards, top-to-bottom) decides what action to take on each event: auto-start a session, do nothing, or reset the `session_emitted` guard.
+- **Diagnostic debug tracing.** Every HAL event logs mic state, mode, session state, frontmost app, and classifier outcome at `RUST_LOG=hush=debug`. Makes it straightforward to confirm whether detection fired and why.
 
 ---
 
@@ -96,6 +105,7 @@ These are worth knowing because they change where to look when debugging:
 ### Meeting
 
 - Manual meeting start/stop
+- **Auto-detection via CoreAudio HAL** — starts when mic activates while Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, or Skype is frontmost (macOS, enabled by default; Settings → Meeting → Auto-start)
 - Microphone + system-audio capture on macOS
 - Live chunked transcript updates
 - Speaker labeling via diarization
@@ -140,6 +150,7 @@ Use `tauri:bundle` — not the raw dev binary — for any claim about macOS perm
 
 ## Next pickup / open work worth flagging
 
+- **PR #673 — event-driven meeting auto-detection** is in draft. Needs real-device validation: open Zoom/Teams and join a call with `Always` mode active; check that a session starts within ~1 s of mic activation. Enable debug logging with `RUST_LOG=hush=debug` to trace the detection path if it doesn't fire.
 - **#10 — signed updater channel** is still maintainer-blocked. UI-side update plumbing exists; signing/notarised release-channel work does not.
 - **#224 — MCP server mode** is still just a proposal. No implementation has started.
 - **#316 — diarization drift research** still needs real-meeting observation; the current session-state matcher is good enough for v1, but not deeply measured.

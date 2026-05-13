@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Meeting auto-detection on by default.** The CoreAudio HAL listener that triggers a meeting session when the microphone activates in a recognised meeting app (Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, Skype) is now enabled out of the box. New installs default to "Always" auto-start mode instead of the previous "Off". Toggle it under Settings → Meeting → Auto-start mode.
+- **Meeting sessions auto-stop when the call ends.** Auto-started meeting sessions now stop automatically when the meeting app releases the microphone (call ended, left, or kicked). Manually started sessions are unaffected — they continue running until the user clicks Stop. Uses the same stop-and-rebuild path as the manual Stop button so transcribers and the diarizer are refreshed in the background, ready for the next call.
+- **Event-driven meeting auto-detection via CoreAudio HAL** (macOS). Meeting sessions start automatically when the microphone activates while a supported meeting app is frontmost. Detection uses the `kAudioDevicePropertyDeviceIsRunningSomewhere` property listener on input devices — fires in the same OS audio call stack as the device state change, no polling. Session start is guarded by `session_emitted` to prevent duplicate fires within one activation cycle.
+- **Unified recording UI — meetings and dictation share one control surface.** When a meeting session is running (auto-detected or manually started) without an active dictation session, the Transcribe panel's `RecordPanel` enters meeting mode: the waveform turns red, a "MEETING" label appears, the Stop button reads "Stop meeting recording", and a live transcript feed updates every 3 s. Global signals (document title, tray state, sidebar recording dot, toggle hotkey) all reflect the combined active state. Previously the panel showed no sign of the active meeting, leaving users unable to stop it without navigating to History, and global controls did not respond to meeting-only recordings.
+
 ### Fixed
 
 - **DMG installs: permissions now persist across restarts on macOS 26.** Two silent macOS 26 bugs broke Input Monitoring and Microphone grants for users who installed from the DMG:
@@ -14,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2. The PTT (push-to-talk) subsystem attempted a low-level `CGEventTapCreate` call when Input Monitoring was `NotDetermined`. On macOS 26, this silently created a permanent TCC Deny entry before the user could grant access via the first-run wizard. The listener is now gated strictly on `Granted` (or `NotApplicable` on non-macOS).
 - **Input Monitoring grant activates PTT immediately — no restart required.** Previously users had to quit and reopen Hush after granting Input Monitoring before push-to-talk would work. The PTT listener now starts in the same session the moment the grant is confirmed.
 - **Removed stale "Restart Now" prompt after Input Monitoring grant.** With the in-session PTT fix above, the hint was both misleading and unnecessary.
+- **Meeting auto-detection half-state eliminated.** When meeting auto-detection started a session, the frontend was never notified — the Stop button never appeared and users could not end the session without quitting. The backend now emits a `meeting:session-started` event after every session start (manual and auto), and the frontend listener sets the active session ID immediately (no refresh round-trip needed).
 
 ## [0.5.3] - 2026-05-12
 
@@ -629,7 +637,7 @@ Two trip-hazards on the Permissions tab:
 
 #### Autostart poller: injectable probe trait + 9 wiring tests (#237)
 
-The meeting auto-start poller (`run_meeting_autostart_poller`) had untested wiring around `active-win-pos-rs::get_active_window` → classifier → `AutostartDecision::decide`. Extracted the pure logic into `meeting::autostart_poller::evaluate_autostart_tick`, gated the OS call behind a `ForegroundAppProbe` trait, and added 9 tests covering off-mode reset, probe-failure no-change, transition-into-meeting Start, steady-state silence, session-active block, and classifier-override propagation.
+The meeting auto-start poller (`run_meeting_autostart_poller`) had untested wiring around `active-win-pos-rs::get_active_window` → classifier → `AutostartDecision::decide`. Extracted the pure logic into `meeting::autostart_poller::evaluate_autostart_tick`, gated the OS call behind a `ForegroundAppProbe` trait, and added 9 tests covering off-mode reset, probe-failure no-change, transition-into-meeting Start, steady-state silence, session-active block, and classifier-override propagation. The `evaluate_autostart_tick` function, `ForegroundAppProbe` trait, and 9 associated tests were subsequently removed in #665 when the polling loop was replaced by the event-driven `mic_camera_monitor`.
 
 #### Updater HTTP coverage: 9 wiremock tests (#236)
 

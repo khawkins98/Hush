@@ -27,6 +27,10 @@ let pendingPermissionsDialogIntro = $state<string | null>(null);
 /// `meeting:source-failed` during an active session (#533).
 /// Cleared when the session ends or the user dismisses it.
 let meetingSourceFailedNotice = $state<string | null>(null);
+/// Latest-wins guard for `meeting.refresh()`. Incremented on every
+/// call so a stale response from a previous in-flight request can't
+/// overwrite state already set by a newer one.
+let meetingRefreshSeq = 0;
 
 export const meeting = {
   get sessions() {
@@ -84,6 +88,8 @@ export const meeting = {
     meetingSourceFailedNotice = val;
   },
   async refresh() {
+    meetingRefreshSeq += 1;
+    const seq = meetingRefreshSeq;
     try {
       const [sessions, active] = await Promise.all([
         invoke<MeetingSession[]>("meeting_sessions_search", {
@@ -91,10 +97,13 @@ export const meeting = {
         }),
         invoke<ActiveMeetingSession>("meeting_active_session"),
       ]);
+      // Discard if a newer refresh already completed.
+      if (seq !== meetingRefreshSeq) return;
       meetingSessions = sessions;
       meetingActiveId = active.active;
       meetingSessionsError = null;
     } catch (e) {
+      if (seq !== meetingRefreshSeq) return;
       meetingSessionsError = formatErrorDisplay(e);
     } finally {
       meetingSessionsLoaded = true;

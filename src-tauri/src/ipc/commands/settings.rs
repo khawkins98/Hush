@@ -319,9 +319,9 @@ pub fn get_meeting_autostart_mode(
 }
 
 /// Persist the Meeting-Mode auto-start mode. Updates both the
-/// in-memory atomic the foreground poller reads and the settings
-/// row used at next-launch boot, so the value is observable to the
-/// poller within the next 3 s tick without an app restart.
+/// in-memory atomic the CoreAudio HAL detection task reads and
+/// the settings row used at next-launch boot; observable on the
+/// next device-state event without an app restart.
 #[tauri::command]
 pub async fn set_meeting_autostart_mode(
     state: State<'_, AppState>,

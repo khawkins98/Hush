@@ -264,7 +264,7 @@ pub struct AppState {
 /// User-facing runtime flags that mirror Settings rows (#431).
 ///
 /// Each entry is an `Arc<Atomic*>` so the read-side hot paths
-/// (dictation start, meeting pump tick, foreground poller, etc.)
+/// (dictation start, meeting pump tick, HAL detection task, etc.)
 /// can do lock-free reads, and the IPC `set_*` commands flip the
 /// flag in place — the loaded `WhisperTranscription` and the
 /// active `SessionManager` clone the same `Arc` at construction
@@ -303,9 +303,9 @@ pub struct RuntimeFlags {
     pub sound_cue_start_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub sound_cue_complete_enabled: Arc<std::sync::atomic::AtomicBool>,
     /// User-chosen Meeting-Mode auto-start mode (Off / Always).
-    /// Read by the foreground poller every tick; flipped by the
-    /// `set_meeting_autostart_mode` IPC. Encoded as an
-    /// `AtomicU8` (`0 = Off`, `1 = Always`) for lock-free reads.
+    /// Read by the CoreAudio HAL detection task on every device-state
+    /// event; flipped by the `set_meeting_autostart_mode` IPC.
+    /// Encoded as an `AtomicU8` (`0 = Off`, `1 = Always`) for lock-free reads.
     pub meeting_autostart_mode: Arc<std::sync::atomic::AtomicU8>,
     /// Whether speaker diarization should label utterances during
     /// meeting capture. Read by the meeting pump's dispatch path so

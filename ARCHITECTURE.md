@@ -127,6 +127,89 @@ Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107
 
 ---
 
+## Meeting auto-detection (macOS, #665)
+
+Hush can auto-start a meeting session when a Meeting-classified app is frontmost and the microphone activates. Two independent background tasks handle this:
+
+**`run_profile_autoactivate_poller`** — a 3-second ticker that detects which app is in focus and, when it has a per-app profile (preferred audio source / model), emits `app:profile-activated` so the frontend updates its dropdowns. Independent of meeting auto-start mode.
+
+**`run_meeting_detection_task`** (macOS only) — event-driven via the CoreAudio HAL. Registers `AudioObjectAddPropertyListener` callbacks on `kAudioDevicePropertyDeviceIsRunningSomewhere` for all enumerated input devices, plus a hot-plug listener on `kAudioObjectSystemObject` for `kAudioHardwarePropertyDevices`. The callback posts `tokio::sync::Notify::notify_one()`; the task loop awaits each notification, then evaluates the pure state machine `evaluate_mic_state(inputs) -> MicStateOutcome`.
+
+```
+CoreAudio HAL thread  ──notify_one()──▶  Notify  ──notified().await──▶  task loop
+                                                                             │
+                                                             is_any_device_active()
+                                                                  + get_active_window()
+                                                                  + classifier.classify()
+                                                                             │
+                                                             evaluate_mic_state(inputs)
+                                                                             │
+                                                   ┌─────────────────────────────────────┐
+                                    MicStateOutcome::Start { app_name }   AutoStop
+                                                   │                         │
+                                             start_manual(...)         stop_and_rebuild()
+```
+
+### Detection logic matrix
+
+`evaluate_mic_state` is a pure function; every auto-start decision passes through it. The table below is exhaustive — rows are evaluated **top-to-bottom**; the first matching row wins.
+
+| # | `mic_is_active` | `mode` | `session_active` | `session_emitted` | `frontmost_app_kind` | Outcome | Side-effect on caller |
+|---|---|---|---|---|---|---|---|
+| 1a | ❌ false | any | ✅ true | ✅ true | any | `AutoStop` | Caller stops session, resets `session_emitted = false` |
+| 1b | ❌ false | any | any | any | any | `ResetSessionEmitted` | Caller resets `session_emitted = false` |
+| 2 | ✅ true | `Off` | any | any | any | `Idle` | — |
+| 3 | ✅ true | `Always` | ✅ true | any | any | `Idle` | — (session already running) |
+| 4 | ✅ true | `Always` | ❌ false | ✅ true | any | `Idle` | — (already started this cycle) |
+| 5 | ✅ true | `Always` | ❌ false | ❌ false | `Other`/`Media` | `Idle` | — (app not a meeting app) |
+| 6 | ✅ true | `Always` | ❌ false | ❌ false | `Meeting` | `Start { app_name }` | Caller sets `session_emitted = true`, calls `start_manual` |
+
+**Row 1a — auto-stop:** Mic went quiet and we hold an auto-started session (`session_emitted = true`). Stop the session so users don't end up with a ghost recording after their call ends. Uses the same `do_stop_and_rebuild` helper as the manual Stop button, so transcribers and diarizer are rebuilt in the background.
+
+**Row 1b — mic quiet:** Mic went quiet and no auto-started session is running. Reset `session_emitted` so the next mic activation can start a fresh session.
+
+**Row 3 — session already running:** Prevents auto-start from racing with a manual start or from firing again if the user manually stopped and immediately re-triggered the mic.
+
+**Row 4 — `session_emitted` guard:** The HAL may fire multiple property-change events during a single activation cycle (e.g. device re-checks, hot-plug refresh). Without this guard, each event while the mic is active would re-call `start_manual`.
+
+**Row 5 — app classification:** The frontmost app at evaluation time must be classified as `Meeting` by `AppClassifier`. Apps classified as `Media` (music players, video editors) or `Other` do not trigger auto-start. See [App classification](#app-classification) below.
+
+### App classification
+
+`AppClassifier::default_table` classifies apps by executable name (Linux/Windows) or macOS bundle ID. The `Meeting` set covers:
+
+| App | macOS bundle ID | Other identifiers |
+|---|---|---|
+| Zoom | `us.zoom.xos` | `zoom.us`, `Zoom.exe` |
+| Microsoft Teams (new) | `com.microsoft.teams2` | `msteams`, `Teams.exe` |
+| Microsoft Teams (classic) | `com.microsoft.teams` | — |
+| Google Meet (Chrome) | `com.google.Chrome` | `google-chrome`, `chrome.exe` |
+| Slack (calls) | `com.tinyspeck.slackmacgap` | `slack`, `Slack.exe` |
+| Webex | `com.cisco.webexmeetingsapp` | `Webex`, `webex`, `CiscoCollabHost.exe` |
+| Discord | — | `Discord`, `discord`, `Discord.exe` |
+| Skype | — | `Skype`, `skype`, `Skype.exe` |
+| GoToMeeting | — | `GoToMeeting`, `Citrix GoToMeeting.exe` |
+| FaceTime | `com.apple.FaceTime` | — |
+| Tuple | `app.tuple.app` | — |
+| Around | `co.around.Around` | — |
+| Loom | `com.loom.desktop` | `Loom.exe` |
+
+Apps classified as `Media` (music players, video editors, etc.) never trigger auto-start even if the mic activates. Everything else is `Other` and also blocked.
+
+### Input-only device filter
+
+`kAudioDevicePropertyDeviceIsRunningSomewhere` fires for **both** input and output devices. The monitor registers listeners only for input devices (those with at least one input stream buffer), checked via `kAudioDevicePropertyStreamConfiguration` + `kAudioObjectPropertyScopeInput`. Output-only devices (speakers, display audio) are skipped — without this filter, playing music would trigger auto-start.
+
+### Hot-plug handling
+
+A `SystemListenerHandle` listens for `kAudioHardwarePropertyDevices` changes on `kAudioObjectSystemObject`. When a device is added or removed, `MicCameraMonitor::refresh_devices()` re-enumerates input devices and re-installs listeners. USB headsets and Bluetooth audio devices plugged in after launch are automatically covered.
+
+### Memory safety
+
+`DeviceListenerHandle` stores an `Arc<Notify>` clone. `Drop` calls `AudioObjectRemovePropertyListener` **first** (synchronous — the HAL waits for all in-flight callbacks to drain before returning), then drops the `Arc`. The HAL callback reconstructs the `Arc` from the raw pointer using `Arc::from_raw` + `Arc::into_raw` (no net reference-count change). No dangling-pointer risk regardless of callback scheduling.
+
+---
+
 ## Diarization
 
 `FlagGatedDiarizer` reads the `diarization_enabled` `AtomicBool` from `AppState` and routes to:
@@ -193,7 +276,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `audio/` | cpal mic + macOS CoreAudio process tap (via Swift helper at `resources/macos-audio-tap.swift`) + `AudioSession` handle trait; `WavFileAudioCapture` test seam under `--features test-utils` |
 | `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
 | `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
-| `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides |
+| `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides + macOS CoreAudio event-driven auto-start (`mic_camera_monitor`) |
 | `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); parallel whisper context load at startup via `tokio::join!` |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
@@ -222,7 +305,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 
 ## Frontend recording lifecycle
 
-`lib/state/dictation.svelte.ts` owns the recording lifecycle as a discriminated-union state machine:
+`lib/state/dictation.svelte.ts` owns the dictation recording lifecycle as a discriminated-union state machine:
 
 ```
 type RecordingPhase =
@@ -247,6 +330,15 @@ type RecordingPhase =
 - `_stopMeeting()` — calls `meeting_stop_manual` (which awaits pump drain before returning), then transitions through `transcribing` while fetching `meeting_session_get` once — the result is shared for both clipboard copy and the result block.
 
 **Stop-failure recovery:** if `_stopMeeting` throws, the catch block calls `meeting_active_session` directly. If the session is gone on the backend → `idle`. If still live → restore to `recording` so the user can retry.
+
+**Meeting-only active state.** Auto-detected meeting sessions run through `meeting-sessions.svelte.ts` (`meeting.activeId`, `meeting.busy`, `meeting.stopSession()`), not through the `dictation` state machine. `DictationSection.svelte` derives:
+
+```
+meetingOnlyActive = meeting.activeId !== null && !dictation.recording && !dictation.busy
+anyRecordingActive = dictation.recording || meetingOnlyActive
+```
+
+`RecordPanel` receives `meetingOnlyActive` and enters a red-waveform meeting mode when true. `+page.svelte` derives the same pair and wires all global signals — document title, tray `UiRecordingState`, sidebar recording dot, toggle hotkey, command palette — to `anyRecordingActive` so they respond to both dictation and meeting sessions.
 
 **Import path:** `.svelte.ts` modules must be imported via the `.svelte` path (e.g. `import { dictation } from '$lib/state/dictation.svelte'`), not `.ts`.
 
