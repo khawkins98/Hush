@@ -507,10 +507,10 @@ test("perms-hint-yellow renders when a macOS permission is denied", async ({
 });
 
 // ---------------------------------------------------------------------------
-// Meeting-active banner — dictation section
+// Meeting-only recording — RecordPanel in meeting mode
 // ---------------------------------------------------------------------------
 
-test("meeting-active banner appears when meeting is running but dictation is idle", async ({
+test("RecordPanel enters meeting mode when a meeting is running but dictation is idle", async ({
   page,
 }) => {
   // Backend reports an active meeting session from the start.
@@ -546,22 +546,20 @@ test("meeting-active banner appears when meeting is running but dictation is idl
   });
   await page.goto("/");
 
-  // The banner must be visible on the Transcribe (dictation) panel without
-  // the user needing to navigate anywhere.
-  const banner = page.locator('[aria-label="Meeting recording in progress"]');
-  await expect(banner).toBeVisible();
-
-  // Stop button is accessible.
+  // RecordPanel must be in recording state — the Stop button (not Start) is visible.
   const stopBtn = page.getByRole("button", { name: "Stop meeting recording" });
   await expect(stopBtn).toBeVisible();
 
+  // The Start button must NOT be visible (we're already in recording state).
+  await expect(page.getByRole("button", { name: "Start recording" })).not.toBeVisible();
+
   // Live transcript from the poll appears once meeting_session_get is called.
-  const transcript = page.locator('[data-testid="meeting-active-transcript"]');
-  await expect(transcript).toBeVisible();
-  await expect(transcript).toContainText("Hello from the meeting.");
+  const livePanel = page.locator('[data-testid="live-transcript"]');
+  await expect(livePanel).toBeVisible();
+  await expect(livePanel).toContainText("Hello from the meeting.");
 });
 
-test("meeting-active banner stop button calls meeting_stop_manual", async ({
+test("RecordPanel meeting stop button calls meeting_stop_manual", async ({
   page,
 }) => {
   let stopCalled = false;
@@ -601,7 +599,7 @@ test("meeting-active banner stop button calls meeting_stop_manual", async ({
   await expect.poll(() => stopCalled).toBe(true);
 });
 
-test("meeting-active banner hides once meeting stops", async ({ page }) => {
+test("RecordPanel returns to idle once meeting stops", async ({ page }) => {
   let activeResult: { active: number | null } = { active: 7 };
   await page.exposeFunction("hushGetActiveMeeting", () => activeResult);
   await page.exposeFunction("hushStopMeeting", () => {
@@ -634,11 +632,12 @@ test("meeting-active banner hides once meeting stops", async ({ page }) => {
   });
   await page.goto("/");
 
-  const banner = page.locator('[aria-label="Meeting recording in progress"]');
-  await expect(banner).toBeVisible();
+  // Start in recording/meeting state.
+  const stopBtn = page.getByRole("button", { name: "Stop meeting recording" });
+  await expect(stopBtn).toBeVisible();
 
-  await page.getByRole("button", { name: "Stop meeting recording" }).click();
+  await stopBtn.click();
 
-  // Banner must disappear once meeting_stop_manual clears the active session.
-  await expect(banner).not.toBeVisible();
+  // After stop, RecordPanel must return to idle — Start recording button appears.
+  await expect(page.getByRole("button", { name: "Start recording" })).toBeVisible();
 });
