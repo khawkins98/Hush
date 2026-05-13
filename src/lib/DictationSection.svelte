@@ -7,6 +7,7 @@
   import { meeting } from "$lib/state/meeting-sessions.svelte";
 
   import AudioSourcePicker from "./AudioSourcePicker.svelte";
+  import AudioWaveform from "./AudioWaveform.svelte";
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import MacosPermsPill from "./MacosPermsPill.svelte";
   import ModelChip from "./ModelChip.svelte";
@@ -57,12 +58,14 @@
   });
   let activeModelName = $derived(dictation.activeModel?.displayName ?? null);
 
-  // True when a meeting session is auto-running but dictation is idle.
-  // In this state the RecordPanel doesn't show a Stop button (it's for
-  // dictation, not meeting). The meeting-active banner below provides
-  // the Stop control and live transcript instead.
+  // True when a meeting session is auto-running but dictation is completely
+  // idle (not recording, starting, stopping, or transcribing). In this state
+  // the RecordPanel is hidden — the meeting-active banner below provides the
+  // sole control point and live transcript. When dictation is busy (stopping
+  // or transcribing), the banner must NOT show so RecordPanel's "Working"
+  // state remains visible.
   let meetingOnlyActive = $derived(
-    meeting.activeId !== null && !dictation.recording,
+    meeting.activeId !== null && !dictation.recording && !dictation.busy,
   );
 
   // Live transcript text for the meeting-active banner — same derivation
@@ -128,6 +131,9 @@
           Stop
         </button>
       </header>
+      <div class="meeting-active-waveform" aria-hidden="true">
+        <AudioWaveform mode="recording" metering />
+      </div>
       {#if meetingLiveText.trim().length > 0}
         <p
           class="meeting-active-transcript"
@@ -142,6 +148,7 @@
     </aside>
   {/if}
 
+  {#if !meetingOnlyActive}
   <RecordPanel
     recording={dictation.recording}
     busy={dictation.busy}
@@ -184,6 +191,7 @@
     {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
     to push-to-talk.
   </p>
+  {/if}
 
   {#if dictation.result}
     <div
@@ -282,6 +290,12 @@
   }
   .meeting-active-stop:hover:not(:disabled) {
     background-color: #b91c1c;
+  }
+  .meeting-active-waveform {
+    height: 48px;
+    /* Waveform bars inherit the red recording palette so they match
+       the HUD pill rather than the default purple dictation gradient. */
+    --audio-waveform-bar-color: #dc2626;
   }
   .meeting-active-transcript {
     font-size: 0.88rem;

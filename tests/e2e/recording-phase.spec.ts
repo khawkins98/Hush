@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { fireEvent, installMocks } from "./_mock";
 
 // Unit-level coverage for the RecordingPhase state machine in
 // dictation.svelte.ts. Each test exercises one row of the transition
@@ -271,23 +271,25 @@ test("record-mode-badge hidden when Screen Recording health is not-applicable (d
 test("live-transcript panel appears during recording when utterances are available", async ({
   page,
 }) => {
-  // Simulate an active meeting session that has returned a spoken utterance.
-  // meeting_start_manual returns session id=99; the $effect in +page.svelte
-  // then calls meeting_session_get(99) which populates meetingActiveDetail.
-  // RecordPanel's liveTranscriptText derived becomes non-empty, triggering
-  // showLiveTranscript → the live-transcript section renders.
+  // This test covers the "combined mode": dictation is recording AND a meeting
+  // session activates mid-session (via the meeting:session-started event).
+  // RecordPanel's showLiveTranscript then renders the live utterances.
+  //
+  // Start without an active meeting so RecordPanel is visible. After Record is
+  // clicked (dictation running), fire meeting:session-started to simulate the
+  // meeting activating, then confirm the live-transcript panel appears.
+  //
+  // meeting_active_session must switch to 99 when fireEvent is called so that
+  // the listener's meeting.refresh() doesn't overwrite the just-set activeId
+  // back to null.
+  let activeMeetingId: number | null = null;
+  await page.exposeFunction("hushGetActiveMeetingForLT", () => activeMeetingId);
+
   await installMocks(page, {
-    meeting_start_manual: () => ({
-      id: 99,
-      appName: "manual",
-      appKind: "other",
-      startedAt: "2026-05-05T10:00:00Z",
-      endedAt: null,
-      speakerCount: null,
-      utteranceCount: 0,
-      notes: null,
-      sources: ["mic"],
-    }),
+    meeting_active_session: async () => {
+      const id = await (window as unknown as Record<string, () => unknown>)["hushGetActiveMeetingForLT"]();
+      return { active: id };
+    },
     meeting_session_get: () => ({
       session: {
         id: 99,
@@ -298,6 +300,8 @@ test("live-transcript panel appears during recording when utterances are availab
         speakerCount: null,
         utteranceCount: 1,
         notes: null,
+        sources: ["mic"],
+        appTitle: null,
       },
       utterances: [
         {
@@ -312,15 +316,24 @@ test("live-transcript panel appears during recording when utterances are availab
       ],
       currentPartials: [],
     }),
-    meeting_active_session: () => ({ active: 99 }),
   });
   await page.goto("/");
 
+  // Dictation starts — meetingOnlyActive becomes false (recording=true)
+  // so RecordPanel is visible even when meeting later activates.
   await page.getByRole("button", { name: "Start recording" }).click();
+  await expect(
+    page.getByRole("button", { name: "Stop recording and transcribe" }),
+  ).toBeVisible();
 
-  // Phase is now recording; the $effect polls meeting_session_get and
-  // populates meetingActiveDetail. The live transcript panel should appear
-  // with the utterance text.
+  // Switch the meeting_active_session mock to return 99, then fire the event.
+  // The listener sets meeting.activeId=99 and calls refresh(); refresh() will
+  // now also see active=99 so the id stays set.
+  activeMeetingId = 99;
+  await fireEvent(page, "meeting:session-started", { sessionId: 99 });
+
+  // RecordPanel's liveTranscriptText derived becomes non-empty →
+  // showLiveTranscript renders the live-transcript section.
   const livePanel = page.locator('[data-testid="live-transcript"]');
   await expect(livePanel).toBeVisible();
   await expect(livePanel).toContainText("Hello world.");
