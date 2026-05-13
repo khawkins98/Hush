@@ -296,14 +296,14 @@ Run four review agents in parallel, each with the same diff scope (e.g. "everyth
 
 - **writer** — prose / docs / changelog / README / panel copy / error messages. Checks for contradictions, stale references, tone drift, broken doc links.
 - **rust** — backend code health: trait seams, error variants, deferred TODO debt, unsoundness, panicking paths, async cancellation correctness.
-- **ux** — frontend walkthrough across the three windows. Affordance consistency, heading hierarchy, destructive-action confirmation, dark-mode parity, empty/error states.
+- **ux** — frontend walkthrough across the main window and its surfaces (inline Settings, Meeting, History, About), the HUD overlay, and the menu-bar popover. Affordance consistency, heading hierarchy, destructive-action confirmation, dark-mode parity, empty/error states.
 - **security** — TCC permission surface, IPC capability allowlists, command injection vectors, dependency posture, network endpoints.
 
 Spawn them in **one message** with multiple `Agent` tool calls so they run concurrently. Ask each for a short, prioritised report: top 3–5 findings with severity + concrete file:line pointers. Synthesize into one fix list — bundle into a single `chore/multi-agent-review-followup` PR rather than splitting per agent (the changes are usually small and orthogonal). File deferred / larger items as GitHub issues.
 
 ### 2. UX walkthrough spec
 
-Re-run the Playwright walkthrough that exercises the post-IA-redesign three-window flow:
+Re-run the Playwright walkthrough that exercises the post-IA-redesign app flow:
 
 ```bash
 npm run test:e2e -- tests/e2e/walkthrough.spec.ts

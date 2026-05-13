@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Meeting auto-detection on by default.** The CoreAudio HAL listener that triggers a meeting session when the microphone activates in a recognised meeting app (Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, Skype) is now enabled out of the box. New installs default to "Always" auto-start mode instead of the previous "Off". Toggle it under Settings → Meeting → Auto-start mode.
+- **Event-driven meeting auto-detection via CoreAudio HAL** (macOS). Meeting sessions start automatically when the microphone activates while a supported meeting app is frontmost. Detection uses the `kAudioDevicePropertyDeviceIsRunningSomewhere` property listener on input devices — fires in the same OS audio call stack as the device state change, no polling. Session start is guarded by `session_emitted` to prevent duplicate fires within one activation cycle.
+
 ### Fixed
 
 - **DMG installs: permissions now persist across restarts on macOS 26.** Two silent macOS 26 bugs broke Input Monitoring and Microphone grants for users who installed from the DMG:

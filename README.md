@@ -18,7 +18,7 @@ Dictate anywhere with a hotkey. Capture meetings with mic + system audio in para
 ## What it is
 
 - **A push-to-talk dictation tool.** Hold your hotkey (default `Right ⌘` on macOS, `Right Ctrl` on Linux + Windows), speak, release. The transcript is on your clipboard, ready to paste, before you've moved your hands. No browser tab, no web service, no upload.
-- **A meeting transcription tool.** Click Record while you're in a call — or let Hush start automatically when a supported meeting app activates your mic (Settings → Meeting → Auto-start). Hush captures your mic and the call's system audio in parallel, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model. *(Parallel system-audio capture currently ships on macOS via a CoreAudio process tap — no Screen Recording permission required. Auto-detection is macOS-only via the CoreAudio HAL. Linux + Windows system-audio support is tracked in [#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107) — meeting mode runs mic-only there for now.)*
+- **A meeting transcription tool.** Click Record while you're in a call — or let Hush start automatically when a supported meeting app activates your mic (on by default; toggle in Settings → Meeting → Auto-start). Hush captures your mic and the call's system audio in parallel, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model. *(Parallel system-audio capture currently ships on macOS via a CoreAudio process tap — no Screen Recording permission required. Auto-detection is macOS-only via the CoreAudio HAL. Linux + Windows system-audio support is tracked in [#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107) — meeting mode runs mic-only there for now.)*
 - **Both, in one app, sharing one history.** Most tools pick one lane. Hush is dictation **and** meetings, with the same model loaded once and the same on-disk history.
 
 The audio never leaves your machine. The audio never lands on disk either — it's processed in RAM (a 30-second rolling ring during meetings; for dictation, drained directly through the transcriber and dropped when the call returns) and is gone as soon as the transcript is on your clipboard.
@@ -116,7 +116,7 @@ For people who care about how it's built before they trust it:
 - **Supply-chain pin policy.** `ort` and `ndarray` are exact-pinned, `rdev` is a git fork pin, all justified in [`learnings.md`](./learnings.md). CI's `supply-chain-pins` job blocks new RC pins / git deps that aren't on the explicit allowlist.
 - **Decision log.** [`learnings.md`](./learnings.md) is append-only, dated, and captures the *why* behind every non-obvious architectural call — including the parts that didn't work and got reverted.
 
-This isn't Electron-with-a-mic-icon. Three native macOS windows (main, settings, HUD), each with its own capability file. Native menu bar with `⌘1/⌘2/⌘3` section nav. Tray icon as template so dark/light menu bars adapt cleanly. Autostart with Accessory activation policy (no Dock icon for background launches). Traffic-light permission health that distinguishes "stale" from "revoked" for the macOS TCC store.
+This isn't Electron-with-a-mic-icon. Four native windows (main, HUD overlay, menu-bar popover, developer debug), each with its own capability file. Settings is inline in the main window — no separate window. Native menu bar with `⌘1/⌘2` section nav. Tray icon as template so dark/light menu bars adapt cleanly. Autostart with Accessory activation policy (no Dock icon for background launches). Traffic-light permission health that distinguishes "stale" from "revoked" for the macOS TCC store.
 
 ---
 
@@ -127,7 +127,7 @@ This isn't Electron-with-a-mic-icon. Three native macOS windows (main, settings,
 | **Discovering Hush** — what it does | This README + the live app (install it, open Settings → menus describe what each thing does) |
 | **What's shipped right now** | [STATUS.md](./STATUS.md) (rolling snapshot), [CHANGELOG.md](./CHANGELOG.md) (release-by-release record) |
 | **What it's meant to be** | [hush-prd.md](./hush-prd.md) — product spec, scope, non-goals, milestone plan |
-| **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, three-window topology, trait seams, meeting pump, module map |
+| **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, four-window topology, trait seams, meeting pump, module map |
 | **Installing + using** | [Releases](https://github.com/khawkins98/Hush/releases), [`docs/macos-permissions.md`](./docs/macos-permissions.md) for macOS TCC troubleshooting |
 | **Running it locally / dev commands** | [docs/developing.md](./docs/developing.md) — setup, command reference, macOS quirks, test layers |
 | **Building + contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md), [CLAUDE.md](./CLAUDE.md) for the Claude-assisted contributor workflow |
