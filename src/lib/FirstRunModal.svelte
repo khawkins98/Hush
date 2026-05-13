@@ -74,7 +74,6 @@
   // genuinely "haven't checked yet" rather than "denied").
   let diagnostic = $state<MacosPermissionDiagnostic | null>(null);
   let micReady = $derived(diagnostic?.statuses.microphone === "granted");
-  // Whether IM was granted when the permissions step first polled in
   let pollHandle: ReturnType<typeof setInterval> | null = null;
 
   // Per-row "Allow click in flight" guards so a user mashing the
@@ -551,9 +550,6 @@
 .wizard-allow-btn {
   white-space: nowrap;
 }
-/* Restart notice shown after a within-session IM grant.
-   Spans all three grid columns so the icon + text columns
-   aren't crammed. */
 
 .first-run-footer {
   margin-top: 0.75rem;
