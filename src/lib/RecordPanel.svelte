@@ -48,6 +48,12 @@
     /// meeting session is active (dictation-only PTT or click-
     /// recording without SCK).
     meetingActiveDetail?: MeetingSessionDetail | null;
+    /// True when a meeting session is auto-running but dictation
+    /// is completely idle — no separate dictation phase. Used to
+    /// apply meeting-specific styling (red waveform bars, "Meeting"
+    /// button label, "press Stop" hint) and to show the waiting-
+    /// for-speech placeholder when the live transcript is empty.
+    meetingOnlyActive?: boolean;
     /// Left adjunct slot — audio source picker. Optional so the
     /// component still renders standalone in the test harness or
     /// any future minimal surface.
@@ -71,6 +77,7 @@
     onStop,
     onOpenPermissions,
     meetingActiveDetail = null,
+    meetingOnlyActive = false,
     leftAdjunct,
     rightAdjunct,
   }: Props = $props();
@@ -95,6 +102,13 @@
   });
   let showLiveTranscript = $derived(
     recording && liveTranscriptText.trim().length > 0,
+  );
+  // Show a waiting-for-speech placeholder when a meeting-only session is
+  // active but no utterances have landed yet. Mirrors the banner's prior
+  // "Waiting for speech…" copy so the user gets feedback that capture is
+  // running even when the room is quiet.
+  let showMeetingWaiting = $derived(
+    meetingOnlyActive && liveTranscriptText.trim().length === 0,
   );
 
   // F5 status line — opt-in display gated by a localStorage flag,
@@ -181,7 +195,7 @@
   );
 </script>
 
-<div class="record-stage" data-recording={recording ? "true" : "false"}>
+<div class="record-stage" class:meeting={meetingOnlyActive} data-recording={recording ? "true" : "false"}>
   <!--
     Big expressive waveform as the visual centerpiece (#411
     mockup target). Width is 100 % of the content column,
@@ -228,7 +242,7 @@
         labels sit on the flanking columns. aria-hidden because
         the button itself carries an aria-label.
       -->
-      <span class="record-btn-label" aria-hidden="true">Record</span>
+      <span class="record-btn-label" aria-hidden="true">{meetingOnlyActive ? 'Meeting' : 'Record'}</span>
       {#if !recording}
         <button
           class="record-btn"
@@ -261,7 +275,7 @@
           class="record-btn recording"
           onclick={onStop}
           disabled={busy}
-          aria-label="Stop recording and transcribe"
+          aria-label={meetingOnlyActive ? "Stop meeting recording" : "Stop recording and transcribe"}
         >
           <span class="record-icon record-icon-stop" aria-hidden="true"></span>
         </button>
@@ -306,7 +320,7 @@
           >· mic only</span
         >
       {/if}
-      — release hotkey or press Stop
+      {meetingOnlyActive ? "— press Stop" : "— release hotkey or press Stop"}
     {:else if transcribing}
       Transcribing…
     {:else if willRecordMeeting}
@@ -342,6 +356,8 @@
     </header>
     <p class="live-transcript-body">{liveTranscriptText}</p>
   </section>
+{:else if showMeetingWaiting}
+  <p class="meeting-waiting" aria-live="polite">Waiting for speech…</p>
 {/if}
 
 {#if statusLineEnabled}
@@ -427,6 +443,24 @@
     .record-row-adjunct > :global(*) {
       max-width: 100%;
     }
+  }
+
+  /* Meeting-only mode: override the waveform bar colour to red so
+     the visual palette matches the pulsing Stop button and makes it
+     immediately clear this is a meeting capture, not dictation. */
+  .record-stage.meeting .record-waveform {
+    --audio-waveform-bar-color: #dc2626;
+  }
+
+  /* Waiting-for-speech placeholder shown when a meeting-only session
+     is active but no utterances have landed yet. Quiet italic copy so
+     the live-transcript area's absence doesn't look like a layout gap. */
+  .meeting-waiting {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-style: italic;
+    text-align: center;
   }
 
   /* Big waveform — overrides AudioWaveform's default 60 × 16 px

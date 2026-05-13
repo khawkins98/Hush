@@ -719,14 +719,16 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 /// instance has its own fresh `SessionClusterState` so speaker
 /// labels do not bleed across meeting boundaries — the reset
 /// happens at swap-time, not at null-time.
-#[tauri::command]
-pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
-    // Hide the HUD up front — the user clicked Stop and expects the
+///
+/// Extracted from the IPC command body so the CoreAudio auto-stop
+/// path in `run_meeting_detection_task` can share the same logic.
+pub(crate) async fn do_stop_and_rebuild(app: &AppHandle, state: &AppState) -> IpcResult<()> {
+    // Hide the HUD up front — the user (or auto-stop) expects the
     // overlay gone now, not after the pump's final-chunk drain
     // (which can take several seconds while whisper finishes the
     // tail of the session). `hide_async` dispatches onto the main
     // thread; same rationale as the start path (#476).
-    crate::hud::hide_async(&app);
+    crate::hud::hide_async(app);
 
     // Check *before* calling stop_manual so we know whether the pump
     // was involved. We need this to distinguish two error cases:
@@ -863,6 +865,11 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
     }
 
     stop_result
+}
+
+#[tauri::command]
+pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
+    do_stop_and_rebuild(&app, &state).await
 }
 
 #[cfg(test)]

@@ -6,12 +6,15 @@
 //! state machine, so it sits comfortably in its own peer file
 //! without any visibility / coupling concerns.
 //!
-//! v1 only uses this for the `app_kind` row stamped on new
-//! sessions (informational, drives the panel's coloured tag); the
-//! actual auto-start-on-meeting policy that this would also drive
-//! is deferred (still manual-start-only for the MVP).
+//! The classifier drives two things:
+//! 1. **`app_kind` row tag** stamped on new sessions (informational,
+//!    drives the panel's coloured tag in the frontend).
+//! 2. **Auto-start gate** in `run_meeting_detection_task` (#665):
+//!    the frontmost app's kind is one of the six guards in
+//!    `evaluate_mic_state` — only `MeetingAppKind::Meeting` unblocks
+//!    an automatic session start.
 //!
-//! Per-user overrides (Phase E, [#112]) write entries into the
+//! Per-user overrides (Phase E, [#112]) will write entries into the
 //! settings table that this struct reads on construction. Today
 //! the table is empty; the defaults are the only signal.
 //!
@@ -92,6 +95,7 @@ impl AppClassifier {
                 // Webex
                 ("Webex", MeetingAppKind::Meeting),
                 ("Cisco Webex Meetings", MeetingAppKind::Meeting),
+                ("com.cisco.webexmeetingsapp", MeetingAppKind::Meeting), // macOS bundle
                 ("webex", MeetingAppKind::Meeting),
                 ("Webex.exe", MeetingAppKind::Meeting),
                 ("CiscoCollabHost.exe", MeetingAppKind::Meeting),
@@ -110,7 +114,19 @@ impl AppClassifier {
                 // Loom (async video — not a live call but the
                 // recording surface is the same)
                 ("Loom", MeetingAppKind::Meeting),
+                ("com.loom.desktop", MeetingAppKind::Meeting), // macOS bundle
                 ("Loom.exe", MeetingAppKind::Meeting),
+                // FaceTime (macOS / iOS native video call)
+                ("FaceTime", MeetingAppKind::Meeting),
+                ("com.apple.FaceTime", MeetingAppKind::Meeting), // macOS bundle
+                // Tuple (pair-programming video call)
+                ("Tuple", MeetingAppKind::Meeting),
+                ("app.tuple.app", MeetingAppKind::Meeting), // macOS bundle
+                // Around (spatial video call)
+                ("Around", MeetingAppKind::Meeting),
+                ("co.around.Around", MeetingAppKind::Meeting), // macOS bundle
+                // Microsoft Teams (classic / legacy bundle ID)
+                ("com.microsoft.teams", MeetingAppKind::Meeting), // macOS bundle (classic)
                 // ---- Media apps ----
                 // Auto-start (when shipped) defaults to "no" for
                 // these — most users don't want a YouTube watch-

@@ -55,6 +55,13 @@ export const Events = {
   /// "system-audio", reason }`. Surfaces a struck-through chip
   /// in the active-session source line.
   MeetingSourceFailed: "meeting:source-failed",
+  /// Backend → frontend (main): a meeting session opened
+  /// successfully (both manual button-press and HAL auto-start
+  /// paths). Payload is `{ sessionId: number }`. The main window
+  /// listener updates `meeting.activeId` immediately (so the Stop
+  /// button appears without waiting for a round-trip refresh) and
+  /// then calls `meeting.refresh()` to pull the full session list.
+  MeetingSessionStarted: "meeting:session-started",
   /// Backend → frontend (main): a mic source was lost mid-session
   /// and the pump has either fallen back to the system default or
   /// has no fallback. Payload: `{ sessionId, sourceKind, lostDevice,
@@ -86,8 +93,8 @@ export const Events = {
   /// the `data-theme` attribute on `<html>`. Canonical helpers
   /// live in `lib/theme.ts`.
   Theme: "hush:theme",
-  /// Backend (autostart poller) → main window: a per-app audio
-  /// profile (#427 Item 5) just activated because focus moved to
+  /// Backend (profile auto-activate poller) → main window: a per-app
+  /// audio profile (#427 Item 5) just activated because focus moved to
   /// an app with a populated profile. Fires only on transitions
   /// (the just-focused-app's profile differs from the last
   /// activation). Payload: `{ appName, preferredAudioSource,

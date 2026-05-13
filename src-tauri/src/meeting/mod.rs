@@ -11,9 +11,9 @@
 //! - **`mod.rs`** — shared types: `MeetingAppKind`, `MeetingSession`,
 //!   `PersistedUtterance`, the `MeetingSessionRepository` trait.
 //! - **`manager`** — `SessionManager` runtime: lifecycle state
-//!   machine, chunking pump, `AppClassifier` for foreground-app
-//!   detection. Driven manually today; auto-start on classifier
-//!   verdict is the open piece of #112.
+//!   machine, chunking pump, `AppClassifier` integration.
+//!   Auto-start is driven by the CoreAudio HAL detection task
+//!   in `lib.rs`; per-app policy overrides are tracked in #112.
 //! - **`app_overrides`** — per-app classifier override storage
 //!   (#112/#192). The Settings panel reads/writes through here;
 //!   `SessionManager` reads a fresh snapshot at every session
@@ -37,10 +37,11 @@
 pub mod app_overrides;
 pub mod audio_buffer;
 pub mod autostart;
-pub mod autostart_poller;
 pub mod classifier;
 pub mod lifecycle;
 pub mod manager;
+#[cfg(target_os = "macos")]
+pub mod mic_camera_monitor;
 pub mod pump;
 pub(super) mod recovery;
 pub mod sqlite;
@@ -49,8 +50,7 @@ pub use app_overrides::{
     MeetingAppOverride, MeetingAppOverrideRepository, NewMeetingAppOverride,
     SqliteMeetingAppOverrideRepository,
 };
-pub use autostart::{AutostartDecision, MeetingAutostartMode};
-pub use autostart_poller::{evaluate_autostart_tick, ForegroundAppProbe, TickOutcome};
+pub use autostart::MeetingAutostartMode;
 pub use classifier::AppClassifier;
 pub use manager::SessionManager;
 pub use sqlite::SqliteMeetingSessionRepository;
@@ -71,7 +71,7 @@ use crate::repository::Repository;
 #[serde(rename_all = "kebab-case")]
 pub enum MeetingAppKind {
     /// A meeting platform (Zoom, Teams, Meet, Discord, Slack-call).
-    /// Default behaviour: surface the "start session?" prompt.
+    /// Triggers auto-start when the mic activates and mode is `Always`.
     Meeting,
     /// A media app (YouTube, Spotify, Apple Music). Default
     /// behaviour: do not auto-record. The user can opt in per-app.

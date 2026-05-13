@@ -12,7 +12,7 @@ Run this checklist before every tagged release on each supported platform.
 ### First run
 - [ ] App launches without errors
 - [ ] Microphone permission prompt appears (macOS) or is not needed (Windows/Linux)
-- [ ] Default model (`base`) is selected
+- [ ] Default model (`small`) is selected
 - [ ] Model download completes and SHA is verified
 
 ### Core dictation loop
@@ -36,3 +36,16 @@ Run this checklist before every tagged release on each supported platform.
 
 ### Network
 - [ ] No outbound network traffic during normal operation (verify with Little Snitch / Wireshark)
+
+### Permissions (macOS)
+- [ ] Fresh install from DMG: Microphone prompt appears on first recording attempt
+- [ ] Fresh install from DMG: Input Monitoring prompt appears on first PTT attempt
+- [ ] After granting both permissions, PTT activates in the same session (no restart required)
+- [ ] Permissions panel shows both Microphone and Input Monitoring as granted (green)
+
+### Meeting auto-detection (macOS)
+- [ ] Settings → Meeting → Auto-start mode is "Always" on fresh install
+- [ ] Open a supported app (Zoom, Teams, Meet, etc.) and join/start a call — Hush starts a meeting session automatically within ~1 s of mic activation
+- [ ] Stopping the call / leaving the meeting ends the session
+- [ ] Manual "Start meeting" button works regardless of auto-start mode
+- [ ] Setting auto-start to "Off" disables detection (mic activating in meeting app does not start session)

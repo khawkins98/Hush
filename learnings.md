@@ -163,7 +163,9 @@ The user was inadvertently launching BOTH. The old `/Applications/Hush.app` wasn
 
 ---
 
- for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.
+## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
+
+Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.
 
 **Why event-driven?** The poll-then-classify loop had two false-start vectors: (1) it classified Zoom/Teams as "Meeting" even when neither was the frontmost app (they run as background services), and (2) it fired on every transition even if the mic wasn't active. The new approach inverts the signal: the mic going active is the primary trigger; the frontmost app is a secondary guard.
 

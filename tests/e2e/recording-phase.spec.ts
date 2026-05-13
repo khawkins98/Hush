@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { fireEvent, installMocks } from "./_mock";
 
 // Unit-level coverage for the RecordingPhase state machine in
 // dictation.svelte.ts. Each test exercises one row of the transition
@@ -271,23 +271,25 @@ test("record-mode-badge hidden when Screen Recording health is not-applicable (d
 test("live-transcript panel appears during recording when utterances are available", async ({
   page,
 }) => {
-  // Simulate an active meeting session that has returned a spoken utterance.
-  // meeting_start_manual returns session id=99; the $effect in +page.svelte
-  // then calls meeting_session_get(99) which populates meetingActiveDetail.
-  // RecordPanel's liveTranscriptText derived becomes non-empty, triggering
-  // showLiveTranscript → the live-transcript section renders.
+  // This test covers the "combined mode": dictation is recording AND a meeting
+  // session activates mid-session (via the meeting:session-started event).
+  // RecordPanel's showLiveTranscript then renders the live utterances.
+  //
+  // Start without an active meeting so RecordPanel is visible. After Record is
+  // clicked (dictation running), fire meeting:session-started to simulate the
+  // meeting activating, then confirm the live-transcript panel appears.
+  //
+  // meeting_active_session must switch to 99 when fireEvent is called so that
+  // the listener's meeting.refresh() doesn't overwrite the just-set activeId
+  // back to null.
+  let activeMeetingId: number | null = null;
+  await page.exposeFunction("hushGetActiveMeetingForLT", () => activeMeetingId);
+
   await installMocks(page, {
-    meeting_start_manual: () => ({
-      id: 99,
-      appName: "manual",
-      appKind: "other",
-      startedAt: "2026-05-05T10:00:00Z",
-      endedAt: null,
-      speakerCount: null,
-      utteranceCount: 0,
-      notes: null,
-      sources: ["mic"],
-    }),
+    meeting_active_session: async () => {
+      const id = await (window as unknown as Record<string, () => unknown>)["hushGetActiveMeetingForLT"]();
+      return { active: id };
+    },
     meeting_session_get: () => ({
       session: {
         id: 99,
@@ -298,6 +300,8 @@ test("live-transcript panel appears during recording when utterances are availab
         speakerCount: null,
         utteranceCount: 1,
         notes: null,
+        sources: ["mic"],
+        appTitle: null,
       },
       utterances: [
         {
@@ -312,15 +316,24 @@ test("live-transcript panel appears during recording when utterances are availab
       ],
       currentPartials: [],
     }),
-    meeting_active_session: () => ({ active: 99 }),
   });
   await page.goto("/");
 
+  // Dictation starts — meetingOnlyActive becomes false (recording=true)
+  // so RecordPanel is visible even when meeting later activates.
   await page.getByRole("button", { name: "Start recording" }).click();
+  await expect(
+    page.getByRole("button", { name: "Stop recording and transcribe" }),
+  ).toBeVisible();
 
-  // Phase is now recording; the $effect polls meeting_session_get and
-  // populates meetingActiveDetail. The live transcript panel should appear
-  // with the utterance text.
+  // Switch the meeting_active_session mock to return 99, then fire the event.
+  // The listener sets meeting.activeId=99 and calls refresh(); refresh() will
+  // now also see active=99 so the id stays set.
+  activeMeetingId = 99;
+  await fireEvent(page, "meeting:session-started", { sessionId: 99 });
+
+  // RecordPanel's liveTranscriptText derived becomes non-empty →
+  // showLiveTranscript renders the live-transcript section.
   const livePanel = page.locator('[data-testid="live-transcript"]');
   await expect(livePanel).toBeVisible();
   await expect(livePanel).toContainText("Hello world.");
@@ -491,4 +504,249 @@ test("perms-hint-yellow renders when a macOS permission is denied", async ({
   const banner = page.locator('[data-testid="perms-hint-yellow"]');
   await expect(banner).toBeVisible();
   await expect(banner).toContainText(/Permission needed/i);
+});
+
+// ---------------------------------------------------------------------------
+// Meeting-only recording — RecordPanel in meeting mode
+// ---------------------------------------------------------------------------
+
+test("RecordPanel enters meeting mode when a meeting is running but dictation is idle", async ({
+  page,
+}) => {
+  // Backend reports an active meeting session from the start.
+  // Dictation is NOT recording — only the meeting pump is running.
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 42 }),
+    meeting_session_get: () => ({
+      session: {
+        id: 42,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 2,
+        notes: null,
+        sources: ["mic", "system"],
+        appTitle: null,
+      },
+      utterances: [
+        {
+          id: 1,
+          sessionId: 42,
+          startedAtMs: 0,
+          endedAtMs: 4000,
+          speakerLabel: null,
+          text: "Hello from the meeting.",
+          isFinal: true,
+        },
+      ],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  // RecordPanel must be in recording state — the Stop button (not Start) is visible.
+  const stopBtn = page.getByRole("button", { name: "Stop meeting recording" });
+  await expect(stopBtn).toBeVisible();
+
+  // The Start button must NOT be visible (we're already in recording state).
+  await expect(page.getByRole("button", { name: "Start recording" })).not.toBeVisible();
+
+  // Live transcript from the poll appears once meeting_session_get is called.
+  const livePanel = page.locator('[data-testid="live-transcript"]');
+  await expect(livePanel).toBeVisible();
+  await expect(livePanel).toContainText("Hello from the meeting.");
+});
+
+test("RecordPanel meeting stop button calls meeting_stop_manual", async ({
+  page,
+}) => {
+  let stopCalled = false;
+  await page.exposeFunction("hushRecordStop", () => {
+    stopCalled = true;
+  });
+
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 7 }),
+    meeting_stop_manual: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushRecordStop"]();
+    },
+    meeting_session_get: () => ({
+      session: {
+        id: 7,
+        appName: "teams",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic", "system"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  const stopBtn = page.getByRole("button", { name: "Stop meeting recording" });
+  await expect(stopBtn).toBeVisible();
+  await stopBtn.click();
+
+  // meeting_stop_manual must have been called.
+  await expect.poll(() => stopCalled).toBe(true);
+});
+
+test("RecordPanel returns to idle once meeting stops", async ({ page }) => {
+  let activeResult: { active: number | null } = { active: 7 };
+  await page.exposeFunction("hushGetActiveMeeting", () => activeResult);
+  await page.exposeFunction("hushStopMeeting", () => {
+    activeResult = { active: null };
+  });
+
+  await installMocks(page, {
+    meeting_active_session: async () => {
+      return await (window as unknown as Record<string, () => unknown>)["hushGetActiveMeeting"]();
+    },
+    meeting_stop_manual: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushStopMeeting"]();
+    },
+    meeting_session_get: () => ({
+      session: {
+        id: 7,
+        appName: "teams",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic", "system"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  // Start in recording/meeting state.
+  const stopBtn = page.getByRole("button", { name: "Stop meeting recording" });
+  await expect(stopBtn).toBeVisible();
+
+  await stopBtn.click();
+
+  // After stop, RecordPanel must return to idle — Start recording button appears.
+  await expect(page.getByRole("button", { name: "Start recording" })).toBeVisible();
+});
+
+test("document title shows 'Hush ● Recording' during meeting-only mode", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 5 }),
+    meeting_session_get: () => ({
+      session: {
+        id: 5,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: "Stop meeting recording" })).toBeVisible();
+  const title = await page.title();
+  expect(title).toBe("Hush ● Recording");
+});
+
+test("sidebar recording dot is visible during meeting-only mode", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 5 }),
+    meeting_session_get: () => ({
+      session: {
+        id: 5,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: "Stop meeting recording" })).toBeVisible();
+  // The recording dot on the Transcribe sidebar icon should be visible.
+  await expect(page.locator(".sidebar-nav-recording-dot")).toBeVisible();
+});
+
+test("toggle hotkey during meeting-only mode stops the meeting, not starts dictation", async ({
+  page,
+}) => {
+  let stopCalled = false;
+  let startCalled = false;
+  await page.exposeFunction("hushMeetingStop", () => {
+    stopCalled = true;
+  });
+  await page.exposeFunction("hushDictationStart", () => {
+    startCalled = true;
+  });
+
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 9 }),
+    meeting_stop_manual: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushMeetingStop"]();
+    },
+    start_dictation: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushDictationStart"]();
+      return { Ok: null };
+    },
+    meeting_session_get: () => ({
+      session: {
+        id: 9,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  // Confirm we're in meeting-only mode.
+  await expect(page.getByRole("button", { name: "Stop meeting recording" })).toBeVisible();
+
+  // Fire the toggle hotkey.
+  await fireEvent(page, "hotkey:toggle", null);
+
+  // meeting_stop_manual must be called; start_dictation must NOT be.
+  await expect.poll(() => stopCalled).toBe(true);
+  expect(startCalled).toBe(false);
 });

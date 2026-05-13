@@ -7,11 +7,11 @@
   import { meeting } from "$lib/state/meeting-sessions.svelte";
 
   import AudioSourcePicker from "./AudioSourcePicker.svelte";
-  import ErrorDisplay from "./ErrorDisplay.svelte";
   import MacosPermsPill from "./MacosPermsPill.svelte";
   import ModelChip from "./ModelChip.svelte";
   import RecordPanel from "./RecordPanel.svelte";
   import ResultBlock from "./ResultBlock.svelte";
+  import ErrorDisplay from "./ErrorDisplay.svelte";
   import { motionDuration } from "./motion";
   import type { PermissionsHealth } from "./types";
 
@@ -55,6 +55,27 @@
     return audio.sources.find((s) => s.id === audio.selected)?.name ?? null;
   });
   let activeModelName = $derived(dictation.activeModel?.displayName ?? null);
+
+  // True when a meeting session is auto-running but dictation is completely
+  // idle (not recording, starting, stopping, or transcribing). In this state
+  // RecordPanel shows in meeting-only mode with meeting-specific styling and
+  // its stop routes to meeting.stopSession(). When dictation is busy (stopping
+  // or transcribing), this must be false so RecordPanel's "Working" state
+  // remains in control.
+  let meetingOnlyActive = $derived(
+    meeting.activeId !== null && !dictation.recording && !dictation.busy,
+  );
+
+  // Effective recording and busy states that combine dictation + meeting-only
+  // so all controls read from a single source of truth.
+  let effectiveRecording = $derived(dictation.recording || meetingOnlyActive);
+  let effectiveBusy = $derived(dictation.busy || (meetingOnlyActive && meeting.busy));
+
+  // Effective error: surface meeting stop failures on this panel when
+  // meeting-only mode is active; fall back to dictation errors otherwise.
+  let effectiveError = $derived(meetingOnlyActive ? meeting.error : dictation.error);
+
+
 </script>
 
 <section id="dictation-section" class="page-section">
@@ -81,21 +102,27 @@
     model chip are passed in as adjunct snippets so they render
     flanking the button on a single row. No sidebar, no two-
     column grid — the page now reads top-to-bottom.
+
+    When meetingOnlyActive is true (meeting pump running, dictation
+    idle) RecordPanel shifts into meeting mode: red waveform bars,
+    "MEETING" button label, "Stop meeting recording" aria-label,
+    and the stop action routes to meeting.stopSession().
   -->
   <RecordPanel
-    recording={dictation.recording}
-    busy={dictation.busy}
+    recording={effectiveRecording}
+    busy={effectiveBusy}
     transcribing={dictation.transcribing}
     {hasUsableSource}
     noModelInstalled={dictation.noModelInstalled}
     {willRecordMeeting}
-    recordMode={dictation.recordMode}
+    recordMode={meetingOnlyActive ? "meeting" : dictation.recordMode}
     {selectedSourceLabel}
     {activeModelName}
-    error={dictation.error}
+    error={effectiveError}
     meetingActiveDetail={meeting.activeDetail}
+    {meetingOnlyActive}
     {onStart}
-    {onStop}
+    onStop={meetingOnlyActive ? () => meeting.stopSession() : onStop}
     onOpenPermissions={onOpenPermissionsTab}
   >
     {#snippet leftAdjunct()}
@@ -103,8 +130,8 @@
         sources={audio.sources}
         sourcesLoaded={audio.sourcesLoaded}
         bind:selected={audio.selected}
-        recording={dictation.recording}
-        busy={dictation.busy}
+        recording={effectiveRecording}
+        busy={effectiveBusy}
       />
     {/snippet}
     {#snippet rightAdjunct()}
@@ -114,9 +141,10 @@
 
   <!--
     Keyboard-shortcut hint sits under the recording area as a
-    contextual reminder. Quieter visual treatment so it doesn't
-    compete with the centerpiece waveform + button above.
+    contextual reminder. Hidden during meeting-only mode since the
+    shortcuts refer to dictation hotkeys, not meeting controls.
   -->
+  {#if !meetingOnlyActive}
   <p class="shortcut-hint" aria-label="Keyboard shortcuts">
     {#if isMacOS}<kbd>⌃</kbd> + <kbd>⌥</kbd>{:else}<kbd>Ctrl</kbd> + <kbd>Alt</kbd>{/if}
     + <kbd>H</kbd> to toggle,
@@ -124,6 +152,7 @@
     {#if isMacOS}<kbd>Right ⌘</kbd>{:else}<kbd>Right Ctrl</kbd>{/if}
     to push-to-talk.
   </p>
+  {/if}
 
   {#if dictation.result}
     <div
@@ -141,9 +170,9 @@
     onOpenPermissions={onOpenPermissionsTab}
   />
 
-  {#if dictation.error}
+  {#if effectiveError}
     <ErrorDisplay
-      error={dictation.error}
+      error={effectiveError}
       onAction={(key) => {
         if (key === "open-model-settings") {
           onScrollToModelPicker();
@@ -171,6 +200,7 @@
     flex-direction: column;
     gap: 1rem;
   }
+
 
   /* Section-header subtitle. Lifted from +page.svelte when the
      History tagline was removed and this became the only consumer
