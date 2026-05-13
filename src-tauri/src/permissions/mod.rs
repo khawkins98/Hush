@@ -259,7 +259,6 @@ pub fn log_tcc_identity(context: &str) {
     }
 }
 
-
 ///
 /// Returns `true` if quarantine was present and successfully removed —
 /// the caller **must restart the app** in that case so the relaunch uses
