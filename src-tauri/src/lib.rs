@@ -1179,12 +1179,15 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
     // next HAL notification.
     let mut is_first_iteration = true;
 
+    tracing::info!("meeting detection task started");
+
     loop {
         if is_first_iteration {
             is_first_iteration = false;
         } else {
             // Wait for any HAL property change notification.
             monitor.wait_for_change().await;
+            tracing::debug!("meeting detection: HAL notification received");
         }
         // Re-enumerate input devices after every wake (and once at startup).
         // Handles hot-plug / unplug: stale DeviceListenerHandles are dropped
@@ -1193,6 +1196,7 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
         monitor.refresh_devices();
 
         let Some(state) = app.try_state::<ipc::AppState>() else {
+            tracing::warn!("meeting detection: AppState not yet available, skipping");
             continue;
         };
 
@@ -1213,6 +1217,16 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
             .map(|name| classifier.classify(name))
             .unwrap_or(meeting::MeetingAppKind::Other);
 
+        tracing::debug!(
+            mic_active,
+            mode = ?mode,
+            session_active,
+            session_emitted,
+            frontmost_app = frontmost_app.as_deref().unwrap_or("<none>"),
+            app_kind = ?app_kind,
+            "meeting detection: evaluating state"
+        );
+
         let outcome = evaluate_mic_state(&meeting::mic_camera_monitor::MicStateInputs {
             mic_is_active: mic_active,
             mode,
@@ -1221,6 +1235,8 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
             frontmost_app_kind: app_kind,
             frontmost_app_name: frontmost_app.clone().unwrap_or_default(),
         });
+
+        tracing::debug!(outcome = ?outcome, "meeting detection: outcome");
 
         match outcome {
             MicStateOutcome::Start { app_name } => {
