@@ -92,18 +92,17 @@ pub mod keys {
     pub const SOUND_CUE_START_ENABLED: &str = "sound_cue_start_enabled";
     pub const SOUND_CUE_COMPLETE_ENABLED: &str = "sound_cue_complete_enabled";
 
-    /// Auto-start mode for Meeting Mode. The foreground poller
-    /// uses this to decide what to do when a Meeting-classified
-    /// app focuses. Stored as one of:
-    /// - `"off"` — never auto-start (the default; user starts
-    ///   every session manually).
-    /// - `"always"` — auto-start a session the moment a Meeting-
-    ///   classified app focuses; no prompt.
+    /// Auto-start mode for Meeting Mode. The CoreAudio HAL listener
+    /// (`run_meeting_detection_task`) reads this to decide what to do
+    /// when a Meeting-classified app is frontmost and the microphone
+    /// activates. Stored as one of:
+    /// - `"off"` — never auto-start; user starts every session manually.
+    /// - `"always"` — auto-start a session the moment the mic activates
+    ///   while a Meeting-classified app is frontmost; no prompt.
     ///
     /// Future: `"ask"` once the prompt UI ships. Absent /
-    /// unparseable values fall back to `"off"` — the safer
-    /// default; nobody wants their mic to spontaneously turn on
-    /// because of a bad settings row.
+    /// unparseable values fall back to `"always"` — the default for
+    /// new installs.
     pub const MEETING_AUTOSTART_MODE: &str = "meeting_autostart_mode";
 
     /// Whether speaker diarization should run on meeting transcripts.
