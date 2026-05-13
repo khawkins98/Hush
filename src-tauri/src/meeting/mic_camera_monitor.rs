@@ -377,24 +377,34 @@ pub struct MicStateInputs {
     pub frontmost_app_name: String,
 }
 
-/// Outcome of one evaluation of the auto-start state machine.
+/// Outcome of one evaluation of the mic auto-start/stop state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MicStateOutcome {
     /// No action needed; keep `session_emitted` as-is.
     Idle,
-    /// Mic went quiet — caller must reset `session_emitted = false`.
+    /// Mic went quiet and no auto-started session is active — caller must
+    /// reset `session_emitted = false`.
     ResetSessionEmitted,
+    /// Mic went quiet while an auto-started session is running. Caller must
+    /// stop the session and reset `session_emitted = false`.
+    AutoStop,
     /// Start a new meeting session for the named app. Caller must set
     /// `session_emitted = true` and call `start_manual`.
     Start { app_name: String },
 }
 
-/// Pure decision function for the mic auto-start state machine.
+/// Pure decision function for the mic auto-start/auto-stop state machine.
 ///
 /// Called on each property-change event (and once at startup). All inputs
 /// are explicit so the function is fully unit-testable without CoreAudio.
 pub fn evaluate_mic_state(inputs: &MicStateInputs) -> MicStateOutcome {
     if !inputs.mic_is_active {
+        // Mic went quiet. If we auto-started the current session, stop it.
+        // Manually-started sessions (session_emitted == false) are left running
+        // so the user retains full control.
+        if inputs.session_active && inputs.session_emitted {
+            return MicStateOutcome::AutoStop;
+        }
         return MicStateOutcome::ResetSessionEmitted;
     }
     // Mic is active from here.
@@ -438,11 +448,40 @@ mod tests {
 
     #[test]
     fn mic_inactive_always_resets_session_emitted() {
+        // No active session → just reset the flag.
         let i = inputs(
             false,
             MeetingAutostartMode::Always,
             false,
             true,
+            MeetingAppKind::Meeting,
+        );
+        assert_eq!(evaluate_mic_state(&i), MicStateOutcome::ResetSessionEmitted);
+    }
+
+    #[test]
+    fn mic_inactive_with_auto_started_session_triggers_auto_stop() {
+        // session_active=true AND session_emitted=true → we auto-started it →
+        // auto-stop so the session doesn't run forever after the call ends.
+        let i = inputs(
+            false,
+            MeetingAutostartMode::Always,
+            true,
+            true,
+            MeetingAppKind::Meeting,
+        );
+        assert_eq!(evaluate_mic_state(&i), MicStateOutcome::AutoStop);
+    }
+
+    #[test]
+    fn mic_inactive_with_manually_started_session_only_resets_flag() {
+        // session_active=true but session_emitted=false → user started manually
+        // → do not auto-stop; user retains full control.
+        let i = inputs(
+            false,
+            MeetingAutostartMode::Always,
+            true,
+            false,
             MeetingAppKind::Meeting,
         );
         assert_eq!(evaluate_mic_state(&i), MicStateOutcome::ResetSessionEmitted);
