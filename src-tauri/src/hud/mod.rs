@@ -282,10 +282,10 @@ pub fn hide_async<R: Runtime>(app: &AppHandle<R>) {
 
 /// HUD lifecycle state — drives the frontend's render branch
 /// (#291). The HUD stays visible across `recording` → `processing`
-/// → hidden so the user has a continuous "Hush is still working"
-/// signal during the transcription gap; pre-#291 the HUD vanished
-/// the instant audio capture stopped, leading users to switch
-/// apps and paste before the clipboard had been written.
+/// → `done` → hidden so the user has a continuous "Hush is still
+/// working" signal during the transcription gap; pre-#291 the HUD
+/// vanished the instant audio capture stopped, leading users to
+/// switch apps and paste before the clipboard had been written.
 #[derive(Debug, Clone, Copy)]
 pub enum HudState {
     /// Audio capture is active. Pulsing dot + level meter. The
@@ -297,6 +297,11 @@ pub enum HudState {
     /// Audio capture stopped, transcription + clipboard write in
     /// flight. Static dot, "Processing…" label, no level meter.
     Processing,
+    /// Clipboard write succeeded. Green dot, "Copied!" label. The
+    /// frontend self-dismisses after a brief confirmation window
+    /// (~1.5 s) so the user sees a clear "safe to paste" signal
+    /// before the HUD disappears (#669).
+    Done,
 }
 
 impl HudState {
@@ -305,6 +310,7 @@ impl HudState {
         match self {
             HudState::Recording { .. } => "recording",
             HudState::Processing => "processing",
+            HudState::Done => "done",
         }
     }
 }
@@ -340,7 +346,7 @@ pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: HudState) -> Result<()> 
     use tauri::Emitter as _;
     let started_at_ms = match state {
         HudState::Recording { started_at_ms } => Some(started_at_ms),
-        HudState::Processing => None,
+        HudState::Processing | HudState::Done => None,
     };
     let payload = HudStatePayload {
         state: state.state_str(),
