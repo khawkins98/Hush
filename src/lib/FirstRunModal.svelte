@@ -78,10 +78,13 @@
   // this session. `null` until the first poll completes. Used to
   // detect a within-session grant that requires a restart.
   let imGrantedAtOpen = $state<boolean | null>(null);
+  // Optimistic signal: user clicked the IM grant button this session.
+  let imGrantAttempted = $state(false);
   let imNeedsRestart = $derived(
     imGrantedAtOpen === false &&
       (diagnostic?.statuses.inputMonitoring === "granted" ||
-        diagnostic?.statuses.inputMonitoring === "not-applicable"),
+        diagnostic?.statuses.inputMonitoring === "not-applicable" ||
+        imGrantAttempted),
   );
   let pollHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -155,6 +158,7 @@
   async function requestInputMonitoring() {
     if (imRequesting) return;
     imRequesting = true;
+    imGrantAttempted = true;
     try {
       // Synchronous prompt: the IPC awaits the user's choice and
       // returns the resulting bool. We don't actually need the

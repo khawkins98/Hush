@@ -36,10 +36,23 @@
      * `undefined` (default) suppresses the notice (unknown baseline).
      */
     imGrantedAtLoad?: boolean;
+    /**
+     * Set to `true` by the parent when the user has clicked "Grant in
+     * Settings…" for Input Monitoring in this session.  Used as an
+     * optimistic signal to show the restart notice even when
+     * `IOHIDCheckAccess` returns a stale/cached value mid-session
+     * (observed on DMG-installed / quarantined builds on macOS 26).
+     */
+    imGrantAttempted?: boolean;
   };
 
-  let { diagnostic, health, onOpenPrivacyPane, imGrantedAtLoad }: Props =
-    $props();
+  let {
+    diagnostic,
+    health,
+    onOpenPrivacyPane,
+    imGrantedAtLoad,
+    imGrantAttempted,
+  }: Props = $props();
 
   const ROWS = [
     {
@@ -101,10 +114,13 @@
             System Settings to restore access.
           </span>
         {/if}
-        {#if row.key === "inputMonitoring" && imGrantedAtLoad === false && status === "granted"}
+        {#if row.key === "inputMonitoring" && imGrantedAtLoad === false && (status === "granted" || imGrantAttempted === true)}
           <!-- rdev's CGEventTap was never established at startup
                (IM was denied then). The OS won't prompt to relaunch
-               automatically on macOS 26+, so we must. -->
+               automatically on macOS 26+, so we must.
+               `imGrantAttempted` is an optimistic signal: shown even
+               when IOHIDCheckAccess returns a stale/cached value
+               mid-session (DMG/quarantined builds on macOS 26). -->
           <span class="perm-restart-hint" role="status">
             Push-to-talk is ready — restart Hush to activate it.
             <button

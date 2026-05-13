@@ -64,6 +64,15 @@
   // Whether IM was granted when the dialog first loaded in this session.
   // Used to detect a within-session grant that requires a restart.
   let imGrantedAtLoad = $state<boolean | null>(null);
+  // Optimistic signal: user clicked "Grant in Settings…" for IM this session.
+  let imGrantAttempted = $state(false);
+
+  function handleOpenPrivacyPane(
+    target: "microphone" | "input-monitoring",
+  ): void | Promise<void> {
+    if (target === "input-monitoring") imGrantAttempted = true;
+    return onOpenPrivacyPane(target);
+  }
 
   let cardEl: HTMLElement | undefined = $state();
   let previousFocus: HTMLElement | null = null;
@@ -184,8 +193,9 @@
         <PermissionsRows
           {diagnostic}
           {health}
-          {onOpenPrivacyPane}
+          onOpenPrivacyPane={handleOpenPrivacyPane}
           imGrantedAtLoad={imGrantedAtLoad ?? undefined}
+          {imGrantAttempted}
         />
       {:else if loadError}
         <p class="perm-dialog-error" role="alert">

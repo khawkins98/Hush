@@ -63,6 +63,10 @@
   let refreshing = $state(false);
   // Whether IM was granted when the tab first mounted in this app session.
   let imGrantedAtMount = $state<boolean | null>(null);
+  // Optimistic signal: user clicked "Grant in Settings…" for IM this session.
+  // Used to show the restart notice even when IOHIDCheckAccess returns a
+  // stale/cached value mid-session (observed on DMG/quarantined builds).
+  let imGrantAttempted = $state(false);
 
   let focusHandler: (() => void) | null = null;
 
@@ -96,6 +100,7 @@
   async function openPrivacyPane(
     target: "microphone" | "input-monitoring",
   ) {
+    if (target === "input-monitoring") imGrantAttempted = true;
     try {
       await invoke("open_macos_privacy_pane", { target });
     } catch (e) {
@@ -169,6 +174,7 @@
     {health}
     onOpenPrivacyPane={openPrivacyPane}
     imGrantedAtLoad={imGrantedAtMount ?? undefined}
+    {imGrantAttempted}
   />
   <p class="perm-recovery-intro">
     Stuck? Open the diagnostic below to reset both
