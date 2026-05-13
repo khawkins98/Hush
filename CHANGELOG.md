@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Meeting auto-detection on by default.** The CoreAudio HAL listener that triggers a meeting session when the microphone activates in a recognised meeting app (Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, Skype) is now enabled out of the box. New installs default to "Always" auto-start mode instead of the previous "Off". Toggle it under Settings → Meeting → Auto-start mode.
 - **Event-driven meeting auto-detection via CoreAudio HAL** (macOS). Meeting sessions start automatically when the microphone activates while a supported meeting app is frontmost. Detection uses the `kAudioDevicePropertyDeviceIsRunningSomewhere` property listener on input devices — fires in the same OS audio call stack as the device state change, no polling. Session start is guarded by `session_emitted` to prevent duplicate fires within one activation cycle.
+- **Meeting recording banner in Transcribe panel.** When a meeting session is auto-detected and running but dictation is not active, the Transcribe panel now shows an inline banner with a pulsing indicator, a Stop button, and a live transcript feed. Previously the panel showed no sign of the active meeting, leaving users unable to stop the session without navigating to History.
 
 ### Fixed
 
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2. The PTT (push-to-talk) subsystem attempted a low-level `CGEventTapCreate` call when Input Monitoring was `NotDetermined`. On macOS 26, this silently created a permanent TCC Deny entry before the user could grant access via the first-run wizard. The listener is now gated strictly on `Granted` (or `NotApplicable` on non-macOS).
 - **Input Monitoring grant activates PTT immediately — no restart required.** Previously users had to quit and reopen Hush after granting Input Monitoring before push-to-talk would work. The PTT listener now starts in the same session the moment the grant is confirmed.
 - **Removed stale "Restart Now" prompt after Input Monitoring grant.** With the in-session PTT fix above, the hint was both misleading and unnecessary.
+- **Meeting auto-detection half-state eliminated.** When meeting auto-detection started a session, the frontend was never notified — the Stop button never appeared and users could not end the session without quitting. The backend now emits a `meeting:session-started` event after every session start (manual and auto), and the frontend listener sets the active session ID immediately (no refresh round-trip needed).
 
 ## [0.5.3] - 2026-05-12
 
