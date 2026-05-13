@@ -38,6 +38,20 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-13 — IOHIDCheckAccess staleness: DMG-installed release binary returns NotDetermined after TCC grant
+
+**Symptom.** After granting Input Monitoring for the DMG-installed release build and using the "Quit & Reopen" restart path, the relaunched app showed PTT as non-functional. Logs showed `registered toggle-record hotkey` but no `starting PTT rdev listener` — PTT startup was being silently skipped. `npm run tauri:bundle` (debug build installed to `~/Applications`) did not reproduce the issue.
+
+**Root cause.** The PTT startup gate in `lib.rs` originally only attempted `register_ptt_listener` when `IOHIDCheckAccess` returned `Granted` or `NotApplicable`. On macOS 26, `IOHIDCheckAccess` appeared to return stale `NotDetermined` for the release binary post-restart — even though IM was genuinely granted. The grant was created in a session where the binary was under Finder quarantine, giving it a slightly different effective TCC identity. On relaunch (clean, no quarantine), `IOHIDCheckAccess` queries that clean identity and finds no matching TCC entry, returning `NotDetermined`. The `lib.rs` gate then silently skipped PTT entirely with no log output.
+
+**Key observation.** On macOS 12+, `CGEventTapCreate` (called internally by rdev) does **not** show an OS permission dialog when IM is not granted — it simply returns NULL and rdev fails. Only an explicit `IOHIDRequestAccess` call (the one the first-run modal makes) triggers the "Keystroke Receiving" inline dialog. This means it is safe to attempt PTT even when `IOHIDCheckAccess` returns `NotDetermined`: if IM is truly absent, rdev fails gracefully with an error log; if IM is granted but `IOHIDCheckAccess` has stale data, PTT starts successfully.
+
+**Fix.** Changed the `lib.rs` PTT startup gate to attempt `register_ptt_listener` for all statuses except `Denied`. Added INFO-level logging for the `im_status` value at startup and for the `NotDetermined` case (explaining why we're still trying). `Denied` is the only case where PTT startup is skipped, since the user explicitly revoked IM.
+
+**Anti-pattern identified.** The original `lib.rs` gate had no `else` branch and no log output — a silent skip that made the bug impossible to diagnose from logs alone. Whenever a major subsystem is conditionally skipped at startup, the skip must log at INFO with the reason.
+
+---
+
 ## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
 
 Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.

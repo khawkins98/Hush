@@ -814,22 +814,39 @@ pub fn run() {
                 tracing::error!(error = ?e, "failed to register default toggle hotkey");
             }
             // PTT runs through `rdev` on a dedicated thread (rdev's listen
-            // is blocking and installs a low-level OS hook). On macOS the
-            // first call triggers the Input Monitoring permission prompt.
-            // Gate on an already-granted (or non-applicable) permission so
-            // the OS dialog doesn't fire before the user reaches the PTT
-            // toggle in Settings — on a fresh install `ptt_active` defaults
-            // to `true` but Input Monitoring is `NotDetermined`. The listener
-            // is spawned on demand via `ptt_set_config` when the user first
-            // enables PTT, which is the right moment to trigger the prompt
-            // (#647). On Wayland the listener exits with an error and we
-            // proceed without PTT — toggle and button-driven dictation still
-            // work.
-            // See `hotkey::ptt` module header for the full rationale.
+            // is blocking and installs a low-level OS hook). On macOS 12+,
+            // `CGEventTapCreate` (called internally by rdev) does NOT show an
+            // OS permission dialog when IM is not granted — it simply returns
+            // NULL and rdev exits with an error. The OS dialog is only
+            // triggered by an explicit `IOHIDRequestAccess` call, which the
+            // first-run modal handles (#647). We therefore attempt the
+            // listener for all statuses except Denied:
+            //
+            //   Granted        → start normally.
+            //   NotApplicable  → start (non-macOS platform).
+            //   NotDetermined  → attempt anyway; on macOS 26, IOHIDCheckAccess
+            //                    may return stale not-determined for release
+            //                    binaries after a TCC grant (the grant was
+            //                    created in a session where the binary had a
+            //                    quarantine-influenced identity; the next
+            //                    startup's identity is clean and IOHIDCheckAccess
+            //                    doesn't find the entry). rdev succeeds if IM is
+            //                    truly granted; fails gracefully if not.
+            //   Denied         → skip; the user explicitly revoked IM.
+            //
+            // See `hotkey::ptt` module header and learnings.md for full detail.
             let im_status = crate::permissions::read_all().input_monitoring;
-            if im_status == crate::permissions::PermissionStatus::Granted
-                || im_status == crate::permissions::PermissionStatus::NotApplicable
-            {
+            tracing::info!(
+                status = ?im_status,
+                "input monitoring status at startup (IOHIDCheckAccess)"
+            );
+            if im_status != crate::permissions::PermissionStatus::Denied {
+                if im_status == crate::permissions::PermissionStatus::NotDetermined {
+                    tracing::info!(
+                        "IOHIDCheckAccess returned not-determined at startup; \
+                         attempting PTT listener (may be stale on macOS 26 after a TCC grant)"
+                    );
+                }
                 if let Err(e) = hotkey::register_ptt_listener(
                     app.handle(),
                     ptt_combo_for_listener,
@@ -838,6 +855,8 @@ pub fn run() {
                 ) {
                     tracing::error!(error = ?e, "failed to start PTT listener");
                 }
+            } else {
+                tracing::info!("input monitoring denied; PTT listener not started");
             }
             Ok(())
         })
