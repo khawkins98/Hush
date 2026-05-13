@@ -61,53 +61,53 @@
       data-health={rowHealth ?? "unknown"}
     >
       <!--
-        Two-column layout: text block on the left (title-line +
-        why subtitle), action button on the right. Three colours
-        on the dot map to the three-state health model: green
-        (confirmed), yellow (was granted, now stale — the cert /
-        bundle-id rotation case), red (no prior grant). Falls
-        back to a neutral grey dot when the health snapshot
-        hasn't loaded yet.
+        Vertical stack: title-line (dot + name + pill) → why
+        subtitle → action button (right-aligned) → stale notice
+        (full-width). Three colours on the dot map to the
+        three-state health model: green (confirmed), yellow (was
+        granted, now stale — the cert / bundle-id rotation case),
+        red (no prior grant). Falls back to a neutral grey dot
+        when the health snapshot hasn't loaded yet.
       -->
-      <div class="perm-text">
-        <div class="perm-title-line">
-          <span
-            class="perm-health-dot"
-            data-health={rowHealth ?? "unknown"}
-            aria-hidden="true"
-          ></span>
-          <span class="perm-name">{row.label}</span>
-          <span class="perm-status-pill">
-            {#if rowHealth === "stale"}Was granted — now revoked
-            {:else if status === "granted"}Granted
-            {:else if status === "denied"}Denied
-            {:else if status === "not-determined"}Not yet granted
-            {:else}Not applicable
-            {/if}
-          </span>
-        </div>
-        <span class="perm-why">{row.why}</span>
-        {#if rowHealth === "stale"}
-          <span class="perm-stale-hint">
-            macOS no longer recognises a previous grant for Hush
-            (common after app updates). Re-enable {row.label} in
-            System Settings to restore access.
-          </span>
-        {/if}
-      </div>
-      {#if status !== "not-applicable"}
-        <button
-          type="button"
-          class="perm-row-action"
-          data-testid="perm-action-{row.key}"
-          onclick={() => onOpenPrivacyPane(row.paneTarget)}
-        >
-          {#if status === "granted"}
-            Open in Settings
-          {:else}
-            Grant in Settings…
+      <div class="perm-title-line">
+        <span
+          class="perm-health-dot"
+          data-health={rowHealth ?? "unknown"}
+          aria-hidden="true"
+        ></span>
+        <span class="perm-name">{row.label}</span>
+        <span class="perm-status-pill">
+          {#if rowHealth === "stale"}Was granted — now revoked
+          {:else if status === "granted"}Granted
+          {:else if status === "denied"}Denied
+          {:else if status === "not-determined"}Not yet granted
+          {:else}Not applicable
           {/if}
-        </button>
+        </span>
+      </div>
+      <span class="perm-why">{row.why}</span>
+      {#if status !== "not-applicable"}
+        <div class="perm-row-action-row">
+          <button
+            type="button"
+            class="perm-row-action"
+            data-testid="perm-action-{row.key}"
+            onclick={() => onOpenPrivacyPane(row.paneTarget)}
+          >
+            {#if status === "granted"}
+              Open in Settings
+            {:else}
+              Grant in Settings…
+            {/if}
+          </button>
+        </div>
+      {/if}
+      {#if rowHealth === "stale"}
+        <span class="perm-stale-hint">
+          macOS no longer recognises a previous grant for Hush
+          (common after app updates). Re-enable {row.label} in
+          System Settings to restore access.
+        </span>
       {/if}
     </li>
   {/each}
@@ -124,20 +124,13 @@
     max-width: 44rem;
   }
   .perm-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.6rem 1rem;
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
     padding: 0.7rem 0.9rem;
     background-color: white;
     border: 1px solid #e1e1e6;
     border-radius: 8px;
-  }
-  .perm-text {
-    /* min-width:0 lets the text column shrink under flex/grid
-       constraints so a long "why" wraps instead of pushing the
-       button off the row. */
-    min-width: 0;
   }
   .perm-title-line {
     display: flex;
@@ -205,13 +198,16 @@
     border-radius: 4px;
   }
   .perm-why {
-    display: block;
-    margin-top: 0.15rem;
     font-size: 0.82rem;
     color: #666;
+    line-height: 1.4;
+  }
+  .perm-row-action-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.2rem;
   }
   .perm-row-action {
-    align-self: center;
     padding: 0.35rem 0.7rem;
     font-size: 0.82rem;
     font-weight: 500;
