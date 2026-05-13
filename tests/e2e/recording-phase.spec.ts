@@ -641,3 +641,112 @@ test("RecordPanel returns to idle once meeting stops", async ({ page }) => {
   // After stop, RecordPanel must return to idle — Start recording button appears.
   await expect(page.getByRole("button", { name: "Start recording" })).toBeVisible();
 });
+
+test("document title shows 'Hush ● Recording' during meeting-only mode", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 5 }),
+    meeting_session_get: () => ({
+      session: {
+        id: 5,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: "Stop meeting recording" })).toBeVisible();
+  const title = await page.title();
+  expect(title).toBe("Hush ● Recording");
+});
+
+test("sidebar recording dot is visible during meeting-only mode", async ({
+  page,
+}) => {
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 5 }),
+    meeting_session_get: () => ({
+      session: {
+        id: 5,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: "Stop meeting recording" })).toBeVisible();
+  // The recording dot on the Transcribe sidebar icon should be visible.
+  await expect(page.locator(".sidebar-nav-recording-dot")).toBeVisible();
+});
+
+test("toggle hotkey during meeting-only mode stops the meeting, not starts dictation", async ({
+  page,
+}) => {
+  let stopCalled = false;
+  let startCalled = false;
+  await page.exposeFunction("hushMeetingStop", () => {
+    stopCalled = true;
+  });
+  await page.exposeFunction("hushDictationStart", () => {
+    startCalled = true;
+  });
+
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 9 }),
+    meeting_stop_manual: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushMeetingStop"]();
+    },
+    start_dictation: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushDictationStart"]();
+      return { Ok: null };
+    },
+    meeting_session_get: () => ({
+      session: {
+        id: 9,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  // Confirm we're in meeting-only mode.
+  await expect(page.getByRole("button", { name: "Stop meeting recording" })).toBeVisible();
+
+  // Fire the toggle hotkey.
+  await fireEvent(page, "hotkey:toggle", null);
+
+  // meeting_stop_manual must be called; start_dictation must NOT be.
+  await expect.poll(() => stopCalled).toBe(true);
+  expect(startCalled).toBe(false);
+});
