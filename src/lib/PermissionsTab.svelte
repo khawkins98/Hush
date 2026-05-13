@@ -61,16 +61,12 @@
   // disabled-flicker is a deliberate hint that the click did
   // something even on a fast machine.
   let refreshing = $state(false);
-
+  // Whether IM was granted when the tab first mounted in this app session.
   let focusHandler: (() => void) | null = null;
 
   async function loadDiagnostic(): Promise<void> {
     refreshing = true;
     try {
-      // Fetch the diagnostic + the three-state health in parallel.
-      // Both are read-only AVFoundation / CoreGraphics / settings-
-      // DB reads; running serially would just add latency for no
-      // ordering reason.
       const [res, healthRes] = await Promise.all([
         invoke<MacosPermissionDiagnostic>("diagnose_macos_permissions"),
         invoke<PermissionHealthResponse>("get_permission_health").catch(
@@ -122,7 +118,7 @@
     // Only fires on the macOS-capable path (`diagnostic` is the
     // gate) — non-macOS builds skip the IPC entirely.
     focusHandler = () => {
-      if (diagnostic !== null && !refreshing) {
+      if (!refreshing) {
         void loadDiagnostic();
       }
     };

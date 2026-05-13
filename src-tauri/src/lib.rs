@@ -480,6 +480,64 @@ pub fn run() {
         // `settings/+page.svelte`.
         .plugin(tauri_plugin_os::init())
         .setup(|app| {
+            // Fast-path quarantine check: strip com.apple.quarantine and
+            // immediately restart before doing any real initialization work.
+            // TCC identity is baked in at process launch time from the
+            // quarantine state; we must restart to get a clean identity.
+            // The check uses `xattr -p` (probe) before `xattr -dr` (strip)
+            // so this is a no-op on non-DMG launches and never loops.
+            // See learnings.md 2026-05-13 and permissions/macos.rs for
+            // the full rationale.
+            // HUSH_QUARANTINE_STRIPPED is set by the exec() restart below
+            // and inherited by the replacement process image.  If it is
+            // already present this is that replacement process — skip the
+            // strip/restart to break any residual loop, then log for
+            // diagnostics.  The var is NOT set on fresh Finder/Dock launches,
+            // so normal user installs still run the strip on first launch.
+            #[cfg(target_os = "macos")]
+            if std::env::var("HUSH_QUARANTINE_STRIPPED").is_ok() {
+                tracing::info!(
+                    im_status = ?crate::permissions::read_all().input_monitoring,
+                    "returned from quarantine-strip exec() restart"
+                );
+            } else if crate::permissions::strip_app_quarantine() {
+                tracing::info!(
+                    "quarantine stripped; exec-restarting app to establish clean TCC identity"
+                );
+                // exec() replaces the current process image (same PID, no
+                // fork).  Unlike spawn()+exit(), this bypasses LaunchServices
+                // so the quarantine events daemon cannot re-add the xattr
+                // before the first instruction of the new image — the root
+                // cause of the infinite restart loop observed on macOS 26
+                // (see learnings.md 2026-05-13 "infinite restart loop").
+                // HUSH_QUARANTINE_STRIPPED=1 is applied to the replacement
+                // image's environment; it is NOT applied to the current
+                // process's environment, so if exec() fails and falls
+                // through, this block could try again on the next launch.
+                use std::os::unix::process::CommandExt as _;
+                let exe = std::env::current_exe()
+                    .map_err(|e| format!("quarantine restart: get exe: {e}"))?;
+                let err = std::process::Command::new(&exe)
+                    .args(std::env::args_os().skip(1))
+                    .env("HUSH_QUARANTINE_STRIPPED", "1")
+                    .exec();
+                // exec() only returns on failure.  Fall through to normal
+                // init rather than crashing — the quarantine xattr was
+                // already stripped from disk, so the next fresh relaunch
+                // will present a clean identity.
+                tracing::warn!(
+                    error = %err,
+                    "quarantine-strip restart via exec() failed; continuing with quarantined identity"
+                );
+            }
+
+            // Log TCC identity + all permission statuses to the persistent log.
+            // The cdhash shown here is what macOS uses as the TCC row key on
+            // macOS 26 — compare this hash between a "grant works" launch and a
+            // "grant doesn't stick" launch to diagnose identity mismatches.
+            #[cfg(target_os = "macos")]
+            crate::permissions::log_tcc_identity("startup");
+
             // The platform app-data directory is only resolvable from a
             // Tauri `App` handle, so state construction has to live in
             // `setup` rather than at the top of `run`. Tauri's own async
@@ -799,19 +857,35 @@ pub fn run() {
                 tracing::error!(error = ?e, "failed to register default toggle hotkey");
             }
             // PTT runs through `rdev` on a dedicated thread (rdev's listen
-            // is blocking and installs a low-level OS hook). On macOS the
-            // first call triggers the Input Monitoring permission prompt.
-            // Gate on an already-granted (or non-applicable) permission so
-            // the OS dialog doesn't fire before the user reaches the PTT
-            // toggle in Settings — on a fresh install `ptt_active` defaults
-            // to `true` but Input Monitoring is `NotDetermined`. The listener
-            // is spawned on demand via `ptt_set_config` when the user first
-            // enables PTT, which is the right moment to trigger the prompt
-            // (#647). On Wayland the listener exits with an error and we
-            // proceed without PTT — toggle and button-driven dictation still
-            // work.
-            // See `hotkey::ptt` module header for the full rationale.
+            // is blocking and installs a low-level OS hook). On macOS 12+,
+            // `CGEventTapCreate` (called internally by rdev) does NOT show an
+            // OS permission dialog when IM is not granted — it simply returns
+            // NULL and rdev exits with an error. The OS dialog is only
+            // triggered by an explicit `IOHIDRequestAccess` call, which the
+            // first-run modal handles (#647).
+            //
+            // IMPORTANT: Do NOT attempt the PTT listener for NotDetermined.
+            // On macOS 26, calling CGEventTapCreate (via rdev) when IM status
+            // is NotDetermined causes macOS to auto-create a TCC Deny entry.
+            // This silently transitions the status to Denied before the user
+            // has had any chance to grant IM via the first-run modal, making
+            // the grant unreachable without a nuclear dev-reset. See
+            // learnings.md 2026-05-13 (CGEventTap auto-deny).
+            //
+            // The first-run flow handles NotDetermined correctly:
+            //   1. User sees modal → clicks Allow → IOHIDRequestAccess fires
+            //   2. `request_input_monitoring_permission` IPC starts the PTT
+            //      listener immediately on grant (same session, no restart)
+            //   3. On subsequent launches, IOHIDCheckAccess → Granted → PTT
+            //      starts here normally
+            //
+            //   Denied  → skip; the user explicitly revoked IM.
+            //   NotApplicable → start (non-macOS platform, no TCC layer).
             let im_status = crate::permissions::read_all().input_monitoring;
+            tracing::info!(
+                status = ?im_status,
+                "input monitoring status at startup (IOHIDCheckAccess)"
+            );
             if im_status == crate::permissions::PermissionStatus::Granted
                 || im_status == crate::permissions::PermissionStatus::NotApplicable
             {
