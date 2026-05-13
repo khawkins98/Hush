@@ -12,6 +12,7 @@
   import ModelChip from "./ModelChip.svelte";
   import RecordPanel from "./RecordPanel.svelte";
   import ResultBlock from "./ResultBlock.svelte";
+  import { joinUtterances } from "./transcript-format";
   import { motionDuration } from "./motion";
   import type { PermissionsHealth } from "./types";
 
@@ -55,6 +56,24 @@
     return audio.sources.find((s) => s.id === audio.selected)?.name ?? null;
   });
   let activeModelName = $derived(dictation.activeModel?.displayName ?? null);
+
+  // True when a meeting session is auto-running but dictation is idle.
+  // In this state the RecordPanel doesn't show a Stop button (it's for
+  // dictation, not meeting). The meeting-active banner below provides
+  // the Stop control and live transcript instead.
+  let meetingOnlyActive = $derived(
+    meeting.activeId !== null && !dictation.recording,
+  );
+
+  // Live transcript text for the meeting-active banner — same derivation
+  // as RecordPanel's liveTranscriptText but sourced from the module-level
+  // meeting state directly so we don't have to thread an extra prop.
+  let meetingLiveText = $derived.by(() => {
+    if (!meeting.activeDetail) return "";
+    const finals = meeting.activeDetail.utterances ?? [];
+    const partials = meeting.activeDetail.currentPartials ?? [];
+    return joinUtterances([...finals, ...partials], "\n");
+  });
 </script>
 
 <section id="dictation-section" class="page-section">
@@ -82,6 +101,47 @@
     flanking the button on a single row. No sidebar, no two-
     column grid — the page now reads top-to-bottom.
   -->
+  {#if meetingOnlyActive}
+    <!--
+      Meeting-active banner: visible when the meeting pump is
+      running but dictation is idle — i.e., meeting was auto-
+      started (or started via the History panel) and the user
+      has not also pressed Record for dictation. Surfaces the
+      live transcript and the Stop button that would otherwise
+      only be reachable by navigating to History.
+    -->
+    <aside
+      class="meeting-active-banner"
+      role="status"
+      aria-label="Meeting recording in progress"
+      in:fly={{ y: -6, duration: motionDuration(200), easing: backOut }}
+      out:fade={{ duration: motionDuration(150), easing: cubicIn }}
+    >
+      <header class="meeting-active-header">
+        <span class="meeting-active-dot" aria-hidden="true"></span>
+        <strong class="meeting-active-title">Meeting recording in progress</strong>
+        <button
+          class="meeting-active-stop"
+          onclick={() => meeting.stopSession()}
+          aria-label="Stop meeting recording"
+        >
+          Stop
+        </button>
+      </header>
+      {#if meetingLiveText.trim().length > 0}
+        <p
+          class="meeting-active-transcript"
+          aria-live="polite"
+          data-testid="meeting-active-transcript"
+        >
+          {meetingLiveText}
+        </p>
+      {:else}
+        <p class="meeting-active-waiting">Waiting for speech…</p>
+      {/if}
+    </aside>
+  {/if}
+
   <RecordPanel
     recording={dictation.recording}
     busy={dictation.busy}
@@ -171,6 +231,74 @@
     flex-direction: column;
     gap: 1rem;
   }
+
+  /* Recording-state banner shown when the meeting pump is active
+     but dictation is idle. Red-tinted to match the HUD's recording
+     indicator and Signal clearly that something is happening. */
+  .meeting-active-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.85rem 1rem;
+    background-color: var(--recording-bg, rgba(220, 38, 38, 0.08));
+    border: 1px solid var(--recording-border, rgba(220, 38, 38, 0.3));
+    border-radius: var(--radius-md);
+  }
+  .meeting-active-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  /* Pulsing red dot — mirrors the HUD's recording indicator. */
+  .meeting-active-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #dc2626;
+    flex-shrink: 0;
+    animation: meeting-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes meeting-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+  .meeting-active-title {
+    flex: 1;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+  }
+  .meeting-active-stop {
+    flex-shrink: 0;
+    background-color: #dc2626;
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.35rem 0.85rem;
+    font-size: 0.82rem;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.12s;
+  }
+  .meeting-active-stop:hover:not(:disabled) {
+    background-color: #b91c1c;
+  }
+  .meeting-active-transcript {
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    margin: 0;
+    max-height: 8rem;
+    overflow-y: auto;
+  }
+  .meeting-active-waiting {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0;
+    font-style: italic;
+  }
+
 
   /* Section-header subtitle. Lifted from +page.svelte when the
      History tagline was removed and this became the only consumer

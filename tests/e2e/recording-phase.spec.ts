@@ -492,3 +492,140 @@ test("perms-hint-yellow renders when a macOS permission is denied", async ({
   await expect(banner).toBeVisible();
   await expect(banner).toContainText(/Permission needed/i);
 });
+
+// ---------------------------------------------------------------------------
+// Meeting-active banner — dictation section
+// ---------------------------------------------------------------------------
+
+test("meeting-active banner appears when meeting is running but dictation is idle", async ({
+  page,
+}) => {
+  // Backend reports an active meeting session from the start.
+  // Dictation is NOT recording — only the meeting pump is running.
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 42 }),
+    meeting_session_get: () => ({
+      session: {
+        id: 42,
+        appName: "zoom",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 2,
+        notes: null,
+        sources: ["mic", "system"],
+        appTitle: null,
+      },
+      utterances: [
+        {
+          id: 1,
+          sessionId: 42,
+          startedAtMs: 0,
+          endedAtMs: 4000,
+          speakerLabel: null,
+          text: "Hello from the meeting.",
+          isFinal: true,
+        },
+      ],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  // The banner must be visible on the Transcribe (dictation) panel without
+  // the user needing to navigate anywhere.
+  const banner = page.locator('[aria-label="Meeting recording in progress"]');
+  await expect(banner).toBeVisible();
+
+  // Stop button is accessible.
+  const stopBtn = page.getByRole("button", { name: "Stop meeting recording" });
+  await expect(stopBtn).toBeVisible();
+
+  // Live transcript from the poll appears once meeting_session_get is called.
+  const transcript = page.locator('[data-testid="meeting-active-transcript"]');
+  await expect(transcript).toBeVisible();
+  await expect(transcript).toContainText("Hello from the meeting.");
+});
+
+test("meeting-active banner stop button calls meeting_stop_manual", async ({
+  page,
+}) => {
+  let stopCalled = false;
+  await page.exposeFunction("hushRecordStop", () => {
+    stopCalled = true;
+  });
+
+  await installMocks(page, {
+    meeting_active_session: () => ({ active: 7 }),
+    meeting_stop_manual: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushRecordStop"]();
+    },
+    meeting_session_get: () => ({
+      session: {
+        id: 7,
+        appName: "teams",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic", "system"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  const stopBtn = page.getByRole("button", { name: "Stop meeting recording" });
+  await expect(stopBtn).toBeVisible();
+  await stopBtn.click();
+
+  // meeting_stop_manual must have been called.
+  await expect.poll(() => stopCalled).toBe(true);
+});
+
+test("meeting-active banner hides once meeting stops", async ({ page }) => {
+  let activeResult: { active: number | null } = { active: 7 };
+  await page.exposeFunction("hushGetActiveMeeting", () => activeResult);
+  await page.exposeFunction("hushStopMeeting", () => {
+    activeResult = { active: null };
+  });
+
+  await installMocks(page, {
+    meeting_active_session: async () => {
+      return await (window as unknown as Record<string, () => unknown>)["hushGetActiveMeeting"]();
+    },
+    meeting_stop_manual: async () => {
+      await (window as unknown as Record<string, () => unknown>)["hushStopMeeting"]();
+    },
+    meeting_session_get: () => ({
+      session: {
+        id: 7,
+        appName: "teams",
+        appKind: "video-call",
+        startedAt: "2026-05-13T16:00:00Z",
+        endedAt: null,
+        speakerCount: null,
+        utteranceCount: 0,
+        notes: null,
+        sources: ["mic", "system"],
+        appTitle: null,
+      },
+      utterances: [],
+      currentPartials: [],
+    }),
+  });
+  await page.goto("/");
+
+  const banner = page.locator('[aria-label="Meeting recording in progress"]');
+  await expect(banner).toBeVisible();
+
+  await page.getByRole("button", { name: "Stop meeting recording" }).click();
+
+  // Banner must disappear once meeting_stop_manual clears the active session.
+  await expect(banner).not.toBeVisible();
+});
