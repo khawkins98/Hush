@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-14
+
+### Fixed
+
+- **HUD: "Copied!" confirmation state after successful dictation** (#669). The floating HUD overlay now shows a green dot, "Copied!" label, and checkmark for 1.5 s after writing to the clipboard, then self-dismisses. Previously the HUD disappeared immediately, giving no feedback that the text was ready to paste.
+- **Live transcript: pulsing typing indicator between Whisper inference cycles** (#670). The transcription pane now shows a `…` pulse animation during the ~1.5 s gaps between partial-transcript updates, so the UI doesn't appear frozen while Whisper is running.
+
 ## [0.6.0] - 2026-05-13
 
 ### Added
