@@ -181,6 +181,28 @@
     }
   });
 
+  // Typing indicator for live transcript (#670). When recording is active
+  // and no new partial has arrived for 1.5 s, show a pulsing "…" so the
+  // UI doesn't read as frozen between Whisper inference cycles.
+  let showTypingIndicator = $state(false);
+
+  $effect(() => {
+    const text = liveTranscriptText;
+    const isRecording = recording;
+
+    if (!isRecording || !text) {
+      showTypingIndicator = false;
+      return;
+    }
+
+    // Text changed — hide indicator and restart the idle timer.
+    showTypingIndicator = false;
+    const timer = setTimeout(() => {
+      showTypingIndicator = true;
+    }, 1500);
+    return () => clearTimeout(timer);
+  });
+
   // Waveform mood priority: error > recording > processing > idle.
   // Error wins so a stop-time failure flashes the bars even while
   // `transcribing` is still true on its way down.
@@ -354,7 +376,14 @@
       <span class="live-transcript-dot" aria-hidden="true"></span>
       Live transcript
     </header>
-    <p class="live-transcript-body">{liveTranscriptText}</p>
+    <p class="live-transcript-body">
+      {liveTranscriptText}<!--
+        Typing indicator (#670): after ~1.5 s with no new partial,
+        show a pulsing ellipsis so the UI doesn't read as frozen
+        during Whisper inference cycles. aria-hidden because the
+        transcript text already conveys state to screen readers.
+      -->{#if showTypingIndicator}<span class="typing-indicator" aria-hidden="true"> …</span>{/if}
+    </p>
   </section>
 {:else if showMeetingWaiting}
   <p class="meeting-waiting" aria-live="polite">Waiting for speech…</p>
@@ -620,6 +649,22 @@
     line-height: 1.5;
     color: var(--text-primary);
     white-space: pre-wrap;
+  }
+  /* Typing indicator (#670) — pulsing ellipsis appended to the live
+     transcript body after ~1.5 s with no new partial. Signals that
+     Whisper is still inferring rather than the stream having stalled. */
+  .typing-indicator {
+    color: var(--text-muted);
+    animation: typing-fade 1.2s ease-in-out infinite;
+  }
+  @keyframes typing-fade {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .typing-indicator {
+      animation: none;
+    }
   }
   @keyframes live-transcript-pulse {
     0%, 100% { opacity: 1; }
