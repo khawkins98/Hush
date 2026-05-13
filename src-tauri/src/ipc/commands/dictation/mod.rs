@@ -354,11 +354,16 @@ pub async fn stop_dictation(
 
     write_to_clipboard(&app, &text)?;
     fire_ready_notification(&app);
-    // Hide the Processing HUD now that the clipboard has the
-    // transcript (#291). The user can paste safely from this
-    // point on. Hide after the clipboard write so the HUD
-    // doesn't flicker out before the user knows it's ready.
-    crate::hud::hide_async(&app);
+    // Transition the HUD to the "Done" state so the user sees a
+    // green "Copied!" confirmation before the HUD self-dismisses
+    // (~1.5 s later, driven by the frontend) (#669). Fallback to
+    // hide_async if the event can't be emitted so the HUD never
+    // gets stuck. On the error paths above we still hide immediately
+    // — "Copied!" is only meaningful after a successful write.
+    if let Err(e) = crate::hud::set_state(&app, crate::hud::HudState::Done) {
+        tracing::warn!(error = ?e, "emit hud:state(done) failed; hiding directly");
+        crate::hud::hide_async(&app);
+    }
     // Completion cue so the user knows the clipboard is ready
     // without glancing at the HUD (#292; cross-platform #446).
     // Fired AFTER the clipboard write so the cue truly means

@@ -28,18 +28,18 @@
 
   // Wire shape mirrors `HudStatePayload` in `src-tauri/src/hud/mod.rs`
   // (camelCase per `serde(rename_all = "camelCase")`). `startedAtMs`
-  // is only present on Recording transitions; Processing transitions
-  // omit it so the frontend keeps the freeze-at-final-value behaviour.
+  // is only present on Recording transitions; Processing and Done
+  // transitions omit it.
   type HudStatePayload = {
-    state: "recording" | "processing";
+    state: "recording" | "processing" | "done";
     startedAtMs?: number;
   };
 
   // HUD lifecycle state (#291). Backend emits `hud:state` with
-  // `"recording"` or `"processing"`. Recording renders the pulsing
-  // dot + waveform; Processing replaces the waveform with a
-  // shimmer so the user knows transcription is in flight and
-  // pasting too early would be premature.
+  // `"recording"`, `"processing"`, or `"done"`. Recording renders
+  // the pulsing dot + waveform; Processing replaces the waveform
+  // with a shimmer; Done shows a green "Copied!" confirmation that
+  // self-dismisses after ~1.5 s (#669).
   //
   // Defaults to `null` (no state yet) rather than `"recording"` so
   // AudioWaveform only mounts after the backend explicitly fires the
@@ -49,7 +49,11 @@
   // requestAnimationFrame, and the rAF loop never recovers when the
   // window becomes visible, leaving the bars permanently frozen at
   // the silence floor.
-  let hudState = $state<"recording" | "processing" | null>(null);
+  let hudState = $state<"recording" | "processing" | "done" | null>(null);
+
+  // Timer handle for the "done" → auto-dismiss sequence (#669).
+  // Cancelled if a new recording starts before the timer fires.
+  let doneTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Transcription progress 0–100, set while hudState === "processing" (#566).
   // Reset to null on each new recording cycle so back-to-back dictations
@@ -109,9 +113,26 @@
       (event) => {
         const payload = event.payload;
         const next = payload?.state;
-        if (next === "recording" || next === "processing") {
+        if (next === "recording" || next === "processing" || next === "done") {
+          // Cancel any pending done-dismiss timer when state changes.
+          if (doneTimer !== null) {
+            clearTimeout(doneTimer);
+            doneTimer = null;
+          }
           hudState = next;
-          if (next === "processing") {
+          if (next === "done") {
+            // Auto-dismiss after 1.5 s so the user sees "Copied!" before
+            // the HUD disappears (#669). A new recording cancels this.
+            doneTimer = setTimeout(async () => {
+              doneTimer = null;
+              try {
+                await getCurrentWebviewWindow().hide();
+              } catch {
+                // Non-fatal — the window will still be visible but won't
+                // block anything.
+              }
+            }, 1500);
+          } else if (next === "processing") {
             // Freeze the timer (don't reset) — the user still sees
             // the final duration of the just-finished capture during
             // the post-stop transcription window. A back-to-back
@@ -152,6 +173,10 @@
     unlistenState = null;
     unlistenProgress?.();
     unlistenProgress = null;
+    if (doneTimer !== null) {
+      clearTimeout(doneTimer);
+      doneTimer = null;
+    }
     if (raf !== undefined) {
       cancelAnimationFrame(raf);
       raf = undefined;
@@ -200,6 +225,7 @@
 <div
   class="hud-root"
   class:hud-processing={hudState === "processing"}
+  class:hud-done={hudState === "done"}
   data-tauri-drag-region
   role="status"
   aria-live="polite"
@@ -207,7 +233,9 @@
     ? transcriptionProgress !== null
       ? `Processing transcription ${transcriptionProgress}%`
       : "Processing transcription"
-    : "Recording in progress"}
+    : hudState === "done"
+      ? "Copied to clipboard"
+      : "Recording in progress"}
   ondblclick={raiseMainWindow}
 >
   <!--
@@ -235,7 +263,9 @@
       ? transcriptionProgress !== null
         ? `Processing… ${transcriptionProgress}%`
         : "Processing…"
-      : "Recording"}
+      : hudState === "done"
+        ? "Copied!"
+        : "Recording"}
   </span>
   {#if hudState === "recording"}
     <span class="hud-elapsed" data-testid="hud-elapsed" aria-hidden="true">
@@ -266,6 +296,26 @@
     <div class="hud-shimmer" role="presentation">
       <div class="hud-shimmer-fill"></div>
     </div>
+  {:else if hudState === "done"}
+    <!--
+      Done state (#669): a brief green check glyph replaces the
+      shimmer so the user gets a clear "safe to paste" signal
+      before the HUD self-dismisses.
+    -->
+    <svg
+      class="hud-done-check"
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <polyline points="2.5,8.5 6.5,12.5 13.5,3.5" />
+    </svg>
   {/if}
   <button
     type="button"
@@ -466,6 +516,23 @@
       animation: none;
       background-position: 50% 0;
     }
+  }
+
+  /* Done state (#669). Green dot + check glyph signal "clipboard ready"
+     before the HUD self-dismisses. The dot stops pulsing (recording is
+     over) and turns green; the waveform area is replaced by a small
+     check icon. */
+  .hud-done .hud-dot {
+    animation: none;
+    background-color: #22c55e;
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+  }
+
+  .hud-done-check {
+    color: #22c55e;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
   }
 
   /*
