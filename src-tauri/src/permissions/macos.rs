@@ -134,66 +134,77 @@ pub fn request_microphone() {
     }
 }
 
-/// Strip `com.apple.quarantine` from the running `.app` bundle before
-/// any TCC API calls.
+/// Strip `com.apple.quarantine` from the running `.app` bundle.
 ///
-/// On macOS 26, `IOHIDRequestAccess` records the TCC grant under a
-/// quarantine-context identity for apps dragged out of a DMG. After
-/// Gatekeeper clears the quarantine xattr on the user's first run
-/// approval, subsequent `IOHIDCheckAccess` calls present the "clean"
-/// identity — which doesn't match the quarantine-keyed TCC entry —
-/// so the API returns `NotDetermined` or `Denied` even though the
-/// user already granted Input Monitoring.
+/// Returns `true` if the xattr was **present and successfully removed**,
+/// `false` in all other cases (already absent, not in an .app, permission
+/// denied).
 ///
-/// Stripping the xattr here (before the first `IOHIDRequestAccess`
-/// call in the first-run modal) ensures both the grant and every
-/// future status check share the same clean identity.
+/// ## Why the return value matters — the restart contract
 ///
-/// Silently no-ops when:
+/// On macOS, a process's TCC identity is baked in **at launch time** based
+/// on the code signature _and_ the quarantine state of the bundle at that
+/// moment. Stripping the xattr from disk does not retroactively change the
+/// running process's identity for `IOHIDRequestAccess` / `IOHIDCheckAccess`.
+///
+/// The correct fix is therefore:
+/// 1. Strip quarantine (this call).
+/// 2. If this call returns `true` (quarantine was present), **restart the
+///    app immediately** before any window is shown.
+/// 3. The relaunch inherits no quarantine → clean identity → both the TCC
+///    grant and all future status checks use the same identity.
+///
+/// `tauri:bundle` (debug install via `cp -R`) doesn't need this because
+/// `cp -R` never sets the quarantine xattr. DMG installs do because Finder
+/// adds it when the user drags the app out.
+///
+/// Silently returns `false` when:
 /// - The binary isn't inside an `.app` bundle (`cargo tauri dev`)
 /// - The xattr is already absent (normal non-DMG installs)
-/// - The process lacks write permission to the bundle path (e.g., a
-///   system-wide `/Applications` install; user may need to approve
-///   in Finder to let Gatekeeper clear quarantine natively)
+/// - The process lacks write permission to the bundle path (e.g.,
+///   system-wide `/Applications`; Gatekeeper handles it on first run)
 ///
 /// See `learnings.md` 2026-05-13 for the full investigation.
-pub fn strip_app_quarantine() {
+pub fn strip_app_quarantine() -> bool {
     let Ok(exe) = std::env::current_exe() else {
-        return;
+        return false;
     };
     // Walk up the path looking for the .app bundle root (up to 5 levels).
     // Typical layout: Hush.app/Contents/MacOS/hush — so the .app is 3 up.
     let mut path = exe.as_path();
     for _ in 0..5 {
-        let Some(parent) = path.parent() else { return };
+        let Some(parent) = path.parent() else { return false };
         if parent.extension().map(|e| e == "app").unwrap_or(false) {
             let result = std::process::Command::new("xattr")
                 .args(["-dr", "com.apple.quarantine"])
                 .arg(parent)
                 .output();
-            match result {
+            return match result {
                 Ok(o) if o.status.success() => {
                     tracing::info!(
                         bundle = ?parent,
-                        "stripped com.apple.quarantine from app bundle (TCC identity fix)"
+                        "stripped com.apple.quarantine from app bundle — will restart for clean TCC identity"
                     );
+                    true
                 }
                 // xattr -d exits 1 when the attribute is not present — expected
                 // for non-DMG installs; not a warning.
-                Ok(o) if o.status.code() == Some(1) => {}
+                Ok(o) if o.status.code() == Some(1) => false,
                 Ok(o) => {
                     tracing::debug!(
                         status = ?o.status,
                         stderr = %String::from_utf8_lossy(&o.stderr),
                         "xattr quarantine strip: unexpected exit status"
                     );
+                    false
                 }
                 Err(e) => {
                     tracing::debug!(error = %e, "xattr quarantine strip: failed to spawn");
+                    false
                 }
-            }
-            return;
+            };
         }
         path = parent;
     }
+    false
 }

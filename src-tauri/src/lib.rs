@@ -815,15 +815,25 @@ pub fn run() {
             }
 
             // Strip com.apple.quarantine from the .app bundle before any TCC
-            // calls. On macOS 26, apps dragged from a DMG carry quarantine
-            // metadata that causes IOHIDRequestAccess to record the TCC grant
-            // under a quarantine-context identity. After Gatekeeper clears the
-            // xattr on first-run approval, IOHIDCheckAccess presents the "clean"
-            // identity which doesn't match — returning Denied/NotDetermined even
-            // though the user already granted. Stripping here ensures the grant
-            // and all future checks share the same identity. No-op outside .app
-            // bundles or when already unquarantined. See learnings.md 2026-05-13.
-            crate::permissions::strip_app_quarantine();
+            // calls. On macOS 26, a process's TCC identity is baked in at
+            // LAUNCH TIME based on the quarantine state of the bundle. Apps
+            // dragged from a DMG carry the quarantine xattr, so their
+            // IOHIDRequestAccess grant is recorded under a quarantine-context
+            // identity. After Gatekeeper clears the xattr on first-run
+            // approval, the "clean" identity used by subsequent launches
+            // doesn't match — IOHIDCheckAccess returns Denied/NotDetermined.
+            //
+            // The fix: strip the xattr and restart BEFORE any window is
+            // shown. The relaunch presents the clean identity, so both
+            // IOHIDRequestAccess (when the user grants) and every future
+            // IOHIDCheckAccess use the same identity. See learnings.md
+            // 2026-05-13.
+            if crate::permissions::strip_app_quarantine() {
+                tracing::info!(
+                    "quarantine stripped; restarting app to establish clean TCC identity"
+                );
+                app.handle().restart();
+            }
             // PTT runs through `rdev` on a dedicated thread (rdev's listen
             // is blocking and installs a low-level OS hook). On macOS 12+,
             // `CGEventTapCreate` (called internally by rdev) does NOT show an

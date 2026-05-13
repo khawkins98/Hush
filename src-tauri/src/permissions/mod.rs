@@ -244,14 +244,24 @@ pub fn request_microphone_permission() {
 
 /// Strip `com.apple.quarantine` from the running `.app` bundle.
 ///
-/// Call this at startup, before any `IOHIDRequestAccess` / TCC
-/// interactions, so that TCC records permission grants under the
-/// clean (unquarantined) code identity that all future launches
-/// will also present. No-op on non-macOS. See `macos::strip_app_quarantine`
-/// for the full rationale and `learnings.md` 2026-05-13.
-pub fn strip_app_quarantine() {
+/// Returns `true` if quarantine was present and successfully removed —
+/// the caller **must restart the app** in that case so the relaunch uses
+/// the clean (unquarantined) TCC identity for both `IOHIDRequestAccess`
+/// and future `IOHIDCheckAccess` calls. Returns `false` when no-op (xattr
+/// already absent, not in an `.app`, or permission denied).
+///
+/// macOS-only. Always returns `false` on other platforms.
+/// See `macos::strip_app_quarantine` for the full rationale and
+/// `learnings.md` 2026-05-13.
+pub fn strip_app_quarantine() -> bool {
     #[cfg(target_os = "macos")]
-    macos::strip_app_quarantine();
+    {
+        macos::strip_app_quarantine()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 #[cfg(test)]
