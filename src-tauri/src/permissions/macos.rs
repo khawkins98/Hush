@@ -133,3 +133,178 @@ pub fn request_microphone() {
         ];
     }
 }
+
+/// Strip `com.apple.quarantine` from the running `.app` bundle.
+///
+/// Returns `true` if the xattr was **present and successfully removed**,
+/// Log the TCC identity and permission state at key lifecycle moments
+/// (app startup, IM grant). Helps diagnose cdhash/identity mismatches
+/// that cause permission grants not to survive a restart.
+///
+/// Runs `codesign --display --verbose=4` against the .app bundle to
+/// surface the `Identifier` and `CandidateCDHash` fields — the pair
+/// macOS uses as the TCC row key on macOS 26. If these differ between
+/// the process that called `IOHIDRequestAccess` and the next launch,
+/// the grant is invisible to the new process.
+pub fn log_tcc_identity(context: &str) {
+    let Ok(exe) = std::env::current_exe() else {
+        tracing::warn!("[tcc-id] {context}: could not determine current exe path");
+        return;
+    };
+
+    // Locate the .app bundle root (up to 5 levels up from the binary).
+    let mut path = exe.as_path();
+    let mut bundle = None;
+    for _ in 0..5 {
+        let Some(parent) = path.parent() else { break };
+        if parent.extension().map(|e| e == "app").unwrap_or(false) {
+            bundle = Some(parent.to_path_buf());
+            break;
+        }
+        path = parent;
+    }
+
+    let quarantine_stripped = std::env::var("HUSH_QUARANTINE_STRIPPED").is_ok();
+
+    let Some(bundle_path) = bundle else {
+        tracing::info!(
+            context,
+            exe = %exe.display(),
+            quarantine_stripped,
+            "[tcc-id] running outside .app bundle — no TCC app identity (dev binary)"
+        );
+        return;
+    };
+
+    // Probe quarantine (independent of the env-var guard).
+    let quarantine_present = std::process::Command::new("xattr")
+        .args(["-p", "com.apple.quarantine"])
+        .arg(&bundle_path)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    // codesign writes its --display output to stderr.
+    let codesign_info = std::process::Command::new("codesign")
+        .args(["--display", "--verbose=4"])
+        .arg(&bundle_path)
+        .output();
+
+    let (identifier, cdhash) = match codesign_info {
+        Ok(o) => {
+            let raw = String::from_utf8_lossy(&o.stderr);
+            let id = raw
+                .lines()
+                .find(|l| l.starts_with("Identifier="))
+                .map(|l| l.trim_start_matches("Identifier=").to_owned())
+                .unwrap_or_else(|| "(not found)".to_owned());
+            // codesign may list multiple CandidateCDHash lines; the sha256 one
+            // is what macOS 26 uses for TCC keying.
+            let hash = raw
+                .lines()
+                .find(|l| l.starts_with("CandidateCDHash sha256="))
+                .map(|l| l.trim_start_matches("CandidateCDHash sha256=").to_owned())
+                .unwrap_or_else(|| "(not found)".to_owned());
+            (id, hash)
+        }
+        Err(e) => (format!("codesign error: {e}"), String::new()),
+    };
+
+    let statuses = super::read_all();
+    tracing::info!(
+        context,
+        bundle = %bundle_path.display(),
+        quarantine_present,
+        quarantine_stripped,
+        %identifier,
+        cdhash = %cdhash,
+        microphone = ?statuses.microphone,
+        input_monitoring = ?statuses.input_monitoring,
+        screen_recording = ?statuses.screen_recording,
+        "[tcc-id] TCC identity + permission snapshot"
+    );
+}
+
+///
+/// ## Why the return value matters — the restart contract
+///
+/// On macOS, a process's TCC identity is baked in **at launch time** based
+/// on the code signature _and_ the quarantine state of the bundle at that
+/// moment. Stripping the xattr from disk does not retroactively change the
+/// running process's identity for `IOHIDRequestAccess` / `IOHIDCheckAccess`.
+///
+/// The correct fix is therefore:
+/// 1. Strip quarantine (this call).
+/// 2. If this call returns `true` (quarantine was present), **restart the
+///    app immediately** before any window is shown.
+/// 3. The relaunch inherits no quarantine → clean identity → both the TCC
+///    grant and all future status checks use the same identity.
+///
+/// `tauri:bundle` (debug install via `cp -R`) doesn't need this because
+/// `cp -R` never sets the quarantine xattr. DMG installs do because Finder
+/// adds it when the user drags the app out.
+///
+/// Silently returns `false` when:
+/// - The binary isn't inside an `.app` bundle (`cargo tauri dev`)
+/// - The xattr is already absent (normal non-DMG installs)
+/// - The process lacks write permission to the bundle path (e.g.,
+///   system-wide `/Applications`; Gatekeeper handles it on first run)
+///
+/// See `learnings.md` 2026-05-13 for the full investigation.
+pub fn strip_app_quarantine() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    // Walk up the path looking for the .app bundle root (up to 5 levels).
+    // Typical layout: Hush.app/Contents/MacOS/hush — so the .app is 3 up.
+    let mut path = exe.as_path();
+    for _ in 0..5 {
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        if parent.extension().map(|e| e == "app").unwrap_or(false) {
+            // First CHECK if the bundle root has quarantine set.
+            // `xattr -p` exits 0 if the named attribute exists on the path,
+            // exits 1 if absent. We MUST do this before the `-dr` strip because
+            // `xattr -dr` (recursive delete) exits 0 even when no files carried
+            // the attribute — a vacuous success that would make us return `true`
+            // on every launch, causing an infinite restart loop.
+            let check = std::process::Command::new("xattr")
+                .args(["-p", "com.apple.quarantine"])
+                .arg(parent)
+                .output();
+            let present = matches!(&check, Ok(o) if o.status.success());
+            if !present {
+                return false;
+            }
+            // Quarantine confirmed present — strip recursively.
+            let strip = std::process::Command::new("xattr")
+                .args(["-dr", "com.apple.quarantine"])
+                .arg(parent)
+                .output();
+            return match strip {
+                Ok(o) if o.status.success() => {
+                    tracing::info!(
+                        bundle = ?parent,
+                        "stripped com.apple.quarantine from app bundle — will restart for clean TCC identity"
+                    );
+                    true
+                }
+                Ok(o) => {
+                    tracing::debug!(
+                        status = ?o.status,
+                        stderr = %String::from_utf8_lossy(&o.stderr),
+                        "xattr quarantine strip: unexpected exit status after confirmed presence"
+                    );
+                    false
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "xattr quarantine strip: failed to spawn");
+                    false
+                }
+            };
+        }
+        path = parent;
+    }
+    false
+}

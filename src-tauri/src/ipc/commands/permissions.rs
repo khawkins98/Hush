@@ -135,16 +135,9 @@ pub async fn prime_screen_recording_permission(app: tauri::AppHandle) -> IpcResu
 
 /// Relaunch the app immediately via `AppHandle::restart()`.
 ///
-/// Exposed as an IPC so the frontend's relaunch banner can trigger
-/// it with a single `invoke("relaunch_app")`. The call does not
-/// return — the process is replaced.
-///
-/// This is the correct fix after a System Audio (Screen Recording
-/// TCC) grant: macOS caches the TCC deny in `mediaserverd` /
-/// `coreaudiod` for the lifetime of the current process. Preflight
-/// flipping true is not enough — only a fresh process sees the
-/// grant take effect. The relaunch is unconditional once the user
-/// confirms it in the UI.
+/// Exposed as an IPC so frontends can programmatically restart Hush
+/// (e.g., after a settings change that requires a fresh process to
+/// take effect). The call does not return — the process is replaced.
 #[tauri::command]
 pub async fn relaunch_app(app: tauri::AppHandle) -> IpcResult<()> {
     app.restart();
@@ -180,6 +173,14 @@ pub async fn request_microphone_permission() -> IpcResult<()> {
 /// return value, but having it lets the wizard show an immediate
 /// status flip when the user clicks Allow.
 ///
+/// On a successful grant, **immediately starts the PTT listener** in
+/// the current session so the user doesn't need to restart Hush to
+/// use push-to-talk. This is the correct place to fire the rdev
+/// listener after a first-run grant: `lib.rs` no longer attempts the
+/// listener for `NotDetermined` (doing so on macOS 26 causes an
+/// auto-deny via CGEventTap), so this IPC owns the "first successful
+/// grant → listener up" path.
+///
 /// Returns `true` when the user granted (or already-granted state
 /// is observed without a prompt), `false` when denied / dismissed.
 /// No-op on non-macOS — Linux + Windows don't have an Input
@@ -187,7 +188,10 @@ pub async fn request_microphone_permission() -> IpcResult<()> {
 /// per-app prompt there); always returns `Ok(true)` so the wizard's
 /// success branch matches.
 #[tauri::command]
-pub async fn request_input_monitoring_permission() -> IpcResult<bool> {
+pub async fn request_input_monitoring_permission(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> IpcResult<bool> {
     // Synchronous OS prompt — keep off the Tokio worker thread
     // so we don't tie up an async slot for the prompt's
     // duration. `spawn_blocking` is the standard escape hatch.
@@ -195,6 +199,29 @@ pub async fn request_input_monitoring_permission() -> IpcResult<bool> {
         tokio::task::spawn_blocking(crate::permissions::request_input_monitoring_permission)
             .await
             .map_err(|e| IpcError::Internal(format!("request IM permission task: {e}")))?;
+
+    if granted {
+        // Log TCC identity snapshot at the moment of grant so it can be compared
+        // against the next startup log — a hash mismatch pinpoints an identity
+        // drift (e.g. quarantine was re-added between strip and grant).
+        crate::permissions::log_tcc_identity("im-grant");
+
+        // IM just granted — start the PTT listener immediately so PTT
+        // works in this session without a restart. `register_ptt_listener`
+        // is idempotent (compare_exchange on the spawned latch), so calling
+        // it here when it was already started at boot is a no-op.
+        if let Err(e) = crate::hotkey::ptt::register_ptt_listener(
+            &app,
+            std::sync::Arc::clone(&state.ptt_combo),
+            std::sync::Arc::clone(&state.ptt_active),
+            std::sync::Arc::clone(&state.ptt_listener_spawned),
+        ) {
+            tracing::warn!(error = ?e, "PTT listener start after IM grant failed; restart may be needed");
+        } else {
+            tracing::info!("PTT listener started after IM grant");
+        }
+    }
+
     Ok(granted)
 }
 
@@ -379,6 +406,13 @@ pub async fn get_permission_health(
         statuses,
         effective_screen_lc.as_deref(),
         effective_mic_lc.as_deref(),
+    );
+    tracing::debug!(
+        microphone = ?health.microphone,
+        screen_recording = ?health.screen_recording,
+        input_monitoring = ?health.input_monitoring,
+        mic_last_confirmed = ?effective_mic_lc,
+        "[permissions] health verdict"
     );
     Ok(PermissionHealthResponse { health })
 }

@@ -141,12 +141,15 @@ CI does not run a real Tauri runtime. A panic at app boot (plugin init, capabili
 
 **The one canonical workflow for TCC / permission testing:**
 
-    npm run dev-reset    # optional — wipe all state for a clean-slate test
+    npm run dev-reset    # REQUIRED when testing IM from scratch — see note below
     npm run tauri:bundle # build → re-sign → install to ~/Applications/Hush.app → launch
 
 `tauri:bundle` builds a debug `.app`, re-signs it so TCC uses the stable bundle ID (`io.github.khawkins98.hush`), and installs it to `~/Applications/Hush.app` — a standard macOS app location that TCC treats identically to `/Applications`. This is as reliable as a DMG install without requiring a full release compile (which can take 5–10 min).
 
 Use `npm run tauri dev` for fast UI/Rust iteration — it can't test TCC reliably. Use `npm run tauri:dmg` only when you need a distributable release artifact.
+
+**`dev-reset` is required when testing Input Monitoring from a clean state.**  
+`npm run dev-reset` runs a nuclear `tccutil reset ListenEvent` (no bundle ID) that clears all IM grants for the user — necessary because TCC entries created during quarantine or by ad-hoc cdhash don't match the plain bundle-ID-scoped reset. It also removes *both* `~/Applications/Hush.app` and `/Applications/Hush.app`. The `/Applications` removal is critical: old DMG installs from before the re-signing fix carry a linker-signed codesign identifier (`hush-<hash>`) instead of `io.github.khawkins98.hush`. TCC uses the **codesign identifier** (not `CFBundleIdentifier`) to key permission rows, so the two installs have completely separate TCC universes and running both produces a confusing split where one shows Denied and the other shows NotDetermined. See `learnings.md` 2026-05-13 "Linker-signed vs re-signed TCC identity".
 
 **Why `cargo tauri dev` and the raw debug binary don't work for TCC:**  
 `cargo tauri dev` produces an unsigned binary. TCC attributes it to the parent terminal, and Screen Recording in particular effectively requires a real `.app` bundle. Even `cargo tauri build --debug` leaves a linker-signed binary with a hash-based identifier (`hush-<hash>`), not `io.github.khawkins98.hush` — `tauri:bundle` fixes this automatically with `codesign --force --deep --sign -`. See `learnings.md` 2026-05-04 for the full investigation.

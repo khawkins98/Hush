@@ -4,6 +4,195 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+# Learnings Log
+
+Engineering decision log for Hush. Append-only, dated entries. Captures dependency choices, platform quirks, false starts, and anything future contributors would benefit from knowing.
+
+---
+
+## 2026-05-13 — DMG-installed app had wrong TCC identity (permissions not sticking)
+
+**Symptom.** Input Monitoring (and other TCC permissions) granted via the DMG-installed app silently didn't stick. `npm run tauri:bundle` worked fine; `npm run tauri:dmg` didn't — and had been broken across multiple releases.
+
+**Root cause.** `tauri-dmg-macos.sh` re-signed the loose `.app` at `target/release/bundle/macos/Hush.app` *after* the DMG was already built. The `.app` baked into the DMG was the un-re-signed version with Tauri's linker-signed hash identifier (`hush-<hash>`) instead of `io.github.khawkins98.hush`. TCC keys grants to this identifier, so any permission granted to the DMG-installed app was effectively granted to a bundle the system couldn't find on the next launch.
+
+**Fix (final).** Re-sign the loose `.app` on the regular APFS filesystem *first* (in `tauri-dmg-macos.sh`, before calling `inject-dmg-readme.sh`), then *replace* the `.app` inside the DMG with the pre-signed copy (`rm -rf` + `cp -R` while the DMG is mounted writable). Signing in-place inside a mounted DMG image was explored first but proved unreliable — the identity wasn't always preserved after `hdiutil convert` back to UDZO, and any subsequent Finder quarantine action can strip it again. Replacing the whole bundle with a clean APFS-signed copy is robust.
+
+**Key lesson.** Never sign a `.app` after it's been packaged into a DMG, and never sign inside a mounted DMG if you can avoid it. The correct order: build → sign on APFS → package signed bundle into DMG. This mirrors how `tauri:bundle` works (signs before installing to `~/Applications`).
+
+---
+
+## 2026-05-13 — Input Monitoring permission does not activate PTT without restart
+
+**Symptom.** After granting Input Monitoring (IM) permission in System Settings while Hush is running, push-to-talk (PTT) doesn't work. On macOS 26, there is no OS-level "Quit & Reopen" dialog from macOS after the grant, even though some users remember seeing one in earlier versions.
+
+**Root cause.** `ptt.rs::register_ptt_listener` spawns an rdev thread. On macOS, rdev installs a `CGEventTap`; if IM isn't granted at the moment `rdev::listen()` runs, `CGEventTap` creation fails and the rdev thread exits with an error. The `spawned: Arc<AtomicBool>` latch is set to `true` before the thread starts and is never reset to `false` on early exit — so there is no retry path, and no code path will re-run `register_ptt_listener` in the same session.
+
+**Why the OS dialog went away.** macOS shows a "Quit & Reopen" dialog only when an *active* `CGEventTap` gains or loses IM access. Since the tap failed at startup (Hush was already running without IM), there is no active tap to trigger that dialog. The user has to be told explicitly.
+
+**Fix.** Frontend-only: track `imGrantedAtLoad / imGrantedAtOpen` in all four IM permission surfaces (FirstRunModal, PermissionsRows, PermissionsDialog, PermissionsTab). When the value was `false` at mount and the diagnostic later shows `"granted"`, show an amber "Push-to-talk is ready — restart Hush to activate it" notice with a "Restart Now" button wired to the existing `relaunch_app` IPC.
+
+**Edge case accepted.** If a user grants IM, closes/reopens the Settings → Permissions tab (new mount), then the `imGrantedAtMount` baseline is `true` and no restart notice appears — even though PTT still doesn't work in the *current session*. This edge case is out-of-scope for now; the first-run flow and the window-focus-after-grant flow cover the primary paths. A global `.svelte.ts` startup-state module that tracks IM status at app-open is the right long-term fix.
+
+**macOS 15+ `IOHIDRequestAccess` behaviour change.** On macOS 15+, this call opens System Settings instead of showing an inline dialog. The change means the user leaves the app, grants, and returns — Hush sees the grant on the next diagnostic poll (the window-focus handler triggers `loadDiagnostic()` in PermissionsTab). This is why adding a "restart now" notice in the re-focus refresh path is sufficient coverage.
+
+---
+
+## 2026-05-13 — IOHIDCheckAccess staleness: DMG-installed release binary returns NotDetermined after TCC grant
+
+**Symptom.** After granting Input Monitoring for the DMG-installed release build and using the "Quit & Reopen" restart path, the relaunched app showed PTT as non-functional. Logs showed `registered toggle-record hotkey` but no `starting PTT rdev listener` — PTT startup was being silently skipped. `npm run tauri:bundle` (debug build installed to `~/Applications`) did not reproduce the issue.
+
+**Root cause.** The PTT startup gate in `lib.rs` originally only attempted `register_ptt_listener` when `IOHIDCheckAccess` returned `Granted` or `NotApplicable`. On macOS 26, `IOHIDCheckAccess` appeared to return stale `NotDetermined` for the release binary post-restart — even though IM was genuinely granted. The grant was created in a session where the binary was under Finder quarantine, giving it a slightly different effective TCC identity. On relaunch (clean, no quarantine), `IOHIDCheckAccess` queries that clean identity and finds no matching TCC entry, returning `NotDetermined`. The `lib.rs` gate then silently skipped PTT entirely with no log output.
+
+**Key observation.** On macOS 12+, `CGEventTapCreate` (called internally by rdev) does **not** show an OS permission dialog when IM is not granted — it simply returns NULL and rdev fails. Only an explicit `IOHIDRequestAccess` call (the one the first-run modal makes) triggers the "Keystroke Receiving" inline dialog. This means it is safe to attempt PTT even when `IOHIDCheckAccess` returns `NotDetermined`: if IM is truly absent, rdev fails gracefully with an error log; if IM is granted but `IOHIDCheckAccess` has stale data, PTT starts successfully.
+
+**Fix.** Changed the `lib.rs` PTT startup gate to attempt `register_ptt_listener` for all statuses except `Denied`. Added INFO-level logging for the `im_status` value at startup and for the `NotDetermined` case (explaining why we're still trying). `Denied` is the only case where PTT startup is skipped, since the user explicitly revoked IM.
+
+**Anti-pattern identified.** The original `lib.rs` gate had no `else` branch and no log output — a silent skip that made the bug impossible to diagnose from logs alone. Whenever a major subsystem is conditionally skipped at startup, the skip must log at INFO with the reason.
+
+---
+
+## 2026-05-13 — Quarantine xattr causes TCC grant/check identity mismatch on macOS 26 (DMG installs)
+
+**Symptom.** After granting IM from the first-run modal in a DMG-installed build and restarting, `IOHIDCheckAccess` returned `Denied` at the new launch. The user had explicitly granted, but the grant was invisible to the relaunched process. `npm run tauri:bundle` did not reproduce the issue.
+
+**Root cause.** When Finder copies an app from a DMG, it adds a `com.apple.quarantine` xattr to every file in the bundle. On macOS 26, `IOHIDRequestAccess` records the TCC grant under a quarantine-context identity (incorporating the xattr state). After Gatekeeper clears the quarantine xattr on first-run approval, subsequent launches present the "clean" identity — which has no matching TCC entry — so `IOHIDCheckAccess` returns `Denied` or `NotDetermined` even though the grant was made.
+
+The same effect causes `tccutil reset ListenEvent io.github.khawkins98.hush` (bundle-ID-scoped) to fail to clear these quarantine-context entries, leaving stale `Denied` rows in TCC that survive `npm run dev-reset` and block IM from ever reaching `NotDetermined` for developer retesting.
+
+**Fix — app startup.** `crate::permissions::strip_app_quarantine()` is called as the very first operation in the `lib.rs` `setup` hook (before any file I/O, plugin init, or window creation). It first probes with `xattr -p com.apple.quarantine <bundle>` (exits 1 when absent — reliable absence check), and only if quarantine is present does it strip with `xattr -dr com.apple.quarantine <bundle>` and return `true`. When it returns `true`, the setup hook restarts via `exec()` (see below) before any work is done. The relaunch carries no quarantine, so both `IOHIDRequestAccess` (when the user grants) and all future `IOHIDCheckAccess` calls share the same clean identity.
+
+**Critical gotcha: `xattr -dr` exits 0 vacuously.** `xattr -dr` (recursive delete) exits 0 even when NO files in the tree had the attribute — it counts "completed recursion" as success. This caused an earlier version to return `true` on every launch and trigger an infinite restart loop. The fix is to ALWAYS check with `xattr -p` first (non-recursive, exits 1 when absent) before running `xattr -dr`.
+
+**Critical gotcha: `app.handle().restart()` causes an infinite restart loop on macOS 26.** `app.handle().restart()` internally calls `std::process::Command::new(exe).spawn()` + `std::process::exit(0)`. On macOS 26, the quarantine events daemon (or a related subsystem) re-adds `com.apple.quarantine` to the bundle before the spawned child process starts — so the child's `xattr -p` probe sees quarantine present again, strips it, restarts, and the cycle repeats indefinitely. In production this was observed looping 234 times in 8 seconds before the user killed it. The fix is to use `CommandExt::exec()` (replaces the current process image in-place, same PID, bypasses LaunchServices entirely) combined with a `HUSH_QUARANTINE_STRIPPED=1` env-var one-shot guard inherited by the replacement image. See `lib.rs` setup hook for the full implementation.
+
+**Fix — dev-reset.** Changed `scripts/dev-reset.sh` to use `tccutil reset ListenEvent` (no bundle ID) for the IM service instead of the bundle-ID-scoped form. This is a **nuclear reset** (clears *all* apps' Input Monitoring grants for the user — iTerm, Raycast, Alfred, etc.) and is unfortunately the only reliable way to ensure quarantine-context TCC entries are cleared during developer iteration.
+
+Why so heavy-handed? `tccutil reset <service> <bundleID>` matches TCC rows by the exact stored identifier. On macOS 26, rows recorded while the app carried a quarantine xattr appear to use a quarantine-context variant of the identifier that doesn't match the plain bundle ID string. There is no documented `tccutil` flag or TCC API to enumerate rows for a given bundle ID across identity variants, and the TCC database itself (`~/Library/Application Support/com.apple.TCC/TCC.db`) is protected by Full Disk Access, so we can't query it to find the right key. The nuclear reset is the only escape hatch available without FDA.
+
+**Developer impact.** After `npm run dev-reset`, you will need to re-grant Input Monitoring for any other apps that use it (terminal emulators, launchers, keyboard tools). This is a known and accepted cost of the current approach. If Apple ever exposes a `tccutil reset ListenEvent --match-bundle-id-prefix` flag, revisit this.
+
+**Future mitigation.** The `strip_app_quarantine()` fix (applied at app startup, before any `IOHIDRequestAccess` call) should prevent quarantine-context entries from being written in the first place for new installs. Once this fix has been in production long enough that no quarantine-keyed rows exist in the wild, the dev-reset nuclear step could theoretically be scoped back to bundle ID. Not recommended until that's confirmed empirically.
+
+Accessibility stays bundle-scoped to avoid losing unrelated system grants (Accessibility grants require the user to navigate System Settings and toggle manually — a much higher re-grant cost).
+
+**Edge case: `/Applications` (system-owned).** The `xattr -dr` call will fail silently with a permission error if the bundle is in `/Applications` (owned by root:admin). In that case, Gatekeeper's own quarantine-clear flow (triggered automatically when the user first opens the app via Finder) should handle it. The quarantine-TCC mismatch is therefore most acute for `~/Applications` and user-owned paths — exactly the case for DMG-drag installs.
+
+## 2026-05-13 — CGEventTap auto-deny: calling rdev with NotDetermined IM status on macOS 26
+
+**Symptom.** After installing from DMG and launching, the first-run modal appeared correctly for Input Monitoring. The user clicked Allow, the OS prompt appeared, they granted it — but after relaunching, IM showed as Denied in the permissions UI (not Granted, not NotDetermined).
+
+Logs showed the transition happening 12 seconds after launch with no user action possible:
+
+```
+11:31:34 UTC — status=NotDetermined → PTT listener attempted
+11:31:46 UTC — status=Denied       → PTT not started
+```
+
+**Root cause.** `register_ptt_listener` calls `rdev::listen`, which internally calls `CGEventTapCreate`. On macOS 26, calling `CGEventTapCreate` when Input Monitoring is `NotDetermined` auto-creates a TCC `Deny` entry. This is NOT the user denying the prompt — macOS itself generates the deny at the kernel/TCC layer when the unapproved tap request arrives. The 12-second window is exactly the time it takes for the app to warm up to the PTT listener attempt after startup.
+
+**Why this didn't affect tauri:bundle.** Development testing with `tauri:bundle` typically happens with IM already granted (from previous testing cycles). The `NotDetermined` first-run path is only exercised from a clean install (DMG + `dev-reset`).
+
+**Fix.** The PTT startup gate in `lib.rs` was changed from:
+
+```rust
+if im_status != Denied {   // included NotDetermined — wrong!
+    register_ptt_listener()
+}
+```
+
+to:
+
+```rust
+if im_status == Granted || im_status == NotApplicable {  // safe
+    register_ptt_listener()
+}
+```
+
+**Companion fix: in-session PTT start after grant.** Since we no longer attempt the PTT listener at boot for `NotDetermined`, the first-run modal's `request_input_monitoring_permission` IPC now immediately calls `register_ptt_listener` when `IOHIDRequestAccess` returns `true`. This gives the user a working PTT in the same session without needing a restart.
+
+**Developer impact.** None for normal iteration. If testing the first-run IM grant flow, use `npm run dev-reset` (nuclear reset), then `npm run tauri:dmg` → copy → launch → grant IM → PTT should work immediately in that same session.
+
+---
+
+## 2026-05-14 — Full nuclear TCC reset required for IM dev iteration; "Restart Now" UI removed
+
+**Why dev-reset nukes all IM grants.** `tccutil reset ListenEvent io.github.khawkins98.hush` is a no-op for any TCC rows that were recorded while the bundle carried a `com.apple.quarantine` xattr. macOS stores those rows under a quarantine-context identifier (a cdhash variant) that doesn't match the plain bundle ID string. There is no documented way to enumerate or clear rows by bundle ID across identity variants short of Full Disk Access to `TCC.db`. The only escape hatch is `tccutil reset ListenEvent` (no bundle ID), which clears ALL apps' Input Monitoring grants for the current user. This is a known cost: after `npm run dev-reset`, every keyboard tool (iTerm, Raycast, Alfred, etc.) will need IM re-granted in System Settings.
+
+**What this means for users.** This pain is **dev-only**. The `strip_app_quarantine()` call at startup (added in the 2026-05-13 infinite-restart-loop fix) strips the quarantine xattr before any `IOHIDRequestAccess` call, ensuring production grants are always recorded under the clean identity. Users who download and install from DMG should never see quarantine-context rows, so their TCC grants persist across relaunches without any reset.
+
+**"Restart Now" button removed.** All four permission surfaces (FirstRunModal, PermissionsRows, PermissionsDialog, PermissionsTab) previously showed an amber "Push-to-talk is ready — restart Hush to activate it" notice with a "Restart Now" button after IM was granted mid-session. This was added when rdev's `CGEventTap` could only be established at process start. The CGEventTap auto-deny fix (2026-05-13) required not calling rdev at all when IM is `NotDetermined`; as a companion, `request_input_monitoring_permission` now immediately calls `register_ptt_listener` after a successful grant. PTT starts in the same session, no restart required. The "Restart Now" UI was removed entirely — showing it would be misleading and could trigger the `app.restart()` path unnecessarily.
+
+**`imGrantedAtLoad` / `imGrantAttempted` state removed.** Four components tracked these to gate the "Restart Now" notice. With the notice gone, the variables are dead code: removed from FirstRunModal.svelte, PermissionsRows.svelte, PermissionsDialog.svelte, and PermissionsTab.svelte.
+
+---
+
+## 2026-05-13 — Multiple stale DMG mounts cause "permissions don't stick" during dev iteration
+
+**Symptom.** Even after all the TCC identity, quarantine, and CGEventTap fixes, a developer running `npm run tauri:dmg` repeatedly would still see Input Monitoring (or other TCC permissions) appearing not to persist after granting and restarting. The diagnostic `[tcc-id]` log would show a `startup` entry with `input_monitoring=Denied` even right after a nuclear reset and a fresh permission grant.
+
+**Root cause.** Each `npm run tauri:dmg` run opens the freshly-built DMG via `open "$DMG_PATH"`, which mounts it at `/Volumes/Hush`. On the **next** run, the old volume is still mounted, so macOS deduplicates the name to `/Volumes/Hush 1`. After three runs: `/Volumes/Hush`, `/Volumes/Hush 1`, `/Volumes/Hush 2` — all mounted simultaneously, each containing a **different binary** built from different source snapshots, each with a **different ad-hoc cdhash**.
+
+TCC grants are keyed to `(bundle identifier, cdhash)`. A grant recorded during testing from `/Volumes/Hush 1/Hush.app` (build N-1) is invisible to `/Volumes/Hush 2/Hush.app` (build N) — they have different cdhashes. The developer opens app from volume N-1, grants permission, restarts, macOS (or a Dock shortcut) opens from volume N → TCC says "never granted for this identity". The symptom looks identical to the quarantine-context identity mismatch bug (2026-05-13 entry above), but the actual cause is stale mount accumulation.
+
+**Diagnostic.** The `[tcc-id] startup` log added in cc75e67 shows the bundle path. If it contains `/Volumes/Hush 1/` or `/Volumes/Hush 2/` (rather than `~/Applications/Hush.app`), stale mounts are the issue.
+
+**Fix.** `tauri-dmg-macos.sh` now ejects **all** `/Volumes/Hush*` mounts at the start (before the build), not just the `rw.*.Hush*` build-time intermediaries. After the script completes, only one Hush volume is mounted — the freshly-built DMG. Testing from `~/Applications` (after dragging from this one volume) then uses the same binary every time.
+
+**Key lesson.** Ad-hoc code signatures produce unique cdhashes on every build. On a developer machine where the app is rebuilt frequently, every rebuild breaks any pre-existing TCC grants for that bundle. The only reliable TCC-testing workflow is: (1) nuclear reset, (2) single clean build, (3) single install to `~/Applications`, (4) test in one session. Never mix binaries from different build runs in the same test.
+
+---
+
+## 2026-05-13 — Linker-signed vs re-signed TCC identity: old /Applications install poisons dev iteration
+
+**Symptom.** After running `npm run tauri:dmg` and testing the new build, every app launch showed a strange two-launch pattern in the logs: a launch with `[tcc-id]` showing `input_monitoring=Denied` (new binary, `io.github.khawkins98.hush` codesign identifier), followed 14 seconds later by a launch *without* `[tcc-id]` showing `input_monitoring=NotDetermined` (different binary, no `log_tcc_identity` code). No amount of nuclear resets or rebuilds fixed the "Denied" state for the new binary.
+
+**Root cause.** Two separate Hush binaries were running from different locations with different TCC identities:
+
+1. **New DMG build** — re-signed with `codesign --force --deep --sign - --identifier "io.github.khawkins98.hush"` → codesign identifier is `io.github.khawkins98.hush`. TCC had a `Deny` entry for this identifier (created by an earlier intermediate build that called CGEventTap while IM was NotDetermined — see 2026-05-13 CGEventTap entry).
+
+2. **Old `/Applications/Hush.app` install** — a DMG-installed copy from before the re-signing fix. Tauri's linker-signed binary uses an opaque `hush-<hash>` identifier (e.g. `hush-cd9e64654b8864a5`), NOT `io.github.khawkins98.hush`. TCC saw it as a completely different application with a separate (NotDetermined) IM entry.
+
+The user was inadvertently launching BOTH. The old `/Applications/Hush.app` wasn't being cleaned by `dev-reset`, which only removed `~/Applications/Hush.app`.
+
+**Diagnostic.** `codesign --display --verbose=4 /Applications/Hush.app | grep Identifier` — if this shows `hush-<hash>` instead of `io.github.khawkins98.hush`, the install is from a pre-fix DMG and needs to be removed.
+
+**Fix.** `scripts/dev-reset.sh` now removes both `~/Applications/Hush.app` AND `/Applications/Hush.app` so no stale linker-signed installs survive between test runs.
+
+**Key lesson.** Every Tauri build without an explicit `codesign --force --deep --sign - --identifier "<bundle-id>"` step leaves a linker-signed binary with a hash-derived identifier. macOS TCC uses the codesign identifier (not `Info.plist`'s `CFBundleIdentifier`) to key permission rows. Two binaries with different codesign identifiers have completely separate TCC permission universes — grants for one are invisible to the other. The `tauri:bundle` and `tauri:dmg` scripts both run a post-build re-sign to ensure the identifier is always `io.github.khawkins98.hush`.
+
+---
+
+ for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.
+
+**Why event-driven?** The poll-then-classify loop had two false-start vectors: (1) it classified Zoom/Teams as "Meeting" even when neither was the frontmost app (they run as background services), and (2) it fired on every transition even if the mic wasn't active. The new approach inverts the signal: the mic going active is the primary trigger; the frontmost app is a secondary guard.
+
+**Why `kAudioDevicePropertyDeviceIsRunningSomewhere`?** It fires when *any* process starts using the device — including system-level aggregates — unlike `kAudioDevicePropertyDeviceIsRunning` which only fires for the current process.
+
+**Input-only device filter (critical).** The HAL fires the property for output devices too. A simple `is_running_somewhere` on a speaker would false-positive whenever music plays. Filter via `kAudioDevicePropertyStreamConfiguration` + `kAudioObjectPropertyScopeInput`: if `AudioBufferList.mNumberBuffers == 0`, skip the device.
+
+**`active-win-pos-rs` still needed.** The original plan briefly considered using `NSWorkspace.runningApplications` to detect meeting apps. Don't: Zoom, Teams, and Slack all run persistent background processes, so they're always in the running-apps list. `get_active_window()` (frontmost app) is the right gate.
+
+**Memory safety pattern for CoreAudio callbacks.**
+The HAL callback receives a `*mut c_void` client-data pointer. Raw pointer + arbitrary callback thread = tightrope. The safe pattern:
+1. `Arc::new(Notify::new())` — allocate the notify on the heap.
+2. Pass `Arc::as_ptr(&notify) as *mut c_void` to `AudioObjectAddPropertyListener`.
+3. `DeviceListenerHandle` stores an `Arc<Notify>` clone — keeps the allocation alive.
+4. `Drop` calls `AudioObjectRemovePropertyListener` **first** (synchronous call; HAL waits for all in-flight callbacks to drain before returning), then drops the `Arc`.
+5. Multiple devices share the same `Arc` inner data (`Arc::as_ptr` returns the same address for all clones), so the HAL's `clientData` matches exactly on unregister.
+
+**`tokio::sync::Notify` coalescing.** Multiple `notify_one()` calls while the task is busy processing store at most one pending permit. The task checks `is_any_device_active()` after each notification, so coalesced events are fine — we always read fresh state.
+
+**Hot-plug (`kAudioHardwarePropertyDevices`).** Registered on `kAudioObjectSystemObject`. When devices are added/removed, the monitor re-enumerates input devices and updates listener registrations. Without this, plugging in a USB headset after launch wouldn't trigger auto-start.
+
+**`session_emitted` guard.** Without it, each HAL notification while the mic is active (device re-checks after state change) would try to start a second session. Set to `true` on start; reset to `false` only when `MicStateOutcome::ResetSessionEmitted` (mic went quiet) is returned.
+
+**Split the old poller.** `run_meeting_autostart_poller` did two unrelated things: per-app profile auto-activation AND meeting auto-start. They were extracted into `run_profile_autoactivate_poller` (3s poll, macOS + Linux + Windows) and `run_meeting_detection_task` (event-driven, macOS only). Per-app profile auto-activation doesn't need the mic signal; the separation makes each task's responsibility obvious.
+
+**Dead code removed.** `autostart_poller.rs` (325 lines, `ForegroundAppProbe` trait, `TickOutcome` enum, `evaluate_autostart_tick`) and `AutostartDecision::decide()` in `autostart.rs` were deleted. `active-win-pos-rs` dep retained — still used at 3 other call sites (dictation pipeline, manual meeting start, profile poller).
+
+---
+
 ## 2026-05-07 (late) — #612 actual root cause: ORT silently uses Metal/MPS even with `CPU::default()` EP
 
 After a full day of fixes targeting various malloc-side hypotheses, the **vmmap region breakdown** finally pointed at the right layer. Captured during a 5-min meeting with diarization on:
@@ -2191,7 +2380,9 @@ for name in os.listdir(vol_dir):
 
 ## 2026-05-12 — Meeting auto-detection: existing poller gaps and recommended replacement architecture
 
-### What exists (as of v0.5.3)
+> **Status: Implemented in PR #668 / commit d9fae1e.** The sections below document the pre-#665 state and the research that informed the replacement. They are historical context, not current architecture. For the current design see `ARCHITECTURE.md → Meeting auto-detection`.
+
+### What existed (v0.5.3, now removed)
 
 - `meeting/autostart_poller.rs`: 3-second tick using `active-win-pos-rs::get_active_window()` — returns the _frontmost_ app only
 - `meeting/classifier.rs`: `AppClassifier` bundle-ID/process-name table → `MeetingAppKind`
@@ -2224,12 +2415,12 @@ for name in os.listdir(vol_dir):
 
 **Windows:** `IAudioSessionManager2` + `IAudioSessionControl2::GetProcessId()` from WASAPI — full Rust implementation in `toeverything/AFFiNE:packages/frontend/native/media_capture/src/windows/microphone_listener.rs`.
 
-### What to retire when implementing #665
+### What was retired in #665
 
-- `meeting/autostart_poller.rs` — the polling loop
-- `meeting/autostart.rs` — foreground-app decision logic
-- Possibly `active-win-pos-rs` dep (check `lib.rs` — it also uses `get_active_window()` to stamp the app name on new session rows; either keep the dep for that use or replace with `NSWorkspace.frontmostApplication`)
-- Keep `meeting/classifier.rs` — the `AppClassifier` bundle-ID table is directly reusable for the Layer 2 process scan
+- `meeting/autostart_poller.rs` — the polling loop (deleted)
+- `AutostartDecision::decide()` in `meeting/autostart.rs` — foreground-app decision logic (deleted)
+- `active-win-pos-rs` dep retained — `lib.rs` also uses `get_active_window()` to stamp the app name on new session rows and for per-app profile detection
+- `meeting/classifier.rs` kept — the `AppClassifier` bundle-ID table is reused in the new event-driven path
 
 ---
 
