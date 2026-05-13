@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DMG installs: permissions now persist across restarts on macOS 26.** Two silent macOS 26 bugs broke Input Monitoring and Microphone grants for users who installed from the DMG:
+  1. `com.apple.quarantine` on the `.app` bundle caused TCC to record grants under a hash-based quarantine identity instead of the stable bundle ID `io.github.khawkins98.hush`. The app now strips the quarantine xattr on first launch and replaces its process image via `exec()` (same PID) before doing any other initialisation, so TCC always sees the correct identity.
+  2. The PTT (push-to-talk) subsystem attempted a low-level `CGEventTapCreate` call when Input Monitoring was `NotDetermined`. On macOS 26, this silently created a permanent TCC Deny entry before the user could grant access via the first-run wizard. The listener is now gated strictly on `Granted` (or `NotApplicable` on non-macOS).
+- **Input Monitoring grant activates PTT immediately — no restart required.** Previously users had to quit and reopen Hush after granting Input Monitoring before push-to-talk would work. The PTT listener now starts in the same session the moment the grant is confirmed.
+- **Removed stale "Restart Now" prompt after Input Monitoring grant.** With the in-session PTT fix above, the hint was both misleading and unnecessary.
+
 ## [0.5.3] - 2026-05-12
 
 ### Added
