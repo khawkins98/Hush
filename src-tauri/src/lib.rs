@@ -480,6 +480,21 @@ pub fn run() {
         // `settings/+page.svelte`.
         .plugin(tauri_plugin_os::init())
         .setup(|app| {
+            // Fast-path quarantine check: strip com.apple.quarantine and
+            // immediately restart before doing any real initialization work.
+            // TCC identity is baked in at process launch time from the
+            // quarantine state; we must restart to get a clean identity.
+            // The check uses `xattr -p` (probe) before `xattr -dr` (strip)
+            // so this is a no-op on non-DMG launches and never loops.
+            // See learnings.md 2026-05-13 and permissions/macos.rs for
+            // the full rationale.
+            if crate::permissions::strip_app_quarantine() {
+                tracing::info!(
+                    "quarantine stripped; restarting app to establish clean TCC identity"
+                );
+                app.handle().restart();
+            }
+
             // The platform app-data directory is only resolvable from a
             // Tauri `App` handle, so state construction has to live in
             // `setup` rather than at the top of `run`. Tauri's own async
@@ -814,26 +829,6 @@ pub fn run() {
                 tracing::error!(error = ?e, "failed to register default toggle hotkey");
             }
 
-            // Strip com.apple.quarantine from the .app bundle before any TCC
-            // calls. On macOS 26, a process's TCC identity is baked in at
-            // LAUNCH TIME based on the quarantine state of the bundle. Apps
-            // dragged from a DMG carry the quarantine xattr, so their
-            // IOHIDRequestAccess grant is recorded under a quarantine-context
-            // identity. After Gatekeeper clears the xattr on first-run
-            // approval, the "clean" identity used by subsequent launches
-            // doesn't match — IOHIDCheckAccess returns Denied/NotDetermined.
-            //
-            // The fix: strip the xattr and restart BEFORE any window is
-            // shown. The relaunch presents the clean identity, so both
-            // IOHIDRequestAccess (when the user grants) and every future
-            // IOHIDCheckAccess use the same identity. See learnings.md
-            // 2026-05-13.
-            if crate::permissions::strip_app_quarantine() {
-                tracing::info!(
-                    "quarantine stripped; restarting app to establish clean TCC identity"
-                );
-                app.handle().restart();
-            }
             // PTT runs through `rdev` on a dedicated thread (rdev's listen
             // is blocking and installs a low-level OS hook). On macOS 12+,
             // `CGEventTapCreate` (called internally by rdev) does NOT show an
