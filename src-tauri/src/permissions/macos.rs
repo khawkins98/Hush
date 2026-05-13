@@ -175,11 +175,26 @@ pub fn strip_app_quarantine() -> bool {
     for _ in 0..5 {
         let Some(parent) = path.parent() else { return false };
         if parent.extension().map(|e| e == "app").unwrap_or(false) {
-            let result = std::process::Command::new("xattr")
+            // First CHECK if the bundle root has quarantine set.
+            // `xattr -p` exits 0 if the named attribute exists on the path,
+            // exits 1 if absent. We MUST do this before the `-dr` strip because
+            // `xattr -dr` (recursive delete) exits 0 even when no files carried
+            // the attribute — a vacuous success that would make us return `true`
+            // on every launch, causing an infinite restart loop.
+            let check = std::process::Command::new("xattr")
+                .args(["-p", "com.apple.quarantine"])
+                .arg(parent)
+                .output();
+            let present = matches!(&check, Ok(o) if o.status.success());
+            if !present {
+                return false;
+            }
+            // Quarantine confirmed present — strip recursively.
+            let strip = std::process::Command::new("xattr")
                 .args(["-dr", "com.apple.quarantine"])
                 .arg(parent)
                 .output();
-            return match result {
+            return match strip {
                 Ok(o) if o.status.success() => {
                     tracing::info!(
                         bundle = ?parent,
@@ -187,14 +202,11 @@ pub fn strip_app_quarantine() -> bool {
                     );
                     true
                 }
-                // xattr -d exits 1 when the attribute is not present — expected
-                // for non-DMG installs; not a warning.
-                Ok(o) if o.status.code() == Some(1) => false,
                 Ok(o) => {
                     tracing::debug!(
                         status = ?o.status,
                         stderr = %String::from_utf8_lossy(&o.stderr),
-                        "xattr quarantine strip: unexpected exit status"
+                        "xattr quarantine strip: unexpected exit status after confirmed presence"
                     );
                     false
                 }
