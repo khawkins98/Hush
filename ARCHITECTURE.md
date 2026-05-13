@@ -305,7 +305,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 
 ## Frontend recording lifecycle
 
-`lib/state/dictation.svelte.ts` owns the recording lifecycle as a discriminated-union state machine:
+`lib/state/dictation.svelte.ts` owns the dictation recording lifecycle as a discriminated-union state machine:
 
 ```
 type RecordingPhase =
@@ -330,6 +330,15 @@ type RecordingPhase =
 - `_stopMeeting()` — calls `meeting_stop_manual` (which awaits pump drain before returning), then transitions through `transcribing` while fetching `meeting_session_get` once — the result is shared for both clipboard copy and the result block.
 
 **Stop-failure recovery:** if `_stopMeeting` throws, the catch block calls `meeting_active_session` directly. If the session is gone on the backend → `idle`. If still live → restore to `recording` so the user can retry.
+
+**Meeting-only active state.** Auto-detected meeting sessions run through `meeting-sessions.svelte.ts` (`meeting.activeId`, `meeting.busy`, `meeting.stopSession()`), not through the `dictation` state machine. `DictationSection.svelte` derives:
+
+```
+meetingOnlyActive = meeting.activeId !== null && !dictation.recording && !dictation.busy
+anyRecordingActive = dictation.recording || meetingOnlyActive
+```
+
+`RecordPanel` receives `meetingOnlyActive` and enters a red-waveform meeting mode when true. `+page.svelte` derives the same pair and wires all global signals — document title, tray `UiRecordingState`, sidebar recording dot, toggle hotkey, command palette — to `anyRecordingActive` so they respond to both dictation and meeting sessions.
 
 **Import path:** `.svelte.ts` modules must be imported via the `.svelte` path (e.g. `import { dictation } from '$lib/state/dictation.svelte'`), not `.ts`.
 
