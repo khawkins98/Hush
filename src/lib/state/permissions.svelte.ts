@@ -5,6 +5,7 @@ import type {
   PermissionsHealth,
   PermissionStatuses,
 } from "$lib/types";
+import { nav } from "$lib/state/nav.svelte";
 
 // Central store for macOS permission diagnostic state shared across
 // the main window's onboarding, dictation, and health surfaces.
@@ -55,6 +56,13 @@ const anyPermsStale = $derived(
     && (permissionHealth.microphone === "stale"
       || permissionHealth.inputMonitoring === "stale"),
 );
+// The stale-banner is suppressed while the user is already on the
+// Permissions tab — they're actively looking at it.
+const showStaleBanner = $derived(
+  anyPermsStale
+    && !staleBannerDismissed
+    && !(nav.activeSection === "settings" && nav.settingsActiveTab === "permissions"),
+);
 
 export const permissions = {
   // ---- State getters ----
@@ -103,6 +111,12 @@ export const permissions = {
 
   get anyPermsStale() {
     return anyPermsStale;
+  },
+
+  /** True when the stale-permission banner should be shown.
+   *  Suppressed while the user is actively on the Permissions tab. */
+  get showStaleBanner() {
+    return showStaleBanner;
   },
 
   // ---- Actions ----
