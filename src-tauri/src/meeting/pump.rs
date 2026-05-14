@@ -525,7 +525,10 @@ fn tick_drain_sources(
                             emit_meeting_source_failed(
                                 ctx.event_emitter.as_ref(),
                                 ctx.session_id,
-                                ctx.sources[i].kind_label(),
+                                // speaker_tag() ("mic"/"system") matches the
+                                // frontend's "mic" branch and the lifecycle
+                                // startup emit (#810/#815).
+                                ctx.sources[i].speaker_tag(),
                                 "audio device disconnected mid-session",
                                 true,
                             );

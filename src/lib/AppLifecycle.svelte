@@ -245,6 +245,8 @@
       lostDevice: string;
       newDevice?: string;
     }>(Events.AudioDeviceLost, (e) => {
+      // Ignore stale events from a previous session (#817).
+      if (e.payload.sessionId !== meeting.activeId) return;
       console.debug(
         "[AudioDeviceLost]",
         e.payload.sourceKind,
@@ -252,10 +254,12 @@
         "→",
         e.payload.newDevice ?? "no fallback",
       );
+      const srcLabel =
+        e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
       if (e.payload.newDevice) {
-        meeting.sourceFailedNotice = `Microphone "${e.payload.lostDevice}" disconnected — switched to "${e.payload.newDevice}".`;
+        meeting.sourceFailedNotice = `${srcLabel} "${e.payload.lostDevice}" disconnected — switched to "${e.payload.newDevice}".`;
       } else {
-        meeting.sourceFailedNotice = `Microphone "${e.payload.lostDevice}" disconnected — recording stopped.`;
+        meeting.sourceFailedNotice = `${srcLabel} "${e.payload.lostDevice}" disconnected — recording stopped.`;
       }
     });
 
@@ -264,6 +268,8 @@
       sourceKind: string;
       restoredDevice: string;
     }>(Events.AudioDeviceRestored, (e) => {
+      // Ignore stale events from a previous session (#817).
+      if (e.payload.sessionId !== meeting.activeId) return;
       console.debug(
         "[AudioDeviceRestored]",
         e.payload.sourceKind,
