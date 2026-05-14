@@ -435,6 +435,9 @@ jobs:
       - name: Type check
         run: npm run check
 
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
   e2e:
     name: Frontend e2e (Playwright)
     runs-on: ubuntu-latest
