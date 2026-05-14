@@ -280,15 +280,13 @@ pub(crate) async fn download_diarizer_model_inner(
         )
         .await;
 
-        // Drop the cancel handle on the way out, success or
-        // failure. Same pattern the Whisper download uses; the
-        // shared `downloads` map is the rejection-guard so
-        // forgetting to clean up here would silently block
-        // subsequent download attempts (audit-2 R-2).
-        if let Ok(mut guard) = downloads_for_task.lock() {
-            guard.remove(&id_for_task);
-        }
-
+        // Emit the completion or failure event first, then remove
+        // the cancel handle from the map. Order matters: tests
+        // (and any future callers) poll the map for handle removal
+        // as a "task is fully done" signal; emitting before
+        // clearing ensures the event is visible as soon as the
+        // handle disappears (no TOCTOU window between "handle
+        // gone" and "event posted").
         match result {
             Ok(()) => {
                 // Hot-swap the diarizer. If OnnxDiarizer::new
@@ -313,7 +311,7 @@ pub(crate) async fn download_diarizer_model_inner(
                         emitter_for_task.emit(
                             "model:download-done",
                             &crate::ipc::commands::models::DownloadStatus {
-                                id: id_for_task,
+                                id: id_for_task.clone(),
                                 message: None,
                             },
                         );
@@ -330,7 +328,7 @@ pub(crate) async fn download_diarizer_model_inner(
                         emitter_for_task.emit(
                             "model:download-failed",
                             &crate::ipc::commands::models::DownloadStatus {
-                                id: id_for_task,
+                                id: id_for_task.clone(),
                                 message: Some(format!("model load failed: {e:#}")),
                             },
                         );
@@ -346,11 +344,20 @@ pub(crate) async fn download_diarizer_model_inner(
                 emitter_for_task.emit(
                     "model:download-failed",
                     &crate::ipc::commands::models::DownloadStatus {
-                        id: id_for_task,
+                        id: id_for_task.clone(),
                         message: Some(format!("{e:#}")),
                     },
                 );
             }
+        }
+
+        // Drop the cancel handle after all notifications are
+        // sent. Removing here (not before the match) means any
+        // poller that uses handle-absence as a "task fully done"
+        // signal already sees the posted event — no observable
+        // window between "handle gone" and "event emitted".
+        if let Ok(mut guard) = downloads_for_task.lock() {
+            guard.remove(&id_for_task);
         }
     });
 
