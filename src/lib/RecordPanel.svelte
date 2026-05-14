@@ -16,6 +16,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
   import AudioWaveform from "./AudioWaveform.svelte";
+  import MeetingLiveTranscriptSection from "./MeetingLiveTranscriptSection.svelte";
   import StatusLine from "./StatusLine.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import { Events } from "./events";
@@ -23,7 +24,6 @@
     listenForStatusLineChanges,
     readStatusLineEnabled,
   } from "./status-line";
-  import { joinUtterances } from "./transcript-format";
   import type { MeetingSessionDetail } from "./types";
 
   type Props = {
@@ -81,35 +81,6 @@
     leftAdjunct,
     rightAdjunct,
   }: Props = $props();
-
-  // Live transcript text — joined from finalized utterances +
-  // in-flight partials in the active meeting session. Speaker
-  // labels are prefixed when ≥2 distinct speakers appear in the
-  // session (#478). With only one speaker, the label is just
-  // noise on every line — hide it. The first time a second
-  // speaker is detected, all earlier utterances re-render with
-  // labels (the prior "unlabelled" lines retroactively belong
-  // to the first speaker, which the eye reads as natural
-  // turn-taking). Mirrors the join in
-  // `copyMeetingSessionToClipboard` so live and clipboard text
-  // come out identical. Empty when no active session or no
-  // utterances yet.
-  let liveTranscriptText = $derived.by(() => {
-    if (!meetingActiveDetail) return "";
-    const finals = meetingActiveDetail.utterances ?? [];
-    const partials = meetingActiveDetail.currentPartials ?? [];
-    return joinUtterances([...finals, ...partials], "\n");
-  });
-  let showLiveTranscript = $derived(
-    recording && liveTranscriptText.trim().length > 0,
-  );
-  // Show a waiting-for-speech placeholder when a meeting-only session is
-  // active but no utterances have landed yet. Mirrors the banner's prior
-  // "Waiting for speech…" copy so the user gets feedback that capture is
-  // running even when the room is quiet.
-  let showMeetingWaiting = $derived(
-    meetingOnlyActive && liveTranscriptText.trim().length === 0,
-  );
 
   // F5 status line — opt-in display gated by a localStorage flag,
   // re-applied via Tauri event when the Settings toggle flips so
@@ -179,28 +150,6 @@
       cancelAnimationFrame(raf);
       raf = undefined;
     }
-  });
-
-  // Typing indicator for live transcript (#670). When recording is active
-  // and no new partial has arrived for 1.5 s, show a pulsing "…" so the
-  // UI doesn't read as frozen between Whisper inference cycles.
-  let showTypingIndicator = $state(false);
-
-  $effect(() => {
-    const text = liveTranscriptText;
-    const isRecording = recording;
-
-    if (!isRecording || !text) {
-      showTypingIndicator = false;
-      return;
-    }
-
-    // Text changed — hide indicator and restart the idle timer.
-    showTypingIndicator = false;
-    const timer = setTimeout(() => {
-      showTypingIndicator = true;
-    }, 1500);
-    return () => clearTimeout(timer);
   });
 
   // Waveform mood priority: error > recording > processing > idle.
@@ -355,39 +304,11 @@
   </p>
 </div>
 
-{#if showLiveTranscript}
-  <!--
-    Live transcript pane during meeting-pump recording. The
-    streaming pump produces partials every few seconds and
-    finalises them once the language model resolves a chunk —
-    text appears with a 3–5 s delay against speech but updates
-    continuously so the user sees what's been captured. Empty
-    while no utterances have landed yet (silence, very short
-    sessions). Idle / non-meeting recording paths skip this
-    surface entirely (no streaming source).
-  -->
-  <section
-    class="live-transcript"
-    aria-label="Live transcript"
-    aria-live="polite"
-    data-testid="live-transcript"
-  >
-    <header class="live-transcript-header">
-      <span class="live-transcript-dot" aria-hidden="true"></span>
-      Live transcript
-    </header>
-    <p class="live-transcript-body">
-      {liveTranscriptText}<!--
-        Typing indicator (#670): after ~1.5 s with no new partial,
-        show a pulsing ellipsis so the UI doesn't read as frozen
-        during Whisper inference cycles. aria-hidden because the
-        transcript text already conveys state to screen readers.
-      -->{#if showTypingIndicator}<span class="typing-indicator" aria-hidden="true"> …</span>{/if}
-    </p>
-  </section>
-{:else if showMeetingWaiting}
-  <p class="meeting-waiting" aria-live="polite">Waiting for speech…</p>
-{/if}
+<MeetingLiveTranscriptSection
+  {meetingActiveDetail}
+  {recording}
+  {meetingOnlyActive}
+/>
 
 {#if statusLineEnabled}
   <StatusLine
@@ -479,17 +400,6 @@
      immediately clear this is a meeting capture, not dictation. */
   .record-stage.meeting .record-waveform {
     --audio-waveform-bar-color: #dc2626;
-  }
-
-  /* Waiting-for-speech placeholder shown when a meeting-only session
-     is active but no utterances have landed yet. Quiet italic copy so
-     the live-transcript area's absence doesn't look like a layout gap. */
-  .meeting-waiting {
-    margin: 0;
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    font-style: italic;
-    text-align: center;
   }
 
   /* Big waveform — overrides AudioWaveform's default 60 × 16 px
@@ -611,69 +521,6 @@
   }
   .record-time.live {
     color: var(--danger);
-  }
-
-  /* Live transcript pane — surfaced during meeting-pump
-     recording so the user sees what the streaming whisper has
-     resolved as text accumulates. Looks like a quiet card
-     framed by `--bg-sidebar` so it sits below the centerpiece
-     without competing for visual weight. */
-  .live-transcript {
-    background: var(--bg-sidebar);
-    border-radius: var(--radius-md);
-    padding: 0.75rem 1rem;
-    max-height: 12rem;
-    overflow-y: auto;
-  }
-  .live-transcript-header {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    font-size: 0.68rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 0.45rem;
-  }
-  .live-transcript-dot {
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background-color: var(--danger);
-    animation: live-transcript-pulse 1.2s ease-in-out infinite;
-  }
-  .live-transcript-body {
-    margin: 0;
-    font-size: 0.92rem;
-    line-height: 1.5;
-    color: var(--text-primary);
-    white-space: pre-wrap;
-  }
-  /* Typing indicator (#670) — pulsing ellipsis appended to the live
-     transcript body after ~1.5 s with no new partial. Signals that
-     Whisper is still inferring rather than the stream having stalled. */
-  .typing-indicator {
-    color: var(--text-muted);
-    animation: typing-fade 1.2s ease-in-out infinite;
-  }
-  @keyframes typing-fade {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.25; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .typing-indicator {
-      animation: none;
-    }
-  }
-  @keyframes live-transcript-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .live-transcript-dot {
-      animation: none;
-    }
   }
 
   /* Status label below the time — the verb / state copy. */
