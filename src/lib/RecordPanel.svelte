@@ -217,6 +217,7 @@
       {#if !recording}
         <button
           class="record-btn"
+          data-testid="record-start-btn"
           onclick={onStart}
           disabled={busy || !hasUsableSource || noModelInstalled}
           aria-label={busy

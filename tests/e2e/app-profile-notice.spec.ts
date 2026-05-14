@@ -48,7 +48,7 @@ test.describe("app profile notice", () => {
     const notice = page.locator('[data-testid="app-profile-notice"]');
     await expect(notice).toBeVisible();
 
-    await notice.getByRole("button", { name: /Dismiss/i }).click();
+    await notice.getByTestId("app-profile-notice-dismiss").click();
     await expect(notice).toHaveCount(0);
   });
 });

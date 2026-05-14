@@ -243,6 +243,7 @@
         <button
           type="button"
           class="app-profile-notice-dismiss"
+          data-testid="app-profile-notice-dismiss"
           aria-label="Dismiss profile-switched notice"
           onclick={() => {
             dictation.clearAppProfileNotice();
