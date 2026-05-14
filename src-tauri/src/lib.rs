@@ -1304,11 +1304,10 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                 // are rebuilt in the background, ready for the next call.
                 session_emitted = false;
                 tracing::info!("meeting detection: mic inactive — auto-stopping session");
-                if let Err(e) =
-                    crate::ipc::commands::meeting::stop_meeting_and_rebuild_transcriber(
-                        &app, &state,
-                    )
-                    .await
+                if let Err(e) = crate::ipc::commands::meeting::stop_meeting_and_rebuild_transcriber(
+                    &app, &state,
+                )
+                .await
                 {
                     tracing::warn!(
                         error = ?e,
