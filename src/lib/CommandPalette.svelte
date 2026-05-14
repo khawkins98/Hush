@@ -101,15 +101,25 @@
   // mutate a Set during iteration. The original implementation
   // worked but read fragile — Svelte's keyed-list patches don't
   // guarantee left-to-right re-evaluation of `{@const}` blocks.
-  // Computing the {action, showGroup} pairs here gives us a pure
-  // derived view that the each loop can render straight.
+  // Computing the {action, showGroup, selectableIndex} tuples here
+  // gives us a pure derived view that the each loop can render
+  // straight. `selectableIndex` is -1 for disabled rows, otherwise
+  // the index within the `selectable` array used for keyboard nav
+  // (avoids a per-row O(n) `findIndex` inside the template).
   let rows = $derived.by(() => {
-    const out: { action: CommandAction; showGroup: boolean }[] = [];
+    const out: {
+      action: CommandAction;
+      showGroup: boolean;
+      selectableIndex: number;
+    }[] = [];
     let lastGroup: string | undefined;
+    let selectableCount = 0;
     for (const action of filtered) {
       const group = action.group;
       const showGroup = group !== undefined && group !== lastGroup;
-      out.push({ action, showGroup });
+      const selectableIndex =
+        action.enabled !== false ? selectableCount++ : -1;
+      out.push({ action, showGroup, selectableIndex });
       if (group !== undefined) lastGroup = group;
     }
     return out;
@@ -267,13 +277,10 @@
             No matching commands.
           </p>
         {:else}
-          {#each rows as { action, showGroup }, i (action.id)}
+          {#each rows as { action, showGroup, selectableIndex }, i (action.id)}
             {#if showGroup && action.group !== undefined}
               <p class="cmdpal-group">{action.group}</p>
             {/if}
-            {@const selectableIndex = selectable.findIndex(
-              ({ i: idx }) => idx === i,
-            )}
             {@const isHighlighted =
               selectableIndex !== -1 && selectableIndex === highlight}
             <button
