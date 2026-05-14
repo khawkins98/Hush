@@ -203,6 +203,28 @@ pub(super) fn poisoned<T>(_: PoisonError<T>) -> IpcError {
     IpcError::Internal("internal state lock poisoned".to_owned())
 }
 
+/// Validate a user-chosen export path returned by the dialog plugin.
+/// Rejects paths with `..` components, which could escape the intended
+/// location regardless of surrounding directory. The dialog plugin
+/// already anchors paths to user-accessible locations; this guard
+/// enforces that a compromised frontend cannot use `..` to write
+/// somewhere unexpected.
+pub(super) fn validate_export_path(path: &str) -> IpcResult<()> {
+    use std::path::{Component, Path};
+    if path.is_empty() {
+        return Err(IpcError::Internal("export path is empty".into()));
+    }
+    if Path::new(path)
+        .components()
+        .any(|c| c == Component::ParentDir)
+    {
+        return Err(IpcError::Internal(format!(
+            "unsafe export path rejected: {path:?}"
+        )));
+    }
+    Ok(())
+}
+
 /// Inspect an error chain and, if it looks permission-shaped,
 /// return the permission name (`"microphone"` or `"input-monitoring"`)
 /// so a caller can promote it to [`IpcError::PermissionDenied`] (#386).

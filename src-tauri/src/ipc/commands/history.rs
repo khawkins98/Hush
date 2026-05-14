@@ -19,7 +19,7 @@ use tauri::State;
 use crate::history::HistoryEntry;
 
 use super::super::AppState;
-use super::{IpcError, IpcResult};
+use super::{validate_export_path, IpcError, IpcResult};
 
 /// Paginated list of history rows, newest first.
 ///
@@ -80,15 +80,13 @@ pub async fn history_export_row_csv(
     id: i64,
     path: String,
 ) -> IpcResult<()> {
-    let all = state
+    validate_export_path(&path)?;
+    let entry = state
         .data
         .history
-        .list(i64::MAX, 0)
+        .get_by_id(id)
         .await
-        .map_err(|e| IpcError::History(format!("history list: {e:#}")))?;
-    let entry = all
-        .into_iter()
-        .find(|e| e.id == id)
+        .map_err(|e| IpcError::History(format!("history get: {e:#}")))?
         .ok_or_else(|| IpcError::History(format!("history row {id} not found")))?;
     let body = history_csv_for_entries(std::slice::from_ref(&entry))
         .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;

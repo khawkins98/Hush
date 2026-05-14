@@ -942,6 +942,18 @@ pub(super) async fn diarize_and_dispatch_merged(
     // bucket vec.
     let source_labels: Vec<String> = buckets.iter().map(|b| b.source_label.clone()).collect();
 
+    // Fast path: a single source skips the merge-sort-label-split entirely.
+    // Most Record-mode sessions use only one source (mic-only), so the common
+    // path avoids the O(N log N) sort and the diarizer overhead entirely.
+    // Dispatch the single bucket's utterances directly using the source's own
+    // label (same outcome as the full path with `source_labels.len() == 1`).
+    if source_labels.len() == 1 {
+        let bucket = buckets.into_iter().next().unwrap();
+        dispatch_utterances(session_id, &source_labels[0], bucket.utterances, partials, repo)
+            .await;
+        return;
+    }
+
     // Tag each utterance with its source bucket index AND its
     // per-utterance audio chunk, then move into a flat
     // `(idx, utterance, audio)` vec. Audio comes from the pump's
