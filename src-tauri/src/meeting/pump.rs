@@ -205,6 +205,10 @@ impl PumpTickState {
 /// from the spawn point's perspective, and a transient drain or
 /// inference failure shouldn't tear down the user's session.
 pub(super) async fn run_pump(mut ctx: PumpContext) {
+    // Reset diarizer cluster state at the top of every session so speaker
+    // IDs from a previous meeting don't bleed into this one (#794).
+    ctx.diarize.reset();
+
     tracing::info!(
         session_id = ctx.session_id,
         sources = ?ctx.sources.iter().map(|s| s.kind_label()).collect::<Vec<_>>(),

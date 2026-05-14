@@ -110,29 +110,83 @@ pub(super) fn start_dictation_inner(state: &AppState, source: AudioSource) -> Ip
     Ok(())
 }
 
-/// Strip whisper-style placeholder tokens from the transcribed text
-/// (`[BLANK_AUDIO]`, `[SOUND]`, etc.). Whisper emits these as
-/// literal bracketed tokens; pasting them into the user's editor
+/// Strip whisper-style placeholder tokens from the transcribed text.
+/// Whisper emits bracketed sentinel tokens like `[BLANK_AUDIO]`, `[MUSIC]`,
+/// etc. to indicate non-speech segments; pasting them into the user's editor
 /// would surface the model's internal vocabulary as transcript noise.
+///
+/// Only tokens on the explicit allowlist below are stripped. Preserving
+/// user text that happens to be inside square brackets (e.g. stage
+/// directions, citations) avoids silently swallowing real content.
 pub(super) fn strip_whisper_brackets(input: &str) -> String {
-    // Build the output one char at a time; skip anything inside `[…]`.
-    // The brackets are always single-line in whisper's output, so a
-    // simple bracket-depth counter is enough — no need for a regex
-    // dep just for this.
+    /// Known Whisper non-speech sentinel tokens (case-insensitive).
+    /// Source: whisper.cpp's `token_to_str` table and `kn_models` vocab.
+    const SENTINELS: &[&str] = &[
+        "BLANK_AUDIO",
+        "MUSIC",
+        "SOUND",
+        "NOISE",
+        "INAUDIBLE",
+        "APPLAUSE",
+        "LAUGHTER",
+        "SILENCE",
+        "BG",
+        "BACKGROUND NOISE",
+        // Whisper also emits whitespace-padded variants; trim handles those.
+    ];
+
+    // Walk the string collecting bracket spans. For each span, only
+    // remove it when the inner text (trimmed, uppercased) is an
+    // allowlisted sentinel. Non-sentinel bracket spans are kept verbatim.
     let mut out = String::with_capacity(input.len());
-    let mut depth: i32 = 0;
-    for ch in input.chars() {
-        match ch {
-            '[' => depth += 1,
-            ']' if depth > 0 => depth -= 1,
-            _ if depth == 0 => out.push(ch),
-            _ => {}
+    let mut chars = input.char_indices().peekable();
+
+    while let Some((_, ch)) = chars.next() {
+        if ch != '[' {
+            out.push(ch);
+            continue;
+        }
+        // Collect everything up to the matching ']', handling nested
+        // brackets the same way the old depth-counter did.
+        let mut depth: i32 = 1;
+        let mut inner = String::new();
+        let mut closed = false;
+        for (_, c) in chars.by_ref() {
+            match c {
+                '[' => {
+                    depth += 1;
+                    inner.push(c);
+                }
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        closed = true;
+                        break;
+                    }
+                    inner.push(c);
+                }
+                _ => inner.push(c),
+            }
+        }
+        if !closed {
+            // Unmatched '[' — emit it literally and continue.
+            out.push('[');
+            out.push_str(&inner);
+            continue;
+        }
+        let trimmed_upper = inner.trim().to_uppercase();
+        if SENTINELS.iter().any(|s| trimmed_upper == *s) {
+            // Sentinel token — drop it (including surrounding brackets).
+        } else {
+            // Not a sentinel — preserve the original brackets + content.
+            out.push('[');
+            out.push_str(&inner);
+            out.push(']');
         }
     }
-    // Collapse whitespace runs introduced by stripped brackets and
-    // trim the edges. Splitting on whitespace and re-joining is
-    // simpler than walking the string with a state machine and is
-    // cheap on the ms-scale strings whisper produces.
+
+    // Collapse whitespace runs introduced by stripped sentinels and
+    // trim the edges.
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

@@ -180,7 +180,11 @@ export const dictation = {
       const sources = await invoke<AudioSourceListing[]>("audio_list_sources");
       audio.setSources(sources);
       const mics = sources.filter((s) => s.kind === "microphone");
-      const def = mics.find((s) => s.isDefault) ?? mics[0];
+      // Preserve the user's previously-chosen mic if it's still present;
+      // only fall back to the default when the chosen device disappeared.
+      const prevMic = audio.selected;
+      const stillPresent = mics.find((s) => s.id === prevMic);
+      const def = stillPresent ?? mics.find((s) => s.isDefault) ?? mics[0];
       if (def) {
         audio.selected = def.id;
         audio.meetingMicId = def.id;
