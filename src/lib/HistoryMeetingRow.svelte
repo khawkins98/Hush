@@ -17,6 +17,9 @@
   second click within 5 s fires. Per-row arming with a 5 s timer.
   Cross-row coordination (only one row armed at a time across the
   list) lives in the parent so each row can stay self-contained.
+
+  Action buttons are icon-only and always visible (right-aligned),
+  matching the dictation row redesign.
 -->
 <script lang="ts">
   import type {
@@ -52,7 +55,7 @@
 
   let { session, confirming, onLoadDetail, onDelete, onExport, onCopy }: Props = $props();
 
-  // Local copy-in-flight state so the button shows "Copying…" while
+  // Local copy-in-flight state so the button shows a spinner while
   // the clipboard write (which may involve a fetch) is pending.
   let copyPending = $state(false);
 
@@ -66,12 +69,8 @@
   }
 
   // Open/close state for the Export popover. Toggled by the
-  // `Export ▾` button; closes itself once the user picks a
-  // format. We keep this dead simple — a single boolean — rather
-  // than wiring a custom click-outside handler. The parent `<li>`
-  // element catches the focus + the inline-flow positioning means
-  // a stale-open popover isn't visually disruptive while the user
-  // continues to scroll.
+  // download icon button; closes itself once the user picks a
+  // format.
   let exportOpen = $state(false);
 
   function pickFormat(format: MeetingExportFormat) {
@@ -162,12 +161,9 @@
 
   // Show speaker labels only when there are ≥2 distinct labels
   // across the session's utterances (#478). Single-speaker
-  // sessions (one person dictating into the mic, the diarizer
-  // labelling everything as "Speaker A" or just "mic") render
-  // bare text — repeating the same label on every line is just
-  // noise. Once a second speaker is detected the labels become
-  // useful context for the prior lines too, so we apply the
-  // decision uniformly across the transcript.
+  // sessions render bare text — repeating the same label on every
+  // line is noise. Once a second speaker is detected the labels
+  // become useful context for the prior lines too.
   let showSpeakerLabels = $derived.by(() => {
     if (!detail) return false;
     const distinct = new Set(
@@ -180,111 +176,153 @@
 </script>
 
 <li class="history-row meeting-row" class:confirming-active={confirming} data-kind="meeting" data-meeting-id={session.id}>
-  <div class="meeting-meta">
-    <span class="meeting-app">{session.appName}</span>
-    <span class="meeting-started">{formatStarted(session.startedAt)}</span>
-    <span class="meeting-duration">
-      {formatDuration(session.startedAt, session.endedAt)}
-    </span>
-    <span class="meeting-utterances">
-      {session.utteranceCount} utterance{session.utteranceCount === 1 ? "" : "s"}
-    </span>
-    {#if session.sources && session.sources.length > 0}
-      <span class="meeting-sources" aria-label="Audio sources">
-        {sourceListLabel(session.sources)}
-      </span>
-    {/if}
-  </div>
-
-  {#if session.appTitle && session.appTitle !== session.appName}
-    <p class="meeting-app-title" title={session.appTitle}>{session.appTitle}</p>
-  {/if}
-  {#if session.notes}
-    <p class="meeting-notes">{session.notes}</p>
-  {/if}
-
-  <div class="history-actions">
-    <button
-      class="ghost"
-      onclick={toggleExpand}
-      aria-expanded={expanded}
-      data-testid="meeting-show-transcript-{session.id}"
-    >
-      {expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount})`}
-    </button>
-    {#if onCopy}
-      <button
-        class="ghost"
-        disabled={copyPending}
-        onclick={handleCopy}
-        aria-label="Copy full transcript to clipboard"
-        data-testid="meeting-copy-transcript-{session.id}"
-      >
-        {copyPending ? "Copying…" : "Copy transcript"}
-      </button>
-    {/if}
-    {#if onExport}
-      <div class="export-popover">
-        <button
-          type="button"
-          class="ghost"
-          onclick={() => (exportOpen = !exportOpen)}
-          aria-haspopup="menu"
-          aria-expanded={exportOpen}
-          data-testid="meeting-export-toggle-{session.id}"
-        >
-          Export ▾
-        </button>
-        {#if exportOpen}
-          <ul class="export-menu" role="menu">
-            <li>
-              <button
-                type="button"
-                role="menuitem"
-                class="export-menu-item"
-                onclick={() => pickFormat("text")}
-                data-testid="meeting-export-text-{session.id}"
-              >
-                Plain text (.txt)
-              </button>
-            </li>
-            <li>
-              <button
-                type="button"
-                role="menuitem"
-                class="export-menu-item"
-                onclick={() => pickFormat("csv")}
-                data-testid="meeting-export-csv-{session.id}"
-              >
-                CSV (.csv)
-              </button>
-            </li>
-            <li>
-              <button
-                type="button"
-                role="menuitem"
-                class="export-menu-item"
-                onclick={() => pickFormat("json")}
-                data-testid="meeting-export-json-{session.id}"
-              >
-                JSON (.json)
-              </button>
-            </li>
-          </ul>
+  <div class="row-layout">
+    <div class="row-content">
+      <div class="meeting-meta">
+        <span class="meeting-app">{session.appName}</span>
+        <span class="meeting-started">{formatStarted(session.startedAt)}</span>
+        <span class="meeting-duration">
+          {formatDuration(session.startedAt, session.endedAt)}
+        </span>
+        <span class="meeting-utterances">
+          {session.utteranceCount} utterance{session.utteranceCount === 1 ? "" : "s"}
+        </span>
+        {#if session.sources && session.sources.length > 0}
+          <span class="meeting-sources" aria-label="Audio sources">
+            {sourceListLabel(session.sources)}
+          </span>
         {/if}
       </div>
-    {/if}
-    <button
-      class="ghost danger"
-      class:confirming
-      onclick={() => onDelete(session)}
-      aria-label={confirming
-        ? "Click again to confirm deleting this meeting"
-        : "Delete this meeting"}
-      data-testid="meeting-delete-{session.id}"
-    >
-      {confirming ? "Click to confirm" : "Delete"}
-    </button>
+
+      {#if session.appTitle && session.appTitle !== session.appName}
+        <p class="meeting-app-title" title={session.appTitle}>{session.appTitle}</p>
+      {/if}
+      {#if session.notes}
+        <p class="meeting-notes">{session.notes}</p>
+      {/if}
+    </div>
+
+    <!-- Icon action cluster — always visible, right-aligned -->
+    <div class="history-actions" role="group" aria-label="Row actions">
+      <!-- Expand/collapse transcript -->
+      <button
+        class="icon-btn"
+        class:expanded
+        onclick={toggleExpand}
+        aria-expanded={expanded}
+        title={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount})`}
+        aria-label={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount} utterances)`}
+        data-testid="meeting-show-transcript-{session.id}"
+      >
+        <!-- Chevron: rotates 180° when expanded via CSS -->
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
+      {#if onCopy}
+        <button
+          class="icon-btn"
+          disabled={copyPending}
+          onclick={handleCopy}
+          title={copyPending ? "Copying…" : "Copy transcript"}
+          aria-label="Copy full transcript to clipboard"
+          data-testid="meeting-copy-transcript-{session.id}"
+        >
+          <!-- Lucide Copy -->
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+      {/if}
+
+      {#if onExport}
+        <div class="export-popover">
+          <button
+            type="button"
+            class="icon-btn"
+            onclick={() => (exportOpen = !exportOpen)}
+            aria-haspopup="menu"
+            aria-expanded={exportOpen}
+            title="Export transcript"
+            aria-label="Export transcript"
+            data-testid="meeting-export-toggle-{session.id}"
+          >
+            <!-- Lucide Download -->
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          {#if exportOpen}
+            <ul class="export-menu" role="menu">
+              <li>
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="export-menu-item"
+                  onclick={() => pickFormat("text")}
+                  data-testid="meeting-export-text-{session.id}"
+                >
+                  Plain text (.txt)
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="export-menu-item"
+                  onclick={() => pickFormat("csv")}
+                  data-testid="meeting-export-csv-{session.id}"
+                >
+                  CSV (.csv)
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="export-menu-item"
+                  onclick={() => pickFormat("json")}
+                  data-testid="meeting-export-json-{session.id}"
+                >
+                  JSON (.json)
+                </button>
+              </li>
+            </ul>
+          {/if}
+        </div>
+      {/if}
+
+      <button
+        class="icon-btn danger"
+        class:confirming
+        title={confirming ? "Click again to confirm delete" : "Delete meeting"}
+        onclick={() => onDelete(session)}
+        aria-label={confirming
+          ? "Click again to confirm deleting this meeting"
+          : "Delete this meeting"}
+        data-testid="meeting-delete-{session.id}"
+      >
+        {#if confirming}
+          <!-- X mark: second click will fire -->
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        {:else}
+          <!-- Lucide Trash2 -->
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+        {/if}
+      </button>
+    </div>
   </div>
 
   {#if expanded}
@@ -315,10 +353,21 @@
 
 <style>
   .history-row {
-    padding: 0.75rem 1rem;
+    padding: 0.65rem 1rem;
     background-color: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 8px;
+  }
+
+  .row-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .row-content {
+    flex: 1;
+    min-width: 0;
   }
 
   .meeting-meta {
@@ -327,7 +376,6 @@
     gap: 0.4rem 0.6rem;
     font-size: 0.82rem;
     color: var(--text-secondary);
-    margin-bottom: 0.5rem;
   }
   .meeting-app {
     font-weight: 600;
@@ -338,7 +386,7 @@
     color: var(--text-muted);
   }
   .meeting-app-title {
-    margin: 0 0 0.4rem;
+    margin: 0.3rem 0 0;
     font-size: 0.85rem;
     color: var(--text-secondary);
     font-style: italic;
@@ -348,33 +396,56 @@
     max-width: 100%;
   }
   .meeting-notes {
-    margin: 0 0 0.5rem;
+    margin: 0.3rem 0 0;
     font-size: 0.88rem;
     color: var(--text-secondary);
     line-height: 1.4;
   }
 
+  /* Icon action cluster */
   .history-actions {
     display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.1rem;
+    flex-shrink: 0;
+    padding-top: 0.1rem;
   }
 
-  /* On pointer devices, hide actions until the row is hovered or
-     keyboard-focused. `confirming-active` keeps them visible while
-     the delete confirm state is armed, even if the cursor leaves.
-     The export popover is also inside .history-actions so it stays
-     visible while open. */
-  @media (hover: hover) {
-    .history-actions {
-      opacity: 0;
-      transition: opacity 0.12s;
-    }
-    .history-row:hover .history-actions,
-    .history-row:focus-within .history-actions,
-    .history-row.confirming-active .history-actions {
-      opacity: 1;
-    }
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: background-color 0.12s, color 0.12s, transform 0.15s;
+  }
+  .icon-btn:hover:not(:disabled) {
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+  }
+  .icon-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  /* Chevron rotates when transcript is expanded */
+  .icon-btn.expanded svg {
+    transform: rotate(180deg);
+  }
+  .icon-btn.danger {
+    color: var(--danger);
+  }
+  .icon-btn.danger:hover:not(:disabled) {
+    background-color: var(--danger-bg);
+  }
+  .icon-btn.danger.confirming {
+    background-color: var(--danger-bg);
+    color: var(--danger);
   }
 
   .export-popover {
@@ -384,7 +455,7 @@
   .export-menu {
     position: absolute;
     top: calc(100% + 0.25rem);
-    left: 0;
+    right: 0;
     z-index: 5;
     list-style: none;
     margin: 0;
@@ -415,37 +486,8 @@
     background-color: var(--bg-sidebar);
   }
 
-  button.ghost {
-    padding: 0.3em 0.75em;
-    font-size: 0.8rem;
-    font-weight: 500;
-    background-color: transparent;
-    border: 1px solid var(--border-input);
-    border-radius: 8px;
-    cursor: pointer;
-    font-family: inherit;
-    color: var(--text-primary);
-    transition: border-color 0.15s, background-color 0.15s;
-  }
-  button.ghost:hover:not(:disabled) {
-    background-color: var(--bg-app);
-  }
-  button.ghost.danger {
-    color: var(--danger);
-    border-color: var(--danger-border);
-  }
-  button.ghost.danger:hover:not(:disabled) {
-    background-color: var(--danger-bg);
-    border-color: var(--danger);
-  }
-  button.ghost.danger.confirming {
-    background-color: var(--danger-bg);
-    border-color: var(--danger);
-    color: #8a0000;
-  }
-
   .meeting-detail-status {
-    margin: 0.75rem 0 0;
+    margin: 0.6rem 0 0;
     font-size: 0.85rem;
     color: var(--text-muted);
     font-style: italic;
@@ -457,9 +499,9 @@
 
   .meeting-transcript {
     list-style: none;
-    margin: 0.75rem 0 0;
+    margin: 0.6rem 0 0;
     padding: 0.6rem;
-    background-color: var(--bg-surface);
+    background-color: var(--bg-app);
     border-radius: 6px;
     display: flex;
     flex-direction: column;
@@ -487,23 +529,17 @@
     :root:not([data-theme="light"]) .export-menu {
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     }
-    :root:not([data-theme="light"]) button.ghost {
-      color: #d8d8d8;
-      border-color: #38383b;
-    }
-    :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
+    :root:not([data-theme="light"]) .icon-btn { color: #6e6e73; }
+    :root:not([data-theme="light"]) .icon-btn:hover:not(:disabled) {
       background-color: #2a2a2d;
+      color: #d8d8d8;
     }
-    :root:not([data-theme="light"]) button.ghost.danger {
-      color: #f0a0a0;
-      border-color: #5a3a3a;
-    }
-    :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
+    :root:not([data-theme="light"]) .icon-btn.danger { color: #f0a0a0; }
+    :root:not([data-theme="light"]) .icon-btn.danger:hover:not(:disabled) {
       background-color: #3d1d1d;
     }
-    :root:not([data-theme="light"]) button.ghost.danger.confirming {
+    :root:not([data-theme="light"]) .icon-btn.danger.confirming {
       background-color: #3d1d1d;
-      border-color: var(--danger);
       color: #f0c0c0;
     }
     :root:not([data-theme="light"]) .meeting-detail-status { color: #9a9aa0; }
@@ -514,23 +550,17 @@
   :root[data-theme="dark"] .export-menu {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   }
-  :root[data-theme="dark"] button.ghost {
-    color: #d8d8d8;
-    border-color: #38383b;
-  }
-  :root[data-theme="dark"] button.ghost:hover:not(:disabled) {
+  :root[data-theme="dark"] .icon-btn { color: #6e6e73; }
+  :root[data-theme="dark"] .icon-btn:hover:not(:disabled) {
     background-color: #2a2a2d;
+    color: #d8d8d8;
   }
-  :root[data-theme="dark"] button.ghost.danger {
-    color: #f0a0a0;
-    border-color: #5a3a3a;
-  }
-  :root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
+  :root[data-theme="dark"] .icon-btn.danger { color: #f0a0a0; }
+  :root[data-theme="dark"] .icon-btn.danger:hover:not(:disabled) {
     background-color: #3d1d1d;
   }
-  :root[data-theme="dark"] button.ghost.danger.confirming {
+  :root[data-theme="dark"] .icon-btn.danger.confirming {
     background-color: #3d1d1d;
-    border-color: var(--danger);
     color: #f0c0c0;
   }
   :root[data-theme="dark"] .meeting-detail-status { color: #9a9aa0; }
