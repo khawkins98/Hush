@@ -152,12 +152,7 @@ test.describe("destructive confirm — History row Delete", () => {
   });
 });
 
-// Phase 1 of #357 dropped the standalone Meetings panel from the
-// main-window sidebar; the meeting-session Delete affordance lives
-// in that panel. Skip until Phase 2 reintroduces meetings as part
-// of the unified History feed (the Delete + two-click confirm
-// pattern will move with the row component).
-test.describe.skip("destructive confirm — Meeting session Delete", () => {
+test.describe("destructive confirm — Meeting session Delete", () => {
   test("two-click confirm flow fires meeting_session_delete exactly once", async ({
     page,
   }) => {
@@ -169,7 +164,7 @@ test.describe.skip("destructive confirm — Meeting session Delete", () => {
       },
     );
     await installMocks(page, {
-      meeting_sessions_list: () => [
+      meeting_sessions_search: () => [
         {
           id: 22,
           appName: "us.zoom.xos",
@@ -179,9 +174,11 @@ test.describe.skip("destructive confirm — Meeting session Delete", () => {
           speakerCount: null,
           utteranceCount: 12,
           notes: null,
+          sources: null,
+          appTitle: null,
         },
       ],
-      meeting_session_delete: (args) => {
+      meeting_session_delete: (args: unknown) => {
         const { id } = (args ?? {}) as { id: number };
         (
           window as unknown as {
@@ -192,12 +189,12 @@ test.describe.skip("destructive confirm — Meeting session Delete", () => {
       },
     });
     await page.goto("/");
-    await gotoSection(page, "meetings");
+    await gotoSection(page, "history");
 
-    const btn = page.locator('[data-testid="meeting-session-delete-22"]');
+    const btn = page.locator('[data-testid="meeting-delete-22"]');
     await expect(btn).toBeVisible();
     await btn.click();
-    await expect(btn).toHaveText(/Click to confirm/i);
+    await expect(btn).toHaveAttribute("aria-label", /confirm/i);
     expect(calls).toEqual([]);
     await btn.click();
     await expect.poll(() => calls.length).toBe(1);
