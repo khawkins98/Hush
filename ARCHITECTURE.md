@@ -288,7 +288,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
 | `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
 | `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides + macOS CoreAudio event-driven auto-start (`mic_camera_monitor`). Sub-modules: `manager.rs` (orchestration), `pump.rs` (chunking), `lifecycle.rs` (session lifecycle), `events.rs` (Tauri event emission), `test_support.rs` (in-memory mocks, `#[cfg(test)]` only) |
-| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); `builder.rs` — explicit-builder for trait-seam composition used in prod and all tests; `tests.rs` — `MemHistory` + 35 IPC integration tests; parallel whisper context load at startup via `tokio::join!` |
+| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); `builder.rs` — explicit-builder for trait-seam composition used in prod and all tests; `tests.rs` — `MemHistory` + cross-domain IPC integration tests; additional unit tests co-located in each command submodule (`commands/dictionary.rs`, `commands/diarizer.rs`, `commands/permissions.rs`); parallel whisper context load at startup via `tokio::join!` |
 | `dictionary/` | Vocabulary + replacement repositories; `packs.rs` — static preset pack definitions (compile-time constants, never DB-materialised; enabled slugs persisted as JSON in settings) |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
