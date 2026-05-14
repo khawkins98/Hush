@@ -27,6 +27,13 @@ let pendingPermissionsDialogIntro = $state<string | null>(null);
 /// `meeting:source-failed` during an active session (#533).
 /// Cleared when the session ends or the user dismisses it.
 let meetingSourceFailedNotice = $state<string | null>(null);
+/// Append-failed banner text set when the backend emits
+/// `dictation:meeting-append-failed` (#696). Fires when a
+/// transcription completed but the utterance couldn't be written
+/// to the active meeting session. The transcript still landed on
+/// the clipboard; this warns the user the session log is incomplete.
+/// Cleared when the session ends or the user dismisses it.
+let meetingAppendFailedNotice = $state<string | null>(null);
 /// Latest-wins guard for `meeting.refresh()`. Incremented on every
 /// call so a stale response from a previous in-flight request can't
 /// overwrite state already set by a newer one.
@@ -86,6 +93,12 @@ export const meeting = {
   },
   set sourceFailedNotice(val: string | null) {
     meetingSourceFailedNotice = val;
+  },
+  get appendFailedNotice() {
+    return meetingAppendFailedNotice;
+  },
+  set appendFailedNotice(val: string | null) {
+    meetingAppendFailedNotice = val;
   },
   async refresh() {
     meetingRefreshSeq += 1;
@@ -204,8 +217,9 @@ export const meeting = {
     try {
       await invoke("meeting_stop_manual");
       await meeting.refresh();
-      // Clear any source-failed banner — the session is done.
+      // Clear any banners — the session is done.
       meetingSourceFailedNotice = null;
+      meetingAppendFailedNotice = null;
     } catch (e) {
       meetingSessionsError = formatErrorDisplay(e);
     } finally {

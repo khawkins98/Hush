@@ -138,4 +138,10 @@ export const Events = {
   /// process — the grant takes effect only in a fresh process. See
   /// `learnings.md` for the full explanation.
   PermissionScreenRecordingGranted: "permission:screen-recording-granted",
+  /// Backend → frontend (main): a meeting-mode utterance append failed
+  /// during `stop_dictation` (#696). Fires when the fire-and-forget
+  /// `append_if_active` task encounters a repo error. The transcript
+  /// itself landed on the clipboard; this warns the user that the
+  /// meeting session log is missing that utterance. Payload: `{ error }`.
+  DictationMeetingAppendFailed: "dictation:meeting-append-failed",
 } as const;
