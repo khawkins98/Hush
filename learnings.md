@@ -2352,7 +2352,7 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 
 ---
 
-## 2026-06-XX — #636 fix: drop-and-recreate WhisperContext + tract Session at meeting stop boundaries
+## 2026-05-07 — #636 fix: drop-and-recreate WhisperContext + tract Session at meeting stop boundaries
 
 ### Why prior fixes didn't fully work
 
