@@ -1,48 +1,22 @@
 <!--
   Settings → Meeting tab — Speakers / diarizer-model section (#693).
-  Extracted from MeetingTab.svelte to give diarization toggle +
-  wespeaker model lifecycle (download / cancel / remove) a single
-  owner. Registers the three model-download event listeners on mount
-  (filtered to the "wespeaker-resnet34-lm" id) and tears them down
-  on unmount — matching the pre-#693 behaviour where they lived for
-  the lifetime of the Meeting tab being visible.
-
-  The diarization-enabled read happens here too. The set-profile
-  path (remove_diarizer_model) flips diarization_enabled to false
-  on the backend; we mirror that locally so the toggle stays in
-  sync without a follow-up IPC round-trip.
+  Thin markup shell for the diarization toggle + wespeaker model UI.
+  IPC state lives in `state/diarizer.svelte.ts`; the component keeps
+  only the three model-download event listeners so their lifetime stays
+  tied to the visible Settings section.
 -->
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
 
+  import { diarizer } from "$lib/state/diarizer.svelte";
   import { openExternal } from "./openExternal";
   import { Events } from "./events";
-  import { formatErrorMessage } from "./errors";
   import "./settings-tab.css";
-  import type { DiarizerModelStatus } from "./types";
 
-  // Diarization toggle (#111).
-  let diarizationEnabled = $state(false);
-  let diarizationBusy = $state(false);
-  let diarizationError = $state<string | null>(null);
-
-  // Diarizer model status (#301). When the wespeaker .onnx is
-  // missing, the toggle is informational only — runtime falls back
-  // to source-only labels until the download lands.
-  let diarizerModelStatus = $state<DiarizerModelStatus | null>(null);
-  let diarizerDownloadBusy = $state(false);
-  let diarizerDownloadProgress = $state<{ received: number; total: number | null } | null>(null);
-  let diarizerDownloadError = $state<string | null>(null);
   let unlistenDiarizerProgress: (() => void) | null = null;
   let unlistenDiarizerDone: (() => void) | null = null;
   let unlistenDiarizerFailed: (() => void) | null = null;
-
-  // Remove-model affordance (#351). Two-state click-to-confirm.
-  let diarizerRemoveConfirming = $state(false);
-  let diarizerRemoveBusy = $state(false);
-  let diarizerRemoveError = $state<string | null>(null);
 
   type DownloadProgressEvent = {
     id: string;
@@ -50,100 +24,22 @@
     bytesTotal: number | null;
   };
 
-  async function loadDiarizationEnabled(): Promise<void> {
-    // Refresh-only path: re-read the persisted value, but don't
-    // touch `diarizationError` if it's already non-null. The
-    // setter-failure path needs the error to survive the post-
-    // failure refresh; clobbering it on a successful read hid
-    // the error from users (caught by #302 e2e).
-    try {
-      diarizationEnabled = await invoke<boolean>("get_diarization_enabled");
-    } catch (e) {
-      diarizationError = "Couldn't read diarization setting.";
-      console.warn("[hush] get_diarization_enabled failed", e);
-    }
-  }
-
-  async function onDiarizationToggle(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    diarizationBusy = true;
-    diarizationError = null;
-    try {
-      await invoke("set_diarization_enabled", { enabled: checked });
-      diarizationEnabled = checked;
-    } catch (err) {
-      diarizationError = formatErrorMessage(err);
-      await loadDiarizationEnabled();
-    } finally {
-      diarizationBusy = false;
-    }
-  }
-
-  async function loadDiarizerModelStatus(): Promise<void> {
-    try {
-      diarizerModelStatus = await invoke<DiarizerModelStatus>(
-        "get_diarizer_model_status",
-      );
-    } catch (e) {
-      console.warn("[hush] get_diarizer_model_status failed", e);
-      diarizerModelStatus = null;
-    }
-  }
-
-  async function onDiarizerDownload() {
-    if (diarizerDownloadBusy) return;
-    diarizerDownloadBusy = true;
-    diarizerDownloadProgress = null;
-    diarizerDownloadError = null;
-    try {
-      await invoke("download_diarizer_model");
-      // Completion lands via `model:download-done` listener.
-    } catch (err) {
-      diarizerDownloadBusy = false;
-      diarizerDownloadError = formatErrorMessage(err);
-    }
-  }
-
-  async function onDiarizerCancel() {
-    // Reuses model_cancel_download (Whisper picker shares the
-    // downloads slot via id keying).
-    try {
-      await invoke("model_cancel_download", { id: "wespeaker-resnet34-lm" });
-    } catch (err) {
-      console.warn("[hush] model_cancel_download failed", err);
-    }
-  }
-
-  async function onDiarizerRemoveConfirm() {
-    if (diarizerRemoveBusy) return;
-    diarizerRemoveBusy = true;
-    diarizerRemoveError = null;
-    try {
-      await invoke("remove_diarizer_model");
-      // Backend flips diarization_enabled to false; mirror locally.
-      diarizationEnabled = false;
-      await loadDiarizerModelStatus();
-      diarizerRemoveConfirming = false;
-    } catch (err) {
-      diarizerRemoveError = formatErrorMessage(err);
-    } finally {
-      diarizerRemoveBusy = false;
-    }
-  }
-
   onMount(async () => {
-    void Promise.all([loadDiarizationEnabled(), loadDiarizerModelStatus()]);
+    void Promise.all([
+      diarizer.loadDiarizationEnabled(),
+      diarizer.loadDiarizerModelStatus(),
+    ]);
 
     // Diarizer download lifecycle listeners (#301). Backend reuses
-    // the existing `model:` events the Whisper download path
-    // emits, but we filter by id so the diarizer download doesn't
-    // get confused with a Whisper download in flight.
+    // the existing `model:` events the Whisper download path emits,
+    // but we filter by id so the diarizer download doesn't get
+    // confused with a Whisper download in flight.
     const isDiarizerEvent = (id: string) => id === "wespeaker-resnet34-lm";
     unlistenDiarizerProgress = await listen<DownloadProgressEvent>(
       Events.ModelDownloadProgress,
       (event) => {
         if (!isDiarizerEvent(event.payload.id)) return;
-        diarizerDownloadProgress = {
+        diarizer.diarizerDownloadProgress = {
           received: event.payload.bytesReceived,
           total: event.payload.bytesTotal,
         };
@@ -153,20 +49,20 @@
       Events.ModelDownloadDone,
       async (event) => {
         if (!isDiarizerEvent(event.payload.id)) return;
-        diarizerDownloadBusy = false;
-        diarizerDownloadProgress = null;
-        diarizerDownloadError = null;
-        await loadDiarizerModelStatus();
+        diarizer.diarizerDownloadBusy = false;
+        diarizer.diarizerDownloadProgress = null;
+        diarizer.diarizerDownloadError = null;
+        await diarizer.loadDiarizerModelStatus();
       },
     );
     unlistenDiarizerFailed = await listen<{ id: string; message: string | null }>(
       Events.ModelDownloadFailed,
       async (event) => {
         if (!isDiarizerEvent(event.payload.id)) return;
-        diarizerDownloadBusy = false;
-        diarizerDownloadProgress = null;
-        diarizerDownloadError = event.payload.message ?? "Download failed.";
-        await loadDiarizerModelStatus();
+        diarizer.diarizerDownloadBusy = false;
+        diarizer.diarizerDownloadProgress = null;
+        diarizer.diarizerDownloadError = event.payload.message ?? "Download failed.";
+        await diarizer.loadDiarizerModelStatus();
       },
     );
   });
@@ -190,11 +86,11 @@
 <section class="settings-group" aria-labelledby="settings-diarization-heading">
   <h2 id="settings-diarization-heading" class="group-heading">Speakers</h2>
 
-  {#if diarizerModelStatus && !diarizerModelStatus.downloaded}
+  {#if diarizer.diarizerModelStatus && !diarizer.diarizerModelStatus.downloaded}
     <div class="diarizer-model-status" data-testid="diarizer-model-not-installed">
       <p class="settings-row-name">Speaker model not installed</p>
       <p class="settings-row-desc">
-        Per-speaker labels need a {diarizerModelStatus.sizeMb} MB ONNX
+        Per-speaker labels need a {diarizer.diarizerModelStatus.sizeMb} MB ONNX
         model. Hush downloads it once and verifies the
         SHA-256; the toggle below has no effect until this
         completes.
@@ -204,36 +100,36 @@
           type="button"
           class="ghost diarizer-download-button"
           data-testid="diarizer-download-button"
-          disabled={diarizerDownloadBusy}
-          onclick={onDiarizerDownload}
+          disabled={diarizer.diarizerDownloadBusy}
+          onclick={diarizer.onDiarizerDownload}
         >
-          {#if diarizerDownloadBusy}
-            {#if diarizerDownloadProgress?.total}
+          {#if diarizer.diarizerDownloadBusy}
+            {#if diarizer.diarizerDownloadProgress?.total}
               Downloading… {Math.round(
-                (100 * diarizerDownloadProgress.received) /
-                  diarizerDownloadProgress.total,
+                (100 * diarizer.diarizerDownloadProgress.received) /
+                  diarizer.diarizerDownloadProgress.total,
               )}%
             {:else}
               Downloading…
             {/if}
           {:else}
-            Download speaker model ({diarizerModelStatus.sizeMb} MB)
+            Download speaker model ({diarizer.diarizerModelStatus.sizeMb} MB)
           {/if}
         </button>
-        {#if diarizerDownloadBusy}
+        {#if diarizer.diarizerDownloadBusy}
           <button
             type="button"
             class="ghost danger"
             data-testid="diarizer-cancel-button"
-            onclick={onDiarizerCancel}
+            onclick={diarizer.onDiarizerCancel}
           >
             Cancel
           </button>
         {/if}
       </div>
-      {#if diarizerDownloadError}
+      {#if diarizer.diarizerDownloadError}
         <p class="settings-error" data-testid="diarizer-download-error">
-          {diarizerDownloadError}
+          {diarizer.diarizerDownloadError}
         </p>
       {/if}
       <!--
@@ -245,13 +141,13 @@
       <details class="diarizer-manual-install">
         <summary>Or install manually</summary>
         <p class="settings-row-desc">
-          Drop <code>{diarizerModelStatus.expectedPath}</code> with
-          SHA-256 <code>{diarizerModelStatus.sha256}</code>. Restart
+          Drop <code>{diarizer.diarizerModelStatus.expectedPath}</code> with
+          SHA-256 <code>{diarizer.diarizerModelStatus.sha256}</code>. Restart
           Hush to load it.
         </p>
       </details>
     </div>
-  {:else if diarizerModelStatus?.downloaded}
+  {:else if diarizer.diarizerModelStatus?.downloaded}
     <!--
       Installed-model details (#351). Replaces the old
       single-line "Speaker model installed." with the
@@ -260,28 +156,28 @@
     -->
     <div class="diarizer-model-status" data-testid="diarizer-model-ready">
       <p class="settings-row-name">
-        {diarizerModelStatus.displayName} — installed
+        {diarizer.diarizerModelStatus.displayName} — installed
       </p>
       <details class="diarizer-installed-details">
         <summary>Model details</summary>
         <dl class="diarizer-details">
           <dt>Size</dt>
-          <dd>{diarizerModelStatus.sizeMb} MB</dd>
+          <dd>{diarizer.diarizerModelStatus.sizeMb} MB</dd>
           <dt>Path</dt>
-          <dd><code class="path-code">{diarizerModelStatus.expectedPath}</code></dd>
+          <dd><code class="path-code">{diarizer.diarizerModelStatus.expectedPath}</code></dd>
           <dt>SHA-256</dt>
-          <dd><code class="path-code">{diarizerModelStatus.sha256}</code></dd>
+          <dd><code class="path-code">{diarizer.diarizerModelStatus.sha256}</code></dd>
           <dt>Source</dt>
           <dd>
             <button
               type="button"
               class="link-like"
               onclick={() =>
-                diarizerModelStatus &&
-                openExternal(diarizerModelStatus.sourceUrl)}
+                diarizer.diarizerModelStatus &&
+                openExternal(diarizer.diarizerModelStatus.sourceUrl)}
               data-testid="diarizer-source-link"
             >
-              {diarizerModelStatus.sourceUrl}
+              {diarizer.diarizerModelStatus.sourceUrl}
             </button>
           </dd>
         </dl>
@@ -294,7 +190,7 @@
         </p>
       </details>
       <div class="diarizer-installed-actions">
-        {#if diarizerRemoveConfirming}
+        {#if diarizer.diarizerRemoveConfirming}
           <span class="settings-row-desc">
             Delete the speaker model? You can re-download anytime.
           </span>
@@ -302,17 +198,17 @@
             type="button"
             class="ghost danger"
             data-testid="diarizer-remove-confirm"
-            disabled={diarizerRemoveBusy}
-            onclick={onDiarizerRemoveConfirm}
+            disabled={diarizer.diarizerRemoveBusy}
+            onclick={diarizer.onDiarizerRemoveConfirm}
           >
-            {diarizerRemoveBusy ? "Removing…" : "Yes, remove"}
+            {diarizer.diarizerRemoveBusy ? "Removing…" : "Yes, remove"}
           </button>
           <button
             type="button"
             class="ghost"
             data-testid="diarizer-remove-cancel"
-            disabled={diarizerRemoveBusy}
-            onclick={() => (diarizerRemoveConfirming = false)}
+            disabled={diarizer.diarizerRemoveBusy}
+            onclick={() => (diarizer.diarizerRemoveConfirming = false)}
           >
             Cancel
           </button>
@@ -321,14 +217,14 @@
             type="button"
             class="ghost danger"
             data-testid="diarizer-remove-button"
-            onclick={() => (diarizerRemoveConfirming = true)}
+            onclick={() => (diarizer.diarizerRemoveConfirming = true)}
           >
             Remove model
           </button>
         {/if}
       </div>
-      {#if diarizerRemoveError}
-        <p class="settings-error">{diarizerRemoveError}</p>
+      {#if diarizer.diarizerRemoveError}
+        <p class="settings-error">{diarizer.diarizerRemoveError}</p>
       {/if}
     </div>
   {/if}
@@ -337,10 +233,10 @@
     <input
       type="checkbox"
       data-testid="settings-diarization-toggle"
-      disabled={diarizationBusy ||
-        (diarizerModelStatus !== null && !diarizerModelStatus.downloaded)}
-      checked={diarizationEnabled}
-      onchange={onDiarizationToggle}
+      disabled={diarizer.diarizationBusy ||
+        (diarizer.diarizerModelStatus !== null && !diarizer.diarizerModelStatus.downloaded)}
+      checked={diarizer.diarizationEnabled}
+      onchange={diarizer.onDiarizationToggle}
     />
     <span class="toggle-label">
       <span class="toggle-name">Label speakers in meeting transcripts</span>
@@ -351,8 +247,8 @@
       </span>
     </span>
   </label>
-  {#if diarizationError}
-    <p class="settings-error">{diarizationError}</p>
+  {#if diarizer.diarizationError}
+    <p class="settings-error">{diarizer.diarizationError}</p>
   {/if}
 </section>
 

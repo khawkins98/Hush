@@ -818,6 +818,12 @@ impl std::fmt::Debug for WhisperTranscription {
 mod tests {
     use super::*;
     use crate::audio::CaptureFormat;
+    use std::sync::Mutex;
+
+    // Tests that mutate HUSH_WHISPER_STATE_RECREATE_INTERVAL must hold this
+    // lock for the full read-mutate-restore cycle; Rust test threads run in
+    // parallel and a remove_var in one test can race a set_var in another.
+    static ENV_VAR_LOCK: Mutex<()> = Mutex::new(());
 
     /// `prepare_audio` is the pure-logic glue between the audio module's
     /// output format and whisper's input format. We can exercise it without
@@ -884,15 +890,9 @@ mod tests {
     fn state_recreate_interval_defaults_to_const_without_env_var() {
         // Pin the default so a typo in the env-var name doesn't
         // silently disable the periodic recreation that #612's
-        // second pass relies on. The env var is read at construction
-        // time, so to test the default we just need to make sure
-        // `state_recreate_interval()` returns DEFAULT when the var
-        // is unset. Wrapped in `with_var` semantics — we save and
-        // restore so a parallel test setting the var doesn't bleed.
+        // second pass relies on.
+        let _guard = ENV_VAR_LOCK.lock().unwrap();
         let saved = std::env::var("HUSH_WHISPER_STATE_RECREATE_INTERVAL").ok();
-        // Safety: tests in this module run in the same process; the
-        // remove + restore window is short and no other test reads
-        // the var.
         unsafe { std::env::remove_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL") };
         assert_eq!(state_recreate_interval(), DEFAULT_STATE_RECREATE_INTERVAL);
         if let Some(prev) = saved {
@@ -902,6 +902,7 @@ mod tests {
 
     #[test]
     fn state_recreate_interval_env_var_override_parses() {
+        let _guard = ENV_VAR_LOCK.lock().unwrap();
         let saved = std::env::var("HUSH_WHISPER_STATE_RECREATE_INTERVAL").ok();
 
         unsafe { std::env::set_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL", "5") };

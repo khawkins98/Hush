@@ -1,53 +1,17 @@
 <!--
   Settings → Meeting tab — Auto-start section (#693).
-  Extracted from MeetingTab.svelte to give the autostart IPC
-  and markup a single owner. Manages its own load-on-mount
-  lifecycle so the state initialises when the Meeting tab
-  becomes visible and tears down cleanly when it unmounts.
+  Thin markup shell for the meeting auto-start selector. IPC
+  state lives in `state/meeting-settings.svelte.ts`; this
+  component only owns the load-on-mount lifecycle.
 -->
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
 
-  import { formatErrorMessage } from "./errors";
+  import { meetingSettings } from "$lib/state/meeting-settings.svelte";
   import "./settings-tab.css";
 
-  // Backend serde encoding is kebab-case ("off" / "always")
-  // so values bind directly to <option> strings.
-  type MeetingAutostartMode = "off" | "always";
-  let meetingAutostartMode = $state<MeetingAutostartMode>("always");
-  let meetingAutostartBusy = $state(false);
-  let meetingAutostartError = $state<string | null>(null);
-
-  async function loadMeetingAutostartMode(): Promise<void> {
-    try {
-      meetingAutostartMode = await invoke<MeetingAutostartMode>(
-        "get_meeting_autostart_mode",
-      );
-      meetingAutostartError = null;
-    } catch (e) {
-      meetingAutostartError = "Couldn't read auto-start mode.";
-      console.warn("[hush] get_meeting_autostart_mode failed", e);
-    }
-  }
-
-  async function onMeetingAutostartChange(e: Event) {
-    const next = (e.target as HTMLSelectElement).value as MeetingAutostartMode;
-    meetingAutostartBusy = true;
-    meetingAutostartError = null;
-    try {
-      await invoke("set_meeting_autostart_mode", { mode: next });
-      meetingAutostartMode = next;
-    } catch (err) {
-      meetingAutostartError = formatErrorMessage(err);
-      await loadMeetingAutostartMode();
-    } finally {
-      meetingAutostartBusy = false;
-    }
-  }
-
   onMount(() => {
-    void loadMeetingAutostartMode();
+    void meetingSettings.loadMeetingAutostartMode();
   });
 </script>
 
@@ -68,15 +32,15 @@
     <select
       id="settings-meeting-autostart"
       data-testid="settings-meeting-autostart"
-      disabled={meetingAutostartBusy}
-      value={meetingAutostartMode}
-      onchange={onMeetingAutostartChange}
+      disabled={meetingSettings.meetingAutostartBusy}
+      value={meetingSettings.meetingAutostartMode}
+      onchange={meetingSettings.onMeetingAutostartChange}
     >
       <option value="off">Off — start manually</option>
       <option value="always">Always start a session</option>
     </select>
   </div>
-  {#if meetingAutostartError}
-    <p class="settings-error">{meetingAutostartError}</p>
+  {#if meetingSettings.meetingAutostartError}
+    <p class="settings-error">{meetingSettings.meetingAutostartError}</p>
   {/if}
 </section>
