@@ -279,7 +279,10 @@ impl SessionManager {
                         emit_meeting_source_failed(
                             self.event_emitter.as_ref(),
                             session.id,
-                            source.kind_label(),
+                            // Use speaker_tag() ("mic"/"system") to match the
+                            // mid-session pump path and the frontend's "mic"
+                            // branch in the MeetingSourceFailed listener (#810).
+                            source.speaker_tag(),
                             reason,
                             device_lost,
                         );
@@ -301,7 +304,7 @@ impl SessionManager {
                         emit_meeting_source_failed(
                             self.event_emitter.as_ref(),
                             session.id,
-                            source.kind_label(),
+                            source.speaker_tag(),
                             "streaming session creation failed at session start",
                             false,
                         );
