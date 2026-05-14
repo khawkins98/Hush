@@ -949,8 +949,14 @@ pub(super) async fn diarize_and_dispatch_merged(
     // label (same outcome as the full path with `source_labels.len() == 1`).
     if source_labels.len() == 1 {
         let bucket = buckets.into_iter().next().unwrap();
-        dispatch_utterances(session_id, &source_labels[0], bucket.utterances, partials, repo)
-            .await;
+        dispatch_utterances(
+            session_id,
+            &source_labels[0],
+            bucket.utterances,
+            partials,
+            repo,
+        )
+        .await;
         return;
     }
 

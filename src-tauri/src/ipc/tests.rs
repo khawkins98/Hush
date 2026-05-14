@@ -806,11 +806,14 @@ impl crate::history::HistoryRepository for MemHistory {
         Ok(self.entries.lock().unwrap().len() as i64)
     }
 
-    async fn get_by_id(
-        &self,
-        id: i64,
-    ) -> anyhow::Result<Option<crate::history::HistoryEntry>> {
-        Ok(self.entries.lock().unwrap().iter().find(|e| e.id == id).cloned())
+    async fn get_by_id(&self, id: i64) -> anyhow::Result<Option<crate::history::HistoryEntry>> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|e| e.id == id)
+            .cloned())
     }
 
     async fn get_stats(&self) -> anyhow::Result<crate::history::DictationStats> {
