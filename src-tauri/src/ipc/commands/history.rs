@@ -37,7 +37,7 @@ pub async fn history_list(
         .history
         .list(limit, offset)
         .await
-        .map_err(|e| IpcError::History(e.to_string()))
+        .map_err(|e| IpcError::History(format!("{e:#}")))
 }
 
 /// FTS5 search over transcript text. Empty / whitespace-only `query`
@@ -55,7 +55,7 @@ pub async fn history_search(
         .history
         .search(&query, limit, offset)
         .await
-        .map_err(|e| IpcError::History(e.to_string()))
+        .map_err(|e| IpcError::History(format!("{e:#}")))
 }
 
 /// Export a single dictation history row as RFC-4180 CSV.
@@ -135,7 +135,7 @@ pub async fn history_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()
         .history
         .delete(id)
         .await
-        .map_err(|e| IpcError::History(e.to_string()))
+        .map_err(|e| IpcError::History(format!("{e:#}")))
 }
 
 /// Total row count, for paginators that need "page X of Y".
@@ -146,7 +146,7 @@ pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
         .history
         .count()
         .await
-        .map_err(|e| IpcError::History(e.to_string()))
+        .map_err(|e| IpcError::History(format!("{e:#}")))
 }
 
 /// Delete every history row. The frontend gates this behind a
@@ -161,7 +161,7 @@ pub async fn history_clear(state: State<'_, AppState>) -> IpcResult<i64> {
         .history
         .clear()
         .await
-        .map_err(|e| IpcError::History(e.to_string()))
+        .map_err(|e| IpcError::History(format!("{e:#}")))
 }
 
 /// Aggregate stats for the History stats bar (#293). Returns
@@ -177,7 +177,7 @@ pub async fn get_dictation_stats(
         .history
         .get_stats()
         .await
-        .map_err(|e| IpcError::History(e.to_string()))
+        .map_err(|e| IpcError::History(format!("{e:#}")))
 }
 
 #[cfg(test)]
