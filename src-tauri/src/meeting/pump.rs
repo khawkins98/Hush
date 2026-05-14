@@ -1027,7 +1027,31 @@ pub(super) async fn diarize_and_dispatch_merged(
     // anyway. Multi-source buckets still hit the diarizer
     // unconditionally — that's where it earns its keep.
     if source_labels.len() > 1 {
-        diarize.label_utterances(&mut chronological, &chronological_audio, CANONICAL_FORMAT);
+        // Only feed finals to the diarizer (#800). Partial utterances
+        // are near-duplicate embeddings that bleed into cluster history,
+        // wasting ~50–100 ms inference per partial and increasing 1-NN
+        // drift. Extract finals by index, run label_utterances, then copy
+        // labels back. dispatch_utterances handles the source-tag fall-
+        // through for any unlabelled partials.
+        let final_idxs: Vec<usize> = chronological
+            .iter()
+            .enumerate()
+            .filter_map(|(i, u)| if u.is_final { Some(i) } else { None })
+            .collect();
+        if !final_idxs.is_empty() {
+            let mut final_utts: Vec<Utterance> = final_idxs
+                .iter()
+                .map(|&i| chronological[i].clone())
+                .collect();
+            let final_audio: Vec<Vec<f32>> = final_idxs
+                .iter()
+                .map(|&i| chronological_audio[i].clone())
+                .collect();
+            diarize.label_utterances(&mut final_utts, &final_audio, CANONICAL_FORMAT);
+            for (&orig_i, labeled) in final_idxs.iter().zip(final_utts) {
+                chronological[orig_i].speaker_label = labeled.speaker_label;
+            }
+        }
     }
 
     // Re-split the labelled vec back into per-source buckets,

@@ -2623,3 +2623,19 @@ Required design constraints (non-negotiable):
 - Auto-fingerprinting meeting participants without their knowledge is the primary legal exposure — consider scoping v1 to explicit enrollment only
 
 The local-first nature (no server, developer never receives the data) substantially reduces legal exposure, but the user may be subject to BIPA if they store voice fingerprints of Illinois residents. Document clearly.
+
+## 2026-05-12 — Settings inline-panel migration (#479 slice 3)
+
+The standalone Settings window (`settings` Tauri window label, `settings_window/` module) was retired and replaced by an inline sidebar panel inside the main window. The migration landed in PR #479 slice 3.
+
+**What changed:**
+- `src-tauri/src/settings_window/` module was deleted — there is no `settings_window::show` function.
+- `App → Settings…` (⌘,) now emits `settings:goto-tab` to the main window instead of calling `show_window("settings")`.
+- The `settings` window label no longer exists in `tauri.conf.json`; the `capabilities/settings.json` capability file is also gone.
+- Module header in `app_menu/mod.rs` referenced `crate::settings_window::show` — updated (#804).
+
+**Why this matters for new contributors:**
+If you see references to `settings_window` in older code or comments, they are stale. Settings state is owned by the main window's Svelte stores. IPC commands invoked from the Settings panel are registered in the `default` (main window) capability, not a separate `settings.json`.
+
+**PTT settings-window env-gate note:**
+`learnings.md` (2026-04-30 PTT entry) has a sentence "A future settings-window toggle will replace the env gate." This refers to a Settings toggle inside the inline panel — not a new standalone window. That toggle is #784.

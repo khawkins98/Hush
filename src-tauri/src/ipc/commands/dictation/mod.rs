@@ -356,6 +356,10 @@ pub async fn stop_dictation(
     // surface the misbehaviour as a Transcription error rather than
     // letting it look like the user's audio was empty.
     if final_count == 0 && !utterances.is_empty() {
+        // Hide the HUD before returning; every other error path in
+        // this function does so, and omitting it leaves the "Processing…"
+        // overlay stuck on screen (#803).
+        crate::hud::hide_async(&app);
         return Err(IpcError::Transcription(
             "transcription backend emitted only partial utterances; no final transcript available"
                 .to_owned(),
