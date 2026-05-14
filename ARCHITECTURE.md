@@ -219,6 +219,17 @@ A `SystemListenerHandle` listens for `kAudioHardwarePropertyDevices` changes on 
 
 The `OnnxDiarizer` is gated behind the `diarization-onnx` Cargo feature (default-on). The earlier D1 silence-gap heuristic (`EnergyDiarizer`) and the offline agglomerative `cluster_with_threshold` were both removed in #310 once the streaming D2 matcher proved stable; `cluster.rs` retains only `cosine_distance` + `DEFAULT_DISTANCE_THRESHOLD`.
 
+### ORT → tract-onnx migration (#641)
+
+The diarizer originally used ONNX Runtime (ORT), which, despite an explicit CPU execution provider, routed operations through Metal Performance Shaders on Apple Silicon. This caused `IOAccelerator` allocations (~1.25 GB/hr during long meetings) that were not reclaimed after session end, eventually exhausting virtual memory. Switched to `tract-onnx` (pure Rust, zero Metal dispatch) in v0.5.0:
+
+- **Binary size:** −45 MB (no vendored ORT runtime)
+- **Latency:** unchanged (~50–100 ms/utterance on a CPU-bound path)
+- **Memory:** zero `IOAccelerator` growth; all allocations return to the standard Rust heap
+- **Compatibility:** wespeaker ResNet34-LM uses only standard ONNX ops (Conv, Gemm, Add, Relu, etc.) supported by tract
+
+`TypedRunnableModel<TypedModel>` is `Send + Sync`; no `Mutex` needed around the loaded model. The `MelExtractor` is owned by `OnnxDiarizer` to avoid per-call re-init cost. CoreML/Neural Engine acceleration is not pursued — the CPU-only path is sufficient for the diarization workload.
+
 ---
 
 ## IPC
@@ -258,7 +269,7 @@ For the in-process tunables that aren't env-driven (inference thread count, mode
 
 SQLite via `sqlx`. Migrations in `src-tauri/migrations/` (sqlx-managed, applied at startup). Schemas:
 
-- **History** — dictation transcripts, with FTS5 over the text + foreground app metadata.
+- **History** — dictation transcripts, with FTS5 over the text + foreground app metadata. Recordings shorter than 1 second are stored as *ignored* entries (`ignored = 1`): no transcript is attempted, stats queries filter them out (`WHERE ignored = 0`), and bulk export skips them. They remain visible in the UI as a dimmed "Recording too short — not transcribed" row so users can see accidental hotkey presses were registered (#682).
 - **Meeting sessions** — session rows + utterance rows; `ended_at` set on stop.
 - **Vocabulary / replacements** — Personal Dictionary CRUD.
 - **Settings** — key/value, including PTT combo, autostart, diarization toggle, app overrides.

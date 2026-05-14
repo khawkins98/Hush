@@ -99,6 +99,8 @@ tccutil reset ListenEvent io.github.khawkins98.hush      # Input Monitoring
 tccutil reset Accessibility io.github.khawkins98.hush    # only if Hush ever asked
 ```
 
+> **Screen Recording / "Screen & System Audio Recording":** Hush does **not** require this permission as of v0.5.0+. System audio uses the CoreAudio process-tap backend, not ScreenCaptureKit. If you see a `Hush.app` row under Screen Recording in System Settings from an older build, it is safe to remove with the **`−`** button.
+
 After relaunch, each permission re-prompts on the next trigger:
 
 - **Microphone** — the next time you start dictation or a meeting capture.
