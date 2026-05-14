@@ -160,9 +160,8 @@
 
     await Promise.all([
       dictation.loadSources(),
-      history.refresh(),
+      history.feedRefresh(),
       dictation.refreshModels(),
-      meeting.refresh(),
     ]);
 
     unlistenToggle = await listen(Events.HotkeyToggle, () => {
