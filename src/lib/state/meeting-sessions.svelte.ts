@@ -15,7 +15,6 @@ import type {
   MeetingSessionDetail,
 } from "$lib/types";
 import { audio } from "$lib/state/audio.svelte";
-import { history } from "$lib/state/history.svelte";
 
 let meetingSessions = $state<MeetingSession[]>([]);
 let meetingSessionsLoaded = $state(false);
@@ -40,6 +39,9 @@ let meetingAppendFailedNotice = $state<string | null>(null);
 /// call so a stale response from a previous in-flight request can't
 /// overwrite state already set by a newer one.
 let meetingRefreshSeq = 0;
+/// Current search query mirror. Kept in sync by history.setSearchQuery()
+/// so meeting.refresh() uses the right filter without importing history.
+let meetingSearchQuery = "";
 
 export const meeting = {
   get sessions() {
@@ -102,13 +104,19 @@ export const meeting = {
   set appendFailedNotice(val: string | null) {
     meetingAppendFailedNotice = val;
   },
+  /** Keep the local search-query mirror in sync. Called by
+   *  history.setSearchQuery() so this module doesn't need to import
+   *  history (breaking the previous circular dependency). */
+  set searchQuery(val: string) {
+    meetingSearchQuery = val;
+  },
   async refresh() {
     meetingRefreshSeq += 1;
     const seq = meetingRefreshSeq;
     try {
       const [sessions, active] = await Promise.all([
         invoke<MeetingSession[]>("meeting_sessions_search", {
-          query: history.historyQuery,
+          query: meetingSearchQuery,
         }),
         invoke<ActiveMeetingSession>("meeting_active_session"),
       ]);
