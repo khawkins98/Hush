@@ -306,6 +306,32 @@ export async function installMocks(
       vocabulary_update: () => undefined,
       vocabulary_delete: () => undefined,
 
+      // ---- preset packs + language style ----
+      list_packs: () => [
+        {
+          slug: "dev-general",
+          name: "Developer — General",
+          description:
+            "Common software-development terms, platform names, and Whisper mishearing corrections for everyday coding conversations.",
+          vocabularyCount: 45,
+          replacementCount: 16,
+          enabled: false,
+        },
+        {
+          slug: "business",
+          name: "Business",
+          description:
+            "Meeting-room language, business metrics, and common corrections for workplace dictation.",
+          vocabularyCount: 29,
+          replacementCount: 7,
+          enabled: false,
+        },
+      ],
+      enable_pack: () => undefined,
+      disable_pack: () => undefined,
+      get_language_style: () => "american",
+      set_language_style: () => undefined,
+
       // ---- model picker ----
       // Field shape mirrors `ModelCard` on the Rust side, which flattens
       // `ModelMetadata` and applies `#[serde(rename_all = "camelCase")]`.

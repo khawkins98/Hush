@@ -15,6 +15,10 @@
   tab; now the IPC fires only when the user actually visits the
   tab. Same data, smaller cold-boot when opening Settings to a
   non-Vocabulary tab.
+
+  Pack + language-style state added in #664: both are loaded
+  alongside vocabulary on mount and delegated to VocabularyPanel
+  for rendering.
 -->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
@@ -22,7 +26,7 @@
 
   import VocabularyPanel from "./VocabularyPanel.svelte";
   import { formatErrorDisplay, type ErrorDisplay } from "./errors";
-  import type { VocabularyTerm } from "./types";
+  import type { LanguageStyle, PackStatus, VocabularyTerm } from "./types";
 
   let vocabulary = $state<VocabularyTerm[]>([]);
   let loaded = $state(false);
@@ -30,9 +34,19 @@
   let newVocab = $state("");
   let inputEl = $state<HTMLInputElement | null>(null);
 
+  let packs = $state<PackStatus[]>([]);
+  let languageStyle = $state<LanguageStyle>("american");
+
   async function load(): Promise<void> {
     try {
-      vocabulary = await invoke<VocabularyTerm[]>("vocabulary_list");
+      const [terms, loadedPacks, style] = await Promise.all([
+        invoke<VocabularyTerm[]>("vocabulary_list"),
+        invoke<PackStatus[]>("list_packs"),
+        invoke<string>("get_language_style"),
+      ]);
+      vocabulary = terms;
+      packs = loadedPacks;
+      languageStyle = (style as LanguageStyle) ?? "american";
       loadError = null;
     } catch (e) {
       loadError = formatErrorDisplay(e);
@@ -70,6 +84,24 @@
     }
   }
 
+  async function togglePack(slug: string, enable: boolean) {
+    try {
+      await invoke(enable ? "enable_pack" : "disable_pack", { slug });
+      packs = packs.map((p) => (p.slug === slug ? { ...p, enabled: enable } : p));
+    } catch (e) {
+      loadError = formatErrorDisplay(e);
+    }
+  }
+
+  async function setLanguageStyle(style: LanguageStyle) {
+    try {
+      await invoke("set_language_style", { style });
+      languageStyle = style;
+    } catch (e) {
+      loadError = formatErrorDisplay(e);
+    }
+  }
+
   onMount(() => {
     void load();
   });
@@ -79,8 +111,12 @@
   {vocabulary}
   vocabularyLoaded={loaded}
   vocabularyError={loadError}
+  {packs}
+  {languageStyle}
   bind:newVocab
   bind:inputEl
   onSubmit={add}
   onDelete={remove}
+  onTogglePack={togglePack}
+  onSetLanguageStyle={setLanguageStyle}
 />

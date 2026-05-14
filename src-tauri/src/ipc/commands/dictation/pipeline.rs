@@ -24,7 +24,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::AudioSource;
-use crate::dictionary::{format_vocabulary_prompt, ReplacementRule};
+use crate::dictionary::{format_vocabulary_prompt, ReplacementRule, VocabularyTerm};
 use crate::history::NewHistoryEntry;
 use crate::ipc::AppState;
 
@@ -161,14 +161,44 @@ pub(super) fn stop_audio_capture(state: &AppState) -> IpcResult<crate::audio::Ca
 /// to the no-prompt path. The decoder treats an empty prompt as a no-op
 /// (both via the trait's default `transcribe_with_prompt` and via
 /// `set_initial_prompt` itself), so the caller never has to branch.
+///
+/// Combines three sources (in order of precedence — duplicates are
+/// deduplicated by [`format_vocabulary_prompt`] keeping the first
+/// occurrence):
+/// 1. User's personal vocabulary from the `dictionary_terms` table.
+/// 2. Vocabulary from any enabled preset packs (appended after user
+///    terms so the user's casing / spelling wins on collision).
+/// 3. A language-style prefix prepended before the term list.
 pub(super) async fn load_vocabulary_prompt(state: &AppState) -> String {
-    match state.data.vocabulary.list().await {
-        Ok(terms) => format_vocabulary_prompt(&terms),
+    // User terms — load first so user spellings win deduplication.
+    let mut all_terms: Vec<VocabularyTerm> = match state.data.vocabulary.list().await {
+        Ok(terms) => terms,
         Err(e) => {
             tracing::error!(error = ?e, "failed to load vocabulary; skipping prompt-biasing");
-            String::new()
+            Vec::new()
+        }
+    };
+
+    // Enabled pack vocabulary — appended after user terms.
+    let enabled_slugs = load_enabled_packs(state).await;
+    for slug in &enabled_slugs {
+        if let Some(pack) = crate::dictionary::packs::find_pack(slug) {
+            for &term_str in pack.vocabulary {
+                // Use a synthetic id that doesn't collide with any real row
+                // (negative ids are never assigned by SQLite's AUTOINCREMENT).
+                // format_vocabulary_prompt deduplicates case-insensitively,
+                // so pack terms the user already has personally are silently
+                // dropped.
+                all_terms.push(VocabularyTerm {
+                    id: -1,
+                    term: term_str.to_owned(),
+                });
+            }
         }
     }
+
+    let style_prefix = load_language_style_prefix(state).await;
+    format_initial_prompt(&style_prefix, &all_terms)
 }
 
 /// Load post-transcription find/replace rules. Best-effort: a failure
@@ -176,14 +206,165 @@ pub(super) async fn load_vocabulary_prompt(state: &AppState) -> String {
 /// dictation. The user already has audio captured and a transcript
 /// pending; surfacing a rules-load error as fatal would block them on
 /// a strictly-secondary feature.
+///
+/// Enabled pack replacement rules are prepended (at sort_order −1) so
+/// they run before user rules (sort_order 0 default). This means user
+/// rules can override or layer on top of pack corrections.
 pub(super) async fn load_replacement_rules(state: &AppState) -> Vec<ReplacementRule> {
-    match state.data.replacements.list().await {
+    let user_rules = match state.data.replacements.list().await {
         Ok(rules) => rules,
         Err(e) => {
             tracing::error!(error = ?e, "failed to load replacement rules; skipping post-processing");
             Vec::new()
         }
+    };
+
+    // Prepend enabled pack replacement rules (sort_order = -1, synthetic
+    // ids starting at i64::MIN so they sort before any real DB rows at the
+    // same sort_order level).
+    let enabled_slugs = load_enabled_packs(state).await;
+    let mut all_rules: Vec<ReplacementRule> = Vec::new();
+    let mut synthetic_id: i64 = i64::MIN;
+    for slug in &enabled_slugs {
+        if let Some(pack) = crate::dictionary::packs::find_pack(slug) {
+            for &(find, replace) in pack.replacements {
+                all_rules.push(ReplacementRule {
+                    id: synthetic_id,
+                    find_text: find.to_owned(),
+                    replace_text: replace.to_owned(),
+                    // -1 so pack rules run before user-defined rules at
+                    // the default sort_order of 0.
+                    sort_order: -1,
+                });
+                synthetic_id = synthetic_id.saturating_add(1);
+            }
+        }
     }
+    all_rules.extend(user_rules);
+    all_rules
+}
+
+/// Read the list of enabled pack slugs from the settings table. Returns
+/// an empty list on any error so callers can always treat the result as
+/// best-effort.
+pub(super) async fn load_enabled_packs(state: &AppState) -> Vec<String> {
+    match state
+        .settings
+        .get(crate::settings::keys::ENABLED_PACKS)
+        .await
+    {
+        Ok(Some(json)) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load enabled packs; continuing with none");
+            Vec::new()
+        }
+    }
+}
+
+/// Read the language style prefix from settings. Returns an empty string
+/// for American English (the Whisper default) and for any missing /
+/// unrecognised setting value.
+pub(super) async fn load_language_style_prefix(state: &AppState) -> String {
+    let style = match state
+        .settings
+        .get(crate::settings::keys::LANGUAGE_STYLE)
+        .await
+    {
+        Ok(Some(s)) => s,
+        Ok(None) | Err(_) => String::new(),
+    };
+    language_style_prefix(&style)
+}
+
+/// Map a language style slug to the prompt prefix string.
+///
+/// Kept as a pure function so it can be unit-tested without a database.
+pub(crate) fn language_style_prefix(style: &str) -> String {
+    match style {
+        "british" => "Use British English spelling.".to_owned(),
+        "oxford" => "Use Oxford English spelling.".to_owned(),
+        _ => String::new(), // "american" or any unrecognised value → no prefix
+    }
+}
+
+/// Build the full Whisper initial prompt from a style prefix and a list
+/// of vocabulary terms.
+///
+/// Layout when both are non-empty:
+/// ```text
+/// Use British English spelling.
+///
+/// Hush, Tauri, whisper.cpp
+/// ```
+///
+/// The combined string is capped at [`crate::dictionary::MAX_PROMPT_CHARS`]
+/// characters. If only the prefix fits, the vocabulary list is truncated or
+/// dropped; the prefix is never truncated — it is always short enough to fit
+/// within budget (max ~40 chars).
+pub(crate) fn format_initial_prompt(style_prefix: &str, terms: &[VocabularyTerm]) -> String {
+    use crate::dictionary::MAX_PROMPT_CHARS;
+
+    if style_prefix.is_empty() {
+        return format_vocabulary_prompt(terms);
+    }
+
+    // Header = "Use British English spelling.\n\n" (prefix + two newlines).
+    // We reserve this space from the prompt budget before handing the
+    // remainder to format_vocabulary_prompt (which also enforces the cap).
+    let separator = "\n\n";
+    let header = format!("{style_prefix}{separator}");
+    let header_chars = header.chars().count();
+
+    if header_chars >= MAX_PROMPT_CHARS {
+        // Style prefix alone already fills the budget; emit it without vocab.
+        return style_prefix
+            .chars()
+            .take(MAX_PROMPT_CHARS)
+            .collect::<String>();
+    }
+
+    let remaining = MAX_PROMPT_CHARS - header_chars;
+
+    // Trim the vocabulary section to fit within the remaining budget.
+    // format_vocabulary_prompt already enforces MAX_PROMPT_CHARS; we need
+    // a tighter cap here. Build the list by hand up to `remaining`.
+    let vocab_part = format_vocabulary_prompt_capped(terms, remaining);
+
+    if vocab_part.is_empty() {
+        style_prefix.to_owned()
+    } else {
+        format!("{header}{vocab_part}")
+    }
+}
+
+/// Like [`format_vocabulary_prompt`] but caps at `max_chars` instead of
+/// [`crate::dictionary::MAX_PROMPT_CHARS`]. Internal helper for the
+/// budget-aware `format_initial_prompt`.
+fn format_vocabulary_prompt_capped(terms: &[VocabularyTerm], max_chars: usize) -> String {
+    let mut seen_lower: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut accepted: Vec<&str> = Vec::with_capacity(terms.len());
+    let mut total_chars: usize = 0;
+
+    for term in terms {
+        let trimmed = term.term.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        if !seen_lower.insert(lower) {
+            continue;
+        }
+        let separator = if accepted.is_empty() { 0 } else { 2 };
+        let needed = trimmed.chars().count() + separator;
+        if total_chars + needed > max_chars {
+            break;
+        }
+        accepted.push(trimmed);
+        total_chars += needed;
+    }
+
+    accepted.join(", ")
 }
 
 /// Pop the foreground snapshot captured at `start_dictation`. Returns

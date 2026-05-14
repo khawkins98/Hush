@@ -27,6 +27,7 @@
 //! beyond the database connection and migration 0001 — see each
 //! submodule for its own design notes and tests.
 
+pub mod packs;
 pub mod replacements;
 pub mod vocabulary;
 
