@@ -374,6 +374,17 @@ impl Diarize for OnnxDiarizer {
             }
         }
     }
+
+    /// Reset speaker cluster state for a new meeting session. Preserves the
+    /// distance threshold so the user's tuning (via `HUSH_DIARIZER_THRESHOLD`)
+    /// carries over, but clears all per-session speaker history so IDs from
+    /// a previous meeting do not bleed into the next one.
+    fn reset(&self) {
+        let mut clusters = self.clusters.lock().unwrap_or_else(|e| e.into_inner());
+        let threshold = clusters.distance_threshold;
+        *clusters = SessionClusterState::new(threshold);
+        tracing::debug!("OnnxDiarizer: cluster state reset for new session");
+    }
 }
 
 /// Load, optimise, and compile the wespeaker ONNX model into a

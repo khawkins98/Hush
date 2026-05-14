@@ -39,6 +39,11 @@ let meetingAppendFailedNotice = $state<string | null>(null);
 /// call so a stale response from a previous in-flight request can't
 /// overwrite state already set by a newer one.
 let meetingRefreshSeq = 0;
+/// Latest-wins guard for `meeting.refreshActiveDetail()`. Same pattern as
+/// `meetingRefreshSeq` — rapid session-switching can produce an in-flight
+/// detail fetch from the previous session that should not overwrite the
+/// already-resolved detail for the current one.
+let meetingActiveDetailSeq = 0;
 /// Current search query mirror. Kept in sync by history.setSearchQuery()
 /// so meeting.refresh() uses the right filter without importing history.
 let meetingSearchQuery = "";
@@ -138,12 +143,15 @@ export const meeting = {
     }
   },
   async refreshActiveDetail(id: number) {
+    meetingActiveDetailSeq += 1;
+    const seq = meetingActiveDetailSeq;
     try {
-      meetingActiveDetail = await invoke<MeetingSessionDetail>(
-        "meeting_session_get",
-        { id },
-      );
+      const detail = await invoke<MeetingSessionDetail>("meeting_session_get", { id });
+      // Discard if a newer refreshActiveDetail already completed.
+      if (seq !== meetingActiveDetailSeq) return;
+      meetingActiveDetail = detail;
     } catch (e) {
+      if (seq !== meetingActiveDetailSeq) return;
       // Transient poll failures are logged but not surfaced — the next
       // poll cycle will self-heal and we don't want to clobber the
       // session-list error field with an ephemeral detail-fetch blip.
