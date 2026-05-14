@@ -260,7 +260,7 @@
     <ErrorDisplay error={history.error} scope="History" />
   {/if}
 
-  {#if !history.loaded || !meeting.sessionsLoaded}
+  {#if !history.feedLoaded}
     <p class="loading-skeleton">Loading history…</p>
   {:else if history.mergedFeed.length === 0}
     <p class="empty-history">

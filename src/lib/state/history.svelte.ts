@@ -154,6 +154,18 @@ export const history = {
   get mergedFeed() {
     return mergedFeed;
   },
+  // True once both dictation and meeting data have completed their first load.
+  // HistoryPanel gates its empty-state and skeleton on this single flag.
+  get feedLoaded() {
+    return historyLoaded && meeting.sessionsLoaded;
+  },
+  // Refresh both dictation history and meeting sessions in parallel.
+  // Use this whenever a search-query change or post-recording invalidation
+  // needs to keep the unified feed in sync — avoids scattering paired
+  // history.refresh() + meeting.refresh() calls across consumers.
+  async feedRefresh() {
+    await Promise.all([history.refresh(), meeting.refresh()]);
+  },
   async refresh() {
     historyError = null;
     historySearching = true;
