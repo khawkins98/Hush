@@ -143,7 +143,7 @@ test.describe("destructive confirm — History row Delete", () => {
 
     const btn = page.locator('[data-testid="history-delete-11"]');
     await btn.click();
-    await expect(btn).toHaveText(/Click to confirm/i);
+    await expect(btn).toHaveAttribute('aria-label', /confirm/i);
     expect(calls).toEqual([]);
     await btn.click();
     await expect.poll(() => calls.length).toBe(1);

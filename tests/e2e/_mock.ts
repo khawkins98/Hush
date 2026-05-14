@@ -188,6 +188,12 @@ export async function installMocks(
       // link clicks pass through; specs that exercise a link
       // override with a recording handler.
       "plugin:shell|open": () => undefined,
+      // `@tauri-apps/plugin-clipboard-manager::writeText()` — used by
+      // ResultBlock.svelte and HistoryDictationRow.svelte to copy
+      // formatted transcripts. Default no-op so tests that don't
+      // exercise copy pass through; tests that want to assert a copy
+      // happened can override per-test.
+      "plugin:clipboard-manager|write_text": () => undefined,
       open_macos_privacy_pane: () => undefined,
       prime_screen_recording_permission: () => undefined,
       relaunch_app: () => undefined,
