@@ -4,9 +4,27 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
-# Learnings Log
+## 2026-05-14 — MIN_DICTATION_MS 1 s threshold + "ignored" DB column (#682)
 
-Engineering decision log for Hush. Append-only, dated entries. Captures dependency choices, platform quirks, false starts, and anything future contributors would benefit from knowing.
+**Problem.** Users accidentally trigger the hotkey and immediately release it (e.g., tapping while thinking). These produce 50–400 ms "recordings" that Whisper classifies as silence or no-speech. Over time, history fills with blank entries for accidental taps. Pre-#682 the threshold was 200 ms, which was a crash-prevention floor (whisper.cpp's mel front-end can panic on near-empty audio buffers), not a user-policy threshold — and users were still seeing short-noise entries.
+
+**Design decision: "ignored" DB column instead of discarding or filtering.**
+
+Rejected alternatives:
+- **Discard silently:** users tap the hotkey accidentally and get no feedback — they're left wondering if Hush registered the press. Bad PTT UX.
+- **Sentinel in transcript (e.g. `[TOO_SHORT]`):** sentinel value would inflate `get_stats` (session count, word count, recording time), conflict with Whisper's own bracket tokens (`[BLANK_AUDIO]`, `[MUSIC]`), and pollute CSV export. The transcript column is for spoken text, not status flags.
+- **Filter at the IPC boundary (never write to DB):** frontend's `limit` parameter no longer maps to what the user sees; pagination maths breaks. A separate `count_non_ignored()` call is needed for every list/search consumer.
+
+**Chosen approach:** `ignored INTEGER NOT NULL DEFAULT 0` column on the `history` table.
+
+- Stats query adds `WHERE ignored = 0` so the "X sessions, Y words" bar stays accurate.
+- Bulk CSV export skips `ignored = true` rows — empty-transcript rows add no value in an export users might share or analyse.
+- Frontend renders ignored rows dimmed + italic: *"Recording too short — not transcribed"*. Copy and Export icons hidden; Delete visible so users can clean them up.
+- The row stays in the list so the user's timeline is contiguous — no mysterious gap at the time they pressed the hotkey.
+
+**Why 1000 ms, not 200 ms?**
+
+The 200 ms floor is a crash-prevention *floor*: below that, whisper.cpp's mel front-end may reject the buffer. The 1000 ms constant is a *user-policy threshold*: even the shortest meaningful utterances ("yes", "no") are ~300–500 ms. Anything under 1 s is almost always an accidental tap, not a deliberate dictation press. The two concerns are decoupled — `MIN_DICTATION_MS` absorbs both by being conservative on both dimensions. If the crash-prevention floor is ever raised (upstream whisper.cpp changes), it stays well below 1000 ms without a policy change.
 
 ---
 
@@ -2212,12 +2230,12 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 
 ---
 
-## 2026-06-XX — #636 fix: drop-and-recreate WhisperContext + ORT Session at meeting stop boundaries
+## 2026-06-XX — #636 fix: drop-and-recreate WhisperContext + tract Session at meeting stop boundaries
 
 ### Why prior fixes didn't fully work
 
 - **`WhisperState` recreation (#615 / #623):** bounded state-level allocations (partial results, per-chunk prompts), not the compute buffers inside `WhisperContext` itself (KV cache, mel scratch, beam decoder scratch). Those buffers are allocated by whisper.cpp's C++ side and high-watermark across `whisper_full` calls — malloc can never reclaim them while any live pointer holds the context open.
-- **ORT arena disable (#630):** the per-run output tensor arena was freed between calls, but the underlying ONNX `Session` still accumulated per-run state across a long meeting.
+- **ORT arena disable (#630):** the per-run output tensor arena was freed between calls, but the underlying ORT `Session` still accumulated (before the tract-onnx migration #641) per-run state across a long meeting.
 - **mimalloc (#635):** an alternative allocator can't free memory that the C++ / ORT runtimes hold live pointers to. It helps with fragmentation of Rust-owned allocations but doesn't touch the C/C++ side when used without the `override` feature.
 - **mimalloc with `override` + this PR (#636 follow-up):** with the `override` feature, mimalloc installs itself as the primary malloc zone on macOS via constructor-time interposition, intercepting `malloc`/`free` from C/C++ code (whisper.cpp, ORT) in addition to Rust. Alone (#635), it can't help because the libraries hold live pointers; with this PR's destructors firing at meeting stop, mimalloc finally has freed pages it can madvise back to the OS. Measured test (5:30 meeting, post-#636): Physical Footprint stayed at 8 GB after stop with system malloc — zero recovery despite correct Drop firing. Paired with override: expected to recover to ~1.5–2 GB baseline within seconds of stop.
 - **Per-run ORT shrinkage (#631, reverted):** freed output tensor memory *before* `try_extract_tensor` could read it → silently zeroed all speaker embeddings → looked like a fix because zero allocations were returned.
@@ -2230,7 +2248,7 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 - **Background rebuild only (fire-and-forget `tokio::spawn`):**
    - Calls `build_transcriber` twice (dictation + meeting slots) concurrently via `tokio::join!`.
    - Calls `swap_diarizer_after_download` on `spawn_blocking` to reload the `OnnxDiarizer` (SHA-256 verify + ONNX init, ~80 ms).
-   - On success, atomically installs each new context Arc, dropping the old one. Old `WhisperContext` C++ destructors fire here — KV cache, mel scratch, beam scratch reclaimed. Old ORT `Session` destructor fires when the old diarizer Arc drops.
+   - On success, atomically installs each new context Arc, dropping the old one. Old `WhisperContext` C++ destructors fire here — KV cache, mel scratch, beam scratch reclaimed. Old tract `Session` destructor fires when the old diarizer Arc drops.
    - On failure (`build_transcriber` returns `None` or `swap_diarizer_after_download` errors): logs at `error!` and leaves the existing (high-watermarked) context live rather than silently breaking dictation / speaker identification.
 
 ### Why transcribers AND the diarizer are rebuilt-then-installed (not nulled-then-rebuilt)

@@ -1,9 +1,10 @@
 # Hush — Product Requirements Document
 
-**Status:** Draft v0.2
-**Date:** 2026-04-25
+**Status:** Historical design document (v0.2, 2026-04-25). See [`STATUS.md`](./STATUS.md) and [`CHANGELOG.md`](./CHANGELOG.md) for current state.
 **Owner:** Ken Hawkins
 **Project:** Hush, a cross-platform offline voice-to-text app inspired by VoiceInk
+
+> **Note:** This document is the original product spec and reflects the design direction at v0.2 (April 2026). Most v1 goals have shipped in the v0.5–v0.6 series. For current feature status, see [`STATUS.md`](./STATUS.md) and [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## 1. Summary
 

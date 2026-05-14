@@ -76,9 +76,10 @@ Subsequent runs are incremental.
 
 ```bash
 # Run the full app. Default features are `whisper` (needs cmake on macOS) +
-# `diarization-onnx` (pulls ~50 MB ORT binaries on first build; needs
-# network). ScreenCaptureKit is linked unconditionally on macOS so
-# system-audio capture works without an extra feature flag.
+# `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
+# no vendored binaries — compiles from source, no network needed).
+# CoreAudio process tap and Input Monitoring are unconditional macOS
+# dependencies; system-audio capture works without an extra feature flag.
 npm run tauri dev
 
 # UI-only path: app shell with no Whisper backend and no ONNX diarizer.
@@ -174,11 +175,11 @@ cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings
 
 ---
 
-## macOS TCC quirk (Screen Recording)
+## macOS TCC quirks and dev-reset
 
-`cargo tauri dev` produces an **unsigned** binary. macOS TCC attributes it to the parent terminal process, so Microphone and Input Monitoring permissions work fine — but **Screen Recording (ScreenCaptureKit / system audio)** does not.
+`cargo tauri dev` produces an **unsigned** binary. macOS TCC attributes it to the parent terminal process, so Microphone and Input Monitoring permissions work inconsistently and may not persist across rebuilds. **Screen Recording is no longer required** (system audio uses the CoreAudio process-tap backend as of v0.5.0, not ScreenCaptureKit).
 
-For anything that touches SCK, build the real `.app` bundle:
+For anything that requires a real signed `.app` bundle — permission prompts, TCC identity testing, first-run onboarding — build the bundle:
 
 ```bash
 npm run tauri:bundle
@@ -194,15 +195,15 @@ To get back to a completely clean state for testing onboarding or first-run perm
 npm run dev-reset
 ```
 
-This wipes all TCC grants, the app database, preferences, and caches. Screen Recording rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
+This wipes all TCC grants, the app database, preferences, and caches. Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
 
 Full recovery recipes: [`docs/macos-permissions.md`](./macos-permissions.md).
 
 ---
 
-## ScreenCaptureKit / Swift dylib workaround
+## ScreenCaptureKit Swift dylib workaround
 
-ScreenCaptureKit is an unconditional macOS dependency. The crate's build script links `libSwift_Concurrency` at runtime using baked-in rpaths (`/usr/lib/swift`, `/Library/Developer/CommandLineTools/.../swift-5.5/macosx`). On a dev machine where those paths don't resolve, `cargo test --lib` aborts with a missing-dylib error.
+ScreenCaptureKit is an unconditional macOS build dependency (it's linked by the `screencapturekit` crate even though Hush no longer uses it for audio capture at runtime — system audio moved to a CoreAudio process tap in v0.5.0). The crate's build script links `libSwift_Concurrency` at runtime using baked-in rpaths (`/usr/lib/swift`, `/Library/Developer/CommandLineTools/.../swift-5.5/macosx`). On a dev machine where those paths don't resolve, `cargo test --lib` aborts with a missing-dylib error.
 
 Workaround:
 
