@@ -272,6 +272,7 @@ export async function installMocks(
       start_dictation: () => undefined,
       stop_dictation: () => ({
         text: "hello world",
+        durationMs: 1234,
         foreground: { appName: "Hush", windowTitle: "Hush" },
       }),
 

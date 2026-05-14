@@ -155,7 +155,7 @@ impl HistoryRepository for SqliteHistoryRepository {
     }
 
     async fn count(&self) -> Result<i64> {
-        let row: (i64,) = sqlx::query_as("SELECT count(*) FROM history")
+        let row: (i64,) = sqlx::query_as("SELECT count(*) FROM history WHERE ignored = 0")
             .fetch_one(self.db.pool())
             .await
             .context("count history")?;
