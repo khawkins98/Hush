@@ -2452,6 +2452,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tract-onnx",
+ "url",
  "whisper-rs",
  "wiremock",
  "zeroize",

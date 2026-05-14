@@ -34,12 +34,12 @@ export const Events = {
   /// native macOS menu bar. Payload is `"dictation" | "meetings" |
   /// "history"`. Sidebar uses this to flip the active tab.
   MenuGotoSection: "menu:goto-section",
-  /// Frontend → settings window (broadcast): which tab to surface
-  /// when Settings opens (or, if it's already open, switch to).
+  /// Frontend → Settings panel (broadcast): which tab to surface
+  /// when Settings opens (or, if it's already visible, switch to).
   SettingsGotoTab: "settings:goto-tab",
   /// Backend → all windows (broadcast): a model download is in
   /// flight. Payload is `{ id, received, total | null }`. The
-  /// settings window's picker drives the progress bar.
+  /// Settings panel's picker drives the progress bar.
   ModelDownloadProgress: "model:download-progress",
   /// Backend → all windows (broadcast): a model download finished
   /// successfully. Payload is `{ id }`. Main window uses this to
@@ -72,7 +72,7 @@ export const Events = {
   /// replug and the pump has swapped back. Payload: `{ sessionId,
   /// sourceKind, restoredDevice }`. Dismisses the device-lost banner.
   AudioDeviceRestored: "audio:device-restored",
-  /// Backend → settings window: result of a Check for Updates
+  /// Backend → Settings panel: result of a Check for Updates
   /// probe fired from the macOS menu (#265). Payload is the
   /// `UpdateCheckResult` tagged union. The Settings About tab
   /// listens for this to render the result inline when the
@@ -113,7 +113,7 @@ export const Events = {
   /// already-open windows. Canonical helpers live in
   /// `lib/status-line.ts`.
   StatusLine: "hush:status-line",
-  /// Backend → settings window (debug tab): a new backend log
+  /// Backend → Settings panel (debug tab): a new backend log
   /// entry is available. Payload is a `LogEntry` object. The
   /// DebugConsole component appends it to the in-page list.
   /// Subscribe *before* calling `get_log_entries` to guarantee no

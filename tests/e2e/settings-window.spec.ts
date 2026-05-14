@@ -9,7 +9,7 @@ import { installMocks } from "./_mock";
 // the main window to a Settings tab) live in `meeting-panel` /
 // `error-states` style files when those flows land.
 
-test.describe("settings window — toolbar nav", () => {
+test.describe("settings panel — toolbar nav", () => {
   test("renders all six tabs and lands on General by default", async ({
     page,
   }) => {
@@ -93,7 +93,7 @@ test.describe("settings window — toolbar nav", () => {
   });
 });
 
-test.describe("settings window — General tab", () => {
+test.describe("settings panel — General tab", () => {
   test("autostart toggle reflects the plugin's reported state", async ({
     page,
   }) => {
@@ -391,7 +391,7 @@ test.describe("settings window — General tab", () => {
   });
 });
 
-test.describe("settings window — PTT editor", () => {
+test.describe("settings panel — PTT editor", () => {
   test("renders the persisted combo as kbd chips and the enable toggle", async ({
     page,
   }) => {
@@ -492,7 +492,7 @@ test.describe("settings window — PTT editor", () => {
   });
 });
 
-test.describe("settings window — Meeting tab (Phase E #112)", () => {
+test.describe("settings panel — Meeting tab (Phase E #112)", () => {
   test("advanced overrides mounts collapsed and shows the empty-state hint when expanded", async ({
     page,
   }) => {
@@ -846,7 +846,7 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
   });
 });
 
-test.describe("settings window — About section", () => {
+test.describe("settings panel — About section", () => {
   test("renders app name + version + license + repo links", async ({
     page,
   }) => {
@@ -1133,7 +1133,7 @@ test.describe("settings window — About section", () => {
   });
 });
 
-test.describe("settings window — Permissions tab — perm-action buttons", () => {
+test.describe("settings panel — Permissions tab — perm-action buttons", () => {
   // perm-action-{key} buttons render inside PermissionsRows when
   // the matching status is NOT "not-applicable". The PermissionsTab
   // only mounts PermissionsRows when diagnostic !== null (requires
@@ -1220,7 +1220,7 @@ test.describe("settings window — Permissions tab — perm-action buttons", () 
   });
 });
 
-test.describe("settings window — General tab: sound-cue previews", () => {
+test.describe("settings panel — General tab: sound-cue previews", () => {
   // settings-cue-preview-start and settings-cue-preview-done are always
   // visible in the Sound Cues section (they appear even when the master
   // toggle is off, greyed out via CSS class rather than `disabled`).
@@ -1254,7 +1254,7 @@ test.describe("settings window — General tab: sound-cue previews", () => {
   });
 });
 
-test.describe("settings window — General tab: theme row", () => {
+test.describe("settings panel — General tab: theme row", () => {
   // settings-theme-row wraps the System / Light / Dark segmented control.
   // Pinning its visibility ensures the Appearance section of GeneralTab
   // didn't accidentally get gated behind a feature flag.
@@ -1278,7 +1278,7 @@ test.describe("settings window — General tab: theme row", () => {
   });
 });
 
-test.describe("settings window — General tab: developer console toggle", () => {
+test.describe("settings panel — General tab: developer console toggle", () => {
   // settings-debug-console-toggle is in the Advanced section (hidden by
   // default behind settings-general-advanced-toggle). Enabling it calls
   // the localStorage-backed setDebugConsoleEnabled helper; no IPC.
@@ -1322,7 +1322,7 @@ test.describe("settings window — General tab: developer console toggle", () =>
   });
 });
 
-test.describe("settings window — Debug tab: startup phase timings", () => {
+test.describe("settings panel — Debug tab: startup phase timings", () => {
   // #584 Angle 1. Debug tab is gated on the developer-console toggle
   // (localStorage `hush.debugConsole = "1"`); seed before goto so the
   // tab renders. The Backend log section is always present; the
@@ -1417,7 +1417,7 @@ test.describe("settings window — Debug tab: startup phase timings", () => {
   });
 });
 
-test.describe("settings window — Debug tab: log file section (#622-followup)", () => {
+test.describe("settings panel — Debug tab: log file section (#622-followup)", () => {
   // Hidden when get_log_dir returns null (file logging off /
   // non-macOS / HUSH_LOG_FILE=off). Visible with reveal + copy
   // controls when the IPC returns a path. Default mock returns
@@ -1483,7 +1483,7 @@ test.describe("settings window — Debug tab: log file section (#622-followup)",
   });
 });
 
-test.describe("settings window — Permissions tab: refresh button", () => {
+test.describe("settings panel — Permissions tab: refresh button", () => {
   // perms-refresh triggers a fresh diagnose_macos_permissions call so the
   // user can re-check after granting/revoking a permission outside the app.
   // PermissionsTab only renders the button when `diagnostic !== null`, which
@@ -1553,7 +1553,7 @@ test.describe("settings window — Permissions tab: refresh button", () => {
   });
 });
 
-test.describe("settings window — Permissions tab: reset flow", () => {
+test.describe("settings panel — Permissions tab: reset flow", () => {
   // Covers the reset_macos_permissions IPC path (#712). The Reset button is
   // inside MacosDiagnosticPanel which starts open (diagnosticOpen = true in
   // PermissionsTab), so no extra click is needed to expand the disclosure.
