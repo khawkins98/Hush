@@ -562,3 +562,70 @@ pub async fn reset_macos_permissions() -> IpcResult<MacosPermissionResetResult> 
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- open_macos_privacy_pane whitelist (#82) --------------------------------
+
+    /// Unknown targets must be rejected without spawning any process.
+    /// This guards the whitelist against frontend bugs or a future
+    /// maintainer accidentally accepting an arbitrary URL.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn open_macos_privacy_pane_rejects_unknown_target() {
+        let result = open_macos_privacy_pane("unknown-pane".to_string()).await;
+        match result {
+            Err(IpcError::Internal(msg)) => {
+                assert!(
+                    msg.contains("unknown privacy pane target"),
+                    "expected whitelist-rejection message, got: {msg}"
+                );
+            }
+            other => panic!("expected IpcError::Internal, got: {other:?}"),
+        }
+    }
+
+    /// All whitelisted targets must reach `Ok(())` on the whitelist
+    /// look-up path. This pins the complete whitelist so a future edit
+    /// that removes or misspells a key is a compile-time (or at worst
+    /// test-time) failure rather than a runtime regression.
+    ///
+    /// Note: on CI this actually invokes `open <url>` which is a no-op
+    /// because System Settings isn't installed. The test only validates
+    /// the whitelist-acceptance path, not that System Settings opens.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn open_macos_privacy_pane_accepts_whitelisted_targets() {
+        for target in &["microphone", "input-monitoring", "screen-recording"] {
+            open_macos_privacy_pane(target.to_string())
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("whitelisted target {target:?} was unexpectedly rejected: {e:?}")
+                });
+        }
+    }
+
+    // ---- diagnose_macos_permissions non-macOS fallthrough (#82) ----------------
+
+    /// On non-macOS the diagnostic must return an empty bundle-id and
+    /// `can_reset = false` so the Settings → Permissions panel knows
+    /// there's nothing to reset. Keeps Linux / Windows CI from
+    /// exercising macOS-only code paths accidentally.
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn diagnose_macos_permissions_non_macos_returns_empty_bundle_id_and_no_reset() {
+        let result = diagnose_macos_permissions()
+            .await
+            .expect("non-macOS diagnose should always succeed");
+        assert_eq!(
+            result.bundle_id, "",
+            "non-macOS bundle_id must be empty so the UI suppresses it"
+        );
+        assert!(
+            !result.can_reset,
+            "can_reset must be false on non-macOS (tccutil is Apple-only)"
+        );
+    }
+}
