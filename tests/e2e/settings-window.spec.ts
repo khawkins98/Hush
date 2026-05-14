@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { fireEvent, installMocks } from "./_mock";
 
 // E2E coverage for the standalone Settings window
 // (`src/routes/settings/+page.svelte`). The window is a sibling
@@ -78,14 +78,7 @@ test.describe("settings panel — toolbar nav", () => {
       page.locator('[data-testid="settings-tab-general"]'),
     ).toHaveAttribute("aria-current", "page");
 
-    await page.evaluate(() => {
-      const bus = (
-        window as unknown as {
-          __hush_e2e_event_bus?: { fire: (n: string, p: unknown) => void };
-        }
-      ).__hush_e2e_event_bus;
-      bus?.fire("settings:goto-tab", "permissions");
-    });
+    await fireEvent(page, "settings:goto-tab", "permissions");
 
     await expect(
       page.locator('[data-testid="settings-tab-permissions"]'),
@@ -1010,18 +1003,9 @@ test.describe("settings panel — About section", () => {
 
     // Drive a download-progress event with a known chunk size so
     // the accumulator visibly increments.
-    await page.evaluate(() => {
-      const bus = (
-        window as unknown as {
-          __hush_e2e_event_bus?: {
-            fire: (n: string, p: unknown) => void;
-          };
-        }
-      ).__hush_e2e_event_bus;
-      bus?.fire("updater:download-progress", {
-        chunkLen: 524_288,
-        total: 5_242_880,
-      });
+    await fireEvent(page, "updater:download-progress", {
+      chunkLen: 524_288,
+      total: 5_242_880,
     });
 
     // Progress readout shows the accumulated bytes as a percent
@@ -1032,16 +1016,7 @@ test.describe("settings panel — About section", () => {
 
     // Drive the install-pending handoff event — UI swaps to the
     // "Hush will relaunch" copy.
-    await page.evaluate(() => {
-      const bus = (
-        window as unknown as {
-          __hush_e2e_event_bus?: {
-            fire: (n: string, p: unknown) => void;
-          };
-        }
-      ).__hush_e2e_event_bus;
-      bus?.fire("updater:install-pending", { version: "0.2.0" });
-    });
+    await fireEvent(page, "updater:install-pending", { version: "0.2.0" });
 
     await expect(
       page.locator('[data-testid="about-install-pending"]'),

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { gotoSection, installMocks } from "./_mock";
 
 // E2E coverage for diarizer model section testids in Settings → Meeting tab:
 // diarizer-model-ready, diarizer-source-link,
@@ -11,7 +11,7 @@ import { installMocks } from "./_mock";
 
 async function openMeetingTab(page: import("@playwright/test").Page) {
   await page.goto("/");
-  await page.locator('[data-testid="sidebar-nav-settings"]').click();
+  await gotoSection(page, "configuration");
   await page.locator('[data-testid="settings-tab-meeting"]').click();
 }
 
