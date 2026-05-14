@@ -142,8 +142,17 @@ pub async fn meeting_session_get(
 }
 
 /// Delete a session and its utterances (FK cascade).
+///
+/// Rejects deletion of the active session — deleting the parent row
+/// while the pump is writing would cause silent append failures and
+/// leave `close_session` updating zero rows on stop (#833).
 #[tauri::command]
 pub async fn meeting_session_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()> {
+    if state.meeting_manager.active_session_id() == Some(id) {
+        return Err(IpcError::MeetingSessions(
+            "cannot delete the active recording session".to_owned(),
+        ));
+    }
     state
         .data
         .meetings
