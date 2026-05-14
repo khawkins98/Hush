@@ -175,6 +175,7 @@ export const history = {
    *  Replaces the inline timer that used to live in +page.svelte. */
   setSearchQuery(query: string) {
     historyQuery = query;
+    meeting.searchQuery = query;
     if (_searchDebounceTimer !== null) clearTimeout(_searchDebounceTimer);
     _searchDebounceTimer = setTimeout(() => {
       void history.feedRefresh();
