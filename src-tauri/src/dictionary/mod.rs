@@ -36,6 +36,6 @@ pub use replacements::{
     SqliteReplacementRepository,
 };
 pub use vocabulary::{
-    format_vocabulary_prompt, NewVocabularyTerm, SqliteVocabularyRepository,
-    VocabularyRepository, VocabularyTerm, MAX_PROMPT_CHARS,
+    format_vocabulary_prompt, NewVocabularyTerm, SqliteVocabularyRepository, VocabularyRepository,
+    VocabularyTerm, MAX_PROMPT_CHARS,
 };

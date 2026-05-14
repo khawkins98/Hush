@@ -24,10 +24,8 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::AudioSource;
-use crate::dictionary::{
-    ReplacementRule, VocabularyTerm,
-};
 use crate::dictionary::vocabulary::format_initial_prompt;
+use crate::dictionary::{ReplacementRule, VocabularyTerm};
 use crate::history::NewHistoryEntry;
 use crate::ipc::AppState;
 
