@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import type { MeetingCopyNotice } from "$lib/MeetingSection.svelte";
 import {
   formatErrorDisplay,
   type ErrorDisplay,
 } from "$lib/errors";
+import { Events } from "$lib/events";
 import { joinUtterances } from "$lib/transcript-format";
 import type {
   ActiveMeetingSession,
@@ -228,5 +230,79 @@ export const meeting = {
   },
   clearPendingPermissionsDialog() {
     pendingPermissionsDialogIntro = null;
+  },
+  /// Register the three meeting-session Tauri event listeners and
+  /// return a cleanup function. Call from `AppLifecycle.svelte`'s
+  /// `onMount`; call the returned cleanup from `onDestroy`.
+  ///
+  /// Owned here (rather than in `AppLifecycle`) because all three
+  /// events update only meeting state — keeping them co-located with
+  /// the state they mutate means fewer files to touch if the event
+  /// shapes change.
+  ///
+  /// `AudioDeviceLost` / `AudioDeviceRestored` remain in
+  /// `AppLifecycle` because they update BOTH `audio.inputDeviceName`
+  /// AND `meeting.sourceFailedNotice` across two state modules.
+  async initSessionListeners(): Promise<() => void> {
+    const unlistenStarted = await listen<{ sessionId: number }>(
+      Events.MeetingSessionStarted,
+      (e) => {
+        meeting.activeId = e.payload.sessionId;
+        void meeting.refresh();
+      },
+    );
+
+    const unlistenSourceFailed = await listen<{
+      sessionId: number;
+      sourceKind: string;
+      reason: string;
+      deviceLost: boolean;
+    }>(Events.MeetingSourceFailed, (e) => {
+      console.debug(
+        "[MeetingSourceFailed]",
+        e.payload.sourceKind,
+        e.payload.reason,
+        "deviceLost:",
+        e.payload.deviceLost,
+        "sessionId:",
+        e.payload.sessionId,
+      );
+      const label =
+        e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
+      // Mirrors the multi-source detection in startSession().
+      const wasMultiSource =
+        audio.meetingMicId !== null &&
+        audio.meetingIncludeSystemAudio &&
+        audio.findSystemAudio()?.isSupported === true;
+      const otherSourceLabel =
+        e.payload.sourceKind === "mic" ? "system audio" : "microphone";
+
+      let verb: string;
+      if (e.payload.deviceLost) {
+        verb = wasMultiSource
+          ? `disconnected — ${otherSourceLabel} still recording`
+          : "disconnected — recording stopped";
+      } else if (e.payload.reason.includes("at session start")) {
+        verb = "couldn't start";
+      } else {
+        verb = "stopped transcribing";
+      }
+      meeting.sourceFailedNotice = `${label} ${verb}.`;
+    });
+
+    const unlistenAppendFailed = await listen<{ error: string }>(
+      Events.DictationMeetingAppendFailed,
+      (e) => {
+        console.warn("[DictationMeetingAppendFailed]", e.payload.error);
+        meeting.appendFailedNotice =
+          "A transcription couldn't be saved to your meeting session. The text is still on your clipboard.";
+      },
+    );
+
+    return () => {
+      unlistenStarted();
+      unlistenSourceFailed();
+      unlistenAppendFailed();
+    };
   },
 };
