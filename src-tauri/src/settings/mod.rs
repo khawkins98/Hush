@@ -152,6 +152,23 @@ pub mod keys {
     /// parity so future TCC-fingerprint shifts can lean on the
     /// same persistence shape.
     pub const PERMISSIONS_MICROPHONE_LAST_CONFIRMED: &str = "permissions_microphone_last_confirmed";
+
+    /// JSON array of enabled dictionary preset pack slugs (#664).
+    /// Example: `["dev-general","business"]`. Absent / unparseable
+    /// falls back to an empty list — no packs enabled. Pack contents
+    /// are never materialised into the vocabulary/replacements tables;
+    /// this setting is the sole persistence point.
+    pub const ENABLED_PACKS: &str = "enabled_packs";
+
+    /// User's preferred English output style for Whisper transcription
+    /// (#664). Accepted values:
+    /// - `"american"` — no style hint (Whisper default behaviour).
+    /// - `"british"` — prepends `"Use British English spelling."`.
+    /// - `"oxford"` — prepends `"Use Oxford English spelling."` (British
+    ///   spellings + Oxford comma tendency).
+    ///
+    /// Absent / unrecognised values default to `"american"`.
+    pub const LANGUAGE_STYLE: &str = "language_style";
 }
 
 /// Repository trait at the storage boundary.

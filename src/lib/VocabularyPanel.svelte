@@ -1,26 +1,34 @@
 <script lang="ts">
   import ErrorDisplay from "./ErrorDisplay.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
-  import type { VocabularyTerm } from "./types";
+  import type { LanguageStyle, PackStatus, VocabularyTerm } from "./types";
 
   type Props = {
     vocabulary: VocabularyTerm[];
     vocabularyLoaded: boolean;
     vocabularyError: ErrorDisplayShape | null;
+    packs: PackStatus[];
+    languageStyle: LanguageStyle;
     newVocab: string;
     inputEl?: HTMLInputElement | null;
     onSubmit: (e: Event) => void | Promise<void>;
     onDelete: (term: VocabularyTerm) => void | Promise<void>;
+    onTogglePack: (slug: string, enable: boolean) => void | Promise<void>;
+    onSetLanguageStyle: (style: LanguageStyle) => void | Promise<void>;
   };
 
   let {
     vocabulary,
     vocabularyLoaded,
     vocabularyError,
+    packs,
+    languageStyle,
     newVocab = $bindable(),
     inputEl = $bindable(),
     onSubmit,
     onDelete,
+    onTogglePack,
+    onSetLanguageStyle,
   }: Props = $props();
 
   // Per-row click-to-confirm. First click arms the row's Delete
@@ -44,11 +52,78 @@
       confirmingId = null;
     }, 5000);
   }
+
+  const STYLE_LABELS: Record<LanguageStyle, string> = {
+    american: "American English",
+    british: "British English",
+    oxford: "Oxford English",
+  };
 </script>
 
+<!-- Language style -->
+<section class="vocabulary panel-language-style" aria-labelledby="language-style-heading">
+  <header class="history-header">
+    <h2 id="language-style-heading">Language Style</h2>
+  </header>
+  <p class="hint-prose">
+    Sets the spelling style hint in Whisper's initial prompt. American is the
+    model default. British and Oxford add a short prefix ("Use British English
+    spelling.") that nudges the model toward the appropriate spellings.
+  </p>
+  <div class="style-options" role="radiogroup" aria-label="Language style">
+    {#each (["american", "british", "oxford"] as LanguageStyle[]) as style}
+      <label class="style-option" class:selected={languageStyle === style}>
+        <input
+          type="radio"
+          name="language-style"
+          value={style}
+          checked={languageStyle === style}
+          onchange={() => void onSetLanguageStyle(style)}
+        />
+        {STYLE_LABELS[style]}
+      </label>
+    {/each}
+  </div>
+</section>
+
+<!-- Preset packs -->
+{#if packs.length > 0}
+  <section class="vocabulary panel-packs" aria-labelledby="packs-heading">
+    <header class="history-header">
+      <h2 id="packs-heading">Preset Packs</h2>
+    </header>
+    <p class="hint-prose">
+      Opt-in vocabulary and replacement bundles. Enabled packs supplement your
+      personal vocabulary — their terms are deduplicated against your own so
+      your spellings always win.
+    </p>
+    <ul class="pack-list">
+      {#each packs as pack (pack.slug)}
+        <li class="pack-row">
+          <label class="pack-label">
+            <input
+              type="checkbox"
+              checked={pack.enabled}
+              onchange={(e) =>
+                void onTogglePack(pack.slug, (e.target as HTMLInputElement).checked)}
+              aria-label={`${pack.enabled ? "Disable" : "Enable"} ${pack.name} pack`}
+            />
+            <span class="pack-name">{pack.name}</span>
+          </label>
+          <span class="pack-description">{pack.description}</span>
+          <span class="pack-counts">
+            {pack.vocabularyCount} terms · {pack.replacementCount} replacements
+          </span>
+        </li>
+      {/each}
+    </ul>
+  </section>
+{/if}
+
+<!-- Personal vocabulary -->
 <section class="vocabulary panel-vocabulary" aria-labelledby="vocabulary-heading">
   <header class="history-header">
-    <h2 id="vocabulary-heading">Vocabulary</h2>
+    <h2 id="vocabulary-heading">Personal Vocabulary</h2>
   </header>
   <p class="hint-prose">
     Words Whisper should be primed to recognise — proper nouns,
@@ -113,6 +188,14 @@
 
 .panel-vocabulary {
   border-left-color: #d8a64a;
+}
+
+.panel-packs {
+  border-left-color: #5b8dd9;
+}
+
+.panel-language-style {
+  border-left-color: #6cba7d;
 }
 
 .history-header {
@@ -280,6 +363,99 @@ button.ghost.danger.confirming {
   margin-left: auto;
 }
 
+/* Language style radio group */
+.style-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.style-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45em 1em;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  background-color: var(--bg-surface);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.style-option:hover {
+  border-color: var(--accent-hover);
+}
+
+.style-option.selected {
+  border-color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
+}
+
+.style-option input[type="radio"] {
+  width: auto;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  accent-color: var(--accent);
+}
+
+/* Preset pack list */
+.pack-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pack-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.2rem;
+  padding: 0.7rem 0.9rem;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.pack-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pack-label input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--accent);
+}
+
+.pack-name {
+  font-size: 0.9rem;
+}
+
+.pack-description {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.pack-counts {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) input,
   :root:not([data-theme="light"]) button {
@@ -321,6 +497,17 @@ button.ghost.danger.confirming {
     background-color: #1f1f1f;
     color: #f0f0f0;
   }
+  :root:not([data-theme="light"]) .style-option {
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  :root:not([data-theme="light"]) .pack-row {
+    background-color: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+  :root:not([data-theme="light"]) .pack-label {
+    color: #d8d8d8;
+  }
 }
 :root[data-theme="dark"] input,
 :root[data-theme="dark"] button {
@@ -361,5 +548,16 @@ button.ghost.danger.confirming {
 :root[data-theme="dark"] .replacement-find {
   background-color: #1f1f1f;
   color: #f0f0f0;
+}
+:root[data-theme="dark"] .style-option {
+  background-color: #2a2a2a;
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] .pack-row {
+  background-color: #2a2a2a;
+  border-color: #3a3a3a;
+}
+:root[data-theme="dark"] .pack-label {
+  color: #d8d8d8;
 }
 </style>
