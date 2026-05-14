@@ -383,3 +383,282 @@ pub(crate) fn swap_diarizer_after_download(
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::AppState;
+
+    // ---- swap_diarizer_after_download (#315) --------------------------------
+
+    /// Sentinel diarizer used by the swap-failure test below.
+    /// Different type from the `RecordingDiarizer` in
+    /// `diarization::tests` so we can use `Arc::ptr_eq` reliably
+    /// to confirm the *exact same* `Arc` survived the failed swap.
+    #[cfg(feature = "diarization-onnx")]
+    struct SwapSentinelDiarizer;
+
+    #[cfg(feature = "diarization-onnx")]
+    impl crate::diarization::Diarize for SwapSentinelDiarizer {
+        fn label_utterances(
+            &self,
+            _utterances: &mut [crate::transcription::Utterance],
+            _audio_chunks: &[Vec<f32>],
+            _format: crate::audio::CaptureFormat,
+        ) {
+            // No-op; presence in the slot is the assertion.
+        }
+    }
+
+    /// When `OnnxDiarizer::new` fails (corrupt / wrong-format file),
+    /// `swap_diarizer_after_download` must not touch the slot at all.
+    /// A partial write would leave the running meeting pump in an
+    /// indeterminate state — it must either succeed atomically or
+    /// leave the original diarizer completely intact.
+    #[cfg(feature = "diarization-onnx")]
+    #[test]
+    fn swap_diarizer_after_download_err_leaves_slot_intact() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("not-wespeaker.onnx");
+        let mut f = std::fs::File::create(&path).expect("create");
+        f.write_all(b"definitely not a wespeaker model")
+            .expect("write");
+        drop(f);
+
+        let sentinel: std::sync::Arc<dyn crate::diarization::Diarize> =
+            std::sync::Arc::new(SwapSentinelDiarizer);
+        let slot: crate::diarization::DiarizeSlot =
+            std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::clone(&sentinel)));
+
+        let res = super::swap_diarizer_after_download(&slot, &path);
+        assert!(res.is_err(), "swap should reject a non-wespeaker file");
+
+        let guard = slot.read().expect("slot read");
+        assert!(
+            std::sync::Arc::ptr_eq(&*guard, &sentinel),
+            "swap failure must not replace the slot's Arc"
+        );
+    }
+
+    // ---- remove_diarizer_model (#351) --------------------------------
+
+    /// Test-side wrapper that calls the IPC body directly without
+    /// needing a `tauri::State<'_, AppState>` constructor.
+    async fn remove_diarizer_model_test(state: &AppState) -> IpcResult<()> {
+        let model = crate::diarization::catalog::default_diarizer_model();
+        let path = state.models_dir.join(&model.filename);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(IpcError::Internal(format!(
+                    "remove diarizer model {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+        {
+            let mut slot = state
+                .diarize_slot
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
+        }
+        state
+            .runtime_flags
+            .diarization_enabled
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        state
+            .settings
+            .set(crate::settings::keys::DIARIZATION_ENABLED, "false")
+            .await
+            .map_err(|e| IpcError::Settings(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Removing when the file isn't present must succeed — covers the
+    /// race where two `remove` calls fire or the user deleted the file
+    /// out of band before clicking Remove.
+    #[tokio::test]
+    async fn remove_diarizer_model_is_idempotent_when_file_missing() {
+        let state = crate::ipc::tests::mock_state();
+        remove_diarizer_model_test(&state)
+            .await
+            .expect("idempotent on missing file");
+    }
+
+    /// After `remove_diarizer_model` the toggle must be cleared in
+    /// both the in-memory atomic and the persisted settings row so
+    /// the Speakers panel shows a consistent off-by-default state
+    /// even after app restart.
+    #[tokio::test]
+    async fn remove_diarizer_model_persists_toggle_off() {
+        let state = crate::ipc::tests::mock_state();
+        state
+            .runtime_flags
+            .diarization_enabled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        state
+            .settings
+            .set(crate::settings::keys::DIARIZATION_ENABLED, "true")
+            .await
+            .expect("seed settings");
+
+        remove_diarizer_model_test(&state).await.expect("remove ok");
+
+        assert!(
+            !state
+                .runtime_flags
+                .diarization_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "atomic should flip to false"
+        );
+        let persisted = state
+            .settings
+            .get(crate::settings::keys::DIARIZATION_ENABLED)
+            .await
+            .expect("settings get");
+        assert_eq!(persisted.as_deref(), Some("false"));
+    }
+
+    // ---- download_diarizer_model_inner (#315) --------------------------------
+
+    fn make_test_diarizer_model(url: &str) -> crate::diarization::catalog::DiarizerModelMetadata {
+        crate::diarization::catalog::DiarizerModelMetadata {
+            id: "wespeaker-test".into(),
+            display_name: "Wespeaker (test)".into(),
+            filename: "test_diarizer.onnx".into(),
+            size_mb: 1,
+            description: "test entry".into(),
+            download_url: url.into(),
+            sha256: "0".repeat(64),
+        }
+    }
+
+    fn build_download_deps(
+        emitter: std::sync::Arc<dyn crate::events::EventEmitter>,
+        downloads: std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<String, crate::transcription::download::CancelHandle>,
+            >,
+        >,
+        models_dir: std::path::PathBuf,
+    ) -> DiarizerDownloadDeps {
+        DiarizerDownloadDeps {
+            emitter,
+            downloads,
+            http: reqwest::Client::new(),
+            diarize_slot: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
+                crate::diarization::NoopDiarizer,
+            ))),
+            models_dir,
+        }
+    }
+
+    /// A second `download_diarizer_model` call while a download is
+    /// already in flight must be rejected immediately with
+    /// `IpcError::Settings` and must not emit any events — the UI
+    /// must not flash spurious progress bars.
+    #[tokio::test]
+    async fn download_diarizer_model_rejects_duplicate_concurrent_clicks() {
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            crate::transcription::download::CancelHandle,
+        >::new()));
+        let model = make_test_diarizer_model("http://127.0.0.1:1/never-fetched");
+        downloads.lock().unwrap().insert(
+            model.id.clone(),
+            crate::transcription::download::CancelHandle::new(),
+        );
+
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn crate::events::EventEmitter> =
+            std::sync::Arc::new(recorder.clone());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = build_download_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        let result = download_diarizer_model_inner(deps, model.clone()).await;
+        match result {
+            Err(IpcError::Settings(msg)) => {
+                assert!(
+                    msg.contains("already downloading"),
+                    "expected duplicate-rejection message, got: {msg}"
+                );
+            }
+            other => panic!("expected IpcError::Settings, got: {other:?}"),
+        }
+
+        assert!(
+            recorder.events().is_empty(),
+            "duplicate rejection should not emit any events; got {:?}",
+            recorder.events()
+        );
+
+        let still_present = downloads.lock().unwrap().contains_key(&model.id);
+        assert!(still_present, "pre-existing cancel handle was clobbered");
+    }
+
+    /// After a network failure the spawned task's cleanup path must
+    /// remove the cancel-handle entry from `downloads` so a retry is
+    /// not permanently blocked, and must emit exactly one
+    /// `model:download-failed` event so the UI can surface the error.
+    #[tokio::test]
+    async fn download_diarizer_model_clears_cancel_handle_on_failure() {
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            crate::transcription::download::CancelHandle,
+        >::new()));
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn crate::events::EventEmitter> =
+            std::sync::Arc::new(recorder.clone());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let model = make_test_diarizer_model("http://127.0.0.1:1/will-fail");
+        let deps = build_download_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        download_diarizer_model_inner(deps, model.clone())
+            .await
+            .expect("inner returns Ok before the spawn — failure happens inside the task");
+
+        // Poll until the spawned task finishes (connect error surfaces
+        // in single-digit ms; 5 s bound guards against CI hiccups).
+        let cleared = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !downloads.lock().unwrap().contains_key(&model.id) {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        assert!(
+            cleared,
+            "cancel handle should have been removed by the failure branch"
+        );
+
+        let failures = recorder.payloads_for("model:download-failed");
+        assert_eq!(
+            failures.len(),
+            1,
+            "exactly one failure event expected; got {failures:?}"
+        );
+        let payload = &failures[0];
+        assert_eq!(payload["id"], serde_json::Value::String(model.id.clone()));
+        let msg = payload["message"]
+            .as_str()
+            .expect("failure event should carry a message string");
+        assert!(!msg.is_empty(), "failure event message should be populated");
+    }
+}
