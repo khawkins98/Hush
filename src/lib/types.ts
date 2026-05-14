@@ -85,6 +85,8 @@ export type HistoryEntry = {
   model: string;
   durationMs: number | null;
   createdAt: string;
+  /** True for recordings that were too short to transcribe. */
+  ignored: boolean;
 };
 
 // Aggregate dictation stats (#293). Powers the "you've dictated N

@@ -62,6 +62,7 @@
     onExportCsv,
   }: Props = $props();
 
+  let isIgnored = $derived(entry.ignored);
   // Export-format popover: clipboard formats (plain/markdown/srt/vtt)
   // + CSV file-download. Mirrors the format picker in ResultBlock.svelte.
   let exportOpen = $state(false);
@@ -110,7 +111,11 @@
 <li class="history-row" class:confirming-active={confirming} data-kind="dictation">
   <div class="row-layout">
     <div class="row-content">
-      <p class="history-text">{entry.transcript}</p>
+      {#if isIgnored}
+        <p class="history-text ignored-note">Recording too short — not transcribed</p>
+      {:else}
+        <p class="history-text">{entry.transcript}</p>
+      {/if}
       <p class="history-meta">
         {formatTimestamp(entry.createdAt)}
         {#if formatDuration(entry.durationMs)}· {formatDuration(entry.durationMs)}{/if}
@@ -119,6 +124,7 @@
       </p>
     </div>
     <div class="history-actions" role="group" aria-label="Row actions">
+      {#if !isIgnored}
       <button
         class="icon-btn"
         title="Copy transcript"
@@ -180,6 +186,7 @@
             </ul>
           {/if}
         </div>
+      {/if}
       <button
         class="icon-btn danger"
         class:confirming
@@ -235,6 +242,11 @@
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .ignored-note {
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .history-meta {
