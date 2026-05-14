@@ -38,6 +38,7 @@ pub mod app_overrides;
 pub mod audio_buffer;
 pub mod autostart;
 pub mod classifier;
+pub mod export;
 pub mod lifecycle;
 pub mod manager;
 #[cfg(target_os = "macos")]
@@ -52,6 +53,7 @@ pub use app_overrides::{
 };
 pub use autostart::MeetingAutostartMode;
 pub use classifier::AppClassifier;
+pub use export::MeetingExportFormat;
 pub use manager::SessionManager;
 pub use sqlite::SqliteMeetingSessionRepository;
 
