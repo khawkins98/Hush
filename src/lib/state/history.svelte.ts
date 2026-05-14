@@ -43,6 +43,11 @@ let historyFilter = $state<HistoryFilter>("all");
 
 let effectiveFilter = $derived<HistoryFilter>(historyFilter);
 
+// Debounce handle for setSearchQuery(). 200 ms is the empirical
+// sweet spot — fast enough to feel live, slow enough not to spam
+// SQLite on every keystroke.
+let _searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 // Merged feed — two-pointer O(N) merge of the newest-first dictation
 // + meeting streams. Lives here rather than in HistoryPanel so
 // `exportBundle` can pass `effectiveFilter` without a prop dance.
@@ -165,6 +170,15 @@ export const history = {
   // history.refresh() + meeting.refresh() calls across consumers.
   async feedRefresh() {
     await Promise.all([history.refresh(), meeting.refresh()]);
+  },
+  /** Update the search query and debounce a feedRefresh by 200 ms.
+   *  Replaces the inline timer that used to live in +page.svelte. */
+  setSearchQuery(query: string) {
+    historyQuery = query;
+    if (_searchDebounceTimer !== null) clearTimeout(_searchDebounceTimer);
+    _searchDebounceTimer = setTimeout(() => {
+      void history.feedRefresh();
+    }, 200);
   },
   async refresh() {
     historyError = null;

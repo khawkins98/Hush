@@ -76,13 +76,8 @@
 
   // Debounce the search input so we don't fire SQLite queries on
   // every keystroke. 200ms is the empirical sweet spot.
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
   function onSearchInput(e: Event) {
-    history.historyQuery = (e.target as HTMLInputElement).value;
-    if (searchTimer !== null) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      void history.feedRefresh();
-    }, 200);
+    history.setSearchQuery((e.target as HTMLInputElement).value);
   }
 </script>
 
@@ -135,7 +130,7 @@
     already on Settings → Permissions (they can see the rows directly)
     or has dismissed it for this session.
   -->
-  {#if permissions.anyPermsStale && !permissions.staleBannerDismissed && !(nav.activeSection === "settings" && nav.settingsActiveTab === "permissions")}
+  {#if permissions.showStaleBanner}
   <div class="stale-perm-banner" role="alert">
     <span class="stale-perm-banner-text">
       ⚠️ A macOS permission may need to be re-granted — this can happen after updating Hush.
