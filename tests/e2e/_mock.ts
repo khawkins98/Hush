@@ -201,7 +201,6 @@ export async function installMocks(
       "plugin:dialog|save": () => "/Users/test/hush-export.csv",
       "plugin:dialog|open": () => "/Users/test/Desktop",
       open_macos_privacy_pane: () => undefined,
-      prime_screen_recording_permission: () => undefined,
       relaunch_app: () => undefined,
       // First-run wizard inline-grant IPCs (#511). Default no-op
       // for mic (real IPC fires the OS dialog asynchronously and
@@ -213,7 +212,6 @@ export async function installMocks(
       // granted.
       request_microphone_permission: () => undefined,
       request_input_monitoring_permission: () => true,
-      open_settings: () => undefined,
       show_main_window: () => undefined,
       open_debug_window: () => undefined,
       diagnose_macos_permissions: () => ({
