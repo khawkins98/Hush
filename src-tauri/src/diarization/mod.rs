@@ -88,6 +88,12 @@ pub trait Diarize: Send + Sync {
         audio_chunks: &[Vec<f32>],
         format: CaptureFormat,
     );
+
+    /// Reset per-session cluster state. Called by the meeting pump at the
+    /// start of each new session so speaker IDs from a previous meeting
+    /// don't bleed into the next one. The default no-op is correct for
+    /// stateless impls (`NoopDiarizer`).
+    fn reset(&self) {}
 }
 
 /// Fallback impl. Leaves `speaker_label` as it is so the pump's
@@ -164,6 +170,14 @@ impl Diarize for FlagGatedDiarizer {
             self.fallback
                 .label_utterances(utterances, audio_chunks, format);
         }
+    }
+
+    /// Forward reset to the inner diarizer regardless of the enabled flag.
+    /// When re-enabled after being turned off, the inner diarizer should
+    /// start with clean state for the new session.
+    fn reset(&self) {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        inner.reset();
     }
 }
 

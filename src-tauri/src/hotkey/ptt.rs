@@ -571,6 +571,10 @@ pub fn register_ptt_listener<R: Runtime>(
     let app_handle = app.clone();
     let combo_for_thread = std::sync::Arc::clone(&combo);
     let active_for_thread = std::sync::Arc::clone(&active);
+    // Clone the spawned latch into the thread so it can be reset when
+    // `rdev::listen` exits. Without this the latch stays `true` after
+    // an error exit, permanently blocking any retry path.
+    let spawned_for_thread = std::sync::Arc::clone(&spawned);
 
     thread::Builder::new()
         .name("hush-ptt".into())
@@ -599,8 +603,11 @@ pub fn register_ptt_listener<R: Runtime>(
             });
 
             // Reaching this point means `listen` returned an error
-            // (typically Wayland or a permission failure). Log and let the
-            // thread exit; the rest of the app keeps working without PTT.
+            // (typically Wayland or a permission failure). Reset the
+            // spawned latch so the next `ptt_set_config` can retry;
+            // without this the latch stays `true` forever and PTT
+            // cannot recover without an app restart.
+            spawned_for_thread.store(false, std::sync::atomic::Ordering::SeqCst);
             if let Err(err) = result {
                 tracing::error!(
                     error = ?err,

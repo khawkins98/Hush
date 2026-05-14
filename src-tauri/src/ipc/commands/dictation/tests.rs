@@ -352,10 +352,11 @@ fn strip_brackets_drops_other_status_sentinels() {
     for sentinel in [
         "[NOISE]",
         "[MUSIC]",
-        "[ MUSIC ]",
+        "[ MUSIC ]", // whitespace-padded variant
         "[INAUDIBLE]",
-        "[Sound effects]",
-        "[laughter]",
+        "[laughter]", // case-insensitive match
+        "[APPLAUSE]",
+        "[SILENCE]",
     ] {
         assert_eq!(
             strip_whisper_brackets(sentinel),
@@ -363,6 +364,20 @@ fn strip_brackets_drops_other_status_sentinels() {
             "sentinel {sentinel} should strip to empty"
         );
     }
+}
+
+#[test]
+fn strip_brackets_preserves_non_sentinel_bracketed_content() {
+    // The new allowlist-based approach must NOT silently drop user
+    // content that happens to be in brackets (e.g. stage directions,
+    // citations, Markdown footnotes).
+    assert_eq!(strip_whisper_brackets("[my citation]"), "[my citation]");
+    assert_eq!(strip_whisper_brackets("[Sound effects]"), "[Sound effects]");
+    // Only the sentinel is dropped; adjacent bracketed content is kept.
+    assert_eq!(
+        strip_whisper_brackets("[BLANK_AUDIO] hello [citation]"),
+        "hello [citation]"
+    );
 }
 
 #[test]
@@ -394,9 +409,9 @@ fn strip_brackets_leaves_text_with_no_brackets_alone() {
 fn strip_brackets_handles_nested_or_unbalanced_brackets_safely() {
     // Defensive: whisper isn't supposed to emit nested or
     // unbalanced brackets, but the depth counter shouldn't
-    // panic if it does. Output may not be ideal — the goal is
-    // "doesn't crash, doesn't drop more than it should."
-    assert_eq!(strip_whisper_brackets("[[NESTED]]"), "");
+    // panic if it does.
+    // [[NESTED]] is NOT on the allowlist, so it's preserved verbatim.
+    assert_eq!(strip_whisper_brackets("[[NESTED]]"), "[[NESTED]]");
     // A stray closing bracket is preserved (depth never goes
     // negative).
     assert_eq!(strip_whisper_brackets("hello]"), "hello]");
