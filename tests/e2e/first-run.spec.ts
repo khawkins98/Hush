@@ -152,10 +152,8 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
           inputMonitoring: "not-determined",
         },
       }),
-      // Prevent real OS calls from the allow buttons.
       request_microphone_permission: () => undefined,
       request_input_monitoring_permission: () => false,
-      prime_screen_recording_permission: () => undefined,
     });
     await page.goto("/");
     await expect(
@@ -240,7 +238,6 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
         ).__hush_track_mic_allow();
       },
       request_input_monitoring_permission: () => false,
-      prime_screen_recording_permission: () => undefined,
     });
 
     await page.goto("/");
@@ -293,7 +290,6 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
         ).__hush_track_im_allow();
         return true;
       },
-      prime_screen_recording_permission: () => undefined,
     });
 
     await page.goto("/");
@@ -366,7 +362,6 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
       },
       request_microphone_permission: () => undefined,
       request_input_monitoring_permission: () => false,
-      prime_screen_recording_permission: () => undefined,
     });
 
     await page.goto("/");

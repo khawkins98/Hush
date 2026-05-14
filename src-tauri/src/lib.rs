@@ -901,7 +901,6 @@ pub fn run() {
             ipc::commands::permissions::reset_macos_permissions,
             ipc::commands::permissions::get_permission_health,
             ipc::commands::permissions::confirm_permission,
-            ipc::commands::permissions::prime_screen_recording_permission,
             ipc::commands::permissions::request_microphone_permission,
             ipc::commands::permissions::request_input_monitoring_permission,
             ipc::commands::permissions::relaunch_app,
