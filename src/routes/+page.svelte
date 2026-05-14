@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { emit } from "@tauri-apps/api/event";
   import { backOut, cubicIn } from "svelte/easing";
   import { fade, fly } from "svelte/transition";
@@ -17,16 +16,14 @@
   import PermissionHealthSection from "$lib/PermissionHealthSection.svelte";
   import { Events } from "$lib/events";
   import { motionDuration } from "$lib/motion";
-  import type {
-    PermissionStatuses,
-    PermissionsHealth,
-  } from "$lib/types";
   import { audio } from "$lib/state/audio.svelte";
   import { dictation, TRAILING_SILENCE_MS } from "$lib/state/dictation.svelte";
   import { history } from "$lib/state/history.svelte";
   import { meeting } from "$lib/state/meeting-sessions.svelte";
   import { nav } from "$lib/state/nav.svelte";
+  import { onboarding } from "$lib/state/onboarding.svelte";
   import { palette } from "$lib/state/palette.svelte";
+  import { permissions } from "$lib/state/permissions.svelte";
 
   // ⌘K command palette (#411 phase F3). State + the action set
   // are colocated here because every action needs the page's
@@ -38,42 +35,9 @@
   // shortcut hint (Right ⌘ on macOS, Right Ctrl elsewhere).
   let isMacOS = $state(false);
 
-  // First-run welcome flow.
-  let showFirstRun = $state(false);
-
-  // ---- macOS permission diagnostic surface ----
-  let macosCapable = $state(false);
-  let permStatuses = $state<PermissionStatuses | null>(null);
-  let permissionHealth = $state<PermissionsHealth | null>(null);
   let screenRecordingLive = $derived(
     audio.findSystemAudio()?.isSupported ?? false,
   );
-  let allPermsGranted = $derived(
-    !!permStatuses
-      && permStatuses.microphone === "granted"
-      && permStatuses.inputMonitoring !== "denied",
-  );
-  let anyPermsDenied = $derived(
-    !!permStatuses
-      && (permStatuses.microphone === "denied"
-        || permStatuses.inputMonitoring === "denied"),
-  );
-
-  // Stale-banner: at least one permission was previously granted
-  // but macOS no longer recognises it (common after ad-hoc rebuilds
-  // where the csreq hash changes). Show a dismissable amber banner
-  // to surface the issue proactively rather than waiting for the
-  // user to notice the Settings → Permissions traffic-light.
-  let anyPermsStale = $derived(
-    macosCapable
-      && !!permissionHealth
-      && (permissionHealth.microphone === "stale"
-        || permissionHealth.inputMonitoring === "stale"),
-  );
-  // Session-only dismiss — not persisted. The stale state is
-  // tied to the running build's csreq, so a new launch (new build
-  // or after granting fresh) re-evaluates it naturally.
-  let staleBannerDismissed = $state(false);
 
   // True when a meeting-only recording is active (no dictation session).
   // Mirrors the same derivation in DictationSection so global controls
@@ -83,10 +47,6 @@
   );
   // True whenever the mic is hot for any reason.
   let anyRecordingActive = $derived(dictation.recording || meetingOnlyActive);
-
-  // Reusable permissions dialog (#232).
-  let showPermissionsDialog = $state(false);
-  let permissionsDialogIntro: string | undefined = $state(undefined);
 
   function handleGlobalKeydown(event: KeyboardEvent) {
     // ⌘K opens the palette; ⌘K again closes (toggle). Cmd on
@@ -138,61 +98,27 @@
       void meeting.refresh();
     }, 200);
   }
-
-  async function dismissFirstRun() {
-    showFirstRun = false;
-    try {
-      await invoke("mark_first_run_completed");
-    } catch (e) {
-      console.error("mark_first_run_completed failed:", e);
-    }
-    // Reload audio sources: the user has just gone through the permissions
-    // wizard and may have granted mic access. AppLifecycle's permission-reload
-    // $effect will catch the TCC state transition if the prompt is still
-    // in-flight when focus returns.
-    void dictation.loadSources();
-  }
-
-  async function openPrivacyPane(
-    target: "microphone" | "input-monitoring" | "screen-recording",
-  ) {
-    try {
-      await invoke("open_macos_privacy_pane", { target });
-    } catch (e) {
-      console.error("open_macos_privacy_pane failed:", e);
-    }
-  }
 </script>
 
 <AppLifecycle
   bind:isMacOS
-  bind:showFirstRun
-  bind:permStatuses
-  bind:showPermissionsDialog
-  bind:permissionsDialogIntro
   onGlobalKeydown={handleGlobalKeydown}
 />
 
 <FirstRunModal
-  show={showFirstRun}
-  onDismiss={dismissFirstRun}
-  onOpenPrivacyPane={openPrivacyPane}
+  show={onboarding.showFirstRun}
+  onDismiss={() => onboarding.completeFirstRun()}
+  onOpenPrivacyPane={(t) => permissions.openPrivacyPane(t)}
 />
 
 <!--
   Permission-health lifecycle + recovery dialog (#432). The
   section owns the focus-debounced probe and the
-  diagnose_macos_permissions one-shot; the orchestrator binds the
-  state so welcome derivations and the MacosPermsPill render as
-  before.
+  diagnose_macos_permissions one-shot; all resulting state lands
+  in the shared `permissions` module (#722).
 -->
 <PermissionHealthSection
-  bind:permissionHealth
-  bind:permStatuses
-  bind:macosCapable
-  bind:showDialog={showPermissionsDialog}
-  bind:dialogIntro={permissionsDialogIntro}
-  onOpenPrivacyPane={openPrivacyPane}
+  onOpenPrivacyPane={(t) => permissions.openPrivacyPane(t)}
 />
 
 <!--
@@ -223,7 +149,7 @@
     already on Settings → Permissions (they can see the rows directly)
     or has dismissed it for this session.
   -->
-  {#if anyPermsStale && !staleBannerDismissed && !(nav.activeSection === "settings" && nav.settingsActiveTab === "permissions")}
+  {#if permissions.anyPermsStale && !permissions.staleBannerDismissed && !(nav.activeSection === "settings" && nav.settingsActiveTab === "permissions")}
   <div class="stale-perm-banner" role="alert">
     <span class="stale-perm-banner-text">
       ⚠️ A macOS permission may need to be re-granted — this can happen after updating Hush.
@@ -237,7 +163,7 @@
       type="button"
       class="stale-perm-banner-dismiss"
       aria-label="Dismiss"
-      onclick={() => (staleBannerDismissed = true)}
+      onclick={() => (permissions.staleBannerDismissed = true)}
     >✕</button>
   </div>
   {/if}
@@ -294,10 +220,10 @@
   {#if nav.activeSection === "dictation"}
   <DictationSection
     {isMacOS}
-    {permissionHealth}
-    {macosCapable}
-    {allPermsGranted}
-    {anyPermsDenied}
+    permissionHealth={permissions.permissionHealth}
+    macosCapable={permissions.macosCapable}
+    allPermsGranted={permissions.allPermsGranted}
+    anyPermsDenied={permissions.anyPermsDenied}
     onStart={() => dictation.startRecord(screenRecordingLive)}
     onStop={() => dictation.stop(TRAILING_SILENCE_MS)}
     onScrollToModelPicker={openModelSettings}

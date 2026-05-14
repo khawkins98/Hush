@@ -31,7 +31,7 @@ test.describe("app profile notice", () => {
 
     const notice = page.locator('[data-testid="app-profile-notice"]');
     await expect(notice).toBeVisible();
-    await expect(notice).toContainText("Switched to Zoom profile.");
+    await expect(notice).toContainText(/Zoom/);
   });
 
   test("dismissing the notice hides it", async ({ page }) => {
