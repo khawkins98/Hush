@@ -24,7 +24,8 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::audio::AudioSource;
-use crate::dictionary::{format_vocabulary_prompt, ReplacementRule, VocabularyTerm};
+use crate::dictionary::vocabulary::format_initial_prompt;
+use crate::dictionary::{ReplacementRule, VocabularyTerm};
 use crate::history::NewHistoryEntry;
 use crate::ipc::AppState;
 
@@ -286,85 +287,6 @@ pub(crate) fn language_style_prefix(style: &str) -> String {
         "oxford" => "Use Oxford English spelling.".to_owned(),
         _ => String::new(), // "american" or any unrecognised value → no prefix
     }
-}
-
-/// Build the full Whisper initial prompt from a style prefix and a list
-/// of vocabulary terms.
-///
-/// Layout when both are non-empty:
-/// ```text
-/// Use British English spelling.
-///
-/// Hush, Tauri, whisper.cpp
-/// ```
-///
-/// The combined string is capped at [`crate::dictionary::MAX_PROMPT_CHARS`]
-/// characters. If only the prefix fits, the vocabulary list is truncated or
-/// dropped; the prefix is never truncated — it is always short enough to fit
-/// within budget (max ~40 chars).
-pub(crate) fn format_initial_prompt(style_prefix: &str, terms: &[VocabularyTerm]) -> String {
-    use crate::dictionary::MAX_PROMPT_CHARS;
-
-    if style_prefix.is_empty() {
-        return format_vocabulary_prompt(terms);
-    }
-
-    // Header = "Use British English spelling.\n\n" (prefix + two newlines).
-    // We reserve this space from the prompt budget before handing the
-    // remainder to format_vocabulary_prompt (which also enforces the cap).
-    let separator = "\n\n";
-    let header = format!("{style_prefix}{separator}");
-    let header_chars = header.chars().count();
-
-    if header_chars >= MAX_PROMPT_CHARS {
-        // Style prefix alone already fills the budget; emit it without vocab.
-        return style_prefix
-            .chars()
-            .take(MAX_PROMPT_CHARS)
-            .collect::<String>();
-    }
-
-    let remaining = MAX_PROMPT_CHARS - header_chars;
-
-    // Trim the vocabulary section to fit within the remaining budget.
-    // format_vocabulary_prompt already enforces MAX_PROMPT_CHARS; we need
-    // a tighter cap here. Build the list by hand up to `remaining`.
-    let vocab_part = format_vocabulary_prompt_capped(terms, remaining);
-
-    if vocab_part.is_empty() {
-        style_prefix.to_owned()
-    } else {
-        format!("{header}{vocab_part}")
-    }
-}
-
-/// Like [`format_vocabulary_prompt`] but caps at `max_chars` instead of
-/// [`crate::dictionary::MAX_PROMPT_CHARS`]. Internal helper for the
-/// budget-aware `format_initial_prompt`.
-fn format_vocabulary_prompt_capped(terms: &[VocabularyTerm], max_chars: usize) -> String {
-    let mut seen_lower: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut accepted: Vec<&str> = Vec::with_capacity(terms.len());
-    let mut total_chars: usize = 0;
-
-    for term in terms {
-        let trimmed = term.term.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let lower = trimmed.to_lowercase();
-        if !seen_lower.insert(lower) {
-            continue;
-        }
-        let separator = if accepted.is_empty() { 0 } else { 2 };
-        let needed = trimmed.chars().count() + separator;
-        if total_chars + needed > max_chars {
-            break;
-        }
-        accepted.push(trimmed);
-        total_chars += needed;
-    }
-
-    accepted.join(", ")
 }
 
 /// Pop the foreground snapshot captured at `start_dictation`. Returns

@@ -122,6 +122,87 @@ pub fn format_vocabulary_prompt(terms: &[VocabularyTerm]) -> String {
     accepted.join(", ")
 }
 
+/// Like [`format_vocabulary_prompt`] but caps at `max_chars` instead of
+/// [`MAX_PROMPT_CHARS`]. Internal helper for the budget-aware
+/// [`format_initial_prompt`].
+fn format_vocabulary_prompt_capped(terms: &[VocabularyTerm], max_chars: usize) -> String {
+    let mut seen_lower: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut accepted: Vec<&str> = Vec::with_capacity(terms.len());
+    let mut total_chars: usize = 0;
+
+    for term in terms {
+        let trimmed = term.term.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        if !seen_lower.insert(lower) {
+            continue;
+        }
+        let separator = if accepted.is_empty() { 0 } else { 2 };
+        let needed = trimmed.chars().count() + separator;
+        if total_chars + needed > max_chars {
+            break;
+        }
+        accepted.push(trimmed);
+        total_chars += needed;
+    }
+
+    accepted.join(", ")
+}
+
+/// Combine a language-style prefix and a vocabulary term list into a
+/// single Whisper initial-prompt string.
+///
+/// The combined string is capped at [`MAX_PROMPT_CHARS`] characters.
+/// If only the prefix fits, the vocabulary list is truncated or dropped;
+/// the prefix is never truncated — it is always short enough to fit
+/// within budget (max ~40 chars).
+///
+/// When `style_prefix` is empty this delegates to
+/// [`format_vocabulary_prompt`] directly (same behaviour, no structural
+/// overhead).
+///
+/// # Format
+///
+/// ```text
+/// Use British English spelling.
+///
+/// Hush, Tauri, whisper.cpp
+/// ```
+pub(crate) fn format_initial_prompt(style_prefix: &str, terms: &[VocabularyTerm]) -> String {
+    if style_prefix.is_empty() {
+        return format_vocabulary_prompt(terms);
+    }
+
+    // Header = "Use British English spelling.\n\n" (prefix + two newlines).
+    // We reserve this space from the prompt budget before handing the
+    // remainder to format_vocabulary_prompt_capped (which also enforces
+    // the cap).
+    let separator = "\n\n";
+    let header = format!("{style_prefix}{separator}");
+    let header_chars = header.chars().count();
+
+    if header_chars >= MAX_PROMPT_CHARS {
+        // Style prefix alone already fills the budget; emit it without vocab.
+        return style_prefix
+            .chars()
+            .take(MAX_PROMPT_CHARS)
+            .collect::<String>();
+    }
+
+    let remaining = MAX_PROMPT_CHARS - header_chars;
+
+    // Trim the vocabulary section to fit within the remaining budget.
+    let vocab_part = format_vocabulary_prompt_capped(terms, remaining);
+
+    if vocab_part.is_empty() {
+        style_prefix.to_owned()
+    } else {
+        format!("{header}{vocab_part}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

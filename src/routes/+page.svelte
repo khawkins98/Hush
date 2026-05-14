@@ -264,6 +264,25 @@
   </div>
   {/if}
   <!--
+    Meeting-append-failed banner (#696): shown when a transcription
+    couldn't be written to the active meeting session. The text still
+    landed on the clipboard so the user didn't lose their work, but the
+    session log is incomplete. Dismissed automatically when the session
+    ends or manually with ✕.
+  -->
+  {#if meeting.appendFailedNotice}
+  <div class="source-failed-banner" role="alert" data-testid="append-failed-banner">
+    <span class="source-failed-banner-icon" aria-hidden="true">⚠️</span>
+    <span class="source-failed-banner-text">{meeting.appendFailedNotice}</span>
+    <button
+      type="button"
+      class="source-failed-banner-dismiss"
+      aria-label="Dismiss"
+      onclick={() => (meeting.appendFailedNotice = null)}
+    >✕</button>
+  </div>
+  {/if}
+  <!--
     Dictation section markup extracted into a leaf (#432 slice
     3/3). Action functions + hotkey listeners stay in this
     orchestrator because they touch a sprawl of cross-section
