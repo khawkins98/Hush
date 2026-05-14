@@ -22,12 +22,9 @@
 //!
 //! ## Out of scope (deferred to follow-up PRs)
 //!
-//! - **CSV export.** Needs the `tauri-plugin-dialog` save-file picker
-//!   wired through the frontend. Cleaner as a separate change so the
-//!   list/search/delete surface lands first.
 //! - **Filter by foreground app.** Schema supports it (`app_name` is on
-//!   the row); UI/query work follows the first cut once we know what
-//!   the filter UX should look like.
+//!   the row); UI/query work follows once we know what the filter UX
+//!   should look like.
 //! - **Retention policies / pruning.** Not yet decided what default
 //!   retention to apply. The History panel exposes per-row Delete
 //!   and Clear-all (#198) for manual cleanup; an automatic pruning

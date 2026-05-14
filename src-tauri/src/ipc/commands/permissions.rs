@@ -23,10 +23,6 @@
 //!   ScreenCapture, ListenEvent / Input Monitoring).
 //!   Accessibility was previously included but Hush never
 //!   requests it (#273).
-//! - [`prime_screen_recording_permission`] is now a no-op (#600):
-//!   system-audio capture no longer uses ScreenCaptureKit, so
-//!   Screen Recording TCC is not required.  Kept for frontend
-//!   call-site compatibility while the frontend is being updated.
 //! - [`relaunch_app`] calls `AppHandle::restart()`. Exposed as an
 //!   IPC so the frontend relaunch banner can trigger it with a
 //!   single `invoke`.
@@ -117,22 +113,6 @@ pub async fn open_macos_privacy_pane(target: String) -> IpcResult<()> {
 }
 
 /// Touch ScreenCaptureKit so macOS adds Hush to the System Audio
-/// permission list (and fires the standard TCC prompt if not yet
-/// determined). Called from the Permissions tab's "Grant in
-/// Settings…" button on the System Audio row, immediately before
-/// deep-linking to System Settings.
-///
-/// **No-op since #600.** System-audio capture now uses
-/// `AudioHardwareCreateProcessTap` which does not require Screen
-/// Recording TCC on macOS 26+.  This command is kept registered so
-/// any frontend call-sites that haven't been updated yet don't
-/// produce a command-not-found error.
-#[tauri::command]
-pub async fn prime_screen_recording_permission(app: tauri::AppHandle) -> IpcResult<()> {
-    let _ = app;
-    Ok(())
-}
-
 /// Relaunch the app immediately via `AppHandle::restart()`.
 ///
 /// Exposed as an IPC so frontends can programmatically restart Hush
