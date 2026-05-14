@@ -65,7 +65,7 @@ pub(crate) async fn set_hud_enabled_inner(state: &AppState, enabled: bool) -> Ip
             crate::settings::codec::encode_bool(enabled),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
 /// Read the audio-cues toggle (#292). Settings → General reads
@@ -98,7 +98,7 @@ pub(crate) async fn set_sound_cues_enabled_inner(state: &AppState, enabled: bool
             crate::settings::codec::encode_bool(enabled),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
 /// Read the per-event recording-start cue toggle (#463). Sub-
@@ -128,7 +128,7 @@ pub async fn set_sound_cue_start_enabled(
             crate::settings::codec::encode_bool(enabled),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
 /// Read the per-event transcription-complete cue toggle (#463).
@@ -156,7 +156,7 @@ pub async fn set_sound_cue_complete_enabled(
             crate::settings::codec::encode_bool(enabled),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
 /// Play one of the audio cues immediately, ignoring the master /
@@ -228,7 +228,7 @@ pub(crate) async fn set_diarization_enabled_inner(
             crate::settings::codec::encode_bool(enabled),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
 /// Read the live inference thread count (#255). Settings →
@@ -267,7 +267,7 @@ pub(crate) async fn set_inference_threads_inner(state: &AppState, threads: i32) 
             &clamped.to_string(),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
 /// Read the current mic gain in dB (0–20). The Settings → General tab
@@ -300,7 +300,7 @@ pub(crate) async fn set_mic_gain_db_inner(state: &AppState, gain_db: f32) -> Ipc
         .settings
         .set(crate::settings::keys::MIC_GAIN_DB, &clamped.to_string())
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
 /// Read the current Meeting-Mode auto-start mode. The Settings
@@ -338,5 +338,5 @@ pub async fn set_meeting_autostart_mode(
             mode.as_setting(),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
