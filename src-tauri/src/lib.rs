@@ -370,6 +370,288 @@ fn build_file_appender() -> Option<(
     Some((appender, dir))
 }
 
+/// Check and strip the macOS quarantine xattr on the first post-DMG
+/// launch, then exec()-restart so TCC sees a clean process identity.
+///
+/// Returns immediately (as a no-op) when:
+/// - Running after a strip (`HUSH_QUARANTINE_STRIPPED` is set in env).
+/// - No quarantine xattr is present (non-DMG installs).
+///
+/// The `current_exe()` resolution failure propagates as an `Err` so the
+/// `setup` hook aborts cleanly; `exec()` failure is logged and silently
+/// swallowed (the quarantine xattr was already stripped so the next fresh
+/// relaunch presents a clean identity).
+///
+/// Gated to macOS because other platforms have no quarantine concept.
+#[cfg(target_os = "macos")]
+fn handle_quarantine_strip() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("HUSH_QUARANTINE_STRIPPED").is_ok() {
+        tracing::info!(
+            im_status = ?crate::permissions::read_all().input_monitoring,
+            "returned from quarantine-strip exec() restart"
+        );
+        return Ok(());
+    }
+    if crate::permissions::strip_app_quarantine() {
+        tracing::info!("quarantine stripped; exec-restarting app to establish clean TCC identity");
+        // exec() replaces the current process image (same PID, no fork).
+        // Unlike spawn()+exit(), this bypasses LaunchServices so the
+        // quarantine events daemon cannot re-add the xattr before the
+        // first instruction of the new image — the root cause of the
+        // infinite restart loop observed on macOS 26 (learnings.md
+        // 2026-05-13 "infinite restart loop"). HUSH_QUARANTINE_STRIPPED=1
+        // is baked into the replacement image's environment; if exec()
+        // fails and falls through, the next fresh relaunch will re-enter
+        // this function and try again (the xattr is already gone, so
+        // `strip_app_quarantine` returns false — no loop).
+        use std::os::unix::process::CommandExt as _;
+        let exe =
+            std::env::current_exe().map_err(|e| format!("quarantine restart: get exe: {e}"))?;
+        let err = std::process::Command::new(&exe)
+            .args(std::env::args_os().skip(1))
+            .env("HUSH_QUARANTINE_STRIPPED", "1")
+            .exec();
+        // exec() only returns on failure.
+        tracing::warn!(
+            error = %err,
+            "quarantine-strip restart via exec() failed; continuing with quarantined identity"
+        );
+    }
+    Ok(())
+}
+
+/// Wire all window-level setup: hide-on-close for main/debug,
+/// macOS drag enablement for menu-bar/hud, zoom-button removal for
+/// main, background-launch hide + Accessory policy, and LaunchAgent
+/// path reconciliation.
+///
+/// Called once from the `setup` hook after `AppState` is managed.
+/// Accesses `AppState` internally via `app.try_state()` so callers
+/// do not need to hold an `ipc::AppState` borrow across the `&mut App`
+/// call. Every sub-step is best-effort.
+fn setup_windows<R: tauri::Runtime>(app: &mut tauri::App<R>) {
+    // Hide-on-close for main and debug (#263, #543). Tauri 2's default
+    // destroys the window on red-✕; without an intercept the user would
+    // close the main window expecting it to hide and find Hush had quit.
+    // The debug console window is included so closing its red-✕ hides
+    // it rather than destroying the webview — this prevents macOS from
+    // stranding focus on the desktop and keeps the window's log buffer
+    // alive for the next open.
+    //
+    // Pairs with the `RunEvent::ExitRequested` interceptor in `run()`
+    // (#328): on Linux/Windows the runtime's default is to quit when the
+    // last window goes away, so hiding all windows would otherwise drop
+    // the tray icon along with the app. The interceptor blocks every
+    // runtime-driven exit; the only exit paths are the tray's "Quit
+    // Hush" item and the macOS app-menu's Quit item, both of which call
+    // `request_user_quit` to set a flag the interceptor honours.
+    for label in ["main", "debug"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let win_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    // Always prevent the destroy. If the subsequent
+                    // `hide()` fails the window stays visible — that's a
+                    // strictly better failure mode than letting Tauri
+                    // destroy the only surface the user has for the
+                    // window. The user can quit via tray / menu / ⌘Q if
+                    // they actually wanted out.
+                    api.prevent_close();
+                    if let Err(e) = win_clone.hide() {
+                        tracing::warn!(
+                            label = %win_clone.label(),
+                            error = ?e,
+                            "hide-on-close failed; window remains visible"
+                        );
+                    }
+                }
+            });
+        } else {
+            tracing::warn!(
+                label,
+                "hide-on-close: window not found at setup time; close defaults to destroy"
+            );
+        }
+    }
+
+    // Borderless-window drag enablement (#427 Item 1). On macOS,
+    // `decorations: false` windows have their NSWindow movable styleMask
+    // bit stripped — Tauri's `data-tauri-drag-region` and
+    // `startDragging()` then become silent no-ops. Restore movability via
+    // explicit AppKit calls so users can drag the popover and HUD pill
+    // from any non-interactive area.
+    #[cfg(target_os = "macos")]
+    for label in ["menu-bar", "hud"] {
+        if let Some(window) = app.get_webview_window(label) {
+            unlock_macos_window_drag(&window);
+        }
+    }
+
+    // Hide the zoom (green) traffic-light button on the main window.
+    // `maximizable: false` disables it but leaves a greyed-out circle;
+    // removing it entirely is cleaner.
+    #[cfg(target_os = "macos")]
+    if let Some(window) = app.get_webview_window("main") {
+        hide_macos_zoom_button(&window);
+    }
+
+    // Background-launch behaviour (#268). When the LaunchAgent fires
+    // Hush at login, we don't want to pop the main window. If
+    // `--background` is present, hide the main window and switch to
+    // Accessory activation policy so the Dock icon doesn't appear.
+    #[cfg(target_os = "macos")]
+    if is_background_launch(std::env::args()) {
+        if let Some(main_win) = app.get_webview_window("main") {
+            let _ = main_win.hide();
+        }
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        tracing::info!("background launch: main window hidden, activation policy = Accessory");
+    }
+
+    // LaunchAgent path reconciliation (#271). Re-register on every
+    // startup where autostart is currently enabled so the plist always
+    // points at `current_exe()`. Cheap (one ~500-byte fs::write) and
+    // idempotent. If `enable()` fails, store a flag in AppState — the
+    // Settings panel reads it and surfaces a "path is stale" warning row
+    // with a retry button (#317).
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let mgr = app.autolaunch();
+        let enabled = mgr.is_enabled().unwrap_or(false);
+        if enabled {
+            match mgr.enable() {
+                Ok(()) => tracing::debug!(
+                    "autostart: re-registered LaunchAgent with current binary path (#271)"
+                ),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "autostart: re-register failed; LaunchAgent path may be stale (#271)"
+                    );
+                    if let Some(state) = app.try_state::<ipc::AppState>() {
+                        state
+                            .runtime_flags
+                            .autostart_path_stale
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Spawn the long-running background tasks that run for the full app
+/// lifetime:
+/// 1. Orphan-session reconciliation — stamps `ended_at` on sessions
+///    left open by a previous crash or kill.
+/// 2. HUD level-meter pump — emits `audio:level` at ~30 Hz while
+///    recording is active.
+/// 3. Per-app profile auto-activation poller — detects foreground-app
+///    changes and applies per-app source/model overrides.
+/// 4. (macOS only) Event-driven meeting auto-start — listens for
+///    CoreAudio HAL device-active notifications.
+///
+/// All spawns are fire-and-forget via `tauri::async_runtime::spawn`.
+/// Called once from the `setup` hook after `AppState` is managed.
+/// Takes a concrete `tauri::AppHandle` rather than a generic `App<R>`
+/// because the async task helpers (`run_profile_autoactivate_poller`,
+/// `run_meeting_detection_task`) are defined with the default Wry
+/// runtime and are not generic.
+fn spawn_background_tasks(handle: tauri::AppHandle, state: &ipc::AppState) {
+    // Orphan-session reconciliation (#249, #329). Sessions left open by a
+    // previous process that exited without `stop_manual` (kill, OS crash,
+    // panic) get their `ended_at` stamped now. Spawned (not block_on'd)
+    // so the SELECT + UPDATEs don't hold the synchronous setup hook open
+    // while the first paint is waiting (#329).
+    let meeting_manager = std::sync::Arc::clone(&state.meeting_manager);
+    tauri::async_runtime::spawn(async move {
+        meeting_manager.reconcile_orphan_sessions().await;
+    });
+
+    // HUD level-meter pump (#21). Reads the latest RMS from the audio
+    // backend at ~30 Hz and emits `audio:level` so the HUD page can
+    // animate a bar. Activity-gated (#329): skip the emit when nothing is
+    // recording so we don't emit ~2.6M IPC events/day at idle.
+    let audio = std::sync::Arc::clone(&state.audio);
+    let handle_for_pump = handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(33));
+        loop {
+            ticker.tick().await;
+            if !audio.is_recording() {
+                continue;
+            }
+            let level = audio.current_level();
+            if let Err(e) = handle_for_pump.emit("audio:level", level) {
+                // No listener attached yet (HUD window hidden) is not an
+                // error per se, but trace keeps it out of the default log.
+                tracing::trace!(error = ?e, "emit audio:level failed");
+            }
+        }
+    });
+
+    // Per-app profile auto-activation poller (#427 / #457). Watches the
+    // foreground app on a 3-second tick; emits `app:profile-activated`
+    // when a per-app override matches so the frontend can update its
+    // source/model dropdowns.
+    let handle_for_profile = handle.clone();
+    tauri::async_runtime::spawn(async move {
+        run_profile_autoactivate_poller(handle_for_profile).await;
+    });
+
+    // Event-driven meeting auto-start (#665). Listens for CoreAudio HAL
+    // property changes on `kAudioDevicePropertyDeviceIsRunningSomewhere`
+    // instead of polling every 3 s. macOS only; other platforms compile
+    // clean with no equivalent HAL API.
+    #[cfg(target_os = "macos")]
+    {
+        let handle_for_detection = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            run_meeting_detection_task(handle_for_detection).await;
+        });
+    }
+}
+
+/// Register the global toggle hotkey and the PTT rdev listener.
+///
+/// Both registrations are best-effort: failures are logged but do not
+/// prevent startup — device-list and button-driven dictation keep
+/// working even if the OS refuses the shortcut.
+///
+/// PTT is skipped when Input Monitoring is `NotDetermined` (calling
+/// CGEventTapCreate in that state causes macOS 26 to auto-create a TCC
+/// Deny entry, making the grant unreachable without a dev-reset — see
+/// learnings.md 2026-05-13) or `Denied` (user explicitly revoked IM).
+/// On non-macOS platforms `NotApplicable` lets PTT start unconditionally.
+///
+/// Takes a concrete `tauri::AppHandle` (same rationale as
+/// `spawn_background_tasks` — the hotkey module's registration
+/// functions expect the default Wry runtime).
+fn register_hotkeys(handle: tauri::AppHandle, state: &ipc::AppState) {
+    if let Err(e) = hotkey::register_default(&handle) {
+        tracing::error!(error = ?e, "failed to register default toggle hotkey");
+    }
+
+    let im_status = crate::permissions::read_all().input_monitoring;
+    tracing::info!(
+        status = ?im_status,
+        "input monitoring status at startup (IOHIDCheckAccess)"
+    );
+    if im_status == crate::permissions::PermissionStatus::Granted
+        || im_status == crate::permissions::PermissionStatus::NotApplicable
+    {
+        if let Err(e) = hotkey::register_ptt_listener(
+            &handle,
+            std::sync::Arc::clone(&state.ptt_combo),
+            std::sync::Arc::clone(&state.ptt_active),
+            std::sync::Arc::clone(&state.ptt_listener_spawned),
+        ) {
+            tracing::error!(error = ?e, "failed to start PTT listener");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialise tracing here so service-construction errors (database
@@ -480,84 +762,39 @@ pub fn run() {
         // `settings/+page.svelte`.
         .plugin(tauri_plugin_os::init())
         .setup(|app| {
-            // Fast-path quarantine check: strip com.apple.quarantine and
-            // immediately restart before doing any real initialization work.
-            // TCC identity is baked in at process launch time from the
-            // quarantine state; we must restart to get a clean identity.
-            // The check uses `xattr -p` (probe) before `xattr -dr` (strip)
-            // so this is a no-op on non-DMG launches and never loops.
-            // See learnings.md 2026-05-13 and permissions/macos.rs for
-            // the full rationale.
-            // HUSH_QUARANTINE_STRIPPED is set by the exec() restart below
-            // and inherited by the replacement process image.  If it is
-            // already present this is that replacement process — skip the
-            // strip/restart to break any residual loop, then log for
-            // diagnostics.  The var is NOT set on fresh Finder/Dock launches,
-            // so normal user installs still run the strip on first launch.
+            // Strip the macOS quarantine xattr on the first post-DMG launch
+            // and exec()-restart for a clean TCC identity. Must run before
+            // any real initialization — TCC identity is baked in at process
+            // launch time from the quarantine state.
             #[cfg(target_os = "macos")]
-            if std::env::var("HUSH_QUARANTINE_STRIPPED").is_ok() {
-                tracing::info!(
-                    im_status = ?crate::permissions::read_all().input_monitoring,
-                    "returned from quarantine-strip exec() restart"
-                );
-            } else if crate::permissions::strip_app_quarantine() {
-                tracing::info!(
-                    "quarantine stripped; exec-restarting app to establish clean TCC identity"
-                );
-                // exec() replaces the current process image (same PID, no
-                // fork).  Unlike spawn()+exit(), this bypasses LaunchServices
-                // so the quarantine events daemon cannot re-add the xattr
-                // before the first instruction of the new image — the root
-                // cause of the infinite restart loop observed on macOS 26
-                // (see learnings.md 2026-05-13 "infinite restart loop").
-                // HUSH_QUARANTINE_STRIPPED=1 is applied to the replacement
-                // image's environment; it is NOT applied to the current
-                // process's environment, so if exec() fails and falls
-                // through, this block could try again on the next launch.
-                use std::os::unix::process::CommandExt as _;
-                let exe = std::env::current_exe()
-                    .map_err(|e| format!("quarantine restart: get exe: {e}"))?;
-                let err = std::process::Command::new(&exe)
-                    .args(std::env::args_os().skip(1))
-                    .env("HUSH_QUARANTINE_STRIPPED", "1")
-                    .exec();
-                // exec() only returns on failure.  Fall through to normal
-                // init rather than crashing — the quarantine xattr was
-                // already stripped from disk, so the next fresh relaunch
-                // will present a clean identity.
-                tracing::warn!(
-                    error = %err,
-                    "quarantine-strip restart via exec() failed; continuing with quarantined identity"
-                );
-            }
+            handle_quarantine_strip()?;
 
-            // Log TCC identity + all permission statuses to the persistent log.
-            // The cdhash shown here is what macOS uses as the TCC row key on
-            // macOS 26 — compare this hash between a "grant works" launch and a
-            // "grant doesn't stick" launch to diagnose identity mismatches.
+            // Log TCC identity + all permission statuses to the persistent
+            // log. The cdhash shown here is what macOS uses as the TCC row
+            // key — compare it between a "grant works" and a "grant doesn't
+            // stick" launch to diagnose identity mismatches.
             #[cfg(target_os = "macos")]
             crate::permissions::log_tcc_identity("startup");
 
-            // The platform app-data directory is only resolvable from a
-            // Tauri `App` handle, so state construction has to live in
-            // `setup` rather than at the top of `run`. Tauri's own async
-            // runtime drives the SQLite open + migrations.
+            // The platform app-data dir is only resolvable from a Tauri
+            // `App` handle, so state construction lives in `setup` rather
+            // than at the top of `run`. Tauri's own async runtime drives the
+            // SQLite open + migrations.
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .map_err(|e| format!("resolve app-data dir: {e}"))?;
 
-            // One-shot migration from the pre-#525 bundle identifier.
-            // Runs before any directory creation so the old DB + models
-            // are in place when the rest of setup looks for them.
+            // One-shot migration from the pre-#525 bundle identifier. Runs
+            // before any directory creation so the old DB + models are in
+            // place when the rest of setup looks for them.
             migrate_legacy_app_data_dir(&app_data_dir);
 
             let db_path = app_data_dir.join(DB_FILENAME);
             let models_dir = app_data_dir.join(MODELS_DIRNAME);
 
-            // Pre-create the models directory so the picker has a
-            // stable place to point users at, even before any model
-            // has been added.
+            // Pre-create the models directory so the picker has a stable
+            // place to point users at, even before any model has been added.
             if let Err(e) = std::fs::create_dir_all(&models_dir) {
                 tracing::error!(error = ?e, path = %models_dir.display(), "failed to create models dir");
             }
@@ -580,339 +817,17 @@ pub fn run() {
                 debug_log,
             ))
             .map_err(|e| format!("build app state: {e:#}"))?;
-            // Clone the audio Arc out before `manage` takes ownership of
-            // `state` — the level-meter pump task below needs a handle
-            // it can read from without going through `app.state()` on
-            // every tick.
-            let audio_for_pump = std::sync::Arc::clone(&state.audio);
-            // Clone the shared PTT-combo handle out before `manage`
-            // takes ownership of `state` — the listener thread reads
-            // it on every key event so a Settings UI edit takes
-            // effect without restarting the rdev thread.
-            let ptt_combo_for_listener = std::sync::Arc::clone(&state.ptt_combo);
-            let ptt_active_for_listener = std::sync::Arc::clone(&state.ptt_active);
-            let ptt_spawned_for_listener = std::sync::Arc::clone(&state.ptt_listener_spawned);
-
-            // Clone the meeting-manager handle out before `manage`
-            // for the orphan-reconcile spawn below.
-            let meeting_manager_for_reconcile = std::sync::Arc::clone(&state.meeting_manager);
-
             app.manage(state);
 
-            // Orphan-session reconciliation (#249, #329). Sessions
-            // left open by a previous process that exited without
-            // `stop_manual` (kill, OS crash, panic) get their
-            // `ended_at` stamped now so the panel doesn't render
-            // them as still-active. Best-effort: a DB failure here
-            // is logged inside the manager and doesn't block
-            // startup.
-            //
-            // Spawned (not block_on'd) so the SELECT + UPDATEs
-            // don't hold the synchronous setup hook open while the
-            // first paint is waiting (#329). The pump tasks below
-            // and the IPC handlers don't depend on this completing
-            // — the meeting manager's own internal locking handles
-            // any race between a reconcile-in-flight and a fresh
-            // `meeting_start_manual`.
-            tauri::async_runtime::spawn(async move {
-                meeting_manager_for_reconcile
-                    .reconcile_orphan_sessions()
-                    .await;
-            });
-
-            // Hide-on-close for main and debug (#263, #543). Tauri
-            // 2's default destroys the window on red-✕; without
-            // an intercept the user would close the main window
-            // expecting it to hide and find Hush had quit (tray
-            // icon gone). The debug console window is included so
-            // closing its red-✕ hides it rather than destroying
-            // the webview — this prevents macOS from stranding
-            // focus on the desktop (which looks like the main
-            // window also closed) and keeps the window's log
-            // buffer alive for the next open.
-            //
-            // Pairs with the `RunEvent::ExitRequested` interceptor
-            // wired below (#328): on Linux/Windows the runtime's
-            // default is to quit when the last window goes away,
-            // so hiding all windows would otherwise drop the tray
-            // icon along with the app. The interceptor blocks
-            // every runtime-driven exit; the only paths that quit
-            // are the tray's "Quit Hush" item and the macOS
-            // app-menu's Quit item, both of which call
-            // `request_user_quit` to set a flag the interceptor
-            // honours.
-            //
-            // Done from setup so the handlers are wired before
-            // any user interaction can fire CloseRequested. The
-            // closures clone the window handle so they outlive
-            // setup; that's the standard pattern Tauri expects.
-            for label in ["main", "debug"] {
-                if let Some(window) = app.get_webview_window(label) {
-                    let win_clone = window.clone();
-                    window.on_window_event(move |event| {
-                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                            // Always prevent the destroy. If the
-                            // subsequent `hide()` fails the window
-                            // stays visible — that's a strictly
-                            // better failure mode than letting
-                            // Tauri destroy the only surface the
-                            // user has for the window. The user
-                            // can quit Hush entirely via tray /
-                            // menu / ⌘Q if they actually wanted
-                            // out. Pre-fix this had a
-                            // belt-and-braces second
-                            // `prevent_close()` in the failure
-                            // arm; the second call is a no-op
-                            // (#286 review #4 finding).
-                            api.prevent_close();
-                            if let Err(e) = win_clone.hide() {
-                                tracing::warn!(
-                                    label = %win_clone.label(),
-                                    error = ?e,
-                                    "hide-on-close failed; window remains visible"
-                                );
-                            }
-                        }
-                    });
-                } else {
-                    tracing::warn!(
-                        label,
-                        "hide-on-close: window not found at setup time; close defaults to destroy"
-                    );
-                }
-            }
-
-            // Borderless-window drag enablement (#427 Item 1).
-            // On macOS, `decorations: false` windows have their
-            // NSWindow movable styleMask bit stripped — Tauri's
-            // `data-tauri-drag-region` and `startDragging()` then
-            // become silent no-ops. Restore movability via
-            // explicit AppKit calls so users can drag the popover
-            // and HUD pill from any non-interactive area. See
-            // `learnings.md` 2026-05-03 for the chase.
-            #[cfg(target_os = "macos")]
-            for label in ["menu-bar", "hud"] {
-                if let Some(window) = app.get_webview_window(label) {
-                    unlock_macos_window_drag(&window);
-                }
-            }
-
-            // Hide the zoom (green) traffic-light button on the
-            // main window. `maximizable: false` disables it but
-            // leaves a greyed-out circle; removing it entirely is
-            // cleaner.
-            #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
-                hide_macos_zoom_button(&window);
-            }
-
-            // Background-launch behaviour (#268). When the
-            // LaunchAgent fires Hush at login, we don't want to
-            // pop the main window — every macOS tray utility
-            // (Rectangle, Bartender, Alfred) starts silent. The
-            // installer / autostart-toggle code passes
-            // `--background` as a CLI arg; if present, hide the
-            // main window and switch to Accessory activation
-            // policy so the Dock icon doesn't appear either.
-            //
-            // The flag is passed via the autostart plugin's
-            // `Some(vec!["--background"])` registration argument
-            // (see the `tauri_plugin_autostart::init` call above).
-            #[cfg(target_os = "macos")]
-            if is_background_launch(std::env::args()) {
-                if let Some(main_win) = app.get_webview_window("main") {
-                    let _ = main_win.hide();
-                }
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-                tracing::info!(
-                    "background launch: main window hidden, activation policy = Accessory"
-                );
-            }
-
-            // LaunchAgent path reconciliation (#271). The autostart
-            // plugin's `enable()` writes a `~/Library/LaunchAgents/`
-            // plist that points to the binary's *absolute path* at
-            // the time it was called. If the user moves Hush.app
-            // afterwards (the natural ~/Downloads → /Applications
-            // flow for a DMG-distributed app), the stale plist
-            // points at the old path and the LaunchAgent fails
-            // silently at the next login — Settings still shows
-            // "Launch at Login: on" but Hush never actually starts.
-            //
-            // Fix: on every startup where autostart is currently
-            // enabled, re-register. The plugin's `enable()` is
-            // idempotent + cheap (writes a small plist file), so a
-            // blind re-enable is simpler than parsing the existing
-            // plist to detect a path mismatch — and gets the same
-            // outcome (the plist now points at `current_exe()`).
-            // No prompts, no UI flicker; LaunchAgents don't gate on
-            // any TCC permission. The cost is one fs::write of
-            // ~500 bytes at every launch.
-            //
-            // If `enable()` fails (e.g. read-only home, file-system
-            // permission issue) we log at warn level and write a
-            // flag into AppState. Settings → General reads the flag
-            // and surfaces a "path is stale" warning row with a
-            // retry button (#317). The user's session is otherwise
-            // unaffected — only the next-login behaviour is
-            // degraded.
-            #[cfg(target_os = "macos")]
-            {
-                use tauri_plugin_autostart::ManagerExt;
-                let mgr = app.autolaunch();
-                let enabled = mgr.is_enabled().unwrap_or(false);
-                if enabled {
-                    match mgr.enable() {
-                        Ok(()) => tracing::debug!(
-                            "autostart: re-registered LaunchAgent with current binary path (#271)"
-                        ),
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "autostart: re-register failed; LaunchAgent path may be stale (#271)"
-                            );
-                            if let Some(state) = app.try_state::<ipc::AppState>() {
-                                state.runtime_flags.autostart_path_stale.store(
-                                    true,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // HUD level-meter pump (#21). Reads the latest RMS from the
-            // audio backend at ~30 Hz and emits `audio:level` so the HUD
-            // page can animate a bar. Lives here (not in commands.rs)
-            // because the pump's lifetime is the app's, not any single
-            // dictation. The audio backend itself owns the level
-            // computation in its callback; this task is purely a
-            // cross-process push.
-            //
-            // Throttling: 33 ms ≈ 30 fps, matches the HUD's pulse
-            // animation cadence and is well above the audio callback
-            // rate (~100 Hz at 48 kHz / 480-frame chunks).
-            //
-            // Activity gate (#329). Pre-fix the pump emitted at 30 Hz
-            // for the entire process lifetime — ~2.6M IPC emits/day
-            // at idle with the HUD hidden and no recording. Now we
-            // skip the emit when nothing is recording: the HUD only
-            // shows during recording anyway, and a stale "0.0"
-            // doesn't help any other listener. Cadence stays at 30 Hz
-            // so the meter goes live within one tick of capture
-            // start without a separate kickoff signal.
-            let app_for_pump = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut ticker =
-                    tokio::time::interval(std::time::Duration::from_millis(33));
-                loop {
-                    ticker.tick().await;
-                    if !audio_for_pump.is_recording() {
-                        continue;
-                    }
-                    let level = audio_for_pump.current_level();
-                    if let Err(e) = app_for_pump.emit("audio:level", level) {
-                        // No listener attached yet (HUD window hidden) is
-                        // not an error per se, but the trace level keeps
-                        // it out of the default log unless someone is
-                        // actively investigating.
-                        tracing::trace!(error = ?e, "emit audio:level failed");
-                    }
-                }
-            });
-
-            // Per-app profile auto-activation poller (#427 / #457). Watches
-            // the foreground app on a 3-second tick; when the user focuses
-            // an app that has a per-app override with a preferred audio
-            // source or model, it emits `app:profile-activated` so the
-            // frontend can update its source/model dropdowns. Completely
-            // independent of meeting auto-start mode — the user doesn't need
-            // to enable Always to benefit from per-app profiles.
-            let app_for_profile = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                run_profile_autoactivate_poller(app_for_profile).await;
-            });
-
-            // Event-driven meeting auto-start (#665). Listens for CoreAudio
-            // HAL property changes on `kAudioDevicePropertyDeviceIsRunningSomewhere`
-            // instead of polling every 3 s. When any input device activates,
-            // it checks the frontmost app and starts a session automatically
-            // if the user's mode is Always. macOS only; other platforms have
-            // no equivalent HAL API and compile-clean with no meeting
-            // detection task.
-            #[cfg(target_os = "macos")]
-            {
-                let app_for_detection = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    run_meeting_detection_task(app_for_detection).await;
-                });
-            }
-
-            // Native macOS menu bar (no-op on other platforms).
-            // Replaces Tauri's auto-generated minimal menu with one
-            // that names the app "Hush", binds Settings… to ⌘,, and
-            // surfaces the sidebar sections under View. See
-            // `app_menu/mod.rs` for the wire shape.
+            // Wire windows first (needs &mut app), then obtain the managed
+            // state reference for the remaining helpers.
+            setup_windows(app);
+            let state = app.state::<ipc::AppState>();
+            spawn_background_tasks(app.handle().clone(), state.inner());
             app_menu::apply(app.handle());
-
-            // Status-bar / system-tray icon. Cross-platform: macOS
-            // menu-bar extra, Windows system tray, Linux notification
-            // area. Reuses the toggle-hotkey event channel for "Toggle
-            // Recording" so the frontend's existing listener handles
-            // start/stop. See `tray/mod.rs`.
             tray::install(app.handle());
+            register_hotkeys(app.handle().clone(), state.inner());
 
-            // Hotkey registration is best-effort: if the OS refuses the
-            // shortcut (already in use, missing permission, Wayland
-            // compositor without support) we log and continue so the rest
-            // of the app — device list, button-driven dictation — keeps
-            // working.
-            if let Err(e) = hotkey::register_default(app.handle()) {
-                tracing::error!(error = ?e, "failed to register default toggle hotkey");
-            }
-            // PTT runs through `rdev` on a dedicated thread (rdev's listen
-            // is blocking and installs a low-level OS hook). On macOS 12+,
-            // `CGEventTapCreate` (called internally by rdev) does NOT show an
-            // OS permission dialog when IM is not granted — it simply returns
-            // NULL and rdev exits with an error. The OS dialog is only
-            // triggered by an explicit `IOHIDRequestAccess` call, which the
-            // first-run modal handles (#647).
-            //
-            // IMPORTANT: Do NOT attempt the PTT listener for NotDetermined.
-            // On macOS 26, calling CGEventTapCreate (via rdev) when IM status
-            // is NotDetermined causes macOS to auto-create a TCC Deny entry.
-            // This silently transitions the status to Denied before the user
-            // has had any chance to grant IM via the first-run modal, making
-            // the grant unreachable without a nuclear dev-reset. See
-            // learnings.md 2026-05-13 (CGEventTap auto-deny).
-            //
-            // The first-run flow handles NotDetermined correctly:
-            //   1. User sees modal → clicks Allow → IOHIDRequestAccess fires
-            //   2. `request_input_monitoring_permission` IPC starts the PTT
-            //      listener immediately on grant (same session, no restart)
-            //   3. On subsequent launches, IOHIDCheckAccess → Granted → PTT
-            //      starts here normally
-            //
-            //   Denied  → skip; the user explicitly revoked IM.
-            //   NotApplicable → start (non-macOS platform, no TCC layer).
-            let im_status = crate::permissions::read_all().input_monitoring;
-            tracing::info!(
-                status = ?im_status,
-                "input monitoring status at startup (IOHIDCheckAccess)"
-            );
-            if im_status == crate::permissions::PermissionStatus::Granted
-                || im_status == crate::permissions::PermissionStatus::NotApplicable
-            {
-                if let Err(e) = hotkey::register_ptt_listener(
-                    app.handle(),
-                    ptt_combo_for_listener,
-                    ptt_active_for_listener,
-                    ptt_spawned_for_listener,
-                ) {
-                    tracing::error!(error = ?e, "failed to start PTT listener");
-                }
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
