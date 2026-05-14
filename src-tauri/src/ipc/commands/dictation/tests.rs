@@ -354,7 +354,7 @@ fn strip_brackets_drops_other_status_sentinels() {
         "[MUSIC]",
         "[ MUSIC ]", // whitespace-padded variant
         "[INAUDIBLE]",
-        "[laughter]",   // case-insensitive match
+        "[laughter]", // case-insensitive match
         "[APPLAUSE]",
         "[SILENCE]",
     ] {
@@ -371,14 +371,8 @@ fn strip_brackets_preserves_non_sentinel_bracketed_content() {
     // The new allowlist-based approach must NOT silently drop user
     // content that happens to be in brackets (e.g. stage directions,
     // citations, Markdown footnotes).
-    assert_eq!(
-        strip_whisper_brackets("[my citation]"),
-        "[my citation]"
-    );
-    assert_eq!(
-        strip_whisper_brackets("[Sound effects]"),
-        "[Sound effects]"
-    );
+    assert_eq!(strip_whisper_brackets("[my citation]"), "[my citation]");
+    assert_eq!(strip_whisper_brackets("[Sound effects]"), "[Sound effects]");
     // Only the sentinel is dropped; adjacent bracketed content is kept.
     assert_eq!(
         strip_whisper_brackets("[BLANK_AUDIO] hello [citation]"),
