@@ -53,7 +53,7 @@ The load-bearing seams:
 
 | Trait | File | Prod impl | Test impl |
 |---|---|---|---|
-| `audio::AudioCapture` | `audio/mod.rs` | `CpalAudioCapture` | inline mocks in `ipc/mod.rs` tests |
+| `audio::AudioCapture` | `audio/mod.rs` | `CpalAudioCapture` | inline mocks in `ipc/tests.rs` |
 | `transcription::Transcribe` | `transcription/mod.rs` | `WhisperTranscribe` (gated on `whisper`) | trait default + `Noop*` |
 | `diarization::Diarize` | `diarization/mod.rs` | `FlagGatedDiarizer` → `OnnxDiarizer` / `NoopDiarizer` | `NoopDiarizer` |
 | `history::HistoryRepository` | `history/` | `SqliteHistoryRepository` | `Mem*` |
@@ -164,7 +164,7 @@ CoreAudio HAL thread  ──notify_one()──▶  Notify  ──notified().awai
 | 5 | ✅ true | `Always` | ❌ false | ❌ false | `Other`/`Media` | `Idle` | — (app not a meeting app) |
 | 6 | ✅ true | `Always` | ❌ false | ❌ false | `Meeting` | `Start { app_name }` | Caller sets `session_emitted = true`, calls `start_manual` |
 
-**Row 1a — auto-stop:** Mic went quiet and we hold an auto-started session (`session_emitted = true`). Stop the session so users don't end up with a ghost recording after their call ends. Uses the same `do_stop_and_rebuild` helper as the manual Stop button, so transcribers and diarizer are rebuilt in the background.
+**Row 1a — auto-stop:** Mic went quiet and we hold an auto-started session (`session_emitted = true`). Stop the session so users don't end up with a ghost recording after their call ends. Uses the same `stop_meeting_and_rebuild_transcriber` helper as the manual Stop button, so transcribers and diarizer are rebuilt in the background.
 
 **Row 1b — mic quiet:** Mic went quiet and no auto-started session is running. Reset `session_emitted` so the next mic activation can start a fresh session.
 
@@ -288,7 +288,8 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
 | `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
 | `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides + macOS CoreAudio event-driven auto-start (`mic_camera_monitor`) |
-| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); parallel whisper context load at startup via `tokio::join!` |
+| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); `builder.rs` — explicit-builder for trait-seam composition used in prod and all tests; `tests.rs` — `MemHistory` + 18 IPC integration tests; parallel whisper context load at startup via `tokio::join!` |
+| `dictionary/` | Vocabulary + replacement repositories; `packs.rs` — static preset pack definitions (compile-time constants, never DB-materialised; enabled slugs persisted as JSON in settings) |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
 | `app_menu/` | Native macOS menu bar (no-op elsewhere) |
@@ -308,7 +309,10 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `lib/state/audio.svelte.ts` | Audio source selection + session state |
 | `lib/state/history.svelte.ts` | Dictation history list + refresh |
 | `lib/state/meeting-sessions.svelte.ts` | Meeting session list, active session, notices |
-| `lib/*.svelte` | Svelte 5 component library (panels, sidebar, error display, PTT editor) |
+| `lib/state/palette.svelte.ts` | Command palette (Cmd+K) state: open/close, query, filtered results |
+| `lib/AppLifecycle.svelte` | App-level lifecycle container: Tauri event listeners (hotkey, PTT, menu, model-download, meetings), permission side-effects, first-run checks; no markup |
+| `lib/HistoryActionRow.svelte` | Shared action row (copy / export-format menu / delete) reused by `HistoryDictationRow` and `HistoryMeetingRow` |
+| `lib/*.svelte` | Svelte 5 component library (panels, modals, sidebar, error display, form editors) |
 | `lib/types.ts` | TS shapes mirroring backend serde structs (camelCase) |
 | `lib/errors.ts` | `IpcError` → `ErrorDisplay` mapping |
 

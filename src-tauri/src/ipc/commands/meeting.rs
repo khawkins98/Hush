@@ -722,7 +722,10 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 ///
 /// Extracted from the IPC command body so the CoreAudio auto-stop
 /// path in `run_meeting_detection_task` can share the same logic.
-pub(crate) async fn do_stop_and_rebuild(app: &AppHandle, state: &AppState) -> IpcResult<()> {
+pub(crate) async fn stop_meeting_and_rebuild_transcriber(
+    app: &AppHandle,
+    state: &AppState,
+) -> IpcResult<()> {
     // Hide the HUD up front — the user (or auto-stop) expects the
     // overlay gone now, not after the pump's final-chunk drain
     // (which can take several seconds while whisper finishes the
@@ -869,7 +872,7 @@ pub(crate) async fn do_stop_and_rebuild(app: &AppHandle, state: &AppState) -> Ip
 
 #[tauri::command]
 pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
-    do_stop_and_rebuild(&app, &state).await
+    stop_meeting_and_rebuild_transcriber(&app, &state).await
 }
 
 #[cfg(test)]

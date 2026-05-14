@@ -80,6 +80,16 @@ Backend shape is still the same high-level trait-seam pattern:
 
 - Recordings under 1 second are not transcribed; a dimmed "Recording too short — not transcribed" entry is stored in History so users can see the hotkey tap was detected. Stats and CSV export exclude these ignored entries (#682).
 
+### v0.6.x-dev refactors (unreleased, landed on main post-v0.6.3)
+
+Five PRs reorganised internals without user-visible changes:
+
+- **#688** — Split 1155-line dictation handler into `mod.rs` (handlers) + `pipeline.rs` (helpers) + `tests.rs` (integration tests).
+- **#689** — Extracted `AppLifecycle.svelte` (Tauri event listeners) and `lib/state/palette.svelte.ts` (command palette state) from `+page.svelte`.
+- **#690** — Extracted shared `HistoryActionRow.svelte` from the two history row types; eliminates duplicate action-row markup.
+- **#691** — Added `MemHistory` in-memory mock + `AppStateBuilder` composition pattern; 18 new IPC integration tests for history/settings/diarizer commands (run via `cargo test --lib`).
+- **#692** — Added `dictionary/packs.rs` — static preset vocabulary packs (compile-time, never DB-materialised). New settings keys `enabled_packs` (JSON array of active pack slugs) and `language_style` (Whisper prompt tone prefix). UI for pack selection is live in Settings → Vocabulary.
+
 ---
 
 ## What works today
