@@ -62,6 +62,12 @@ export const Events = {
   /// button appears without waiting for a round-trip refresh) and
   /// then calls `meeting.refresh()` to pull the full session list.
   MeetingSessionStarted: "meeting:session-started",
+  /// Backend → frontend (main): the meeting pump has finished (normal
+  /// stop, backend auto-stop on device failure, or error). Payload is
+  /// `{ sessionId: number }`. The main window listener clears
+  /// `meeting.activeId` even when no explicit `stopSession()` call was
+  /// made from the UI (#799).
+  MeetingSessionEnded: "meeting:session-ended",
   /// Backend → frontend (main): a mic source was lost mid-session
   /// and the pump has either fallen back to the system default or
   /// has no fallback. Payload: `{ sessionId, sourceKind, lostDevice,

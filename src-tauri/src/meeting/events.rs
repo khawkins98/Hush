@@ -128,6 +128,28 @@ pub(super) fn emit_meeting_source_failed(
     );
 }
 
+/// Fired when the meeting pump finishes (normal stop, auto-stop, or error).
+/// Lets the frontend clear `meeting.activeId` even when the stop was backend-
+/// driven (device failure, auto-stop) and no explicit `stopSession()` call
+/// was made from the UI (#799).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MeetingSessionEndedPayload {
+    pub session_id: i64,
+}
+
+/// Tauri event name for [`MeetingSessionEndedPayload`]. Matches the
+/// TypeScript constant `Events.MeetingSessionEnded` in `events.ts`.
+pub(super) const MEETING_SESSION_ENDED_EVENT: &str = "meeting:session-ended";
+
+pub(super) fn emit_meeting_session_ended(event_emitter: &dyn EventEmitter, session_id: i64) {
+    emit_payload(
+        event_emitter,
+        MEETING_SESSION_ENDED_EVENT,
+        &MeetingSessionEndedPayload { session_id },
+    );
+}
+
 pub(super) fn emit_meeting_session_started(event_emitter: &dyn EventEmitter, session_id: i64) {
     emit_payload(
         event_emitter,
