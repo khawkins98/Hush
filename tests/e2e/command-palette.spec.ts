@@ -89,7 +89,7 @@ test.describe("CommandPalette — F3 ⌘K", () => {
 
     await input.fill("permissions");
     await expect(allRows).toHaveCount(1);
-    await expect(allRows.first()).toContainText(/Permissions/i);
+    await expect(allRows.first()).toHaveAttribute("data-action-id", "settings.permissions");
   });
 
   test("Stop dictation is disabled while idle", async ({ page }) => {

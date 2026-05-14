@@ -36,10 +36,8 @@
   import { onDestroy } from "svelte";
 
   import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
-  import type {
-    MacosPermissionDiagnostic,
-    PermissionStatus,
-  } from "./types";
+  import type { PermissionStatus } from "./types";
+  import { permissions } from "$lib/state/permissions.svelte";
 
   type Props = {
     show: boolean;
@@ -68,12 +66,12 @@
   let cardEl: HTMLElement | undefined = $state();
   let previousFocus: HTMLElement | null = null;
 
-  // Live permission state. `null` while the first poll is in
-  // flight or the call failed (which `diagnose_macos_permissions`
-  // signals via NotApplicable on non-macOS, so a real `null` is
-  // genuinely "haven't checked yet" rather than "denied").
-  let diagnostic = $state<MacosPermissionDiagnostic | null>(null);
-  let micReady = $derived(diagnostic?.statuses.microphone === "granted");
+  // `permissions.permStatuses` is the shared live TCC state updated
+  // by `permissions.diagnose()`. The wizard polls this via
+  // `permissions.diagnose()` below — no local diagnostic copy needed.
+  let micReady = $derived(
+    permissions.permStatuses?.microphone === "granted",
+  );
   let pollHandle: ReturnType<typeof setInterval> | null = null;
 
   // Per-row "Allow click in flight" guards so a user mashing the
@@ -85,27 +83,10 @@
   const FOCUSABLE_SELECTOR =
     'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-  async function pollDiagnostic() {
-    try {
-      const next = await invoke<MacosPermissionDiagnostic>(
-        "diagnose_macos_permissions",
-      );
-      diagnostic = next;
-    } catch (e) {
-      // Non-fatal — show whatever we last had. The next poll will
-      // try again. On non-macOS the IPC returns NotApplicable for
-      // every permission, which renders as already-granted-style
-      // ✓ states (Linux + Windows don't have per-app TCC for
-      // these, so "not applicable" reads as "doesn't apply, you're
-      // fine").
-      console.warn("[hush] diagnose_macos_permissions failed", e);
-    }
-  }
-
   function statusFor(
     key: "microphone" | "screenRecording" | "inputMonitoring",
   ): PermissionStatus | null {
-    return diagnostic?.statuses[key] ?? null;
+    return permissions.permStatuses?.[key] ?? null;
   }
 
   function isGranted(
@@ -131,7 +112,7 @@
     // short window so a mistaken second-click doesn't re-fire.
     setTimeout(() => {
       micRequesting = false;
-      void pollDiagnostic();
+      void permissions.diagnose();
     }, 400);
   }
 
@@ -150,7 +131,7 @@
       console.warn("[hush] request_input_monitoring_permission failed", e);
     }
     imRequesting = false;
-    void pollDiagnostic();
+    void permissions.diagnose();
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -214,8 +195,8 @@
       pollHandle = null;
     }
     if (show && step === "permissions") {
-      void pollDiagnostic();
-      pollHandle = setInterval(() => void pollDiagnostic(), 1500);
+      void permissions.diagnose();
+      pollHandle = setInterval(() => void permissions.diagnose(), 1500);
     }
   });
 

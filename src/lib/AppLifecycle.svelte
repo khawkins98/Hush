@@ -9,21 +9,23 @@
       permissions-dialog triggers from dictation / meeting state)
     - Platform detection and first-run flag check
 
-  State that callers need is exposed via $bindable() props so
-  +page.svelte stays a pure layout. AppLifecycle holds no markup.
+  Permission/onboarding state lives in the `permissions` and `onboarding`
+  state modules (#722); this component writes to them directly instead
+  of forwarding via bind: props. `isMacOS` remains a bindable prop
+  because it is only set here and read by the parent layout glyph.
 -->
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { platform } from "@tauri-apps/plugin-os";
   import { onDestroy, onMount } from "svelte";
 
   import { Events } from "$lib/events";
-  import type { PermissionStatuses, PermissionsHealth } from "$lib/types";
   import { audio } from "$lib/state/audio.svelte";
   import { dictation, TRAILING_SILENCE_MS } from "$lib/state/dictation.svelte";
   import { history } from "$lib/state/history.svelte";
   import { meeting } from "$lib/state/meeting-sessions.svelte";
+  import { onboarding } from "$lib/state/onboarding.svelte";
+  import { permissions } from "$lib/state/permissions.svelte";
   import type { SettingsTab } from "$lib/SettingsPanel.svelte";
   import { nav } from "$lib/state/nav.svelte";
 
@@ -31,31 +33,13 @@
     /// Resolved platform — true when running on macOS. Set during onMount
     /// from `@tauri-apps/plugin-os`'s `platform()` call.
     isMacOS: boolean;
-    /// First-run wizard visibility. Set to true if the backend flag is
-    /// unset; parent clears it via dismissFirstRun().
-    showFirstRun: boolean;
-    /// Current permission probe result (mic / screen / input-monitoring).
-    /// Read by the permission-source-reload effect.
-    permStatuses: PermissionStatuses | null;
-    /// Permissions-recovery dialog visibility. Written by the dictation /
-    /// meeting pending-dialog effects.
-    showPermissionsDialog: boolean;
-    /// Optional intro copy for the recovery dialog. Cleared on dismiss.
-    permissionsDialogIntro: string | undefined;
     /// Keyboard handler to register on `window` during onMount. Passed
     /// by the parent so handleGlobalKeydown can close over paletteOpen.
     onGlobalKeydown: (e: KeyboardEvent) => void;
-    // permissionHealth / macosCapable / staleBannerDismissed are owned
-    // and bound by PermissionHealthSection / the page template; they are
-    // not needed here.
   };
 
   let {
     isMacOS = $bindable(false),
-    showFirstRun = $bindable(false),
-    permStatuses = $bindable<PermissionStatuses | null>(null),
-    showPermissionsDialog = $bindable(false),
-    permissionsDialogIntro = $bindable<string | undefined>(undefined),
     onGlobalKeydown,
   }: Props = $props();
 
@@ -110,7 +94,7 @@
   // with at least one microphone entry and the condition becomes false.
   $effect(() => {
     if (
-      permStatuses?.microphone === "granted" &&
+      permissions.permStatuses?.microphone === "granted" &&
       audio.sources.filter((s) => s.kind === "microphone").length === 0
     ) {
       void dictation.loadSources();
@@ -119,16 +103,14 @@
 
   $effect(() => {
     if (dictation.pendingPermissionsDialogIntro !== null) {
-      permissionsDialogIntro = dictation.pendingPermissionsDialogIntro;
-      showPermissionsDialog = true;
+      permissions.openDialog(dictation.pendingPermissionsDialogIntro);
       dictation.clearPendingPermissionsDialog();
     }
   });
 
   $effect(() => {
     if (meeting.pendingPermissionsDialogIntro !== null) {
-      permissionsDialogIntro = meeting.pendingPermissionsDialogIntro;
-      showPermissionsDialog = true;
+      permissions.openDialog(meeting.pendingPermissionsDialogIntro);
       meeting.clearPendingPermissionsDialog();
     }
   });
@@ -167,12 +149,7 @@
 
     // Check the first-run flag BEFORE the Promise.all — round-7 UX
     // reviewer caught a real timing bug.
-    try {
-      const done = await invoke<boolean>("get_first_run_completed");
-      if (!done) showFirstRun = true;
-    } catch (e) {
-      console.error("get_first_run_completed failed:", e);
-    }
+    await onboarding.check();
 
     // Register meeting-session listeners before the initial refresh
     // so events that fire in the narrow window between refresh and

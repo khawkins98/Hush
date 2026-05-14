@@ -313,6 +313,8 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `lib/state/diarizer.svelte.ts` | Diarizer model status, download, removal, enable toggle |
 | `lib/state/models.svelte.ts` | Whisper model list, download progress, selection |
 | `lib/state/vocabulary.svelte.ts` | Vocabulary terms CRUD + language-style picker |
+| `lib/state/permissions.svelte.ts` | macOS TCC permission state: `diagnostic`, `permStatuses`, health, dialog; `diagnose()` / `refreshHealth()` / `openDialog()` (#722) |
+| `lib/state/onboarding.svelte.ts` | First-run wizard flag: `showFirstRun`, `check()`, `completeFirstRun()` (#722) |
 | `lib/state/general-settings.svelte.ts` | General settings (autostart, clipboard, sound cues, theme) |
 | `lib/state/general-runtime.svelte.ts` | Runtime/performance settings (inference threads, GPU) |
 | `lib/state/palette.svelte.ts` | Command palette (Cmd+K) state: open/close, query, filtered results |

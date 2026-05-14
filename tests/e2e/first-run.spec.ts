@@ -209,6 +209,177 @@ test.describe("first-run permissions step — wizard-perm and wizard-allow testi
       page.locator('[data-testid="wizard-allow-input-monitoring"]'),
     ).toHaveCount(0);
   });
+
+  test("clicking wizard-allow-microphone calls request_microphone_permission", async ({
+    page,
+  }) => {
+    // exposeFunction bridges the page/Node boundary so the mock can
+    // increment a counter and the assertion can read it back.
+    let micAllowCalls = 0;
+    await page.exposeFunction("__hush_track_mic_allow", () => {
+      micAllowCalls += 1;
+    });
+    await page.exposeFunction("__hush_was_mic_allow_called", () => micAllowCalls > 0);
+
+    await installMocks(page, {
+      get_first_run_completed: () => false,
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: null,
+        inputMonitoringHint: null,
+        canReset: false,
+        statuses: {
+          microphone: "not-determined",
+          screenRecording: "not-determined",
+          inputMonitoring: "not-determined",
+        },
+      }),
+      request_microphone_permission: async () => {
+        await (
+          window as unknown as { __hush_track_mic_allow: () => Promise<void> }
+        ).__hush_track_mic_allow();
+      },
+      request_input_monitoring_permission: () => false,
+      prime_screen_recording_permission: () => undefined,
+    });
+
+    await page.goto("/");
+    await expect(
+      page.locator('[data-testid="wizard-allow-microphone"]'),
+    ).toBeVisible();
+
+    await page.locator('[data-testid="wizard-allow-microphone"]').click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            window as unknown as {
+              __hush_was_mic_allow_called: () => Promise<boolean>;
+            }
+          ).__hush_was_mic_allow_called(),
+        ),
+      )
+      .toBe(true);
+  });
+
+  test("clicking wizard-allow-input-monitoring calls request_input_monitoring_permission", async ({
+    page,
+  }) => {
+    let imAllowCalls = 0;
+    await page.exposeFunction("__hush_track_im_allow", () => {
+      imAllowCalls += 1;
+    });
+    await page.exposeFunction("__hush_was_im_allow_called", () => imAllowCalls > 0);
+
+    await installMocks(page, {
+      get_first_run_completed: () => false,
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: null,
+        inputMonitoringHint: null,
+        canReset: false,
+        statuses: {
+          // Microphone already granted so the IM button is enabled.
+          microphone: "granted",
+          screenRecording: "not-determined",
+          inputMonitoring: "not-determined",
+        },
+      }),
+      request_microphone_permission: () => undefined,
+      request_input_monitoring_permission: async () => {
+        await (
+          window as unknown as { __hush_track_im_allow: () => Promise<void> }
+        ).__hush_track_im_allow();
+        return true;
+      },
+      prime_screen_recording_permission: () => undefined,
+    });
+
+    await page.goto("/");
+    await expect(
+      page.locator('[data-testid="wizard-allow-input-monitoring"]'),
+    ).toBeVisible();
+
+    await page.locator('[data-testid="wizard-allow-input-monitoring"]').click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            window as unknown as {
+              __hush_was_im_allow_called: () => Promise<boolean>;
+            }
+          ).__hush_was_im_allow_called(),
+        ),
+      )
+      .toBe(true);
+  });
+
+  test("diagnostic polling transition after microphone allow updates the UI to granted", async ({
+    page,
+  }) => {
+    // Track how many times diagnose_macos_permissions has been called.
+    // The first call (on mount) returns not-determined; subsequent calls
+    // (triggered by the 400 ms timeout + pollDiagnostic after clicking Allow)
+    // return granted. This exercises the wizard's reactive polling loop.
+    let diagCalls = 0;
+    await page.exposeFunction("__hush_inc_diag_count", () => ++diagCalls);
+    await page.exposeFunction("__hush_get_diag_count", () => diagCalls);
+
+    await installMocks(page, {
+      get_first_run_completed: () => false,
+      diagnose_macos_permissions: async () => {
+        const n = await (
+          window as unknown as {
+            __hush_inc_diag_count: () => Promise<number>;
+          }
+        ).__hush_inc_diag_count();
+        // First two calls may be concurrent (PermissionHealthSection.onMount
+        // and FirstRunModal.$effect both call permissions.diagnose() on load;
+        // the seq guard keeps only the last result). n <= 2 keeps the UI in
+        // not-determined until the user actually clicks Allow, which triggers
+        // call #3+ → granted.
+        return n <= 2
+          ? {
+              bundleId: "io.github.khawkins98.hush",
+              microphoneHint: null,
+              inputMonitoringHint: null,
+              canReset: false,
+              statuses: {
+                microphone: "not-determined",
+                screenRecording: "not-determined",
+                inputMonitoring: "not-determined",
+              },
+            }
+          : {
+              bundleId: "io.github.khawkins98.hush",
+              microphoneHint: null,
+              inputMonitoringHint: null,
+              canReset: false,
+              statuses: {
+                microphone: "granted",
+                screenRecording: "not-determined",
+                inputMonitoring: "not-determined",
+              },
+            };
+      },
+      request_microphone_permission: () => undefined,
+      request_input_monitoring_permission: () => false,
+      prime_screen_recording_permission: () => undefined,
+    });
+
+    await page.goto("/");
+
+    const micAllow = page.locator('[data-testid="wizard-allow-microphone"]');
+    await expect(micAllow).toBeVisible();
+
+    await micAllow.click();
+
+    // After the 400 ms timeout fires pollDiagnostic(), the diagnose mock
+    // returns granted and the reactive UI removes the Allow button.
+    await expect(micAllow).toHaveCount(0, { timeout: 5000 });
+  });
 });
 
 test.describe("permissions dialog — perm-dialog-refresh", () => {

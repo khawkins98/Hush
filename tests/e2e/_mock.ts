@@ -194,6 +194,12 @@ export async function installMocks(
       // exercise copy pass through; tests that want to assert a copy
       // happened can override per-test.
       "plugin:clipboard-manager|write_text": () => undefined,
+      // `@tauri-apps/plugin-dialog::save()` and `open()` — used by
+      // row-level and bundle export flows. Default save() returns a
+      // synthetic path so IPC calls that depend on a user-chosen
+      // path fire in specs without a real OS dialog.
+      "plugin:dialog|save": () => "/Users/test/hush-export.csv",
+      "plugin:dialog|open": () => "/Users/test/Desktop",
       open_macos_privacy_pane: () => undefined,
       prime_screen_recording_permission: () => undefined,
       relaunch_app: () => undefined,

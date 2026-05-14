@@ -60,12 +60,10 @@ test.describe("audio source picker", () => {
     const micOption = micGroup.locator('[role="option"]').first();
     await expect(micOption).toHaveText(/Built-in Microphone/);
 
-    // The system-audio option is the disabled "coming soon" affordance.
+    // The system-audio option is the disabled affordance.
     // aria-disabled="true" is the custom listbox's disabled signal.
     const sysOption = sysGroup.locator('[role="option"]').first();
     await expect(sysOption).toHaveAttribute("aria-disabled", "true");
-    await expect(sysOption).toContainText(/coming soon/i);
-    await expect(sysOption).not.toContainText(/#33/);
   });
 
   test("system-audio option becomes selectable when backend reports support", async ({
@@ -109,7 +107,6 @@ test.describe("audio source picker", () => {
       .first();
     // No `aria-disabled` = enabled.
     await expect(sysOption).not.toHaveAttribute("aria-disabled", "true");
-    await expect(sysOption).not.toContainText(/coming soon/i);
   });
 
   test("Start invokes meeting_start_manual with a single mic AudioSource", async ({
