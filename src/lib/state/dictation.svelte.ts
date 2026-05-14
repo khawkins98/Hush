@@ -197,6 +197,10 @@ export const dictation = {
     result = null;
     phase = { tag: "starting" };
     const sourceShape = audio.selectedAsAudioSource();
+    // Build the sources array for meeting_start_manual:
+    // - No source selected → [] (backend rejects with no-device error, handled below)
+    // - Microphone + Screen Recording live → mic + system-audio pair (multi-source meeting)
+    // - Anything else (mic only, or system-audio only) → single source as-is
     const sources =
       sourceShape === null
         ? []
@@ -357,6 +361,10 @@ async function _stopDictation(): Promise<void> {
   if (meeting.activeId !== null) {
     void meeting.refresh();
   }
+  // Fire-and-forget: confirm_permission nudges the TCC store so the
+  // permission health panel reflects the most recent grant status. If it
+  // fails (e.g. no microphone permission, or an older Tauri build), we
+  // just warn — the main stop path has already completed successfully.
   void invoke("confirm_permission", { permission: "microphone" }).catch(
     (err) => {
       console.warn("[hush] confirm_permission(mic) failed", err);
