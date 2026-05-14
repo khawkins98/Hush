@@ -27,6 +27,7 @@
     MeetingSession,
     MeetingSessionDetail,
   } from "./types";
+  import HistoryActionRow, { type ExpandAction, type ExportMenuEntry } from "./HistoryActionRow.svelte";
 
   type Props = {
     session: MeetingSession;
@@ -68,15 +69,32 @@
     }
   }
 
-  // Open/close state for the Export popover. Toggled by the
-  // download icon button; closes itself once the user picks a
-  // format.
-  let exportOpen = $state(false);
-
-  function pickFormat(format: MeetingExportFormat) {
-    exportOpen = false;
-    void onExport?.(session, format);
-  }
+  // Open/close state for the Export popover is now managed by HistoryActionRow.
+  // Export items derived from the onExport callback availability.
+  let meetingExportItems = $derived<ExportMenuEntry[]>(
+    onExport
+      ? [
+          {
+            kind: "item",
+            label: "Plain text (.txt)",
+            onSelect: () => void onExport?.(session, "text"),
+            testId: `meeting-export-text-${session.id}`,
+          },
+          {
+            kind: "item",
+            label: "CSV (.csv)",
+            onSelect: () => void onExport?.(session, "csv"),
+            testId: `meeting-export-csv-${session.id}`,
+          },
+          {
+            kind: "item",
+            label: "JSON (.json)",
+            onSelect: () => void onExport?.(session, "json"),
+            testId: `meeting-export-json-${session.id}`,
+          },
+        ]
+      : [],
+  );
 
   // Inline-expand state for the transcript view. Initial click
   // fires `loadDetail`; subsequent toggles use the cached
@@ -99,6 +117,19 @@
       detailLoading = false;
     }
   }
+
+  // ExpandAction prop for HistoryActionRow — re-derived after expanded/$state is live.
+  let expandAction = $derived<ExpandAction>({
+    expanded,
+    onClick: toggleExpand,
+    title: expanded
+      ? "Hide transcript"
+      : `Show transcript (${session.utteranceCount})`,
+    ariaLabel: expanded
+      ? "Hide transcript"
+      : `Show transcript (${session.utteranceCount} utterances)`,
+    testId: `meeting-show-transcript-${session.id}`,
+  });
 
   function formatStarted(iso: string): string {
     const d = new Date(iso);
@@ -212,126 +243,25 @@
     </div>
 
     <!-- Icon action cluster — always visible, right-aligned -->
-    <div class="history-actions" role="group" aria-label="Row actions">
-      <!-- Expand/collapse transcript -->
-      <button
-        class="icon-btn"
-        class:expanded
-        onclick={toggleExpand}
-        aria-expanded={expanded}
-        title={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount})`}
-        aria-label={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount} utterances)`}
-        data-testid="meeting-show-transcript-{session.id}"
-      >
-        <!-- Chevron: rotates 180° when expanded via CSS -->
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
-      </button>
-
-      {#if onCopy}
-        <button
-          class="icon-btn"
-          disabled={copyPending}
-          onclick={handleCopy}
-          title={copyPending ? "Copying…" : "Copy transcript"}
-          aria-label="Copy full transcript to clipboard"
-          data-testid="meeting-copy-transcript-{session.id}"
-        >
-          <!-- Lucide Copy -->
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-        </button>
-      {/if}
-
-      {#if onExport}
-        <div class="export-popover">
-          <button
-            type="button"
-            class="icon-btn"
-            onclick={() => (exportOpen = !exportOpen)}
-            aria-haspopup="menu"
-            aria-expanded={exportOpen}
-            title="Export transcript"
-            aria-label="Export transcript"
-            data-testid="meeting-export-toggle-{session.id}"
-          >
-            <!-- Lucide Download -->
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-          </button>
-          {#if exportOpen}
-            <ul class="export-menu" role="menu">
-              <li>
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="export-menu-item"
-                  onclick={() => pickFormat("text")}
-                  data-testid="meeting-export-text-{session.id}"
-                >
-                  Plain text (.txt)
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="export-menu-item"
-                  onclick={() => pickFormat("csv")}
-                  data-testid="meeting-export-csv-{session.id}"
-                >
-                  CSV (.csv)
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="export-menu-item"
-                  onclick={() => pickFormat("json")}
-                  data-testid="meeting-export-json-{session.id}"
-                >
-                  JSON (.json)
-                </button>
-              </li>
-            </ul>
-          {/if}
-        </div>
-      {/if}
-
-      <button
-        class="icon-btn danger"
-        class:confirming
-        title={confirming ? "Click again to confirm delete" : "Delete meeting"}
-        onclick={() => onDelete(session)}
-        aria-label={confirming
-          ? "Click again to confirm deleting this meeting"
-          : "Delete this meeting"}
-        data-testid="meeting-delete-{session.id}"
-      >
-        {#if confirming}
-          <!-- X mark: second click will fire -->
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        {:else}
-          <!-- Lucide Trash2 -->
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-            <line x1="10" y1="11" x2="10" y2="17"/>
-            <line x1="14" y1="11" x2="14" y2="17"/>
-          </svg>
-        {/if}
-      </button>
-    </div>
+    <HistoryActionRow
+      {expandAction}
+      onCopy={onCopy ? handleCopy : undefined}
+      copyPending={copyPending}
+      copyTitle={copyPending ? "Copying…" : "Copy transcript"}
+      copyAriaLabel="Copy full transcript to clipboard"
+      copyTestId="meeting-copy-transcript-{session.id}"
+      exportItems={meetingExportItems.length ? meetingExportItems : undefined}
+      exportTitle="Export transcript"
+      exportAriaLabel="Export transcript"
+      exportTestId="meeting-export-toggle-{session.id}"
+      {confirming}
+      onDelete={() => onDelete(session)}
+      deleteTitle="Delete meeting"
+      confirmTitle="Click again to confirm delete"
+      deleteAriaLabel="Delete this meeting"
+      confirmAriaLabel="Click again to confirm deleting this meeting"
+      deleteTestId="meeting-delete-{session.id}"
+    />
   </div>
 
   {#if expanded}
@@ -413,90 +343,6 @@
     line-height: 1.4;
   }
 
-  /* Icon action cluster */
-  .history-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.1rem;
-    flex-shrink: 0;
-    padding-top: 0.1rem;
-  }
-
-  .icon-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    cursor: pointer;
-    color: var(--text-muted);
-    transition: background-color 0.12s, color 0.12s, transform 0.15s;
-  }
-  .icon-btn:hover:not(:disabled) {
-    background-color: var(--bg-app);
-    color: var(--text-primary);
-  }
-  .icon-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-  /* Chevron rotates when transcript is expanded */
-  .icon-btn.expanded svg {
-    transform: rotate(180deg);
-  }
-  .icon-btn.danger {
-    color: var(--danger);
-  }
-  .icon-btn.danger:hover:not(:disabled) {
-    background-color: var(--danger-bg);
-  }
-  .icon-btn.danger.confirming {
-    background-color: var(--danger-bg);
-    color: var(--danger);
-  }
-
-  .export-popover {
-    position: relative;
-    display: inline-block;
-  }
-  .export-menu {
-    position: absolute;
-    top: calc(100% + 0.25rem);
-    right: 0;
-    z-index: 5;
-    list-style: none;
-    margin: 0;
-    padding: 0.25rem;
-    background-color: var(--bg-surface);
-    border: 1px solid var(--border-input);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    min-width: 11rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-  }
-  .export-menu-item {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 0.4rem 0.7rem;
-    background-color: transparent;
-    border: none;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    font-family: inherit;
-    color: var(--text-primary);
-    cursor: pointer;
-  }
-  .export-menu-item:hover {
-    background-color: var(--bg-sidebar);
-  }
-
   .meeting-detail-status {
     margin: 0.6rem 0 0;
     font-size: 0.85rem;
@@ -537,43 +383,11 @@
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) .meeting-utterances,
     :root:not([data-theme="light"]) .meeting-sources { color: #9a9aa0; }
-    :root:not([data-theme="light"]) .export-menu {
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    }
-    :root:not([data-theme="light"]) .icon-btn { color: #6e6e73; }
-    :root:not([data-theme="light"]) .icon-btn:hover:not(:disabled) {
-      background-color: #2a2a2d;
-      color: #d8d8d8;
-    }
-    :root:not([data-theme="light"]) .icon-btn.danger { color: #f0a0a0; }
-    :root:not([data-theme="light"]) .icon-btn.danger:hover:not(:disabled) {
-      background-color: #3d1d1d;
-    }
-    :root:not([data-theme="light"]) .icon-btn.danger.confirming {
-      background-color: #3d1d1d;
-      color: #f0c0c0;
-    }
     :root:not([data-theme="light"]) .meeting-detail-status { color: #9a9aa0; }
     :root:not([data-theme="light"]) .meeting-detail-error { color: #f0a0a0; }
   }
   :root[data-theme="dark"] .meeting-utterances,
   :root[data-theme="dark"] .meeting-sources { color: #9a9aa0; }
-  :root[data-theme="dark"] .export-menu {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  }
-  :root[data-theme="dark"] .icon-btn { color: #6e6e73; }
-  :root[data-theme="dark"] .icon-btn:hover:not(:disabled) {
-    background-color: #2a2a2d;
-    color: #d8d8d8;
-  }
-  :root[data-theme="dark"] .icon-btn.danger { color: #f0a0a0; }
-  :root[data-theme="dark"] .icon-btn.danger:hover:not(:disabled) {
-    background-color: #3d1d1d;
-  }
-  :root[data-theme="dark"] .icon-btn.danger.confirming {
-    background-color: #3d1d1d;
-    color: #f0c0c0;
-  }
   :root[data-theme="dark"] .meeting-detail-status { color: #9a9aa0; }
   :root[data-theme="dark"] .meeting-detail-error { color: #f0a0a0; }
 </style>
