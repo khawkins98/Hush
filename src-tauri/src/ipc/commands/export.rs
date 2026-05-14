@@ -24,11 +24,11 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::ipc::AppState;
-
-use super::history::history_csv_for_entries;
-use super::meeting::{
+use crate::meeting::export::{
     meeting_session_csv, meeting_session_json, meeting_session_text, MeetingExportFormat,
 };
+
+use super::history::history_csv_for_entries;
 use super::{IpcError, IpcResult};
 
 /// Which kinds of rows the bulk export covers (#357 phase 3c).

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { formatTimestamp } from "$lib/format";
   import { dictation } from "$lib/state/dictation.svelte";
-  import { history } from "$lib/state/history.svelte";
+  import { history, type FeedRow, type HistoryFilter } from "$lib/state/history.svelte";
   import { meeting } from "$lib/state/meeting-sessions.svelte";
 
   import ErrorDisplay from "./ErrorDisplay.svelte";
@@ -15,14 +15,6 @@
     MeetingSession,
     MeetingSessionDetail,
   } from "./types";
-
-  /// Filter chip values for the unified History feed (#357 phase 2).
-  /// "all" interleaves both kinds of rows by recency; "dictation"
-  /// and "meetings" scope to a single kind. Search across meetings
-  /// requires backend FTS that lands in a follow-up — while the
-  /// search box has a query, the filter is forced to "dictation"
-  /// since meetings can't match.
-  export type HistoryFilter = "all" | "dictation" | "meetings";
 
   type Props = {
     onSearchInput: (e: Event) => void;
@@ -57,7 +49,6 @@
     onExportBundle?: (args: {
       kind: "auto" | "dictation" | "meetings" | "both";
       meetingFormat: MeetingExportFormat;
-      activeFilter: HistoryFilter;
     }) => void | Promise<void>;
     /// Wipes every dictation row. Meetings have their own per-row
     /// Delete; bulk meeting delete pends until the export work in
@@ -78,11 +69,6 @@
     onClearAll,
   }: Props = $props();
 
-  // User-selected filter chip. Defaults to "all" so the unified
-  // surface lands on first paint. Forced to "dictation" while the
-  // search box has a query — see `effectiveFilter` below.
-  let userFilter = $state<HistoryFilter>("all");
-
   /// Whether the bulk-export options dialog is open. Toggled by
   /// the panel header's "Export filtered" button; closes itself
   /// on Cancel / Confirm / Escape.
@@ -93,80 +79,10 @@
     void onExportBundle?.({
       kind: selection.kind,
       meetingFormat: selection.meetingFormat,
-      activeFilter: effectiveFilter,
     });
   }
 
   let hasQuery = $derived(history.historyQuery.trim().length > 0);
-  // #357 phase 2 step 3 lifted the search-time forced filter:
-  // both streams now run their own searches (history FTS5 +
-  // utterance FTS5 rolled up to sessions), so the user's chip
-  // selection stays in effect while a query is active.
-  let effectiveFilter = $derived<HistoryFilter>(userFilter);
-
-  // Merged feed. Each entry tags its kind so the {#each} below can
-  // dispatch to the right row component, and the sort key is the
-  // creation/start instant in ms so the two streams interleave by
-  // recency (newest first). Pre-#357-phase-2 the panel was
-  // dictation-only and the parent's pagination already returned
-  // entries newest-first; meetings are sorted parent-side too.
-  type FeedRow =
-    | { kind: "dictation"; sortKey: number; entry: HistoryEntry }
-    | { kind: "meeting"; sortKey: number; session: MeetingSession };
-
-  let mergedFeed = $derived<FeedRow[]>(
-    (() => {
-      const includeDictation =
-        effectiveFilter === "all" || effectiveFilter === "dictation";
-      const includeMeetings =
-        effectiveFilter === "all" || effectiveFilter === "meetings";
-
-      // Fast path: only one stream active — map directly, no merge.
-      if (!includeMeetings) {
-        if (!includeDictation) return [];
-        return history.entries.map((entry) => ({
-          kind: "dictation" as const,
-          sortKey: Date.parse(entry.createdAt) || 0,
-          entry,
-        }));
-      }
-      if (!includeDictation) {
-        return meeting.sessions.map((session) => ({
-          kind: "meeting" as const,
-          sortKey: Date.parse(session.startedAt) || 0,
-          session,
-        }));
-      }
-
-      // Both streams active. Both arrive newest-first from the
-      // backend, so a two-pointer merge produces a sorted result in
-      // O(N) rather than the previous O(N log N) rebuild+sort.
-      const d: FeedRow[] = history.entries.map((entry) => ({
-        kind: "dictation" as const,
-        sortKey: Date.parse(entry.createdAt) || 0,
-        entry,
-      }));
-      const m: FeedRow[] = meeting.sessions.map((session) => ({
-        kind: "meeting" as const,
-        sortKey: Date.parse(session.startedAt) || 0,
-        session,
-      }));
-
-      const out: FeedRow[] = [];
-      let di = 0,
-        mi = 0;
-      while (di < d.length && mi < m.length) {
-        if (d[di].sortKey >= m[mi].sortKey) {
-          out.push(d[di++]);
-        } else {
-          out.push(m[mi++]);
-        }
-      }
-      while (di < d.length) out.push(d[di++]);
-      while (mi < m.length) out.push(m[mi++]);
-      return out;
-    })(),
-  );
 
   // Click-to-confirm state for the "Clear all" button. Same shape
   // as the meeting-mode Stop session confirmation: first click
@@ -222,10 +138,8 @@
   }
 
   function selectFilter(next: HistoryFilter) {
-    userFilter = next;
-    // Don't drag a stale armed confirm across a filter switch —
-    // the user has changed view, the muscle-memory of the prior
-    // armed click no longer applies.
+    history.filter = next;
+    // Don't drag a stale armed confirm across a filter switch.
     window.clearTimeout(confirmDeleteTimer);
     confirmingDelete = null;
   }
@@ -331,8 +245,8 @@
         <button
           type="button"
           class="filter-chip"
-          class:active={effectiveFilter === chip.value}
-          aria-pressed={effectiveFilter === chip.value}
+          class:active={history.effectiveFilter === chip.value}
+          aria-pressed={history.effectiveFilter === chip.value}
           onclick={() => selectFilter(chip.value as HistoryFilter)}
           data-testid="history-filter-{chip.value}"
         >
@@ -348,15 +262,15 @@
 
   {#if !history.loaded || !meeting.sessionsLoaded}
     <p class="loading-skeleton">Loading history…</p>
-  {:else if mergedFeed.length === 0}
+  {:else if history.mergedFeed.length === 0}
     <p class="empty-history">
       {#if hasQuery}
         No matches for "<em>{history.historyQuery}</em>". Try a shorter query.
-      {:else if effectiveFilter === "dictation"}
+      {:else if history.effectiveFilter === "dictation"}
         No dictation transcripts yet. Press the toggle hotkey or
         the Start button on the Dictation panel — the transcript
         will land here.
-      {:else if effectiveFilter === "meetings"}
+      {:else if history.effectiveFilter === "meetings"}
         No meeting sessions yet. Start a meeting from the
         Dictation panel — the session shows up here once it
         wraps up.
@@ -368,7 +282,7 @@
     </p>
   {:else}
     <ul class="history-list" data-version={history.version}>
-      {#each mergedFeed as row (row.kind + ":" + (row.kind === "dictation" ? row.entry.id : row.session.id))}
+      {#each history.mergedFeed as row (row.kind + ":" + (row.kind === "dictation" ? row.entry.id : row.session.id))}
         {#if row.kind === "dictation"}
           <HistoryDictationRow
             entry={row.entry}
@@ -396,9 +310,9 @@
 
 {#if exportDialogOpen}
   <ExportOptionsDialog
-    initialKind={effectiveFilter === "all"
+    initialKind={history.effectiveFilter === "all"
       ? "auto"
-      : effectiveFilter === "dictation"
+      : history.effectiveFilter === "dictation"
         ? "dictation"
         : "meetings"}
     onConfirm={onExportConfirm}
