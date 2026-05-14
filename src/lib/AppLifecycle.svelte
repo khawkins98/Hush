@@ -200,13 +200,22 @@
 
     unlistenPttPress = await listen(Events.HotkeyPttPress, () => {
       pttIsDown = true;
-      if (dictation.busy || dictation.recording) return;
+      // Don't start dictation during an active meeting session (#824).
+      if (dictation.busy || dictation.recording || meeting.busy || meeting.activeId !== null)
+        return;
       // Ignore key-repeat events while the hold timer is already running.
       if (pttPressTimer !== null) return;
       pttPressTimer = setTimeout(() => {
         pttPressTimer = null;
         // Key may have been released before the timer fired (short tap).
-        if (!pttIsDown || dictation.busy || dictation.recording) return;
+        if (
+          !pttIsDown ||
+          dictation.busy ||
+          dictation.recording ||
+          meeting.busy ||
+          meeting.activeId !== null
+        )
+          return;
         void dictation.start().then(() => {
           if (!dictation.recording || dictation.busy) return;
           if (pttIsDown) {
