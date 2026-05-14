@@ -107,6 +107,7 @@
   onDestroy(() => {
     window.clearTimeout(clearTimer);
     window.clearTimeout(confirmDeleteTimer);
+    history.cancelSearchDebounce();
   });
 
   function isConfirming(kind: "dictation" | "meeting", id: number): boolean {

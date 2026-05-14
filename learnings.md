@@ -35,19 +35,15 @@ The exported object is stable (not reactive itself), getters return reactive val
 
 ### Event-listener lifecycle rule
 
-Tauri event listeners (`listen()` / `unlisten` refs) **stay in the component's `onMount`/`onDestroy`**, never in the state module. Reasons:
-1. Listener lifetime is tied to the component's DOM lifetime, not the module's singleton lifetime.
-2. State modules are module-scope singletons — a listener registered in a module fires for the whole app session even if the component is destroyed.
-3. This matches the pattern in `state/models.svelte.ts` (doc comment: "event listeners stay in SettingsPanel's onMount/onDestroy").
+Two valid patterns; choose based on listener scope:
 
-The state module exposes the underlying reactive variables (`downloadProgress`, `downloadState`, etc.) that the component's listener callbacks write to directly.
+**1. Component `onMount` / `onDestroy`** — use this when the listener should be active only while a specific component is mounted. The listener is registered in `onMount` and cleaned up in `onDestroy`. The state module exposes reactive variables that the callback writes to directly. This is the default: `state/models.svelte.ts` is the canonical example (listeners live in `SettingsPanel`).
 
-**Exception: `initSessionListeners()` pattern.**  
-When a group of listeners (a) updates *only* the state module that owns them, and (b) must be active for the entire app session, the state module may expose an `async initSessionListeners(): Promise<() => void>` method. The method registers the listeners and returns a cleanup function. `AppLifecycle.svelte` calls it from `onMount` and invokes the returned cleanup from `onDestroy`, so the lifecycle contract is preserved at the component boundary.
+**2. `initSessionListeners()` pattern** — use this when the listener (a) must be active for the *entire* app session (not just while one panel is visible), and (b) writes *exclusively* to the state module that owns it. The state module exposes `async initSessionListeners(): Promise<() => void>`. `AppLifecycle.svelte` calls it from `onMount` and invokes the returned cleanup from `onDestroy`, preserving the lifecycle contract at the component boundary.
 
 `meeting-sessions.svelte.ts::initSessionListeners()` is the canonical example — the three meeting-session events (`MeetingSessionStarted`, `MeetingSourceFailed`, `MeetingSessionEnded`) write exclusively to `meeting.*` state, so co-locating them with that state reduces the file-count to touch when event shapes change.
 
-**Counter-example.** `AudioDeviceLost` / `AudioDeviceRestored` remain in `AppLifecycle` directly because they write to *two* state modules (`audio.inputDeviceName` AND `meeting.sourceFailedNotice`). When an event crosses module boundaries it belongs in the lifecycle component, not either module.
+**When an event crosses module boundaries**, it belongs in `AppLifecycle` directly, not in either state module. `AudioDeviceLost` / `AudioDeviceRestored` write to both `audio.inputDeviceName` AND `meeting.sourceFailedNotice` — they live in `AppLifecycle`.
 
 ### Playwright mock closure restriction
 

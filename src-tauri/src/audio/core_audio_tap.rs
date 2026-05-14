@@ -136,10 +136,20 @@ impl CoreAudioTapSession {
                 "audio tap binary reported degenerate format: sr={sample_rate} ch={channels}"
             ));
         }
+        // Guard against a tap binary reporting a pathological channel count
+        // that would silently truncate when cast to the u16 stored in
+        // CaptureFormat — the ring-buffer capacity (below) was already using
+        // the pre-cast u32, so the two values would diverge. Any real audio
+        // device tops out at far fewer than 65535 channels; reject early.
+        if channels > u16::MAX as u32 {
+            return Err(anyhow!(
+                "audio tap binary reported implausible channel count: {channels}"
+            ));
+        }
 
         let format = CaptureFormat {
             sample_rate,
-            channels: channels as u16,
+            channels: channels as u16, // safe: guarded above
         };
 
         // SPSC ring large enough for ~2 min of 48 kHz stereo (same ceiling as

@@ -156,6 +156,9 @@ impl HistoryRepository for NoopHistory {
     async fn delete(&self, _: i64) -> anyhow::Result<()> {
         Ok(())
     }
+    async fn get_by_id(&self, _: i64) -> anyhow::Result<Option<crate::history::HistoryEntry>> {
+        Ok(None)
+    }
     async fn clear(&self) -> anyhow::Result<i64> {
         Ok(0)
     }
@@ -801,6 +804,16 @@ impl crate::history::HistoryRepository for MemHistory {
 
     async fn count(&self) -> anyhow::Result<i64> {
         Ok(self.entries.lock().unwrap().len() as i64)
+    }
+
+    async fn get_by_id(&self, id: i64) -> anyhow::Result<Option<crate::history::HistoryEntry>> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|e| e.id == id)
+            .cloned())
     }
 
     async fn get_stats(&self) -> anyhow::Result<crate::history::DictationStats> {
