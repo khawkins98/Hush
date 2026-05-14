@@ -177,7 +177,16 @@
 
 <li class="history-row meeting-row" class:confirming-active={confirming} data-kind="meeting" data-meeting-id={session.id}>
   <div class="row-layout">
-    <div class="row-content">
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <div
+      class="row-content"
+      role="button"
+      tabindex="0"
+      onclick={toggleExpand}
+      onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpand()}
+      aria-expanded={expanded}
+      title={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount} utterances)`}
+    >
       <div class="meeting-meta">
         <span class="meeting-app">{session.appName}</span>
         <span class="meeting-started">{formatStarted(session.startedAt)}</span>
@@ -368,6 +377,8 @@
   .row-content {
     flex: 1;
     min-width: 0;
+    cursor: pointer;
+    user-select: none;
   }
 
   .meeting-meta {
