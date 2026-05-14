@@ -61,6 +61,10 @@ pub struct HistoryEntry {
     /// SQLite default `strftime('%Y-%m-%dT%H:%M:%SZ', 'now')` so callers
     /// don't have to provide it.
     pub created_at: String,
+    /// True for recordings that were too short to transcribe. These rows
+    /// appear in the history list (so the user can see the press was
+    /// detected) but are excluded from stats and bulk export.
+    pub ignored: bool,
 }
 
 /// Aggregate stats over the entire history table (#293). Powers the
@@ -92,6 +96,8 @@ pub struct NewHistoryEntry {
     pub window_title: Option<String>,
     pub model: String,
     pub duration_ms: Option<i64>,
+    /// Set to `true` for recordings that were too short to transcribe.
+    pub ignored: bool,
 }
 
 /// Repository trait at the storage boundary.

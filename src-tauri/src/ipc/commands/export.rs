@@ -132,7 +132,7 @@ pub async fn history_export_bundle(
                 .map_err(|e| IpcError::History(format!("history list: {e:#}")))?,
         };
 
-        for entry in &entries {
+        for entry in entries.iter().filter(|e| !e.ignored) {
             let body = history_csv_for_entries(std::slice::from_ref(entry))
                 .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;
             let path = bundle_path(&dir, &format!("dictation-{}.csv", entry.id))?;

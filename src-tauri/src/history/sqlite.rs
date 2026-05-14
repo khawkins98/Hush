@@ -44,14 +44,15 @@ impl SqliteHistoryRepository {
 impl HistoryRepository for SqliteHistoryRepository {
     async fn create(&self, entry: NewHistoryEntry) -> Result<i64> {
         let result = sqlx::query(
-            "INSERT INTO history (transcript, app_name, window_title, model, duration_ms) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO history (transcript, app_name, window_title, model, duration_ms, ignored) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(entry.transcript)
         .bind(entry.app_name)
         .bind(entry.window_title)
         .bind(entry.model)
         .bind(entry.duration_ms)
+        .bind(entry.ignored as i64)
         .execute(self.db.pool())
         .await
         .context("insert history row")?;
@@ -167,6 +168,7 @@ impl HistoryRepository for SqliteHistoryRepository {
               COALESCE(SUM(duration_ms), 0),
               COALESCE(SUM(LENGTH(COALESCE(transcript, ''))), 0)
             FROM history
+            WHERE ignored = 0
             "#,
         )
         .fetch_one(self.db.pool())
@@ -197,6 +199,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for HistoryEntry {
             model: row.try_get("model")?,
             duration_ms: row.try_get("duration_ms")?,
             created_at: row.try_get("created_at")?,
+            ignored: row.try_get::<i64, _>("ignored").unwrap_or(0) != 0,
         })
     }
 }
@@ -219,6 +222,7 @@ mod tests {
             window_title: None,
             model: "test-model".to_owned(),
             duration_ms: Some(1234),
+            ignored: false,
         }
     }
 
@@ -447,6 +451,37 @@ mod tests {
         repo.create(sample("hello  world", None)).await.unwrap();
         let stats = repo.get_stats().await.unwrap();
         assert_eq!(stats.word_count, 3);
+    }
+
+    #[tokio::test]
+    async fn get_stats_excludes_ignored_rows() {
+        // Ignored rows (too-short recordings) must not inflate any of the
+        // four aggregate values: session_count, word_count,
+        // total_recording_ms, or total_chars.
+        let repo = fresh_repo().await;
+        repo.create(sample("hello world", None)).await.unwrap();
+        // This entry is ignored — it must not appear in any stat.
+        repo.create(NewHistoryEntry {
+            transcript: String::new(),
+            app_name: None,
+            window_title: None,
+            model: String::new(),
+            duration_ms: Some(400),
+            ignored: true,
+        })
+        .await
+        .unwrap();
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(
+            stats.session_count, 1,
+            "ignored row must not count as a session"
+        );
+        assert_eq!(stats.word_count, 2);
+        assert_eq!(
+            stats.total_recording_ms, 1234,
+            "ignored row duration excluded"
+        );
+        assert_eq!(stats.total_chars, 11);
     }
 
     #[tokio::test]
