@@ -447,6 +447,12 @@ async function _stopMeeting(snapshot: {
     console.warn("[hush] failed to hydrate result from meeting session", e);
   } finally {
     // Always clean up regardless of hydration success.
+    // Clear any session-scoped failure banners that may have been
+    // raised during the meeting; stopSession() does this on the
+    // Settings/History path but _stopMeeting() is the dictation-flow
+    // stop path and didn't clear them (#802).
+    meeting.sourceFailedNotice = null;
+    meeting.appendFailedNotice = null;
     phase = { tag: "idle" };
     void history.feedRefresh();
     void invoke("confirm_permission", { permission: "microphone" }).catch(

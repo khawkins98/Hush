@@ -20,8 +20,9 @@
 //! Menu items have stable string IDs so the menu-event handler can
 //! dispatch on them without depending on label copy:
 //!
-//! - `settings` — open the Settings window
-//!   ([`crate::settings_window::show`])
+//! - `settings` — emit `settings:goto-tab` event; the main window's
+//!   listener flips its sidebar section to the inline Settings panel
+//!   (#479 slice 3 — standalone settings window was retired)
 //! - `goto-dictation` / `goto-history` — emit `menu:goto-section`
 //!   Tauri event with the section name as payload; the main
 //!   window's onMount listener flips its `activeSection` rune.
