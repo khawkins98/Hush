@@ -447,4 +447,3 @@ pub async fn stop_dictation(
 
 #[cfg(test)]
 mod tests;
-

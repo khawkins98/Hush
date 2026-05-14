@@ -19,8 +19,7 @@ use anyhow::anyhow;
 
 use crate::audio::{AudioCapture, AudioDevice, AudioSource, CapturedAudio};
 use crate::dictionary::{
-    NewVocabularyTerm, ReplacementRepository, ReplacementRule, VocabularyRepository,
-    VocabularyTerm,
+    NewVocabularyTerm, ReplacementRepository, ReplacementRule, VocabularyRepository, VocabularyTerm,
 };
 use crate::ipc::state::ForegroundApp;
 use crate::ipc::AppState;
@@ -376,10 +375,7 @@ fn strip_brackets_keeps_real_speech_around_a_silence_marker() {
         strip_whisper_brackets("[BLANK_AUDIO] hello world"),
         "hello world"
     );
-    assert_eq!(
-        strip_whisper_brackets("hello world [NOISE]"),
-        "hello world"
-    );
+    assert_eq!(strip_whisper_brackets("hello world [NOISE]"), "hello world");
     assert_eq!(
         strip_whisper_brackets("first [NOISE] second"),
         "first second"
@@ -391,10 +387,7 @@ fn strip_brackets_leaves_text_with_no_brackets_alone() {
     // The common path. Pin so a regression in the stripping
     // pass doesn't accidentally trim or reflow real
     // transcripts.
-    assert_eq!(
-        strip_whisper_brackets("Hello, world."),
-        "Hello, world."
-    );
+    assert_eq!(strip_whisper_brackets("Hello, world."), "Hello, world.");
 }
 
 #[test]
