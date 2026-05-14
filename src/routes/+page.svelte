@@ -94,8 +94,7 @@
     history.historyQuery = (e.target as HTMLInputElement).value;
     if (searchTimer !== null) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
-      void history.refresh();
-      void meeting.refresh();
+      void history.feedRefresh();
     }, 200);
   }
 </script>

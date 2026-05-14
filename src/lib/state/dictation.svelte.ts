@@ -420,8 +420,7 @@ async function _stopMeeting(snapshot: {
   } finally {
     // Always clean up regardless of hydration success.
     phase = { tag: "idle" };
-    void meeting.refresh();
-    void history.refresh();
+    void history.feedRefresh();
     void invoke("confirm_permission", { permission: "microphone" }).catch(
       (err) => {
         console.warn("[hush] confirm_permission(mic) failed", err);
