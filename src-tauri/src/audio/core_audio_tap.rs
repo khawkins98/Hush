@@ -73,9 +73,7 @@ impl CoreAudioTapSession {
         active_sessions: Arc<AtomicU32>,
         level: Arc<AtomicU32>,
     ) -> Result<Self> {
-        let binary = resource_dir
-            .join("resources")
-            .join("hush-audio-tap-capture");
+        let binary = capture_binary_path(resource_dir);
 
         if !binary.exists() {
             return Err(anyhow!(
