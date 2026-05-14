@@ -758,6 +758,7 @@ mod tests {
             vec![make_partial("revising tail", 1_500, 3_000, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -789,6 +790,7 @@ mod tests {
             vec![make_partial("hello", 0, 500, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
         dispatch_utterances(
@@ -797,6 +799,7 @@ mod tests {
             vec![make_partial("hello world", 0, 1_500, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -827,6 +830,7 @@ mod tests {
             vec![make_partial("you side", 0, 1_000, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
         dispatch_utterances(
@@ -835,6 +839,7 @@ mod tests {
             vec![make_partial("remote side", 0, 1_000, "system")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -869,6 +874,7 @@ mod tests {
             vec![make_partial("about to firm up", 0, 500, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
         assert_eq!(mgr.current_partials_for(session.id).len(), 1);
@@ -879,6 +885,7 @@ mod tests {
             vec![make_final("about to firm up", 0, 500, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -915,6 +922,7 @@ mod tests {
             vec![make_partial("remote still talking", 0, 2_000, "system")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
         dispatch_utterances(
@@ -923,6 +931,7 @@ mod tests {
             vec![make_final("you finished a sentence", 0, 1_500, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -951,6 +960,7 @@ mod tests {
             vec![make_final("   ", 0, 1_000, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -986,6 +996,7 @@ mod tests {
             vec![u],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -1010,7 +1021,15 @@ mod tests {
         let mut u = make_final("hello", 0, 1_000, "");
         u.speaker_label = None;
 
-        dispatch_utterances(session.id, "system", vec![u], &mgr.partials, &mgr.repo).await;
+        dispatch_utterances(
+            session.id,
+            "system",
+            vec![u],
+            &mgr.partials,
+            &mgr.repo,
+            &crate::events::NoopEventEmitter,
+        )
+        .await;
 
         let utterances = mgr.repo.list_utterances(session.id).await.unwrap();
         assert_eq!(utterances.len(), 1);
@@ -1066,6 +1085,7 @@ mod tests {
             &recorder_dyn,
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -1098,7 +1118,15 @@ mod tests {
         let diarize: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
 
-        diarize_and_dispatch_merged(0, vec![], &diarize, &mgr.partials, &mgr.repo).await;
+        diarize_and_dispatch_merged(
+            0,
+            vec![],
+            &diarize,
+            &mgr.partials,
+            &mgr.repo,
+            &crate::events::NoopEventEmitter,
+        )
+        .await;
         diarize_and_dispatch_merged(
             0,
             vec![TickBucket {
@@ -1109,6 +1137,7 @@ mod tests {
             &diarize,
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
         // No assertions needed beyond "didn't panic"; mgr.repo is
@@ -1161,6 +1190,7 @@ mod tests {
             &recorder_dyn,
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -1224,6 +1254,7 @@ mod tests {
             &recorder_dyn,
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -1275,6 +1306,7 @@ mod tests {
             &recorder_dyn,
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
 
@@ -1316,6 +1348,7 @@ mod tests {
             vec![make_partial("incomplete", 0, 500, "mic")],
             &mgr.partials,
             &mgr.repo,
+            &crate::events::NoopEventEmitter,
         )
         .await;
         assert_eq!(mgr.current_partials_for(session.id).len(), 1);

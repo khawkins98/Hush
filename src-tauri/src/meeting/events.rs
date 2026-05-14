@@ -58,6 +58,29 @@ pub(super) struct MeetingSessionStartedPayload {
 /// TypeScript constant `Events.MeetingSessionStarted` in `events.ts`.
 pub(super) const MEETING_SESSION_STARTED_EVENT: &str = "meeting:session-started";
 
+/// Fired when the pump fails to persist a finished utterance to the DB.
+/// Re-uses the `dictation:meeting-append-failed` wire name so the existing
+/// frontend banner listener in `meeting-sessions.svelte.ts` picks it up
+/// without a new event registration.  Payload: `{ error: String }`.
+pub(super) const MEETING_APPEND_FAILED_EVENT: &str = "dictation:meeting-append-failed";
+
+/// Payload for [`MEETING_APPEND_FAILED_EVENT`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MeetingAppendFailedPayload {
+    pub error: String,
+}
+
+pub(super) fn emit_utterance_append_failed(event_emitter: &dyn EventEmitter, error: &str) {
+    emit_payload(
+        event_emitter,
+        MEETING_APPEND_FAILED_EVENT,
+        &MeetingAppendFailedPayload {
+            error: error.to_owned(),
+        },
+    );
+}
+
 /// Fired when a mic source is lost mid-session and the pump has switched to
 /// the system default or has no fallback. Payload: [`AudioDeviceLostPayload`].
 pub(super) const AUDIO_DEVICE_LOST_EVENT: &str = "audio:device-lost";

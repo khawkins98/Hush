@@ -51,6 +51,7 @@ use crate::transcription::{StreamingTranscribeSession, Transcribe, Utterance};
 
 use super::events::{
     emit_audio_device_lost, emit_audio_device_restored, emit_meeting_source_failed,
+    emit_utterance_append_failed,
 };
 use super::recovery::SourceRecoveryState;
 use super::{MeetingSessionRepository, NewPersistedUtterance};
@@ -254,6 +255,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
                 &ctx.diarize,
                 &ctx.partials,
                 &ctx.repo,
+                ctx.event_emitter.as_ref(),
             )
             .await;
         }
@@ -274,6 +276,7 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             &ctx.diarize,
             &ctx.partials,
             &ctx.repo,
+            ctx.event_emitter.as_ref(),
         )
         .await;
     }
@@ -932,6 +935,7 @@ pub(super) async fn diarize_and_dispatch_merged(
     diarize: &Arc<dyn crate::diarization::Diarize>,
     partials: &Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
     repo: &Arc<dyn MeetingSessionRepository>,
+    event_emitter: &dyn crate::events::EventEmitter,
 ) {
     if buckets.is_empty() {
         return;
@@ -955,6 +959,7 @@ pub(super) async fn diarize_and_dispatch_merged(
             bucket.utterances,
             partials,
             repo,
+            event_emitter,
         )
         .await;
         return;
@@ -1035,7 +1040,7 @@ pub(super) async fn diarize_and_dispatch_merged(
     }
 
     for (label, utts) in source_labels.into_iter().zip(split) {
-        dispatch_utterances(session_id, &label, utts, partials, repo).await;
+        dispatch_utterances(session_id, &label, utts, partials, repo, event_emitter).await;
     }
 }
 
@@ -1053,6 +1058,7 @@ pub(super) async fn dispatch_utterances(
     utterances: Vec<Utterance>,
     partials: &Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
     repo: &Arc<dyn MeetingSessionRepository>,
+    event_emitter: &dyn crate::events::EventEmitter,
 ) {
     for mut u in utterances {
         // Source-derived speaker label is the fallback for any
@@ -1102,6 +1108,10 @@ pub(super) async fn dispatch_utterances(
                     source_kind = source_label,
                     "meeting pump: utterance append failed; final dropped"
                 );
+                // Surface to the user via the same banner the dictation IPC
+                // path uses (#790) — transcript went to clipboard but not to
+                // history, which is worth a visible warning.
+                emit_utterance_append_failed(event_emitter, &e.to_string());
             }
         } else {
             // Partial — replace the in-flight slot for this source.
