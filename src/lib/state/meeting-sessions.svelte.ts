@@ -282,6 +282,8 @@ export const meeting = {
       reason: string;
       deviceLost: boolean;
     }>(Events.MeetingSourceFailed, (e) => {
+      // Ignore stale events from a previous session (#811).
+      if (e.payload.sessionId !== meeting.activeId) return;
       console.debug(
         "[MeetingSourceFailed]",
         e.payload.sourceKind,
