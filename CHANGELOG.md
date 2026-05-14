@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-14
+
+### Added
+
+- **History: "recording too short" ignored entries** (#682). Recordings shorter than 1 second (accidental taps, background noise) are no longer sent to Whisper. A dimmed italic *"Recording too short — not transcribed"* entry is written to History so the user can see the press was detected; copy/export icons are hidden but delete is available. These ignored rows are excluded from the stats bar (session count, word count, recording time) and bulk CSV export.
+
+### Changed
+
+- **History: minimum dictation threshold raised to 1 s** (#682). The previous 200 ms crash-prevention floor has been replaced by a 1 s user-facing threshold. Anything under a second is treated as an accidental press.
+
 ## [0.6.2] - 2026-05-14
 
 ### Added
