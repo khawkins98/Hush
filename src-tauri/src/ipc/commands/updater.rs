@@ -131,15 +131,7 @@ pub async fn install_pending_update(
         return Ok(());
     };
 
-    if let Some(expected) = expected_version.as_deref() {
-        if update.version != expected {
-            return Err(IpcError::Internal(format!(
-                "update version mismatch: you agreed to install {expected}, \
-                 but the latest is now {} — please re-check",
-                update.version
-            )));
-        }
-    }
+    check_version_match(expected_version.as_deref(), &update.version)?;
 
     let version = update.version.clone();
     let app_for_progress = app.clone();
@@ -171,4 +163,86 @@ pub async fn install_pending_update(
     // returns Ok; this line is reached only on the successful
     // path before the relaunch interrupts execution.
     Ok(())
+}
+
+/// Pure helper: apply the TOCTOU version-mismatch check without
+/// requiring a live plugin. Extracted so tests can exercise all
+/// branches without a real `AppHandle` or network.
+pub(crate) fn check_version_match(expected: Option<&str>, actual: &str) -> Result<(), IpcError> {
+    if let Some(expected) = expected {
+        if actual != expected {
+            return Err(IpcError::Internal(format!(
+                "update version mismatch: you agreed to install {expected}, \
+                 but the latest is now {actual} — please re-check"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- version mismatch guard ---------------------------------------------
+
+    #[test]
+    fn version_match_passes_when_versions_agree() {
+        assert!(check_version_match(Some("1.2.3"), "1.2.3").is_ok());
+    }
+
+    #[test]
+    fn version_match_passes_when_no_expected_version() {
+        // Callers that don't track a version pre-click skip the check.
+        assert!(check_version_match(None, "1.2.3").is_ok());
+    }
+
+    #[test]
+    fn version_match_fails_when_versions_differ() {
+        let err = check_version_match(Some("1.2.3"), "1.3.0").unwrap_err();
+        match err {
+            IpcError::Internal(msg) => {
+                assert!(msg.contains("1.2.3"), "error must mention expected version");
+                assert!(msg.contains("1.3.0"), "error must mention actual version");
+            }
+            other => panic!("expected IpcError::Internal, got {other:?}"),
+        }
+    }
+
+    // -- wire-format shape --------------------------------------------------
+
+    #[test]
+    fn updater_download_progress_serialises_to_camel_case() {
+        let payload = UpdaterDownloadProgress {
+            chunk_len: 1024,
+            total: Some(65536),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert!(
+            json.get("chunkLen").is_some(),
+            "chunkLen must be present in camelCase JSON"
+        );
+        assert!(json.get("total").is_some(), "total must be present");
+        assert_eq!(json["chunkLen"], 1024);
+        assert_eq!(json["total"], 65536);
+    }
+
+    #[test]
+    fn updater_download_progress_serialises_null_total() {
+        let payload = UpdaterDownloadProgress {
+            chunk_len: 512,
+            total: None,
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert!(json["total"].is_null(), "None total must serialise as null");
+    }
+
+    #[test]
+    fn updater_install_pending_serialises_version_field() {
+        let payload = UpdaterInstallPending {
+            version: "2.0.0".to_string(),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["version"], "2.0.0");
+    }
 }
