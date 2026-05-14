@@ -420,7 +420,9 @@ mod tests {
         let slug = "dev-general".to_string();
 
         // First enable.
-        save_enabled_slugs(&state, &[slug.clone()]).await.unwrap();
+        save_enabled_slugs(&state, std::slice::from_ref(&slug))
+            .await
+            .unwrap();
         let after_first = load_enabled_slugs(&state).await.unwrap();
         assert_eq!(after_first.len(), 1);
 
