@@ -42,6 +42,13 @@ Tauri event listeners (`listen()` / `unlisten` refs) **stay in the component's `
 
 The state module exposes the underlying reactive variables (`downloadProgress`, `downloadState`, etc.) that the component's listener callbacks write to directly.
 
+**Exception: `initSessionListeners()` pattern.**  
+When a group of listeners (a) updates *only* the state module that owns them, and (b) must be active for the entire app session, the state module may expose an `async initSessionListeners(): Promise<() => void>` method. The method registers the listeners and returns a cleanup function. `AppLifecycle.svelte` calls it from `onMount` and invokes the returned cleanup from `onDestroy`, so the lifecycle contract is preserved at the component boundary.
+
+`meeting-sessions.svelte.ts::initSessionListeners()` is the canonical example — the three meeting-session events (`MeetingSessionStarted`, `MeetingSourceFailed`, `MeetingSessionEnded`) write exclusively to `meeting.*` state, so co-locating them with that state reduces the file-count to touch when event shapes change.
+
+**Counter-example.** `AudioDeviceLost` / `AudioDeviceRestored` remain in `AppLifecycle` directly because they write to *two* state modules (`audio.inputDeviceName` AND `meeting.sourceFailedNotice`). When an event crosses module boundaries it belongs in the lifecycle component, not either module.
+
 ### Playwright mock closure restriction
 
 State module closures are safe. However, Playwright mock handlers in `tests/e2e/_mock.ts` are serialized via `toString()` and reconstructed with `new Function()` inside the browser page context — they cannot capture outer-scope variables. Any per-test counter or shared state must go through `page.exposeFunction`.
