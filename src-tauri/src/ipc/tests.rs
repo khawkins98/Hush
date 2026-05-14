@@ -935,7 +935,9 @@ async fn history_search_filters_by_transcript_substring() {
     let results = state.data.history.search("world", 100, 0).await.unwrap();
     assert_eq!(results.len(), 2, "two entries contain 'world'");
     assert!(
-        results.iter().all(|e| e.transcript.to_lowercase().contains("world")),
+        results
+            .iter()
+            .all(|e| e.transcript.to_lowercase().contains("world")),
         "all results contain the query"
     );
 }
@@ -947,7 +949,11 @@ async fn history_search_empty_query_falls_through_to_list() {
     let state = state_with_mem_history(Arc::clone(&repo));
 
     let results = state.data.history.search("  ", 100, 0).await.unwrap();
-    assert_eq!(results.len(), 3, "whitespace-only query returns all entries");
+    assert_eq!(
+        results.len(),
+        3,
+        "whitespace-only query returns all entries"
+    );
 }
 
 #[tokio::test]
@@ -982,9 +988,17 @@ async fn history_count_tracks_insertions_and_deletions() {
     let repo = Arc::new(MemHistory::new());
     let state = state_with_mem_history(Arc::clone(&repo));
 
-    assert_eq!(state.data.history.count().await.unwrap(), 0, "empty at start");
+    assert_eq!(
+        state.data.history.count().await.unwrap(),
+        0,
+        "empty at start"
+    );
     seed_history(Arc::clone(&repo), 3).await;
-    assert_eq!(state.data.history.count().await.unwrap(), 3, "after 3 inserts");
+    assert_eq!(
+        state.data.history.count().await.unwrap(),
+        3,
+        "after 3 inserts"
+    );
     state.data.history.delete(1).await.unwrap();
     assert_eq!(state.data.history.count().await.unwrap(), 2, "after delete");
 }
@@ -1038,7 +1052,10 @@ async fn history_get_stats_aggregates_non_ignored_entries() {
     let state = state_with_mem_history(Arc::clone(&repo));
     let stats = state.data.history.get_stats().await.unwrap();
 
-    assert_eq!(stats.session_count, 2, "ignored rows excluded from session_count");
+    assert_eq!(
+        stats.session_count, 2,
+        "ignored rows excluded from session_count"
+    );
     // "hello world" = 2 words, "foo bar baz" = 3 words → 5 total.
     assert_eq!(stats.word_count, 5, "'hello world'(2) + 'foo bar baz'(3)");
     assert_eq!(stats.total_recording_ms, 3_500);
@@ -1075,7 +1092,11 @@ async fn hud_enabled_round_trips_through_atomic_and_settings_row() {
         .get(crate::settings::keys::HUD_ENABLED)
         .await
         .unwrap();
-    assert_eq!(row.as_deref(), Some("false"), "settings row persisted as 'false'");
+    assert_eq!(
+        row.as_deref(),
+        Some("false"),
+        "settings row persisted as 'false'"
+    );
 
     // Re-enable.
     set_hud_enabled_inner(&state, true).await.unwrap();
@@ -1091,7 +1112,11 @@ async fn hud_enabled_round_trips_through_atomic_and_settings_row() {
         .get(crate::settings::keys::HUD_ENABLED)
         .await
         .unwrap();
-    assert_eq!(row.as_deref(), Some("true"), "settings row persisted as 'true'");
+    assert_eq!(
+        row.as_deref(),
+        Some("true"),
+        "settings row persisted as 'true'"
+    );
 }
 
 #[tokio::test]
