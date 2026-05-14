@@ -87,6 +87,10 @@ test.describe("CommandPalette — F3 ⌘K", () => {
     const initialCount = await allRows.count();
     expect(initialCount).toBeGreaterThan(5);
 
+    // Intentional copy-smoke: "permissions" must appear in the
+    // settings.permissions action label for the text filter to work.
+    // The assertion is stable (data-action-id); the query word is the
+    // deliberate behavioral contract.
     await input.fill("permissions");
     await expect(allRows).toHaveCount(1);
     await expect(allRows.first()).toHaveAttribute("data-action-id", "settings.permissions");

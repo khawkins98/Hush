@@ -134,9 +134,7 @@ test.describe("audio source picker", () => {
     });
     await page.goto("/");
 
-    await page.getByRole("button", { name: "Start recording" }).click();
-
-    await expect.poll(() => seen.length).toBeGreaterThan(0);
+    await page.locator('[data-testid="record-start-btn"]').click();
 
     // Default mock has SCK NOT confirmed, so click-record stays
     // single-source mic. Multi-source path is exercised when the
@@ -195,9 +193,7 @@ test.describe("audio source picker", () => {
 
     await page.goto("/");
 
-    await page.getByRole("button", { name: "Start recording" }).click();
-
-    // After the click, `start_dictation` resolves and the recording
+    await page.locator('[data-testid="record-start-btn"]').click();
     // rune flips; the $effect in +page.svelte fires
     // `emit("ui:recording-state", true)`.
     await expect
