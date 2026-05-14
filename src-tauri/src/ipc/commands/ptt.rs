@@ -106,7 +106,7 @@ pub async fn ptt_set_config(
             &new_combo.to_storage_string(),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))?;
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))?;
     state
         .settings
         .set(
@@ -114,7 +114,7 @@ pub async fn ptt_set_config(
             crate::settings::codec::encode_bool(enabled),
         )
         .await
-        .map_err(|e| IpcError::Settings(e.to_string()))?;
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))?;
 
     // Hot-swap the in-memory state — listener picks both up on the
     // next OS event without restarting.
@@ -152,4 +152,116 @@ pub async fn ptt_set_config(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ipc::tests::mock_state;
+    use crate::settings;
+    use std::sync::atomic::Ordering;
+
+    // -- initial state -------------------------------------------------------
+
+    #[test]
+    fn ptt_disabled_and_listener_not_spawned_by_default() {
+        let state = mock_state();
+        // `mock_state()` uses MemSettings with no stored rows, so both
+        // atomics must be at their constructed defaults.
+        assert!(!state.ptt_active.load(Ordering::SeqCst));
+        assert!(!state.ptt_listener_spawned.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn default_ptt_combo_is_single_key() {
+        let state = mock_state();
+        let guard = state.ptt_combo.read().unwrap();
+        assert_eq!(
+            guard.keys().len(),
+            1,
+            "default combo must be exactly one key"
+        );
+    }
+
+    // -- combo validation (parse_ptt_key / try_from_keys) --------------------
+
+    #[test]
+    fn parse_ptt_key_accepts_canonical_names() {
+        use crate::hotkey::ptt::{parse_ptt_key, PttKey};
+        assert_eq!(parse_ptt_key("RightMeta").unwrap(), PttKey::RightMeta);
+        assert_eq!(parse_ptt_key("rightmeta").unwrap(), PttKey::RightMeta);
+        assert_eq!(parse_ptt_key("RightControl").unwrap(), PttKey::RightControl);
+        assert_eq!(parse_ptt_key("F5").unwrap(), PttKey::F5);
+        assert_eq!(parse_ptt_key("CapsLock").unwrap(), PttKey::CapsLock);
+    }
+
+    #[test]
+    fn parse_ptt_key_accepts_platform_aliases() {
+        use crate::hotkey::ptt::{parse_ptt_key, PttKey};
+        // macOS aliases
+        assert_eq!(parse_ptt_key("RightCmd").unwrap(), PttKey::RightMeta);
+        assert_eq!(parse_ptt_key("option").unwrap(), PttKey::LeftAlt);
+    }
+
+    #[test]
+    fn parse_ptt_key_rejects_unknown_key() {
+        use crate::hotkey::ptt::parse_ptt_key;
+        assert!(parse_ptt_key("Enter").is_err());
+        assert!(parse_ptt_key("").is_err());
+        assert!(parse_ptt_key("Space").is_err());
+    }
+
+    #[test]
+    fn try_from_keys_rejects_empty_combo() {
+        use crate::hotkey::ptt::PttCombo;
+        let result = PttCombo::try_from_keys(std::iter::empty());
+        assert!(result.is_err(), "empty combo must be rejected");
+    }
+
+    #[test]
+    fn try_from_keys_deduplicates_repeated_keys() {
+        use crate::hotkey::ptt::{PttCombo, PttKey};
+        let combo = PttCombo::try_from_keys([PttKey::RightMeta, PttKey::RightMeta]).unwrap();
+        assert_eq!(combo.keys().len(), 1, "duplicate keys must be deduplicated");
+    }
+
+    // -- settings key round-trip ---------------------------------------------
+
+    #[tokio::test]
+    async fn ptt_enabled_key_round_trips_through_settings() {
+        use crate::settings::codec::encode_bool;
+        let state = mock_state();
+        state
+            .settings
+            .set(settings::keys::PTT_ENABLED, encode_bool(true))
+            .await
+            .unwrap();
+        let stored = state
+            .settings
+            .get(settings::keys::PTT_ENABLED)
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(stored, encode_bool(true));
+    }
+
+    #[tokio::test]
+    async fn ptt_combo_key_round_trips_through_settings() {
+        use crate::hotkey::ptt::{parse_ptt_combo, PttCombo, PttKey};
+        let state = mock_state();
+        let combo = PttCombo::try_from_keys([PttKey::RightMeta, PttKey::RightShift]).unwrap();
+        let serialised = combo.to_storage_string();
+        state
+            .settings
+            .set(settings::keys::PTT_COMBO, &serialised)
+            .await
+            .unwrap();
+        let raw = state
+            .settings
+            .get(settings::keys::PTT_COMBO)
+            .await
+            .unwrap()
+            .unwrap();
+        let restored = parse_ptt_combo(&raw).unwrap();
+        assert_eq!(restored.keys(), combo.keys());
+    }
 }
