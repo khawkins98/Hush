@@ -120,6 +120,17 @@ export type VocabularyTerm = {
   term: string;
 };
 
+export type PackStatus = {
+  slug: string;
+  name: string;
+  description: string;
+  vocabularyCount: number;
+  replacementCount: number;
+  enabled: boolean;
+};
+
+export type LanguageStyle = 'american' | 'british' | 'oxford';
+
 // Meeting Mode (refs #33 / #109). Wire shapes mirror the Rust
 // types in `src-tauri/src/meeting/mod.rs`. Sessions are populated
 // by the SessionManager chunking pump; the panel renders an empty

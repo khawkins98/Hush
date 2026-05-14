@@ -148,3 +148,150 @@ pub async fn vocabulary_delete(state: State<'_, AppState>, id: i64) -> IpcResult
         .await
         .map_err(|e| IpcError::Replacements(e.to_string()))
 }
+
+// -- Preset packs ----------------------------------------------------------
+//
+// Pack contents are **static** — compiled into the binary. Only the list of
+// enabled pack slugs is persisted in the settings table. Commands here
+// read/write that slug list; the pack vocabulary and replacement rules are
+// applied at transcription time in `dictation/pipeline.rs`.
+
+use crate::dictionary::packs::{self, PackDescriptor};
+use crate::settings;
+
+/// Wire shape returned by `list_packs`.
+///
+/// Extends [`PackDescriptor`] with an `enabled` boolean derived from the
+/// stored enabled-pack-slugs setting. Using a dedicated wire type keeps
+/// the frontend from reasoning about the difference between "no packs
+/// setting row yet" and "empty list".
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackStatus {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub vocabulary_count: usize,
+    pub replacement_count: usize,
+    pub enabled: bool,
+}
+
+impl PackStatus {
+    fn from_descriptor(desc: &'static PackDescriptor, enabled: bool) -> Self {
+        PackStatus {
+            slug: desc.slug.to_owned(),
+            name: desc.name.to_owned(),
+            description: desc.description.to_owned(),
+            vocabulary_count: desc.vocabulary.len(),
+            replacement_count: desc.replacements.len(),
+            enabled,
+        }
+    }
+}
+
+/// All built-in preset packs with their current enabled/disabled state.
+#[tauri::command]
+pub async fn list_packs(state: State<'_, AppState>) -> IpcResult<Vec<PackStatus>> {
+    let enabled = load_enabled_slugs(&state).await?;
+    Ok(packs::all_packs()
+        .iter()
+        .map(|p| PackStatus::from_descriptor(p, enabled.contains(&p.slug.to_owned())))
+        .collect())
+}
+
+/// Enable a preset pack. Adds the slug to the enabled-packs setting if
+/// it is not already present. No-op if the slug is not a known pack.
+#[tauri::command]
+pub async fn enable_pack(state: State<'_, AppState>, slug: String) -> IpcResult<()> {
+    if packs::find_pack(&slug).is_none() {
+        return Err(IpcError::Replacements(format!("unknown pack: {slug}")));
+    }
+    let mut enabled = load_enabled_slugs(&state).await?;
+    if !enabled.contains(&slug) {
+        enabled.push(slug);
+        save_enabled_slugs(&state, &enabled).await?;
+    }
+    Ok(())
+}
+
+/// Disable a preset pack. Removes the slug from the enabled-packs setting.
+/// No-op if the pack was not enabled.
+#[tauri::command]
+pub async fn disable_pack(state: State<'_, AppState>, slug: String) -> IpcResult<()> {
+    let mut enabled = load_enabled_slugs(&state).await?;
+    let before = enabled.len();
+    enabled.retain(|s| s != &slug);
+    if enabled.len() != before {
+        save_enabled_slugs(&state, &enabled).await?;
+    }
+    Ok(())
+}
+
+async fn load_enabled_slugs(state: &AppState) -> IpcResult<Vec<String>> {
+    match state
+        .settings
+        .get(crate::settings::keys::ENABLED_PACKS)
+        .await
+    {
+        Ok(Some(json)) => Ok(serde_json::from_str::<Vec<String>>(&json).unwrap_or_default()),
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(IpcError::Replacements(e.to_string())),
+    }
+}
+
+async fn save_enabled_slugs(state: &AppState, slugs: &[String]) -> IpcResult<()> {
+    let json = serde_json::to_string(slugs)
+        .map_err(|e| IpcError::Replacements(format!("serialize pack slugs: {e}")))?;
+    state
+        .settings
+        .set(settings::keys::ENABLED_PACKS, &json)
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+// -- Language style --------------------------------------------------------
+
+/// Get the stored language style preference.
+///
+/// Returns `"american"` if the setting is absent or unrecognised — that is
+/// Whisper's default behaviour and the product default for Hush.
+#[tauri::command]
+pub async fn get_language_style(state: State<'_, AppState>) -> IpcResult<String> {
+    let style = state
+        .settings
+        .get(settings::keys::LANGUAGE_STYLE)
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))?
+        .unwrap_or_default();
+    Ok(normalise_language_style(&style).to_owned())
+}
+
+/// Set the language style preference.
+///
+/// Accepted values: `"american"`, `"british"`, `"oxford"`. Any other
+/// value is rejected with an error so the frontend can't silently persist
+/// garbage that later defaults to American silently.
+#[tauri::command]
+pub async fn set_language_style(state: State<'_, AppState>, style: String) -> IpcResult<()> {
+    if !["american", "british", "oxford"].contains(&style.as_str()) {
+        return Err(IpcError::Replacements(format!(
+            "invalid language style {style:?}; expected american, british, or oxford"
+        )));
+    }
+    state
+        .settings
+        .set(settings::keys::LANGUAGE_STYLE, &style)
+        .await
+        .map_err(|e| IpcError::Replacements(e.to_string()))
+}
+
+/// Normalise a stored style slug to a known value, defaulting to
+/// `"american"` for anything unrecognised (including the empty string
+/// from an absent row).
+fn normalise_language_style(stored: &str) -> &'static str {
+    match stored {
+        "british" => "british",
+        "oxford" => "oxford",
+        _ => "american",
+    }
+}
