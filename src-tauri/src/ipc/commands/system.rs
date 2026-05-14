@@ -320,15 +320,21 @@ pub fn get_app_version() -> String {
 /// deep-link or file:// exposure.
 #[tauri::command]
 pub fn open_url(url: String) -> IpcResult<()> {
-    let parsed = Url::parse(&url)
-        .ok()
-        .filter(|u| matches!(u.scheme(), "https" | "http") && u.host_str().is_some());
-    if parsed.is_none() {
+    if !validate_open_url(&url) {
         return Err(IpcError::Internal(
             "open_url: only http(s) URLs with a non-empty host are allowed".into(),
         ));
     }
     open_url_impl(&url)
+}
+
+/// Returns `true` iff the URL is safe to open via the platform launcher:
+/// must parse as http or https with a non-empty host.
+fn validate_open_url(url: &str) -> bool {
+    Url::parse(url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "https" | "http") && u.host_str().is_some())
+        .is_some()
 }
 
 #[cfg(target_os = "macos")]
@@ -484,5 +490,43 @@ mod tests {
             None => unsafe { std::env::remove_var("HUSH_LOG_FILE") },
         }
         assert!(matches!(result, Ok(None)), "got {result:?}");
+    }
+
+    // ── open_url validation ────────────────────────────────────────────────
+
+    #[test]
+    fn open_url_allows_https() {
+        assert!(validate_open_url("https://example.com/path?q=1"));
+    }
+
+    #[test]
+    fn open_url_allows_http() {
+        assert!(validate_open_url("http://example.com"));
+    }
+
+    #[test]
+    fn open_url_rejects_file_scheme() {
+        assert!(!validate_open_url("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn open_url_rejects_ftp_scheme() {
+        assert!(!validate_open_url("ftp://example.com/file.txt"));
+    }
+
+    #[test]
+    fn open_url_rejects_custom_scheme() {
+        assert!(!validate_open_url("vscode://extension/open"));
+    }
+
+    #[test]
+    fn open_url_rejects_hostless_url() {
+        // data: URLs have no host.
+        assert!(!validate_open_url("data:text/plain,hello"));
+    }
+
+    #[test]
+    fn open_url_rejects_unparseable_url() {
+        assert!(!validate_open_url("not a url at all"));
     }
 }
