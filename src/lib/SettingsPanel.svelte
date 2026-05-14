@@ -1,8 +1,7 @@
 <!--
-  Settings panel — extracted from `routes/settings/+page.svelte`
-  in #479 slice 2 so the same content can render either inside
-  the standalone Settings window (legacy, slice 3 deletes it) or
-  inline as the third sidebar panel on the main page.
+  Settings panel — inline in the main window's third sidebar slot.
+  Extracted from `routes/settings/+page.svelte` in #479; the
+  standalone Settings window was removed in the same PR.
 
   Owns:
     - Tab strip + active-tab state (`activeTab`, bindable so the
@@ -10,9 +9,9 @@
     - Model picker state + lifecycle (model_list / model_select /
       model_download / model_remove + the 3 download-progress
       Tauri event listeners).
-    - The `settings:goto-tab` Tauri-event listener so cross-window
-      deep-links still flip the active tab when the panel is
-      hosted in either context.
+    - The `settings:goto-tab` Tauri-event listener so the active
+      tab can be flipped programmatically from menus or the
+      command palette.
 
   Each tab's per-tab state still lives inside its dedicated
   `*Tab.svelte` (GeneralTab, VocabularyTab, etc., per the #332

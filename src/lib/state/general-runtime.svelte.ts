@@ -36,6 +36,7 @@ let _micGainDbError = $state<string | null>(null);
 
 let _firstRunResetBusy = $state(false);
 let _firstRunResetMessage = $state<string | null>(null);
+let _firstRunResetTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function loadStats(): Promise<void> {
   try {
@@ -161,7 +162,8 @@ export const generalRuntime = {
       _firstRunResetMessage = "Welcome will show on next launch.";
       // Auto-clear after 3 s so the button returns to its actionable
       // label if the user changes their mind in the same session.
-      setTimeout(() => {
+      clearTimeout(_firstRunResetTimer ?? undefined);
+      _firstRunResetTimer = setTimeout(() => {
         _firstRunResetMessage = null;
       }, 3000);
     } catch (e) {
