@@ -446,6 +446,50 @@ test.describe("settings window — PTT editor", () => {
     await expect(record).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Cancel/i })).toBeVisible();
   });
+
+  test("completing a capture session calls ptt_set_config with the captured keys", async ({
+    page,
+  }) => {
+    let pttSetCalls = 0;
+    let lastCombo: string[] = [];
+    await page.exposeFunction(
+      "__hush_record_ptt_set",
+      (combo: string[]) => {
+        pttSetCalls += 1;
+        lastCombo = combo;
+      },
+    );
+    await installMocks(page, {
+      // Await the exposed fn so Node-side counters update before the
+      // caller sees the resolved IPC response.
+      ptt_set_config: async (args) => {
+        const { combo } = (args ?? {}) as { combo: string[]; enabled: boolean };
+        await (
+          window as unknown as {
+            __hush_record_ptt_set: (c: string[]) => Promise<void>;
+          }
+        ).__hush_record_ptt_set(combo);
+      },
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+
+    // Enter capture mode.
+    await page.locator('[data-testid="ptt-record-button"]').click();
+    // "Save combo" appears once capturing is true — also confirms the
+    // window keydown/keyup listeners are now registered.
+    await expect(
+      page.getByRole("button", { name: /Save combo/i }),
+    ).toBeVisible();
+
+    // F8 is a valid PTT key (function key, no OS/browser side effects);
+    // press + release triggers the 80 ms auto-commit debounce.
+    await page.keyboard.down("F8");
+    await page.keyboard.up("F8");
+
+    await expect.poll(() => pttSetCalls).toBeGreaterThan(0);
+    expect(lastCombo).toEqual(["F8"]);
+  });
 });
 
 test.describe("settings window — Meeting tab (Phase E #112)", () => {
@@ -603,6 +647,88 @@ test.describe("settings window — Meeting tab (Phase E #112)", () => {
     await expect(
       page.locator('[data-testid="override-model-Zoom"]'),
     ).toBeVisible();
+  });
+
+  test("selecting an audio source override calls meeting_app_override_set_profile", async ({
+    page,
+  }) => {
+    const profileCalls: Array<{
+      appName: string;
+      preferredAudioSource: string | null;
+      preferredModelId: string | null;
+    }> = [];
+    await page.exposeFunction(
+      "__hush_record_set_profile",
+      (args: unknown) => {
+        profileCalls.push(
+          args as {
+            appName: string;
+            preferredAudioSource: string | null;
+            preferredModelId: string | null;
+          },
+        );
+      },
+    );
+    await installMocks(page, {
+      meeting_app_override_list: () => [
+        {
+          appName: "Zoom",
+          kind: "meeting",
+          createdAt: "2026-04-28T00:00:00Z",
+          preferredAudioSource: null,
+          preferredModelId: null,
+        },
+      ],
+      meeting_app_override_set_profile: async (args) => {
+        const {
+          appName,
+          preferredAudioSource = null,
+          preferredModelId = null,
+        } = (args ?? {}) as {
+          appName: string;
+          preferredAudioSource?: string | null;
+          preferredModelId?: string | null;
+        };
+        await (
+          window as unknown as {
+            __hush_record_set_profile: (a: {
+              appName: string;
+              preferredAudioSource: string | null;
+              preferredModelId: string | null;
+            }) => Promise<void>;
+          }
+        ).__hush_record_set_profile({
+          appName,
+          preferredAudioSource,
+          preferredModelId,
+        });
+        return {
+          appName,
+          kind: "meeting",
+          createdAt: "2026-04-28T00:00:00Z",
+          preferredAudioSource,
+          preferredModelId,
+        };
+      },
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+    await page
+      .locator('[data-testid="settings-meeting-advanced-toggle"]')
+      .click();
+
+    // Wait for the profile select to be visible before interacting.
+    const audioSelect = page.locator('[data-testid="override-audio-Zoom"]');
+    await expect(audioSelect).toBeVisible();
+    await audioSelect.selectOption("Built-in Microphone");
+
+    await expect.poll(() => profileCalls.length).toBeGreaterThan(0);
+    expect(profileCalls[0]).toEqual({
+      appName: "Zoom",
+      preferredAudioSource: "Built-in Microphone",
+      preferredModelId: null,
+    });
   });
 
   test("built-in defaults disclosure renders Meeting + Media sections (#320)", async ({
@@ -1424,5 +1550,50 @@ test.describe("settings window — Permissions tab: refresh button", () => {
 
     await page.locator('[data-testid="perms-refresh"]').click();
     await expect.poll(() => callCount).toBeGreaterThan(countBeforeRefresh);
+  });
+});
+
+test.describe("settings window — Permissions tab: reset flow", () => {
+  // Covers the reset_macos_permissions IPC path (#712). The Reset button is
+  // inside MacosDiagnosticPanel which starts open (diagnosticOpen = true in
+  // PermissionsTab), so no extra click is needed to expand the disclosure.
+
+  test("clicking Reset permissions calls reset_macos_permissions", async ({
+    page,
+  }) => {
+    let resetCalls = 0;
+    await page.exposeFunction("__hush_record_reset", () => {
+      resetCalls += 1;
+    });
+    await installMocks(page, {
+      // canReset: true is required for PermissionsTab to render
+      // MacosDiagnosticPanel (diagnostic = res.canReset ? res : null).
+      diagnose_macos_permissions: () => ({
+        bundleId: "io.github.khawkins98.hush",
+        microphoneHint: "",
+        inputMonitoringHint: "",
+        canReset: true,
+        statuses: {
+          microphone: "granted",
+          screenRecording: "granted",
+          inputMonitoring: "granted",
+        },
+      }),
+      reset_macos_permissions: async () => {
+        await (
+          window as unknown as { __hush_record_reset: () => Promise<void> }
+        ).__hush_record_reset();
+        return {
+          anyReset: true,
+          summary: "Mocked reset (e2e — no real tccutil call).",
+        };
+      },
+    });
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator('[data-testid="settings-tab-permissions"]').click();
+
+    await page.getByRole("button", { name: /Reset permissions/i }).click();
+    await expect.poll(() => resetCalls).toBeGreaterThan(0);
   });
 });
