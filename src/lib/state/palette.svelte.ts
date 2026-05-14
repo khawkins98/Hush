@@ -2,15 +2,9 @@
 // the root route a pure layout file. All action targets are singleton
 // state modules — no page-local state needed.
 import type { CommandAction } from "$lib/CommandPalette.svelte";
-import { audio } from "$lib/state/audio.svelte";
 import { dictation, TRAILING_SILENCE_MS } from "$lib/state/dictation.svelte";
 import { meeting } from "$lib/state/meeting-sessions.svelte";
 import { nav } from "$lib/state/nav.svelte";
-
-const screenRecordingLive = $derived(audio.findSystemAudio()?.isSupported ?? false);
-const meetingOnlyActive = $derived(
-  meeting.activeId !== null && !dictation.recording && !dictation.busy,
-);
 
 const _actions = $derived<CommandAction[]>([
   {
@@ -24,19 +18,19 @@ const _actions = $derived<CommandAction[]>([
       !dictation.noModelInstalled &&
       meeting.activeId === null,
     run: () => {
-      void dictation.startRecord(screenRecordingLive);
+      void dictation.startRecord();
     },
   },
   {
     id: "dictation.stop",
-    label: meetingOnlyActive ? "Stop meeting recording" : "Stop transcription",
-    subtitle: meetingOnlyActive
+    label: dictation.meetingOnlyActive ? "Stop meeting recording" : "Stop transcription",
+    subtitle: dictation.meetingOnlyActive
       ? "Stop the current meeting recording"
       : "Stop the current recording and transcribe",
     group: "Transcribe",
-    enabled: dictation.recording || meetingOnlyActive,
+    enabled: dictation.recording || dictation.meetingOnlyActive,
     run: () => {
-      if (meetingOnlyActive) void meeting.stopSession();
+      if (dictation.meetingOnlyActive) void meeting.stopSession();
       else void dictation.stop(TRAILING_SILENCE_MS);
     },
   },
