@@ -384,7 +384,9 @@ impl AppStateBuilder {
                     },
                 ))
                 .build()
-                .expect("reqwest client should always build with default config"),
+                .map_err(|e| {
+                    anyhow::anyhow!("AppStateBuilder: reqwest client build failed: {e}")
+                })?,
             downloads: Arc::new(Mutex::new(HashMap::new())),
             pending_foreground: Mutex::new(None),
             last_update_check: Mutex::new(None),

@@ -287,7 +287,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `audio/` | cpal mic + macOS CoreAudio process tap (via Swift helper at `resources/macos-audio-tap.swift`) + `AudioSession` handle trait; `WavFileAudioCapture` test seam under `--features test-utils` |
 | `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
 | `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
-| `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides + macOS CoreAudio event-driven auto-start (`mic_camera_monitor`) |
+| `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides + macOS CoreAudio event-driven auto-start (`mic_camera_monitor`). Sub-modules: `manager.rs` (orchestration), `pump.rs` (chunking), `lifecycle.rs` (session lifecycle), `events.rs` (Tauri event emission), `test_support.rs` (in-memory mocks, `#[cfg(test)]` only) |
 | `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); `builder.rs` — explicit-builder for trait-seam composition used in prod and all tests; `tests.rs` — `MemHistory` + 18 IPC integration tests; parallel whisper context load at startup via `tokio::join!` |
 | `dictionary/` | Vocabulary + replacement repositories; `packs.rs` — static preset pack definitions (compile-time constants, never DB-materialised; enabled slugs persisted as JSON in settings) |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
@@ -309,7 +309,14 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `lib/state/audio.svelte.ts` | Audio source selection + session state |
 | `lib/state/history.svelte.ts` | Dictation history list + refresh |
 | `lib/state/meeting-sessions.svelte.ts` | Meeting session list, active session, notices |
+| `lib/state/meeting-settings.svelte.ts` | Meeting tab: auto-start config, per-app overrides load/save |
+| `lib/state/diarizer.svelte.ts` | Diarizer model status, download, removal, enable toggle |
+| `lib/state/models.svelte.ts` | Whisper model list, download progress, selection |
+| `lib/state/vocabulary.svelte.ts` | Vocabulary terms CRUD + language-style picker |
+| `lib/state/general-settings.svelte.ts` | General settings (autostart, clipboard, sound cues, theme) |
+| `lib/state/general-runtime.svelte.ts` | Runtime/performance settings (inference threads, GPU) |
 | `lib/state/palette.svelte.ts` | Command palette (Cmd+K) state: open/close, query, filtered results |
+| `lib/state/nav.svelte.ts` | Sidebar + settings tab navigation state |
 | `lib/AppLifecycle.svelte` | App-level lifecycle container: Tauri event listeners (hotkey, PTT, menu, model-download, meetings), permission side-effects, first-run checks; no markup |
 | `lib/HistoryActionRow.svelte` | Shared action row (copy / export-format menu / delete) reused by `HistoryDictationRow` and `HistoryMeetingRow` |
 | `lib/*.svelte` | Svelte 5 component library (panels, modals, sidebar, error display, form editors) |

@@ -4,7 +4,7 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
-## 2026-06-XX — Frontend state module pattern: thin tabs + `.svelte.ts` state modules (#694 et al.)
+## 2026-05-14 — Frontend state module pattern: thin tabs + `.svelte.ts` state modules (#694 et al.)
 
 ### Rule: thin tab + state module separation
 
@@ -48,7 +48,24 @@ State module closures are safe. However, Playwright mock handlers in `tests/e2e/
 
 ---
 
-## 2026-06-XX — Meeting export lives in the domain layer, not the IPC layer (#688–#694)
+## 2026-05-14 — IPC test co-location rule (#711, #718)
+
+### Where to put a new Rust IPC test
+
+The codebase has two homes for IPC-level Rust tests; the rule is determined by how many seams the test exercises:
+
+| Location | When to use |
+|---|---|
+| `src-tauri/src/ipc/commands/<domain>/tests.rs` | The test exercises only the command handlers in that domain module (e.g., `diarizer` tests that call `download_diarizer_model`, `remove_diarizer_model`, `get_diarizer_model_status`). Lives next to the code it tests; `mod tests` inside the domain module file or as a sibling `tests.rs`. |
+| `src-tauri/src/ipc/tests.rs` | The test exercises cross-domain interactions or a command that requires multiple fully-wired seams (audio + transcription + history together). These tests are the integration tests for `AppState` as a whole. |
+
+**Motivation.** The original `ipc/tests.rs` grew to ~700 lines mixing dictation, history, and settings in one file. Round-4 work split dictation tests (`#688`) and diarizer/permissions tests (`#718`) into co-located `tests.rs` files. Going forward, new tests for a domain's own commands default to co-location; `ipc/tests.rs` is reserved for cross-cutting integration.
+
+**Practical rule:** if you are adding a test for a command that lives in `ipc/commands/foo/mod.rs`, the test goes in `ipc/commands/foo/tests.rs` (or `ipc/commands/foo/mod.rs` under `#[cfg(test)]`). If it needs more than one domain's seams, it goes in `ipc/tests.rs`.
+
+---
+
+## 2026-05-14 — Meeting export lives in the domain layer, not the IPC layer (#688–#694)
 
 `src-tauri/src/meeting/export.rs` contains meeting export and formatting logic rather than living in `src-tauri/src/ipc/commands/`. This is intentional:
 
@@ -286,7 +303,7 @@ The user was inadvertently launching BOTH. The old `/Applications/Hush.app` wasn
 
 ---
 
-## 2026-06-XX — #665: Event-driven meeting detection via CoreAudio HAL
+## 2026-05-13 — #665: Event-driven meeting detection via CoreAudio HAL
 
 Replaced the 3-second foreground-app polling loop for meeting auto-start with a CoreAudio HAL property listener on `kAudioDevicePropertyDeviceIsRunningSomewhere`.
 
