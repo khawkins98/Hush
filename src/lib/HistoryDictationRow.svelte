@@ -21,6 +21,12 @@
   We just take `confirming` as a prop here.
 -->
 <script lang="ts">
+  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+  import {
+    EXPORT_FORMAT_LABELS,
+    exportAs,
+    type ExportFormat,
+  } from "./export-formats";
   import type { HistoryEntry, ModelCard } from "./types";
 
   type Props = {
@@ -55,6 +61,30 @@
     onDelete,
     onExportCsv,
   }: Props = $props();
+
+  // Export-format popover: clipboard formats (plain/markdown/srt/vtt)
+  // + CSV file-download. Mirrors the format picker in ResultBlock.svelte.
+  let exportOpen = $state(false);
+  const CLIPBOARD_FORMATS = ["plain", "markdown", "srt", "vtt"] as const satisfies readonly ExportFormat[];
+
+  async function copyAs(format: ExportFormat) {
+    exportOpen = false;
+    const body = exportAs(format, {
+      text: entry.transcript,
+      durationMs: entry.durationMs,
+      capturedAt: new Date(entry.createdAt),
+    });
+    try {
+      await writeText(body);
+    } catch (e) {
+      console.warn("[hush] history export-as clipboard write failed", e);
+    }
+  }
+
+  function handleExportCsv() {
+    exportOpen = false;
+    void onExportCsv?.(entry);
+  }
 
   function displayModelName(filename: string | null): string | null {
     if (!filename) return null;
@@ -101,22 +131,55 @@
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
         </svg>
       </button>
-      {#if onExportCsv}
-        <button
-          class="icon-btn"
-          title="Export as CSV"
-          onclick={() => onExportCsv?.(entry)}
-          data-testid="history-export-{entry.id}"
-          aria-label="Export this transcript as CSV"
-        >
-          <!-- Lucide Download -->
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-        </button>
-      {/if}
+      <div class="export-popover">
+          <button
+            class="icon-btn"
+            title="Export transcript"
+            onclick={() => (exportOpen = !exportOpen)}
+            aria-haspopup="menu"
+            aria-expanded={exportOpen}
+            aria-label="Export transcript"
+            data-testid="history-export-{entry.id}"
+          >
+            <!-- Lucide Download -->
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          {#if exportOpen}
+            <ul class="export-menu" role="menu">
+              {#each CLIPBOARD_FORMATS as fmt}
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="export-menu-item"
+                    onclick={() => copyAs(fmt)}
+                    data-testid="history-export-{fmt}-{entry.id}"
+                  >
+                    {EXPORT_FORMAT_LABELS[fmt]}
+                  </button>
+                </li>
+              {/each}
+              {#if onExportCsv}
+                <li role="separator" class="export-menu-separator"></li>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="export-menu-item"
+                    onclick={handleExportCsv}
+                    data-testid="history-export-csv-{entry.id}"
+                  >
+                    Export CSV…
+                  </button>
+                </li>
+              {/if}
+            </ul>
+          {/if}
+        </div>
       <button
         class="icon-btn danger"
         class:confirming
@@ -189,6 +252,49 @@
     padding-top: 0.1rem;
   }
 
+  .export-popover {
+    position: relative;
+    display: inline-block;
+  }
+  .export-menu {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    z-index: 5;
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-input);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    min-width: 10rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+  .export-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.4rem 0.7rem;
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .export-menu-item:hover {
+    background-color: var(--bg-app);
+  }
+  .export-menu-separator {
+    height: 1px;
+    background-color: var(--border);
+    margin: 0.2rem 0.25rem;
+  }
+
   .icon-btn {
     display: flex;
     align-items: center;
@@ -220,6 +326,9 @@
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) .history-meta { color: #9a9aa0; }
+    :root:not([data-theme="light"]) .export-menu {
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
     :root:not([data-theme="light"]) .icon-btn { color: #6e6e73; }
     :root:not([data-theme="light"]) .icon-btn:hover:not(:disabled) {
       background-color: #2a2a2d;
@@ -235,6 +344,9 @@
     }
   }
   :root[data-theme="dark"] .history-meta { color: #9a9aa0; }
+  :root[data-theme="dark"] .export-menu {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
   :root[data-theme="dark"] .icon-btn { color: #6e6e73; }
   :root[data-theme="dark"] .icon-btn:hover:not(:disabled) {
     background-color: #2a2a2d;
