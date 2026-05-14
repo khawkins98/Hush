@@ -87,9 +87,12 @@ impl DebugLogState {
     /// insertion order (oldest first). Used by `get_log_entries` to
     /// let the frontend catch up before its live listener was attached.
     pub fn snapshot(&self) -> Vec<LogEntry> {
+        // Recover from a poisoned mutex rather than panicking — the log
+        // buffer is non-critical and a previous thread panic should not
+        // kill log snapshot reads.
         self.buffer
             .lock()
-            .expect("debug_log buffer poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .cloned()
             .collect()
@@ -149,7 +152,9 @@ where
         //    before we emit to the frontend to avoid holding it
         //    during a potentially-slow Tauri IPC call.
         let handle_opt = {
-            let mut buf = self.state.buffer.lock().expect("debug_log buffer poisoned");
+            // Recover from a poisoned mutex rather than panicking — a
+            // previous thread panic should not permanently disable logging.
+            let mut buf = self.state.buffer.lock().unwrap_or_else(|e| e.into_inner());
             if buf.len() == 500 {
                 buf.pop_front();
             }
