@@ -461,7 +461,12 @@ impl SlidingWindowState {
             });
             self.committed_until_ms = abs_end_ms;
         }
-        // Drain the window — finish is terminal.
+        // Drain the window — finish is terminal. Zeroize first so the
+        // PCM backing allocation is scrubbed before its length is set
+        // to zero: Drop's zeroize call operates on the slice [0..len],
+        // and clear() sets len = 0, making the Drop zeroize a no-op.
+        use zeroize::Zeroize;
+        self.window.zeroize();
         self.window.clear();
         self.last_partial_text = None;
         Ok(out)

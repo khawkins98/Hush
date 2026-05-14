@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { formatTimestamp } from "$lib/format";
   import { dictation } from "$lib/state/dictation.svelte";
   import { history, type FeedRow, type HistoryFilter } from "$lib/state/history.svelte";
@@ -103,6 +104,11 @@
   let confirmingDelete = $state<ConfirmingRow | null>(null);
   let confirmDeleteTimer: number | undefined;
 
+  onDestroy(() => {
+    window.clearTimeout(clearTimer);
+    window.clearTimeout(confirmDeleteTimer);
+  });
+
   function isConfirming(kind: "dictation" | "meeting", id: number): boolean {
     return (
       confirmingDelete?.kind === kind && confirmingDelete?.id === id
@@ -206,17 +212,6 @@
             </button>
           </div>
         {:else}
-          {#if onExportBundle && (history.totalCount > 0 || meeting.sessions.length > 0)}
-            <button
-              type="button"
-              class="ghost"
-              onclick={() => (exportDialogOpen = true)}
-              data-testid="history-export-bundle"
-              aria-label="Export filtered rows"
-            >
-              Export filtered…
-            </button>
-          {/if}
           <button
             type="button"
             class="ghost danger"
@@ -227,6 +222,17 @@
             Clear all
           </button>
         {/if}
+      {/if}
+      {#if onExportBundle && (history.totalCount > 0 || meeting.sessions.length > 0)}
+        <button
+          type="button"
+          class="ghost"
+          onclick={() => (exportDialogOpen = true)}
+          data-testid="history-export-bundle"
+          aria-label="Export filtered rows"
+        >
+          Export filtered…
+        </button>
       {/if}
     </div>
   </header>
