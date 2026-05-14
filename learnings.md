@@ -4,6 +4,62 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-06-XX — Frontend state module pattern: thin tabs + `.svelte.ts` state modules (#694 et al.)
+
+### Rule: thin tab + state module separation
+
+A Settings tab (or section component) should be a thin shell: it owns template markup and DOM-level concerns only. All IPC calls, reactive state, and derived values belong in a sibling `src/lib/state/<domain>.svelte.ts` module that exports a single reactive object.
+
+**When to extract to a state module:**
+- The component contains more than one `invoke()` call AND the state those calls manage is reused in more than one place.
+- The component script block is growing past ~60 lines of non-template concerns.
+
+**When direct `invoke()` in a component is still acceptable:**
+- The component is small (< 80 lines total) and the IPC call is truly local to one interaction (e.g., a single toggle with no side effects elsewhere).
+- The state module would only exist to host a single fire-and-forget call.
+
+**State module shape (Svelte 5):**
+```typescript
+// Module-level reactive state — Svelte 5 $state rune
+let _foo = $state<Foo | null>(null);
+
+// Exported object with reactive getters + async methods
+export const fooState = {
+    get foo() { return _foo; },
+    async load() { ... },
+    async setFoo(value: Foo) { ... },
+};
+```
+
+The exported object is stable (not reactive itself), getters return reactive values — components bind/read via `fooState.foo` without needing `$derived`.
+
+### Event-listener lifecycle rule
+
+Tauri event listeners (`listen()` / `unlisten` refs) **stay in the component's `onMount`/`onDestroy`**, never in the state module. Reasons:
+1. Listener lifetime is tied to the component's DOM lifetime, not the module's singleton lifetime.
+2. State modules are module-scope singletons — a listener registered in a module fires for the whole app session even if the component is destroyed.
+3. This matches the pattern in `state/models.svelte.ts` (doc comment: "event listeners stay in SettingsPanel's onMount/onDestroy").
+
+The state module exposes the underlying reactive variables (`downloadProgress`, `downloadState`, etc.) that the component's listener callbacks write to directly.
+
+### Playwright mock closure restriction
+
+State module closures are safe. However, Playwright mock handlers in `tests/e2e/_mock.ts` are serialized via `toString()` and reconstructed with `new Function()` inside the browser page context — they cannot capture outer-scope variables. Any per-test counter or shared state must go through `page.exposeFunction`.
+
+---
+
+## 2026-06-XX — Meeting export lives in the domain layer, not the IPC layer (#688–#694)
+
+`src-tauri/src/meeting/export.rs` contains meeting export and formatting logic rather than living in `src-tauri/src/ipc/commands/`. This is intentional:
+
+- IPC command handlers are thin shells. Business logic that could be tested independently, reused in other contexts, or that has non-trivial behaviour belongs in the domain layer.
+- `meeting/export.rs` can be unit-tested without a Tauri runtime.
+- The pattern mirrors `ipc/commands/dictation/pipeline.rs` (extracted from `mod.rs` in #688 for the same reason).
+
+**Rule of thumb:** if an IPC handler grows past ~50 lines of logic (not counting error mapping), extract the logic into the domain layer and call it from the handler. The handler becomes a thin adapter: validate → call domain fn → map result to `IpcResult`.
+
+---
+
 ## 2026-05-14 — Design decisions from #688–#692 refactors
 
 ### #692: Preset vocabulary packs are settings-only, never DB-materialised
