@@ -245,7 +245,7 @@ Pure-logic tests at the trait + module boundaries. No real audio device needed. 
 - **Default features** — same tests, but also exercises feature-gated code. Needs cmake + ORT.
 - **`--features whisper`** — adds whisper-gated paths. Needs cmake.
 - **`--features diarization-onnx`** — adds diarizer-gated paths.
-- **Hand-rolled mocks** at every trait seam (`Noop*`, `Mem*` impls in `src-tauri/src/ipc/mod.rs`) — preferred over `mockall` for clearer test failure messages.
+- **Hand-rolled mocks** at every trait seam (`Noop*`, `Mem*` impls in `src-tauri/src/ipc/tests.rs`) — preferred over `mockall` for clearer test failure messages. `MemHistory` enables round-trip assertions; `Noop*` variants return defaults. Compose test `AppState` instances via `AppStateBuilder`.
 - **Async tests** use `#[tokio::test]`. SQLite-backed tests use `SqliteDatabase::open_in_memory()` — no disk, no shared state.
 
 ### Integration tests (`src-tauri/tests/`)
