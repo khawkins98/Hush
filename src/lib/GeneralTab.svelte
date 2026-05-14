@@ -1,35 +1,26 @@
 <!--
   Settings → General tab (#332 phase 1, slice 4 — see also
   PermissionsTab #387, VocabularyTab #389, ReplacementsTab #390).
-  Owns its own state, IPC, and lifecycle for the largest tab in
-  the Settings window: autostart toggle (with stale-LaunchAgent
-  warning), HUD-overlay toggle, audio-cues toggle, transcription-
-  threads slider, and the first-run-reset button. Hotkey editing
-  happens in `PttHotkeyEditor.svelte`, which is rendered inline.
-
-  Lifecycle: every value here loads on mount via its own IPC.
-  Pre-extraction the page eagerly loaded all of them on every
-  Settings open regardless of which tab was active; now the IPCs
-  fire only when General actually mounts. Same data, smaller
-  cold-boot when the user opens Settings to a different tab.
+  Thin coordinator: IPC-backed state lives in state/general-runtime.svelte.ts
+  (#709); localStorage-backed state (theme, status-line, debug-console)
+  stays here since it uses lib/theme.ts, lib/status-line.ts, and
+  lib/debug-console.ts directly with no IPC seam.
 
   `isMacOS` is read from `@tauri-apps/plugin-os` on mount and
   passed to `PttHotkeyEditor` so the modifier-glyph copy ("Right
-  ⌘" vs "Right Ctrl") matches the host. A one-frame
-  default-then-correct flicker is imperceptible — same shape the
-  page used pre-extraction.
+  ⌘" vs "Right Ctrl") matches the host.
 -->
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import { platform } from "@tauri-apps/plugin-os";
 
   import AdvancedSection from "./AdvancedSection.svelte";
   import DictationStatsBar from "./DictationStatsBar.svelte";
   import GeneralInterfaceSection from "./GeneralInterfaceSection.svelte";
+  import GeneralPerformanceSection from "./GeneralPerformanceSection.svelte";
   import GeneralStartupSection from "./GeneralStartupSection.svelte";
   import PttHotkeyEditor from "./PttHotkeyEditor.svelte";
-  import { formatErrorMessage } from "./errors";
+  import { generalRuntime as gr } from "./state/general-runtime.svelte";
   import {
     readStatusLineEnabled,
     setStatusLineEnabled,
@@ -39,7 +30,6 @@
     setDebugConsoleEnabled,
   } from "./debug-console";
   import { readStoredTheme, setTheme, type ThemePref } from "./theme";
-  import type { DictationStats } from "./types";
   import "./settings-tab.css";
 
   type Props = {
@@ -50,47 +40,11 @@
 
   let { onDebugConsoleChange }: Props = $props();
 
-  let firstRunResetBusy = $state(false);
-  let firstRunResetMessage = $state<string | null>(null);
-
-  // Two-cell slider (#348): `inferenceThreads` is the persisted
-  // value; `inferenceThreadsDisplay` tracks the slider thumb live
-  // during drag so the inline label updates without firing one
-  // IPC per pixel — the `change` event (release) persists.
-  let inferenceThreads = $state(4);
-  let inferenceThreadsDisplay = $state(4);
-  let inferenceThreadsBusy = $state(false);
-  let inferenceThreadsError = $state<string | null>(null);
-
-  // Mic gain slider (#531): same two-cell pattern as inferenceThreads.
-  let micGainDb = $state(0);
-  let micGainDbDisplay = $state(0);
-  let micGainDbBusy = $state(false);
-  let micGainDbError = $state<string | null>(null);
-
   let isMacOS = $state(false);
-
-  // Dictation stats for the at-a-glance summary at the top of the
-  // tab. Pre-r3 this rendered above the History panel on the main
-  // window, but stats are reflective info that doesn't compete with
-  // active-session controls — moved here so the main page reads as
-  // dictation-now and the Settings General tab reads as dictation-
-  // overall.
-  let dictationStats = $state<DictationStats | null>(null);
-
-  async function loadDictationStats() {
-    try {
-      dictationStats = await invoke<DictationStats>("get_dictation_stats");
-    } catch (e) {
-      console.warn("[hush] get_dictation_stats failed", e);
-    }
-  }
 
   // F5 technical status line — opt-in display under the main
   // window's waveform that surfaces "🎤 device · model". No IPC;
-  // localStorage-backed via `lib/status-line.ts`. Sits inside the
-  // Advanced section because casual users don't need to think
-  // about which model is loaded — they just want it to work.
+  // localStorage-backed via `lib/status-line.ts`.
   let statusLineEnabled = $state(false);
   let statusLineBusy = $state(false);
 
@@ -106,9 +60,7 @@
     }
   }
 
-  // Developer console toggle (#532). Enables the Debug tab in
-  // Settings, which shows a live view of the Rust tracing log.
-  // localStorage-backed (same pattern as statusLine); no IPC.
+  // Developer console toggle (#532). localStorage-backed; no IPC.
   // Calls `onDebugConsoleChange` so SettingsPanel can show/hide
   // the Debug tab without a Tauri event broadcast.
   let debugConsoleEnabled = $state(false);
@@ -120,13 +72,8 @@
     onDebugConsoleChange?.(checked);
   }
 
-  // Appearance / theme override (#411 phase A). Default "system"
-  // means follow `prefers-color-scheme`; explicit values force
-  // light or dark regardless of OS preference. Persistence is
-  // localStorage; the layout listens for a Tauri event to re-
-  // apply when the setting changes from another window. Read at
-  // mount rather than at script-evaluation time so the picker
-  // reflects whatever the layout already applied.
+  // Appearance / theme override (#411 phase A). localStorage-backed
+  // via lib/theme.ts; Tauri event notifies other windows on change.
   let themePref = $state<ThemePref>("system");
   let themeBusy = $state(false);
 
@@ -141,113 +88,8 @@
     }
   }
 
-  async function loadInferenceThreads(): Promise<void> {
-    try {
-      inferenceThreads = await invoke<number>("get_inference_threads");
-      inferenceThreadsDisplay = inferenceThreads;
-      inferenceThreadsError = null;
-    } catch (e) {
-      inferenceThreadsError = "Couldn't read inference-threads setting.";
-      console.warn("[hush] get_inference_threads failed", e);
-    }
-  }
-
-  /// Live drag handler. Only updates the visible label so the
-  /// user sees the slider thumb's position in real time without
-  /// firing one IPC per pixel of movement. The `change` event
-  /// below fires on release and is what actually persists.
-  function onInferenceThreadsInput(e: Event) {
-    const next = Number((e.target as HTMLInputElement).value);
-    if (Number.isFinite(next)) {
-      inferenceThreadsDisplay = next;
-    }
-  }
-
-  async function onInferenceThreadsChange(e: Event) {
-    const next = Number((e.target as HTMLInputElement).value);
-    if (!Number.isFinite(next)) {
-      return;
-    }
-    inferenceThreadsBusy = true;
-    inferenceThreadsError = null;
-    try {
-      await invoke("set_inference_threads", { threads: next });
-      inferenceThreads = next;
-      inferenceThreadsDisplay = next;
-    } catch (err) {
-      inferenceThreadsError = formatErrorMessage(err);
-      // Snap the display back to the persisted value.
-      await loadInferenceThreads();
-    } finally {
-      inferenceThreadsBusy = false;
-    }
-  }
-
-  async function loadMicGainDb(): Promise<void> {
-    try {
-      micGainDb = await invoke<number>("get_mic_gain_db");
-      micGainDbDisplay = micGainDb;
-      micGainDbError = null;
-    } catch (e) {
-      micGainDbError = "Couldn't read mic gain setting.";
-      console.warn("[hush] get_mic_gain_db failed", e);
-    }
-  }
-
-  function onMicGainDbInput(e: Event) {
-    const next = Number((e.target as HTMLInputElement).value);
-    if (Number.isFinite(next)) {
-      micGainDbDisplay = next;
-    }
-  }
-
-  async function onMicGainDbChange(e: Event) {
-    const next = Number((e.target as HTMLInputElement).value);
-    if (!Number.isFinite(next)) {
-      return;
-    }
-    micGainDbBusy = true;
-    micGainDbError = null;
-    try {
-      await invoke("set_mic_gain_db", { gainDb: next });
-      micGainDb = next;
-      micGainDbDisplay = next;
-    } catch (err) {
-      micGainDbError = formatErrorMessage(err);
-      await loadMicGainDb();
-    } finally {
-      micGainDbBusy = false;
-    }
-  }
-
-  async function onResetFirstRun() {
-    firstRunResetBusy = true;
-    try {
-      await invoke("reset_first_run");
-      firstRunResetMessage = "Welcome will show on next launch.";
-      // Clear after a moment so the button returns to its
-      // actionable label in case the user changes their mind in
-      // the same session.
-      setTimeout(() => {
-        firstRunResetMessage = null;
-      }, 3000);
-    } catch (e) {
-      firstRunResetMessage = formatErrorMessage(e);
-    } finally {
-      firstRunResetBusy = false;
-    }
-  }
-
   onMount(async () => {
-    // Run loads in parallel — they're independent and small, no
-    // ordering concerns. `platform()` is the OS plugin call for
-    // the PTT-editor glyph copy; failure is non-fatal (the
-    // editor falls back to its own default).
-    void Promise.all([
-      loadInferenceThreads(),
-      loadMicGainDb(),
-      loadDictationStats(),
-    ]);
+    void gr.load();
     try {
       isMacOS = (await platform()) === "macos";
     } catch (e) {
@@ -261,9 +103,9 @@
 
 <h2 class="tab-title">General</h2>
 
-{#if dictationStats}
+{#if gr.stats}
   <section class="settings-group" aria-label="Transcription activity">
-    <DictationStatsBar stats={dictationStats} />
+    <DictationStatsBar stats={gr.stats} />
   </section>
 {/if}
 
@@ -329,85 +171,7 @@
   label="Advanced"
   testId="settings-general-advanced-toggle"
 >
-  <section class="settings-group" aria-labelledby="settings-performance-heading">
-    <h2 id="settings-performance-heading" class="group-heading">Performance</h2>
-    <label class="slider-row">
-      <span class="toggle-label">
-        <span class="toggle-name">
-          Transcription threads:
-          <span
-            data-testid="settings-inference-threads-value"
-            aria-live="polite"
-          >{inferenceThreadsDisplay}</span>
-          {#if inferenceThreadsBusy}
-            <span class="row-note" aria-live="polite">Saving…</span>
-          {/if}
-        </span>
-        <span id="settings-inference-threads-desc" class="toggle-desc">
-          How many CPU threads whisper.cpp uses per chunk. More
-          threads finish each chunk faster on a multi-core CPU but
-          compete with other apps for cores. The default (4) suits
-          most laptops; bump it up if transcription lags on a
-          larger model, drop it if you want Hush to run quietly
-          alongside heavy workloads.
-        </span>
-      </span>
-      <input
-        type="range"
-        min="1"
-        max="16"
-        step="1"
-        data-testid="settings-inference-threads-slider"
-        aria-label="Transcription threads"
-        aria-describedby="settings-inference-threads-desc"
-        aria-valuetext={`${inferenceThreadsDisplay} threads`}
-        disabled={inferenceThreadsBusy}
-        value={inferenceThreadsDisplay}
-        oninput={onInferenceThreadsInput}
-        onchange={onInferenceThreadsChange}
-      />
-    </label>
-    {#if inferenceThreadsError}
-      <p class="settings-error">{inferenceThreadsError}</p>
-    {/if}
-    <label class="slider-row">
-      <span class="toggle-label">
-        <span class="toggle-name">
-          Microphone boost:
-          <span
-            data-testid="settings-mic-gain-db-value"
-            aria-live="polite"
-          >{micGainDbDisplay === 0 ? "Off (0 dB)" : `+${micGainDbDisplay} dB`}</span>
-          {#if micGainDbBusy}
-            <span class="row-note" aria-live="polite">Saving…</span>
-          {/if}
-        </span>
-        <span id="settings-mic-gain-db-desc" class="toggle-desc">
-          Amplify microphone input before transcription. Useful if
-          your voice comes through quietly. 0 = no boost; 6 dB ≈
-          double the perceived volume; 20 dB is the maximum safe
-          boost. Has no effect on system-audio capture.
-        </span>
-      </span>
-      <input
-        type="range"
-        min="0"
-        max="20"
-        step="1"
-        data-testid="settings-mic-gain-db-slider"
-        aria-label="Microphone boost"
-        aria-describedby="settings-mic-gain-db-desc"
-        aria-valuetext={micGainDbDisplay === 0 ? "No boost" : `+${micGainDbDisplay} dB`}
-        disabled={micGainDbBusy}
-        value={micGainDbDisplay}
-        oninput={onMicGainDbInput}
-        onchange={onMicGainDbChange}
-      />
-    </label>
-    {#if micGainDbError}
-      <p class="settings-error">{micGainDbError}</p>
-    {/if}
-  </section>
+  <GeneralPerformanceSection />
 
   <!--
     F5 technical status line — opt-in display of "🎤 device ·
@@ -463,10 +227,10 @@
         type="button"
         class="ghost"
         data-testid="settings-reset-first-run"
-        disabled={firstRunResetBusy}
-        onclick={onResetFirstRun}
+        disabled={gr.firstRunResetBusy}
+        onclick={gr.onResetFirstRun}
       >
-        {firstRunResetMessage ?? "Show welcome on next launch"}
+        {gr.firstRunResetMessage ?? "Show welcome on next launch"}
       </button>
       <span class="row-note">
         Re-shows the permissions explainer the next time you open
