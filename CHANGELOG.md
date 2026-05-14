@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-14
+
+### Added
+
+- **History: multi-format export for dictation rows** (#679). The download icon on dictation history rows now opens a popover with clipboard formats — Plain text, Markdown, SRT, and WebVTT — alongside the existing "Export CSV…" file-save option. All four formats use the same `exportAs()` implementation as the live result block after dictation.
+
+### Changed
+
+- **History: always-visible icon-only action buttons** (#679). Copy, Export, and Delete actions on both dictation and meeting history rows are now icon-only and always visible. Previously they were text labels that appeared only on hover, reserving a blank ~34 px strip under every row. The meeting row's expand/collapse toggle is now a chevron that rotates 180° when the transcript is open.
+
 ## [0.6.1] - 2026-05-14
 
 ### Fixed
