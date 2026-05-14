@@ -37,10 +37,8 @@ use crate::audio::{AudioSession, AudioSource};
 use crate::transcription::StreamingTranscribeSession;
 
 use super::classifier::AppClassifier;
-use super::manager::{
-    ActiveSession, MeetingSessionStartedPayload, MeetingSourceFailedPayload, SessionManager,
-    SessionState, MEETING_SESSION_STARTED_EVENT, MEETING_SOURCE_FAILED_EVENT,
-};
+use super::events::{emit_meeting_session_started, emit_meeting_source_failed};
+use super::manager::{ActiveSession, SessionManager, SessionState};
 use super::pump;
 use super::{MeetingSession, NewMeetingSession, NewPersistedUtterance};
 
@@ -278,14 +276,12 @@ impl SessionManager {
                         // a transient blip like the mid-session path. Emit
                         // so the panel can show a warning banner rather than
                         // silently logging nothing.
-                        self.event_emitter.emit(
-                            MEETING_SOURCE_FAILED_EVENT,
-                            &MeetingSourceFailedPayload {
-                                session_id: session.id,
-                                source_kind: source.kind_label(),
-                                reason,
-                                device_lost,
-                            },
+                        emit_meeting_source_failed(
+                            self.event_emitter.as_ref(),
+                            session.id,
+                            source.kind_label(),
+                            reason,
+                            device_lost,
                         );
                         streaming_sessions.push(None);
                         continue;
@@ -302,16 +298,12 @@ impl SessionManager {
                         // Same surface-to-frontend pattern as the pre-warm
                         // failure arm above (#533): a start_stream failure
                         // means this source will produce 0 utterances.
-                        self.event_emitter.emit(
-                            MEETING_SOURCE_FAILED_EVENT,
-                            &MeetingSourceFailedPayload {
-                                session_id: session.id,
-                                source_kind: source.kind_label(),
-                                reason: "streaming session creation failed at session start",
-                                // start_stream is a transcriber-side
-                                // call — never carries DeviceLost.
-                                device_lost: false,
-                            },
+                        emit_meeting_source_failed(
+                            self.event_emitter.as_ref(),
+                            session.id,
+                            source.kind_label(),
+                            "streaming session creation failed at session start",
+                            false,
                         );
                         streaming_sessions.push(None);
                     }
@@ -394,12 +386,7 @@ impl SessionManager {
         // Covers both the manual button path (IPC command) and the HAL
         // auto-start path — the frontend listener only needs to call
         // `meeting.refresh()` once regardless of which path fired.
-        self.event_emitter.emit(
-            MEETING_SESSION_STARTED_EVENT,
-            &MeetingSessionStartedPayload {
-                session_id: session.id,
-            },
-        );
+        emit_meeting_session_started(self.event_emitter.as_ref(), session.id);
 
         Ok(session)
     }

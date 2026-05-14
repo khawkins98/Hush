@@ -45,42 +45,15 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use serde::Serialize;
 
 use crate::audio::{apply_mic_gain, AudioCapture, AudioSession, AudioSource, CaptureFormat};
 use crate::transcription::{StreamingTranscribeSession, Transcribe, Utterance};
 
-use super::manager::{MeetingSourceFailedPayload, MEETING_SOURCE_FAILED_EVENT};
+use super::events::{
+    emit_audio_device_lost, emit_audio_device_restored, emit_meeting_source_failed,
+};
 use super::recovery::SourceRecoveryState;
 use super::{MeetingSessionRepository, NewPersistedUtterance};
-
-/// Fired when a mic source is lost mid-session and the pump has switched
-/// to the system default or has no fallback. Payload: [`AudioDeviceLostPayload`].
-pub(super) const AUDIO_DEVICE_LOST_EVENT: &str = "audio:device-lost";
-
-/// Fired when the original mic is detected on replug and the pump has
-/// swapped back. Payload: [`AudioDeviceRestoredPayload`].
-pub(super) const AUDIO_DEVICE_RESTORED_EVENT: &str = "audio:device-restored";
-
-/// Payload for [`AUDIO_DEVICE_LOST_EVENT`].
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct AudioDeviceLostPayload<'a> {
-    pub session_id: i64,
-    pub source_kind: &'a str,
-    pub lost_device: String,
-    /// `Some` when fallback succeeded (name of the device now recording).
-    pub new_device: Option<String>,
-}
-
-/// Payload for [`AUDIO_DEVICE_RESTORED_EVENT`].
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct AudioDeviceRestoredPayload<'a> {
-    pub session_id: i64,
-    pub source_kind: &'a str,
-    pub restored_device: String,
-}
 
 /// Pump tick interval — how often the streaming pump pulls samples
 /// from each audio handle and feeds them into the per-source
@@ -476,14 +449,12 @@ fn tick_drain_sources(
                                         original_source,
                                         original_device_name: lost_device.clone(),
                                     };
-                                    ctx.event_emitter.emit(
-                                        AUDIO_DEVICE_LOST_EVENT,
-                                        &AudioDeviceLostPayload {
-                                            session_id: ctx.session_id,
-                                            source_kind: ctx.sources[i].kind_label(),
-                                            lost_device,
-                                            new_device: Some(fallback_device_name),
-                                        },
+                                    emit_audio_device_lost(
+                                        ctx.event_emitter.as_ref(),
+                                        ctx.session_id,
+                                        ctx.sources[i].kind_label(),
+                                        &lost_device,
+                                        Some(fallback_device_name.as_str()),
                                     );
                                 }
                                 Err(fe) => {
@@ -498,14 +469,12 @@ fn tick_drain_sources(
                                             original_source,
                                             original_device_name: lost_device.clone(),
                                         };
-                                    ctx.event_emitter.emit(
-                                        AUDIO_DEVICE_LOST_EVENT,
-                                        &AudioDeviceLostPayload {
-                                            session_id: ctx.session_id,
-                                            source_kind: ctx.sources[i].kind_label(),
-                                            lost_device,
-                                            new_device: None,
-                                        },
+                                    emit_audio_device_lost(
+                                        ctx.event_emitter.as_ref(),
+                                        ctx.session_id,
+                                        ctx.sources[i].kind_label(),
+                                        &lost_device,
+                                        None,
                                     );
                                 }
                             }
@@ -519,14 +488,12 @@ fn tick_drain_sources(
                                 session_id = ctx.session_id,
                                 "meeting pump: audio device disconnected; ending source"
                             );
-                            ctx.event_emitter.emit(
-                                MEETING_SOURCE_FAILED_EVENT,
-                                &MeetingSourceFailedPayload {
-                                    session_id: ctx.session_id,
-                                    source_kind: ctx.sources[i].kind_label(),
-                                    reason: "audio device disconnected mid-session",
-                                    device_lost: true,
-                                },
+                            emit_meeting_source_failed(
+                                ctx.event_emitter.as_ref(),
+                                ctx.session_id,
+                                ctx.sources[i].kind_label(),
+                                "audio device disconnected mid-session",
+                                true,
                             );
                             drop(ctx.handles[i].take());
                             state.recovery_states[i] = SourceRecoveryState::Dead;
@@ -671,14 +638,12 @@ async fn tick_inference(
                 // this source. Notify the frontend so the panel
                 // can surface "this source dropped" rather than
                 // silently rendering "still recording".
-                ctx.event_emitter.emit(
-                    MEETING_SOURCE_FAILED_EVENT,
-                    &MeetingSourceFailedPayload {
-                        session_id,
-                        source_kind: &source_label,
-                        reason: "transcription task panicked",
-                        device_lost: false,
-                    },
+                emit_meeting_source_failed(
+                    ctx.event_emitter.as_ref(),
+                    session_id,
+                    &source_label,
+                    "transcription task panicked",
+                    false,
                 );
                 continue;
             }
@@ -717,18 +682,12 @@ async fn tick_inference(
                 // would loop the same warning every 500 ms for
                 // the rest of the meeting.
                 ctx.streaming_sessions[i] = None;
-                ctx.event_emitter.emit(
-                    MEETING_SOURCE_FAILED_EVENT,
-                    &MeetingSourceFailedPayload {
-                        session_id,
-                        source_kind: &source_label,
-                        reason: &reason,
-                        // The streaming feed/drain path returns
-                        // whisper.cpp errors, not audio-capture
-                        // errors — DeviceLost would have been
-                        // caught in the drain_into arm above.
-                        device_lost: false,
-                    },
+                emit_meeting_source_failed(
+                    ctx.event_emitter.as_ref(),
+                    session_id,
+                    &source_label,
+                    &reason,
+                    false,
                 );
                 continue;
             }
@@ -833,13 +792,11 @@ fn tick_recovery_check(ctx: &mut PumpContext, state: &mut PumpTickState) {
                     ctx.handles[i] = Some(new_handle);
                     ctx.streaming_sessions[i] = new_stream;
                     state.recovery_states[i] = SourceRecoveryState::Active;
-                    ctx.event_emitter.emit(
-                        AUDIO_DEVICE_RESTORED_EVENT,
-                        &AudioDeviceRestoredPayload {
-                            session_id: ctx.session_id,
-                            source_kind: ctx.sources[i].kind_label(),
-                            restored_device: original_device_name,
-                        },
+                    emit_audio_device_restored(
+                        ctx.event_emitter.as_ref(),
+                        ctx.session_id,
+                        ctx.sources[i].kind_label(),
+                        &original_device_name,
                     );
                 }
                 Err(e) => {
