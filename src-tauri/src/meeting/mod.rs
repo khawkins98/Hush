@@ -38,6 +38,7 @@ pub mod app_overrides;
 pub mod audio_buffer;
 pub mod autostart;
 pub mod classifier;
+pub mod events;
 pub mod export;
 pub mod lifecycle;
 pub mod manager;
@@ -46,6 +47,8 @@ pub mod mic_camera_monitor;
 pub mod pump;
 pub(super) mod recovery;
 pub mod sqlite;
+#[cfg(test)]
+mod test_support;
 
 pub use app_overrides::{
     MeetingAppOverride, MeetingAppOverrideRepository, NewMeetingAppOverride,
