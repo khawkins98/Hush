@@ -62,6 +62,12 @@ cd src-tauri && HUSH_TEST_AUDIO=/path/to/sample.wav cargo test --features whispe
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check
 
+# Frontend unit tests (vitest) — pure logic + state module derived logic.
+# Fast (~1 s), no browser needed. Run before every PR that touches
+# src/lib/**/*.ts or src/lib/state/**/*.svelte.ts.
+npm run test:unit
+npm run test:unit:watch                                          # interactive watch mode
+
 # Frontend e2e — Path A (Playwright + mocked Tauri IPC)
 npm run test:e2e
 npm run test:e2e:ui                                              # interactive
