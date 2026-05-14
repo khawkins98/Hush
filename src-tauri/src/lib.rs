@@ -393,9 +393,7 @@ fn handle_quarantine_strip() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if crate::permissions::strip_app_quarantine() {
-        tracing::info!(
-            "quarantine stripped; exec-restarting app to establish clean TCC identity"
-        );
+        tracing::info!("quarantine stripped; exec-restarting app to establish clean TCC identity");
         // exec() replaces the current process image (same PID, no fork).
         // Unlike spawn()+exit(), this bypasses LaunchServices so the
         // quarantine events daemon cannot re-add the xattr before the
@@ -407,8 +405,8 @@ fn handle_quarantine_strip() -> Result<(), Box<dyn std::error::Error>> {
         // this function and try again (the xattr is already gone, so
         // `strip_app_quarantine` returns false — no loop).
         use std::os::unix::process::CommandExt as _;
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("quarantine restart: get exe: {e}"))?;
+        let exe =
+            std::env::current_exe().map_err(|e| format!("quarantine restart: get exe: {e}"))?;
         let err = std::process::Command::new(&exe)
             .args(std::env::args_os().skip(1))
             .env("HUSH_QUARANTINE_STRIPPED", "1")
@@ -507,9 +505,7 @@ fn setup_windows<R: tauri::Runtime>(app: &mut tauri::App<R>) {
             let _ = main_win.hide();
         }
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-        tracing::info!(
-            "background launch: main window hidden, activation policy = Accessory"
-        );
+        tracing::info!("background launch: main window hidden, activation policy = Accessory");
     }
 
     // LaunchAgent path reconciliation (#271). Re-register on every
@@ -534,10 +530,10 @@ fn setup_windows<R: tauri::Runtime>(app: &mut tauri::App<R>) {
                         "autostart: re-register failed; LaunchAgent path may be stale (#271)"
                     );
                     if let Some(state) = app.try_state::<ipc::AppState>() {
-                        state.runtime_flags.autostart_path_stale.store(
-                            true,
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
+                        state
+                            .runtime_flags
+                            .autostart_path_stale
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             }
