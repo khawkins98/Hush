@@ -4,6 +4,55 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-14 — Design decisions from #688–#692 refactors
+
+### #692: Preset vocabulary packs are settings-only, never DB-materialised
+
+**Decision:** Pack contents (vocab terms, replacement rules) are defined as `Copy` compile-time constants in `dictionary/packs.rs` and are **never written to `dictionary_terms` or `replacements` tables.** Only the list of enabled pack slugs is persisted, as a JSON array in the settings table (`enabled_packs` key).
+
+**Why not materialise to DB?**
+- Avoids ownership ambiguity (who "owns" a term — user or pack? What happens on pack update?)
+- Enable/disable is atomic — flip the slug in/out of the JSON array, no row migration
+- Pack updates ship in the binary, not as a migration script
+- `PackDescriptor: Copy` because all fields are `&'static str` / `&'static [...]`; the struct lives in `.rodata`, zero heap allocation
+
+**Runtime composition:** `load_vocabulary_prompt` in `pipeline.rs` fetches enabled pack slugs, calls `find_pack(slug)`, merges pack terms + user terms at inference time. Pack replacement rules are prepended as synthetic `ReplacementRule` entries with `sort_order = -1` so user rules (default `sort_order = 0`) always win.
+
+### #692: `format_initial_prompt` three-stage budget allocation
+
+The Whisper initial prompt has a character budget (`MAX_PROMPT_CHARS`). The prompt is composed as: language-style prefix (≤ ~40 chars, reserved first) + pack vocabulary (up to 50% of remaining budget) + user vocabulary (remainder). This ordering ensures the opinionated style prefix is never truncated, and pack vocab (curated) has priority over user vocab (open-ended) when the combined list overflows.
+
+### #691: `AppStateBuilder` explicit-builder for trait-seam composition
+
+`AppState` wires ~12 trait seams (`Arc<dyn Trait>`). The explicit-builder pattern (`ipc/builder.rs`) keeps the call site readable and validates completeness at construction time. Used both in `lib.rs::setup` (production) and in every IPC test (`ipc/tests.rs`). Prefer `AppStateBuilder` over adding a new constructor overload — the builder documents each seam's role by name.
+
+### #691: `MemHistory` vs `NoopHistory` — when to use each
+
+- **`NoopHistory`** — discards all writes, returns empty lists. Use when the test doesn't care about history side-effects (e.g., testing a settings command).
+- **`MemHistory`** — stores entries in `Mutex<Vec>`, returns them on list/search calls. Use when the test needs to assert that a handler *wrote* something to history (e.g., round-trip `history_create` → `history_search`).
+Adding a new domain repository? Follow the same pattern: `NoopFoo` for zero-config, `MemFoo` when round-trip correctness matters.
+
+### #690: HistoryActionRow extraction — when to extract a shared component
+
+Extracted when `HistoryDictationRow` and `HistoryMeetingRow` had identical action-row markup (copy/export/delete icons) with only the callback signatures differing. Rule of thumb: extract when two sibling components share a structural sub-section with identical logic and neither is "canonical" — both are peers. Don't extract when one component is a full-featured version and the other is a simplified variant; keep the canonical and pass a simplified-mode flag.
+
+### #689: AppLifecycle.svelte — lifecycle vs layout separation
+
+Extracted all Tauri `.listen()` calls, PTT state machine, permission side-effects, and first-run checks from `+page.svelte` into `AppLifecycle.svelte`. The component carries no markup — pure lifecycle orchestration. Kept it in `lib/` rather than `routes/+layout.svelte` because the listeners are scoped to the main window only, not all routes.
+
+`lib/state/palette.svelte.ts` was extracted at the same time for the same reason: Cmd+K state is orthogonal to recording lifecycle and should not live in the recording state machine.
+
+### #688: Dictation handler → handler + pipeline + tests decomposition
+
+`ipc/commands/dictation/mod.rs` was 1155 lines mixing IPC handlers with helper stages. Split into:
+- `mod.rs` — thin command shells (`start_dictation`, `stop_dictation`), each ≤ 50 lines
+- `pipeline.rs` — reusable helper stages (vocab loading, clipboard write, prompt formatting)
+- `tests.rs` — all `#[cfg(test)]` blocks, including unit tests for pipeline helpers
+
+This mirrors the meeting-pump decomposition (#627: `meeting/manager.rs` → `lifecycle.rs` + `pump.rs`). Pattern: IPC handlers stay thin; logic that can be tested or reused independently goes in a sibling module.
+
+---
+
 ## 2026-05-14 — MIN_DICTATION_MS 1 s threshold + "ignored" DB column (#682)
 
 **Problem.** Users accidentally trigger the hotkey and immediately release it (e.g., tapping while thinking). These produce 50–400 ms "recordings" that Whisper classifies as silence or no-speech. Over time, history fills with blank entries for accidental taps. Pre-#682 the threshold was 200 ms, which was a crash-prevention floor (whisper.cpp's mel front-end can panic on near-empty audio buffers), not a user-policy threshold — and users were still seeing short-noise entries.

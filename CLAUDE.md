@@ -108,6 +108,20 @@ Every OS-touching layer is a trait (`AudioCapture`, `Transcribe`, `Diarize`, `Hi
 
 Full seam table, the meeting-pump dataflow diagram, and the module map are in [`ARCHITECTURE.md`](./ARCHITECTURE.md). When you touch a seam (adding a new trait method, swapping a prod impl, threading a new dependency through `AppState`), update both the prod impl *and* the test mock in the same change — the mocks are how the IPC tests stay deterministic.
 
+## IPC integration testing infrastructure
+
+The trait-seam pattern enables deterministic round-trip tests without real audio/SQLite. Key utilities live in `src-tauri/src/ipc/tests.rs`:
+
+**`AppStateBuilder`** (`src-tauri/src/ipc/builder.rs`) — explicit-builder for `AppState`. Each method sets one seam; `build()` panics if a required seam is missing. Used in production (`lib.rs::setup`) and all IPC tests.
+
+**`MemHistory`** — in-memory `HistoryRepository` impl that stores entries in `Mutex<Vec>`. Unlike `NoopHistory` (which discards writes), `MemHistory` retains them so tests can assert side-effects. 18 integration tests use it to round-trip `history_create`, `history_search`, `history_delete`, `history_get_stats`. Other seams have `Noop*` variants that return empty/default values.
+
+When adding a command that touches a seam:
+1. Write the handler in `src-tauri/src/ipc/commands/{domain}.rs`.
+2. Add an integration test in `src-tauri/src/ipc/tests.rs` using `AppStateBuilder` + appropriate `Mem*` mock.
+3. Assert on the mock's state after the handler completes (not just on the return value).
+4. The [four-place IPC sync rule](#the-four-place-ipc-sync-rule) still applies: handler → registration → TS type → Playwright mock.
+
 ## The four-place IPC sync rule
 
 A `#[tauri::command]` lives in **four** places that must stay aligned. CI catches Rust-only and TS-only breaks; it cannot catch shape mismatches between them — that's a hands-on responsibility. Any time you add or change a command:
