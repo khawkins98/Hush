@@ -15,6 +15,7 @@
 //! symbol — see `learnings.md` 2026-04-25.
 
 use tauri::{AppHandle, State};
+use url::Url;
 
 use super::super::AppState;
 use super::{poisoned, IpcError, IpcResult, UPDATE_CHECK_TTL};
@@ -319,9 +320,10 @@ pub fn get_app_version() -> String {
 /// deep-link or file:// exposure.
 #[tauri::command]
 pub fn open_url(url: String) -> IpcResult<()> {
-    let is_https = url.starts_with("https://") && url.len() > 8;
-    let is_http = url.starts_with("http://") && url.len() > 7;
-    if !is_https && !is_http {
+    let parsed = Url::parse(&url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "https" | "http") && u.host_str().is_some());
+    if parsed.is_none() {
         return Err(IpcError::Internal(
             "open_url: only http(s) URLs with a non-empty host are allowed".into(),
         ));

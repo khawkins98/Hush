@@ -15,8 +15,8 @@ import type {
 // PermissionHealthSection.loadCapabilityFlag(). Both components
 // now delegate to this module so the result lands in one place.
 //
-// The settings window manages its own local diagnostic/health state
-// (via PermissionsRows directly); it does not use this module.
+// The Settings panel renders PermissionsRows directly and reads
+// this module's exported getters for shared state.
 
 let diagnostic = $state<MacosPermissionDiagnostic | null>(null);
 let permissionHealth = $state<PermissionsHealth | null>(null);
