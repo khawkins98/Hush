@@ -164,7 +164,7 @@ test.describe("destructive confirm — Meeting session Delete", () => {
       },
     );
     await installMocks(page, {
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 22,
           appName: "us.zoom.xos",
