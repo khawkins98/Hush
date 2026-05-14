@@ -65,8 +65,10 @@ impl HistoryRepository for SqliteHistoryRepository {
         let offset = offset.max(0);
 
         sqlx::query_as::<_, HistoryEntry>(
-            "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at \
+            "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at, \
+                    ignored \
              FROM history \
+             WHERE ignored = 0 \
              ORDER BY id DESC \
              LIMIT ? OFFSET ?",
         )
@@ -97,10 +99,10 @@ impl HistoryRepository for SqliteHistoryRepository {
 
         sqlx::query_as::<_, HistoryEntry>(
             "SELECT h.id, h.transcript, h.app_name, h.window_title, h.model, \
-                    h.duration_ms, h.created_at \
+                    h.duration_ms, h.created_at, h.ignored \
              FROM history h \
              INNER JOIN history_fts fts ON fts.rowid = h.id \
-             WHERE history_fts MATCH ? \
+             WHERE history_fts MATCH ? AND h.ignored = 0 \
              ORDER BY h.id DESC \
              LIMIT ? OFFSET ?",
         )
@@ -116,7 +118,8 @@ impl HistoryRepository for SqliteHistoryRepository {
         // Single B-tree probe via the PK index — mirrors the column list in
         // `list()` so a future column add only needs to touch one place.
         sqlx::query_as::<_, HistoryEntry>(
-            "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at \
+            "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at, \
+                    ignored \
              FROM history \
              WHERE id = ?",
         )
