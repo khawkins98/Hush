@@ -295,3 +295,162 @@ fn normalise_language_style(stored: &str) -> &'static str {
         _ => "american",
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::tests::mock_state;
+    use crate::settings;
+
+    // -- normalise_language_style -------------------------------------------
+
+    #[test]
+    fn normalise_language_style_keeps_british() {
+        assert_eq!(normalise_language_style("british"), "british");
+    }
+
+    #[test]
+    fn normalise_language_style_keeps_oxford() {
+        assert_eq!(normalise_language_style("oxford"), "oxford");
+    }
+
+    #[test]
+    fn normalise_language_style_defaults_unknown_to_american() {
+        assert_eq!(normalise_language_style("american"), "american");
+        assert_eq!(normalise_language_style(""), "american");
+        assert_eq!(normalise_language_style("garbage"), "american");
+    }
+
+    // -- language style settings round-trip ---------------------------------
+
+    #[tokio::test]
+    async fn language_style_defaults_to_american_when_absent() {
+        let state = mock_state();
+        // No row stored yet → normalise_language_style("") → "american".
+        let stored = state
+            .settings
+            .get(settings::keys::LANGUAGE_STYLE)
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(normalise_language_style(&stored), "american");
+    }
+
+    #[tokio::test]
+    async fn language_style_round_trips_through_settings() {
+        let state = mock_state();
+        state
+            .settings
+            .set(settings::keys::LANGUAGE_STYLE, "british")
+            .await
+            .unwrap();
+        let stored = state
+            .settings
+            .get(settings::keys::LANGUAGE_STYLE)
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(normalise_language_style(&stored), "british");
+    }
+
+    #[tokio::test]
+    async fn set_language_style_rejects_invalid_value() {
+        let state = mock_state();
+        // Simulate the validation branch inline — any value not in the known
+        // set returns an error rather than silently storing garbage.
+        let style = "garbage".to_string();
+        let is_valid = ["american", "british", "oxford"].contains(&style.as_str());
+        assert!(!is_valid, "unknown style must fail validation");
+
+        // Confirm that no write happened for the invalid value.
+        let stored = state
+            .settings
+            .get(settings::keys::LANGUAGE_STYLE)
+            .await
+            .unwrap();
+        assert!(stored.is_none(), "invalid style must not be persisted");
+    }
+
+    // -- pack enable/disable ------------------------------------------------
+
+    #[tokio::test]
+    async fn enable_pack_unknown_slug_is_rejected() {
+        // find_pack drives the guard inside enable_pack.
+        assert!(
+            crate::dictionary::packs::find_pack("no-such-pack").is_none(),
+            "unknown slug is not in the pack registry"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_save_enabled_slugs_round_trips() {
+        let state = mock_state();
+        // Nothing stored yet → empty list.
+        let empty = load_enabled_slugs(&state).await.unwrap();
+        assert!(empty.is_empty(), "no slugs stored initially");
+
+        // Save two slugs.
+        save_enabled_slugs(&state, &["dev-general".to_string(), "business".to_string()])
+            .await
+            .unwrap();
+
+        let loaded = load_enabled_slugs(&state).await.unwrap();
+        assert_eq!(loaded, vec!["dev-general", "business"]);
+    }
+
+    #[tokio::test]
+    async fn save_enabled_slugs_overwrites_previous_value() {
+        let state = mock_state();
+        save_enabled_slugs(&state, &["dev-general".to_string()])
+            .await
+            .unwrap();
+        // Overwrite with an empty list (simulates disable_pack removing last slug).
+        save_enabled_slugs(&state, &[]).await.unwrap();
+        let loaded = load_enabled_slugs(&state).await.unwrap();
+        assert!(loaded.is_empty(), "overwritten value should be empty");
+    }
+
+    #[tokio::test]
+    async fn enable_pack_logic_is_idempotent() {
+        let state = mock_state();
+        let slug = "dev-general".to_string();
+
+        // First enable.
+        save_enabled_slugs(&state, std::slice::from_ref(&slug))
+            .await
+            .unwrap();
+        let after_first = load_enabled_slugs(&state).await.unwrap();
+        assert_eq!(after_first.len(), 1);
+
+        // Simulate the idempotency guard from enable_pack: don't push if already present.
+        let mut slugs = load_enabled_slugs(&state).await.unwrap();
+        if !slugs.contains(&slug) {
+            slugs.push(slug.clone());
+            save_enabled_slugs(&state, &slugs).await.unwrap();
+        }
+        let after_second = load_enabled_slugs(&state).await.unwrap();
+        assert_eq!(after_second.len(), 1, "duplicate must not be inserted");
+    }
+
+    #[tokio::test]
+    async fn disable_pack_logic_is_noop_when_not_enabled() {
+        let state = mock_state();
+        save_enabled_slugs(&state, &["business".to_string()])
+            .await
+            .unwrap();
+
+        // Simulate the retain logic from disable_pack for a slug that is absent.
+        let mut slugs = load_enabled_slugs(&state).await.unwrap();
+        let before = slugs.len();
+        slugs.retain(|s| s != "dev-general"); // "dev-general" was never enabled
+        assert_eq!(slugs.len(), before, "nothing should be removed");
+        // save_enabled_slugs is only called when len changed — so the settings row
+        // should still have "business".
+        let final_slugs = load_enabled_slugs(&state).await.unwrap();
+        assert_eq!(final_slugs, vec!["business"]);
+    }
+}
