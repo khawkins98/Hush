@@ -1,7 +1,7 @@
 <!--
   PTT hotkey editor. Lives in the Settings → General → Hotkeys
-  group. Reads/writes the backend `ptt_get_config` / `ptt_set_config`
-  IPC commands and exposes:
+  group. Reads/writes the backend via the `ptt` state module
+  (src/lib/state/ptt.svelte.ts, #720) and exposes:
 
   - An Enabled checkbox that toggles the listener gate.
   - A combo display rendered as `<kbd>` chips, plus a "Click and
@@ -17,23 +17,15 @@
   bindings that would type into focused apps.
 -->
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { onDestroy, onMount } from "svelte";
-  import type { PttConfig } from "./types";
   import "./settings-tab.css";
+  import { ptt } from "./state/ptt.svelte";
 
   type Props = {
     isMacOS: boolean;
   };
 
   let { isMacOS }: Props = $props();
-
-  let combo = $state<string[]>([]);
-  let enabled = $state(false);
-  let listenerRunning = $state(false);
-  let loaded = $state(false);
-  let error = $state<string | null>(null);
-  let saving = $state(false);
 
   // Capture mode: when true, we're listening for the user's next
   // combo. We accumulate held keys in `captured` (set, not array, to
@@ -93,48 +85,9 @@
     }
   }
 
-  async function load() {
-    try {
-      const cfg = await invoke<PttConfig>("ptt_get_config");
-      combo = cfg.combo;
-      enabled = cfg.enabled;
-      listenerRunning = cfg.listenerRunning;
-      error = null;
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loaded = true;
-    }
-  }
-
-  async function persist(nextCombo: string[], nextEnabled: boolean) {
-    saving = true;
-    error = null;
-    try {
-      await invoke("ptt_set_config", {
-        combo: nextCombo,
-        enabled: nextEnabled,
-      });
-      combo = nextCombo;
-      enabled = nextEnabled;
-      // Re-read after persist so `listenerRunning` reflects the
-      // outcome of the on-demand spawn. On macOS, the OS prompt
-      // for Input Monitoring may still be visible; the listener
-      // will start delivering events the moment it's granted, but
-      // listenerRunning flips to true now (the thread is up; the
-      // permission grant just gates whether events flow).
-      await load();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      await load();
-    } finally {
-      saving = false;
-    }
-  }
-
   function onEnabledChange(e: Event) {
     const next = (e.target as HTMLInputElement).checked;
-    void persist(combo, next);
+    void ptt.persist(ptt.combo, next);
   }
 
   // ---- Capture mode --------------------------------------------------
@@ -157,7 +110,7 @@
     capturing = false;
     captured = new Set();
     captureBuffer = [];
-    await persist(next, enabled);
+    await ptt.persist(next, ptt.enabled);
   }
 
   function onCaptureKeyDown(e: KeyboardEvent) {
@@ -176,8 +129,8 @@
       void commitCapture();
       return;
     }
-    const ptt = ptKeyForCode(e.code);
-    if (ptt === null) {
+    const pttKey = ptKeyForCode(e.code);
+    if (pttKey === null) {
       // Letter / digit / arrow / etc — ignored, but surface a
       // transient cue so the user knows the press registered and
       // *why* nothing happened. Without this, capture mode
@@ -192,8 +145,8 @@
       return;
     }
     e.preventDefault();
-    if (!captured.has(ptt)) {
-      captured = new Set([...captured, ptt]);
+    if (!captured.has(pttKey)) {
+      captured = new Set([...captured, pttKey]);
     }
     // Mirror into a stable array so the live preview is sorted.
     captureBuffer = Array.from(captured).sort();
@@ -229,16 +182,16 @@
   }
   // Update physicallyHeld in the same listeners.
   function trackPhysicalDown(e: KeyboardEvent) {
-    const ptt = ptKeyForCode(e.code);
-    if (ptt && !physicallyHeld.has(ptt)) {
-      physicallyHeld = new Set([...physicallyHeld, ptt]);
+    const pttKey = ptKeyForCode(e.code);
+    if (pttKey && !physicallyHeld.has(pttKey)) {
+      physicallyHeld = new Set([...physicallyHeld, pttKey]);
     }
   }
   function trackPhysicalUp(e: KeyboardEvent) {
-    const ptt = ptKeyForCode(e.code);
-    if (ptt && physicallyHeld.has(ptt)) {
+    const pttKey = ptKeyForCode(e.code);
+    if (pttKey && physicallyHeld.has(pttKey)) {
       const next = new Set(physicallyHeld);
-      next.delete(ptt);
+      next.delete(pttKey);
       physicallyHeld = next;
     }
   }
@@ -265,11 +218,11 @@
   });
 
   async function resetToDefault() {
-    await persist([platformDefault()], enabled);
+    await ptt.persist([platformDefault()], ptt.enabled);
   }
 
   onMount(() => {
-    void load();
+    void ptt.load();
   });
 
   onDestroy(() => {
@@ -279,14 +232,14 @@
 </script>
 
 <div class="ptt-editor">
-  {#if !loaded}
+  {#if !ptt.loaded}
     <p class="muted">Loading PTT configuration…</p>
   {:else}
     <label class="toggle-row" data-testid="ptt-enabled-toggle">
       <input
         type="checkbox"
-        checked={enabled}
-        disabled={saving}
+        checked={ptt.enabled}
+        disabled={ptt.saving}
         onchange={onEnabledChange}
       />
       <span class="toggle-label">
@@ -302,7 +255,7 @@
       </span>
     </label>
 
-    {#if enabled && !listenerRunning}
+    {#if ptt.enabled && !ptt.listenerRunning}
       <p class="settings-hint warn">
         Couldn't start the keyboard listener. Try toggling off and
         back on; if that doesn't help, restart Hush.
@@ -321,7 +274,7 @@
             {/each}
           {/if}
         {:else}
-          {#each combo as key (key)}
+          {#each ptt.combo as key (key)}
             <kbd>{pretty(key)}</kbd>
           {/each}
         {/if}
@@ -345,7 +298,7 @@
         <button
           type="button"
           class="ghost"
-          disabled={saving}
+          disabled={ptt.saving}
           data-testid="ptt-record-button"
           onclick={startCapture}
         >
@@ -354,7 +307,7 @@
         <button
           type="button"
           class="ghost ghost-subtle"
-          disabled={saving}
+          disabled={ptt.saving}
           onclick={() => void resetToDefault()}
         >
           Reset to default
@@ -375,8 +328,8 @@
       </p>
     {/if}
 
-    {#if error}
-      <p class="settings-error">{error}</p>
+    {#if ptt.error}
+      <p class="settings-error">{ptt.error}</p>
     {/if}
   {/if}
 </div>

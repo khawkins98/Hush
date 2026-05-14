@@ -313,6 +313,8 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `lib/state/diarizer.svelte.ts` | Diarizer model status, download, removal, enable toggle |
 | `lib/state/models.svelte.ts` | Whisper model list, download progress, selection |
 | `lib/state/vocabulary.svelte.ts` | Vocabulary terms CRUD + language-style picker |
+| `lib/state/replacements.svelte.ts` | Replacements CRUD (find/replace rules, load/add/remove) |
+| `lib/state/ptt.svelte.ts` | PTT persisted config: combo, enabled, listenerRunning; load/persist IPC |
 | `lib/state/general-settings.svelte.ts` | General settings (autostart, clipboard, sound cues, theme) |
 | `lib/state/general-runtime.svelte.ts` | Runtime/performance settings (inference threads, GPU) |
 | `lib/state/palette.svelte.ts` | Command palette (Cmd+K) state: open/close, query, filtered results |
