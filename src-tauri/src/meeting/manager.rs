@@ -22,105 +22,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
-#[cfg(test)]
-use anyhow::{anyhow, Result};
-
 use crate::audio::AudioCapture;
-#[cfg(test)]
-use crate::audio::CapturedAudio;
-#[cfg(test)]
-use crate::audio::{AudioSession, AudioSource};
-#[cfg(test)]
-use crate::transcription::Transcribe;
 use crate::transcription::Utterance;
 
 use super::classifier::AppClassifier;
-#[cfg(test)]
-use super::MeetingAppKind;
 use super::MeetingSessionRepository;
-
-/// Test-only no-op audio backend used by `SessionManager::new_for_test`.
-/// Returns empty capture sessions instantly so the pump's spawn path
-/// runs without a real audio device. Lives at module scope (not in
-/// the `tests` submod) so the test-only `new_for_test` constructor
-/// can reach it from outside its own test module — IPC-layer tests
-/// in `crate::ipc` use it via `SessionManager::new_for_test`.
-#[cfg(test)]
-struct NoOpAudio;
-
-#[cfg(test)]
-impl AudioCapture for NoOpAudio {
-    fn list_input_devices(&self) -> Result<Vec<crate::audio::AudioDevice>> {
-        Ok(vec![])
-    }
-    fn start(&self, _: Option<&str>) -> Result<()> {
-        Ok(())
-    }
-    fn stop(&self) -> Result<CapturedAudio> {
-        Ok(CapturedAudio {
-            samples: vec![],
-            format: crate::audio::CaptureFormat {
-                sample_rate: 16_000,
-                channels: 1,
-            },
-        })
-    }
-    fn is_recording(&self) -> bool {
-        false
-    }
-    fn start_session(&self, source: AudioSource) -> Result<Box<dyn AudioSession>> {
-        Ok(Box::new(NoOpSession { source }))
-    }
-}
-
-#[cfg(test)]
-struct NoOpSession {
-    source: AudioSource,
-}
-
-#[cfg(test)]
-impl AudioSession for NoOpSession {
-    fn source(&self) -> &AudioSource {
-        &self.source
-    }
-    fn stop(self: Box<Self>) -> Result<CapturedAudio> {
-        Ok(CapturedAudio {
-            samples: vec![],
-            format: crate::audio::CaptureFormat {
-                sample_rate: 16_000,
-                channels: 1,
-            },
-        })
-    }
-}
-
-/// Test-only override repo. Returns an empty list so the
-/// classifier falls through to the static defaults — same behaviour
-/// the pre-#112 SessionManager exhibited.
-#[cfg(test)]
-struct NoOpAppOverrides;
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl super::MeetingAppOverrideRepository for NoOpAppOverrides {
-    async fn list(&self) -> Result<Vec<super::MeetingAppOverride>> {
-        Ok(vec![])
-    }
-    async fn upsert(&self, _: super::NewMeetingAppOverride) -> Result<super::MeetingAppOverride> {
-        Err(anyhow!("NoOpAppOverrides::upsert not supported"))
-    }
-    async fn set_profile(
-        &self,
-        _: &str,
-        _: Option<&str>,
-        _: Option<&str>,
-    ) -> Result<super::MeetingAppOverride> {
-        Err(anyhow!("NoOpAppOverrides::set_profile not supported"))
-    }
-    async fn delete(&self, _: &str) -> Result<()> {
-        Ok(())
-    }
-}
 
 /// Manages the lifecycle of meeting-mode sessions.
 ///
@@ -134,51 +40,6 @@ impl super::MeetingAppOverrideRepository for NoOpAppOverrides {
 /// `Arc<dyn MeetingSessionRepository>` is held internally so the
 /// manager owns the persistence handle without forcing every call
 /// site to thread it through. Cheap to clone (`Arc`).
-/// Wire-shape for the `meeting:source-failed` Tauri event. Fired
-/// when the meeting pump drops a per-source capture path mid-session
-/// (TCC revoke, device unplug, inference panic). Without this
-/// signal the panel keeps showing "recording from mic + system
-/// audio" while one of those sources has silently gone dead.
-///
-/// Lives here (rather than in the pump or the IPC adapter) because
-/// both sides reference the field shape — the pump emits, the
-/// frontend listens. `camelCase` so the Tauri JSON bridge gives
-/// JS consumers idiomatic field names.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct MeetingSourceFailedPayload<'a> {
-    pub session_id: i64,
-    pub source_kind: &'a str,
-    pub reason: &'a str,
-    /// `true` when the failure came from `audio::DeviceLost` — the
-    /// user's mic / AirPods disconnected mid-session or vanished
-    /// during pre-warm. Lets the frontend branch on a typed flag
-    /// instead of substring-matching `reason`, which #617 flagged
-    /// as fragile to backend wording changes.
-    pub device_lost: bool,
-}
-
-/// Tauri event name the pump fires through
-/// [`crate::events::EventEmitter::emit`] when [`MeetingSourceFailedPayload`]
-/// is the wire body. Centralised so the frontend's listener
-/// (`Events.MeetingSourceFailed`) and the backend emit site can't
-/// drift.
-pub(super) const MEETING_SOURCE_FAILED_EVENT: &str = "meeting:source-failed";
-
-/// Payload emitted by [`SessionManager::start_manual`] when a new session
-/// opens successfully (both manual button-press and HAL auto-start paths).
-/// Centralised so the frontend's listener (`Events.MeetingSessionStarted`)
-/// and every backend emit site stay in sync.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct MeetingSessionStartedPayload {
-    pub session_id: i64,
-}
-
-/// Tauri event name for [`MeetingSessionStartedPayload`]. Matches the
-/// TypeScript constant `Events.MeetingSessionStarted` in `events.ts`.
-pub(super) const MEETING_SESSION_STARTED_EVENT: &str = "meeting:session-started";
-
 pub struct SessionManager {
     // All fields are `pub(super)` so the lifecycle peer
     // (`crate::meeting::lifecycle`) can drive `start_manual` /
@@ -230,7 +91,7 @@ pub struct SessionManager {
     /// [`crate::events::NoopEventEmitter`] or a
     /// `RecordingEventEmitter` that captures emit calls for
     /// assertion. The pump fires `meeting:source-failed` through
-    /// this seam (see [`MeetingSourceFailedPayload`]).
+    /// this seam (see [`super::events::MeetingSourceFailedPayload`]).
     pub(super) event_emitter: Arc<dyn crate::events::EventEmitter>,
     /// Speaker diarization. Production wires
     /// [`crate::diarization::FlagGatedDiarizer`] which routes to
@@ -386,32 +247,6 @@ impl SessionManager {
         out
     }
 
-    /// Test-only constructor that wires the manager up against a
-    /// no-op audio backend and an empty transcribe slot. Use from
-    /// IPC-layer tests where the manager is constructed but its
-    /// pump path is not exercised — keeps each call site from
-    /// repeating the stub-audio plumbing.
-    #[cfg(test)]
-    pub fn new_for_test(repo: Arc<dyn MeetingSessionRepository>) -> Self {
-        let audio: Arc<dyn AudioCapture> = Arc::new(NoOpAudio);
-        let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
-        let emitter: Arc<dyn crate::events::EventEmitter> =
-            Arc::new(crate::events::NoopEventEmitter);
-        let diarize: Arc<dyn crate::diarization::Diarize> =
-            Arc::new(crate::diarization::NoopDiarizer);
-        let app_overrides: Arc<dyn super::MeetingAppOverrideRepository> =
-            Arc::new(NoOpAppOverrides);
-        Self::new(
-            repo,
-            audio,
-            transcribe,
-            emitter,
-            diarize,
-            app_overrides,
-            Arc::new(AtomicU32::new(0f32.to_bits())),
-        )
-    }
-
     // `start_manual`, `stop_manual`, and `append_if_active` live in
     // `crate::meeting::lifecycle` — extracted under #488. The state
     // machine + struct definitions stay here; the methods that drive
@@ -485,91 +320,16 @@ impl Drop for SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::{AudioDevice, CaptureFormat, CapturedAudio};
+
+    use crate::audio::AudioSource;
     use crate::db::SqliteDatabase;
+    use crate::meeting::events::MeetingSourceFailedPayload;
     use crate::meeting::pump::{diarize_and_dispatch_merged, dispatch_utterances, TickBucket};
-    use crate::meeting::SqliteMeetingSessionRepository;
-
-    /// Test-only audio backend that produces empty capture sessions
-    /// instantly. Lets `start_manual` succeed without a real mic and
-    /// makes the pump's chunk-and-transcribe cycle a no-op (no
-    /// samples, no transcript, no utterance appended). The pump task
-    /// is still spawned and runs until cancelled, so tests that
-    /// exercise start_manual must also call stop_manual to drain it.
-    struct StubParallelAudio;
-
-    impl AudioCapture for StubParallelAudio {
-        fn list_input_devices(&self) -> Result<Vec<AudioDevice>> {
-            Ok(vec![])
-        }
-        fn start(&self, _: Option<&str>) -> Result<()> {
-            Ok(())
-        }
-        fn stop(&self) -> Result<CapturedAudio> {
-            Ok(CapturedAudio {
-                samples: vec![],
-                format: CaptureFormat {
-                    sample_rate: 16_000,
-                    channels: 1,
-                },
-            })
-        }
-        fn is_recording(&self) -> bool {
-            false
-        }
-        fn start_session(&self, source: AudioSource) -> Result<Box<dyn AudioSession>> {
-            Ok(Box::new(StubSession { source }))
-        }
-    }
-
-    struct StubSession {
-        source: AudioSource,
-    }
-    impl AudioSession for StubSession {
-        fn source(&self) -> &AudioSource {
-            &self.source
-        }
-        fn stop(self: Box<Self>) -> Result<CapturedAudio> {
-            Ok(CapturedAudio {
-                samples: vec![],
-                format: CaptureFormat {
-                    sample_rate: 16_000,
-                    channels: 1,
-                },
-            })
-        }
-    }
-
-    async fn fresh_manager() -> SessionManager {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
-        let repo: Arc<dyn MeetingSessionRepository> =
-            Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
-        manager_with_repo(repo)
-    }
-
-    /// Same as [`fresh_manager`] but lets the caller supply a
-    /// pre-built repo — used by the orphan-reconciliation test
-    /// that needs to insert open rows directly before constructing
-    /// the manager that should close them at boot.
-    fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> SessionManager {
-        let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
-        let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
-        let emitter: Arc<dyn crate::events::EventEmitter> =
-            Arc::new(crate::events::NoopEventEmitter);
-        let diarize: Arc<dyn crate::diarization::Diarize> =
-            Arc::new(crate::diarization::NoopDiarizer);
-        let app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
-            Arc::new(NoOpAppOverrides);
-        SessionManager::new(
-            repo,
-            audio,
-            transcribe,
-            emitter,
-            diarize,
-            app_overrides,
-            Arc::new(AtomicU32::new(0f32.to_bits())),
-        )
-    }
+    use crate::meeting::test_support::{
+        fresh_manager, make_final, make_partial, manager_with_repo, FailingCloseRepo,
+        RecordingDiarizer,
+    };
+    use crate::meeting::{MeetingAppKind, SqliteMeetingSessionRepository};
 
     #[tokio::test]
     async fn start_manual_opens_a_session_and_records_active_id() {
@@ -753,80 +513,6 @@ mod tests {
             msg.contains("no meeting session active"),
             "error must explain the precondition; got: {msg}"
         );
-    }
-
-    /// Failing `close_session` repo wrapper used by the #492 race
-    /// tests. Delegates every other call to an inner SQLite repo so
-    /// `start_manual` / `append_utterance` work normally; only
-    /// `close_session` is overridden. Optional `on_close_session`
-    /// callback runs *before* the failure is returned so the test
-    /// can inject the "concurrent start_manual claimed the slot"
-    /// race condition deterministically.
-    struct FailingCloseRepo {
-        inner: Arc<dyn MeetingSessionRepository>,
-        on_close_session: Option<Arc<dyn Fn() + Send + Sync>>,
-    }
-
-    #[async_trait::async_trait]
-    impl
-        crate::repository::Repository<
-            crate::meeting::MeetingSession,
-            crate::meeting::NewMeetingSession,
-            i64,
-        > for FailingCloseRepo
-    {
-        async fn list(&self) -> Result<Vec<crate::meeting::MeetingSession>> {
-            self.inner.list().await
-        }
-        async fn create(
-            &self,
-            new: crate::meeting::NewMeetingSession,
-        ) -> Result<crate::meeting::MeetingSession> {
-            self.inner.create(new).await
-        }
-        async fn update(&self, item: crate::meeting::MeetingSession) -> Result<()> {
-            self.inner.update(item).await
-        }
-        async fn delete(&self, id: i64) -> Result<()> {
-            self.inner.delete(id).await
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl MeetingSessionRepository for FailingCloseRepo {
-        async fn close_session(&self, _id: i64) -> Result<()> {
-            if let Some(cb) = self.on_close_session.as_ref() {
-                cb();
-            }
-            Err(anyhow!("simulated close_session failure"))
-        }
-        async fn append_utterance(
-            &self,
-            new: crate::meeting::NewPersistedUtterance,
-        ) -> Result<crate::meeting::PersistedUtterance> {
-            self.inner.append_utterance(new).await
-        }
-        async fn list_utterances(
-            &self,
-            session_id: i64,
-        ) -> Result<Vec<crate::meeting::PersistedUtterance>> {
-            self.inner.list_utterances(session_id).await
-        }
-        async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()> {
-            self.inner.set_notes(id, notes).await
-        }
-        async fn get_by_id(&self, id: i64) -> Result<Option<crate::meeting::MeetingSession>> {
-            self.inner.get_by_id(id).await
-        }
-        async fn list_open_sessions(&self) -> Result<Vec<crate::meeting::MeetingSession>> {
-            self.inner.list_open_sessions().await
-        }
-        async fn search_sessions(
-            &self,
-            query: &str,
-        ) -> Result<Vec<crate::meeting::MeetingSession>> {
-            self.inner.search_sessions(query).await
-        }
     }
 
     /// #492: with no concurrent start in flight, a `close_session`
@@ -1035,26 +721,6 @@ mod tests {
     // Unit-test the dispatch + read path against a real
     // SqliteMeetingSessionRepository to exercise both halves of the
     // contract.
-
-    fn make_partial(text: &str, started: u64, ended: u64, label: &str) -> Utterance {
-        Utterance {
-            text: text.to_owned(),
-            started_at_ms: started,
-            ended_at_ms: ended,
-            is_final: false,
-            speaker_label: Some(label.to_owned()),
-        }
-    }
-
-    fn make_final(text: &str, started: u64, ended: u64, label: &str) -> Utterance {
-        Utterance {
-            text: text.to_owned(),
-            started_at_ms: started,
-            ended_at_ms: ended,
-            is_final: true,
-            speaker_label: Some(label.to_owned()),
-        }
-    }
 
     #[tokio::test]
     async fn current_partials_for_returns_empty_for_new_session() {
@@ -1350,37 +1016,6 @@ mod tests {
         assert_eq!(utterances.len(), 1);
         assert_eq!(utterances[0].speaker_label.as_deref(), Some("system"));
         mgr.stop_manual().await.unwrap();
-    }
-
-    /// Recording diarizer for the merged-dispatch test (#206). Saves
-    /// the chronological sequence of `started_at_ms` values it
-    /// receives + the audio chunk lengths (#111 PR-F), then writes
-    /// deterministic `"Speaker A"` labels so the test can assert
-    /// order without standing up a real diarizer.
-    struct RecordingDiarizer {
-        seen_starts: Mutex<Vec<u64>>,
-        seen_audio_lens: Mutex<Vec<usize>>,
-    }
-
-    impl crate::diarization::Diarize for RecordingDiarizer {
-        fn label_utterances(
-            &self,
-            utterances: &mut [crate::transcription::Utterance],
-            audio: &[Vec<f32>],
-            _format: crate::audio::CaptureFormat,
-        ) {
-            let mut seen = self.seen_starts.lock().unwrap();
-            for u in utterances.iter() {
-                seen.push(u.started_at_ms);
-            }
-            let mut seen_audio = self.seen_audio_lens.lock().unwrap();
-            for chunk in audio.iter() {
-                seen_audio.push(chunk.len());
-            }
-            for u in utterances.iter_mut() {
-                u.speaker_label = Some("Speaker A".to_owned());
-            }
-        }
     }
 
     #[tokio::test]
@@ -1814,7 +1449,7 @@ mod tests {
         // field name and the JSON output silently demotes mic
         // disconnects to the generic banner — the lie this PR
         // exists to prevent.
-        let payload = super::MeetingSourceFailedPayload {
+        let payload = MeetingSourceFailedPayload {
             session_id: 42,
             source_kind: "mic",
             reason: "audio device disconnected mid-session",
@@ -1834,7 +1469,7 @@ mod tests {
         // The flag is opt-in true; serializer must round-trip false
         // verbatim (not omit, since the frontend reads it
         // unconditionally).
-        let payload = super::MeetingSourceFailedPayload {
+        let payload = MeetingSourceFailedPayload {
             session_id: 7,
             source_kind: "system-audio",
             reason: "transcription task panicked",
