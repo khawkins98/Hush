@@ -173,10 +173,15 @@
 
     unlistenMenuGoto = await listen<string>(Events.MenuGotoSection, (e) => {
       const payload = e.payload;
-      nav.activeSection =
-        payload === "meetings" || payload === "history"
-          ? "history"
-          : "dictation";
+      if (payload === "meetings" || payload === "history") {
+        nav.activeSection = "history";
+      } else if (payload === "about") {
+        // goto-about emits menu:goto-section; route to the About panel
+        // the same way settings:goto-tab "about" does (#837).
+        nav.openSettingsTab("about");
+      } else {
+        nav.activeSection = "dictation";
+      }
     });
 
     unlistenSettingsGoto = await listen<string>(Events.SettingsGotoTab, (e) => {
