@@ -6,11 +6,21 @@ import type {
   MeetingExportFormat,
   MeetingSession,
 } from "$lib/types";
+import { meeting } from "$lib/state/meeting-sessions.svelte";
 
 // Page size for the history view. Hard-cap on the Rust side is 500;
 // 25 is plenty per page for a dictation history that grows linearly
 // with the user's actual usage (handful per day).
 const HISTORY_PAGE_SIZE = 25;
+
+/// Filter chip values for the unified History feed (#357 phase 2).
+/// "all" interleaves both kinds of rows by recency; "dictation"
+/// and "meetings" scope to a single kind.
+export type HistoryFilter = "all" | "dictation" | "meetings";
+
+export type FeedRow =
+  | { kind: "dictation"; sortKey: number; entry: HistoryEntry }
+  | { kind: "meeting"; sortKey: number; session: MeetingSession };
 
 let historyEntries = $state<HistoryEntry[]>([]);
 let historyLoaded = $state(false);
@@ -24,6 +34,70 @@ let historyTotalCount = $state(0);
 // Sentinel that any history-touching command bumps so consumers can
 // react to an external invalidation.
 let historyVersion = $state(0);
+
+// User-selected filter chip. Defaults to "all" so the unified
+// surface lands on first paint. Kept in the state module so
+// the active filter survives panel unmounts and is accessible
+// to `exportBundle` without the panel needing to pass it down.
+let historyFilter = $state<HistoryFilter>("all");
+
+let effectiveFilter = $derived<HistoryFilter>(historyFilter);
+
+// Merged feed — two-pointer O(N) merge of the newest-first dictation
+// + meeting streams. Lives here rather than in HistoryPanel so
+// `exportBundle` can pass `effectiveFilter` without a prop dance.
+let mergedFeed = $derived<FeedRow[]>(
+  (() => {
+    const includeDictation =
+      effectiveFilter === "all" || effectiveFilter === "dictation";
+    const includeMeetings =
+      effectiveFilter === "all" || effectiveFilter === "meetings";
+
+    // Fast path: only one stream active — map directly, no merge.
+    if (!includeMeetings) {
+      if (!includeDictation) return [];
+      return historyEntries.map((entry) => ({
+        kind: "dictation" as const,
+        sortKey: Date.parse(entry.createdAt) || 0,
+        entry,
+      }));
+    }
+    if (!includeDictation) {
+      return meeting.sessions.map((session) => ({
+        kind: "meeting" as const,
+        sortKey: Date.parse(session.startedAt) || 0,
+        session,
+      }));
+    }
+
+    // Both streams active. Both arrive newest-first from the backend,
+    // so a two-pointer merge produces a sorted result in O(N).
+    const d: FeedRow[] = historyEntries.map((entry) => ({
+      kind: "dictation" as const,
+      sortKey: Date.parse(entry.createdAt) || 0,
+      entry,
+    }));
+    const m: FeedRow[] = meeting.sessions.map((session) => ({
+      kind: "meeting" as const,
+      sortKey: Date.parse(session.startedAt) || 0,
+      session,
+    }));
+
+    const out: FeedRow[] = [];
+    let di = 0,
+      mi = 0;
+    while (di < d.length && mi < m.length) {
+      if (d[di].sortKey >= m[mi].sortKey) {
+        out.push(d[di++]);
+      } else {
+        out.push(m[mi++]);
+      }
+    }
+    while (di < d.length) out.push(d[di++]);
+    while (mi < m.length) out.push(m[mi++]);
+    return out;
+  })(),
+);
 
 export const history = {
   get entries() {
@@ -67,6 +141,18 @@ export const history = {
   },
   set version(val: number) {
     historyVersion = val;
+  },
+  get filter() {
+    return historyFilter;
+  },
+  set filter(val: HistoryFilter) {
+    historyFilter = val;
+  },
+  get effectiveFilter() {
+    return effectiveFilter;
+  },
+  get mergedFeed() {
+    return mergedFeed;
   },
   async refresh() {
     historyError = null;
@@ -155,14 +241,13 @@ export const history = {
   async exportBundle(args: {
     kind: "auto" | "dictation" | "meetings" | "both";
     meetingFormat: MeetingExportFormat;
-    activeFilter: "all" | "dictation" | "meetings";
   }) {
     try {
       const resolvedKind: "both" | "dictation" | "meetings" =
         args.kind === "auto"
-          ? args.activeFilter === "dictation"
+          ? effectiveFilter === "dictation"
             ? "dictation"
-            : args.activeFilter === "meetings"
+            : effectiveFilter === "meetings"
               ? "meetings"
               : "both"
           : args.kind;

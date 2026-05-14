@@ -72,11 +72,12 @@
   let unlistenSettingsGoto: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenAppProfileActivated: UnlistenFn | null = null;
-  let unlistenMeetingSourceFailed: UnlistenFn | null = null;
   let unlistenAudioDeviceLost: UnlistenFn | null = null;
   let unlistenAudioDeviceRestored: UnlistenFn | null = null;
-  let unlistenMeetingSessionStarted: UnlistenFn | null = null;
-  let unlistenMeetingAppendFailed: UnlistenFn | null = null;
+  // The three meeting-session listeners (session-started,
+  // source-failed, append-failed) are owned by `meeting.svelte.ts`
+  // and cleaned up via the single returned function (#700).
+  let cleanupMeetingListeners: (() => void) | null = null;
 
   // PTT state machine.
   //
@@ -173,18 +174,12 @@
       console.error("get_first_run_completed failed:", e);
     }
 
-    // Register before the initial refresh so that an auto-start event
-    // that fires in the narrow window between refresh and listener
-    // setup is never lost. The listener immediately sets `meeting.activeId`
-    // from the payload (shows the Stop button without a round-trip wait)
-    // and then calls `meeting.refresh()` for the full session list.
-    unlistenMeetingSessionStarted = await listen<{ sessionId: number }>(
-      Events.MeetingSessionStarted,
-      (e) => {
-        meeting.activeId = e.payload.sessionId;
-        void meeting.refresh();
-      },
-    );
+    // Register meeting-session listeners before the initial refresh
+    // so events that fire in the narrow window between refresh and
+    // listener setup are never lost. The three listeners (session-
+    // started, source-failed, append-failed) live in the meeting
+    // state module since all three update only meeting state (#700).
+    cleanupMeetingListeners = await meeting.initSessionListeners();
 
     await Promise.all([
       dictation.loadSources(),
@@ -268,68 +263,6 @@
       void dictation.stop(TRAILING_SILENCE_MS);
     });
 
-    // Surface per-source transcription failures as a banner (#533).
-    // The backend emits this at session start (source failed to open)
-    // and mid-session (drain failure / panic). No activeId gate here:
-    // startup failures arrive before the invoke resolves and sets
-    // activeId, so gating would silently drop the very case this
-    // banner is designed for. The backend never emits for a stopped
-    // session, so stale-event bleed isn't a real risk.
-    unlistenMeetingSourceFailed = await listen<{
-      sessionId: number;
-      sourceKind: string;
-      reason: string;
-      // #617: typed flag from the backend so we don't substring-
-      // match on `reason`. `true` for both mid-session DeviceLost
-      // and pre-warm DeviceLost; `false` for whisper panics,
-      // start_stream failures, generic drain errors.
-      deviceLost: boolean;
-    }>(Events.MeetingSourceFailed, (e) => {
-      console.debug(
-        "[MeetingSourceFailed]",
-        e.payload.sourceKind,
-        e.payload.reason,
-        "deviceLost:",
-        e.payload.deviceLost,
-        "sessionId:",
-        e.payload.sessionId,
-      );
-      const label =
-        e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
-      // Three failure classes — distinguished by the typed
-      // `deviceLost` flag and a fallback `reason` substring on
-      // session-start (which has no typed equivalent yet):
-      //   - device-lost — user's mic / AirPods disconnected at
-      //     pre-warm or mid-session.
-      //   - session-start — pre-warm or start_stream failure that
-      //     ISN'T a device-lost (e.g. whisper init failed).
-      //   - other — generic mid-session drain failure or whisper
-      //     panic (#591).
-      // Multi-source intent: the user picked a mic AND opted into
-      // system audio, AND system audio was supported on this host.
-      // Mirrors the include-source logic in meeting-sessions.svelte.ts.
-      // When this is true and only one source failed, the other is
-      // still capturing — claiming "recording stopped" would be a lie.
-      const wasMultiSource =
-        audio.meetingMicId !== null &&
-        audio.meetingIncludeSystemAudio &&
-        audio.findSystemAudio()?.isSupported === true;
-      const otherSourceLabel =
-        e.payload.sourceKind === "mic" ? "system audio" : "microphone";
-
-      let verb: string;
-      if (e.payload.deviceLost) {
-        verb = wasMultiSource
-          ? `disconnected — ${otherSourceLabel} still recording`
-          : "disconnected — recording stopped";
-      } else if (e.payload.reason.includes("at session start")) {
-        verb = "couldn't start";
-      } else {
-        verb = "stopped transcribing";
-      }
-      meeting.sourceFailedNotice = `${label} ${verb}.`;
-    });
-
     unlistenAudioDeviceLost = await listen<{
       sessionId: number;
       sourceKind: string;
@@ -363,17 +296,6 @@
       meeting.sourceFailedNotice = null;
     });
 
-    unlistenMeetingAppendFailed = await listen<{ error: string }>(
-      Events.DictationMeetingAppendFailed,
-      (e) => {
-        console.warn("[DictationMeetingAppendFailed]", e.payload.error);
-        // Show a warning banner so the user knows the meeting session log is
-        // missing this utterance, even though it landed on the clipboard (#696).
-        meeting.appendFailedNotice =
-          "A transcription couldn't be saved to your meeting session. The text is still on your clipboard.";
-      },
-    );
-
     window.addEventListener("keydown", _keydownHandler);
   });
 
@@ -385,11 +307,9 @@
     unlistenPttRelease?.();
     unlistenDownloadDone?.();
     unlistenAppProfileActivated?.();
-    unlistenMeetingSourceFailed?.();
+    cleanupMeetingListeners?.();
     unlistenAudioDeviceLost?.();
     unlistenAudioDeviceRestored?.();
-    unlistenMeetingSessionStarted?.();
-    unlistenMeetingAppendFailed?.();
     if (pttPressTimer !== null) {
       clearTimeout(pttPressTimer);
       pttPressTimer = null;
