@@ -92,6 +92,17 @@ let noModelInstalled = $derived(
 let activeModel = $derived(
   models.find((m) => m.isSelected && m.isDownloaded) ?? null,
 );
+// Cross-module derived recording-status flags. Centralised here because
+// dictation.svelte.ts already imports audio and meeting; exporting from a
+// single place prevents the same derivation from drifting across page,
+// DictationSection, and palette (all three were previously independent).
+let meetingOnlyActive = $derived(
+  meeting.activeId !== null && !recording && !busy,
+);
+let screenRecordingLive = $derived(
+  audio.findSystemAudio()?.isSupported ?? false,
+);
+let anyRecordingActive = $derived(recording || meetingOnlyActive);
 
 export const dictation = {
   // ---- read-only derived state ----
@@ -151,6 +162,19 @@ export const dictation = {
   get activeModel() {
     return activeModel;
   },
+  // ---- derived cross-module recording status ----
+  // These are the canonical source for recording-state flags shared across
+  // +page.svelte, DictationSection.svelte, and palette.svelte.ts.
+  // All three previously maintained independent $derived definitions.
+  get meetingOnlyActive() {
+    return meetingOnlyActive;
+  },
+  get screenRecordingLive() {
+    return screenRecordingLive;
+  },
+  get anyRecordingActive() {
+    return anyRecordingActive;
+  },
   async loadSources() {
     try {
       const sources = await invoke<AudioSourceListing[]>("audio_list_sources");
@@ -191,7 +215,7 @@ export const dictation = {
       phase = { tag: "idle" };
     }
   },
-  async startRecord(screenRecordingLive: boolean) {
+  async startRecord() {
     if (phase.tag !== "idle") return;
     error = null;
     result = null;

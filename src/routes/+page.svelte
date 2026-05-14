@@ -35,19 +35,6 @@
   // shortcut hint (Right ⌘ on macOS, Right Ctrl elsewhere).
   let isMacOS = $state(false);
 
-  let screenRecordingLive = $derived(
-    audio.findSystemAudio()?.isSupported ?? false,
-  );
-
-  // True when a meeting-only recording is active (no dictation session).
-  // Mirrors the same derivation in DictationSection so global controls
-  // (hotkey, tray, document title, sidebar dot) stay in sync.
-  let meetingOnlyActive = $derived(
-    meeting.activeId !== null && !dictation.recording && !dictation.busy,
-  );
-  // True whenever the mic is hot for any reason.
-  let anyRecordingActive = $derived(dictation.recording || meetingOnlyActive);
-
   function handleGlobalKeydown(event: KeyboardEvent) {
     // ⌘K opens the palette; ⌘K again closes (toggle). Cmd on
     // macOS, Ctrl elsewhere — matches the platform muscle memory
@@ -78,13 +65,13 @@
   // have the window in the background — at-a-glance signal that the mic
   // is hot. Tauri exposes `window.document` like a regular browser.
   $effect(() => {
-    document.title = anyRecordingActive ? "Hush ● Recording" : "Hush";
+    document.title = dictation.anyRecordingActive ? "Hush ● Recording" : "Hush";
   });
 
   // Push recording state to the backend so the tray's "Start / Stop
   // Recording" menu item label can mirror the UI.
   $effect(() => {
-    void emit(Events.UiRecordingState, anyRecordingActive);
+    void emit(Events.UiRecordingState, dictation.anyRecordingActive);
   });
 
   // Debounce the search input so we don't fire SQLite queries on
@@ -135,7 +122,7 @@
 <div class="app-shell">
   <SidebarNav
     bind:active={nav.activeSection}
-    recording={anyRecordingActive}
+    recording={dictation.anyRecordingActive}
     open={nav.sidebarOpen}
     onSelect={nav.onSidebarSelect}
     onToggle={nav.onSidebarToggle}
@@ -224,7 +211,7 @@
     macosCapable={permissions.macosCapable}
     allPermsGranted={permissions.allPermsGranted}
     anyPermsDenied={permissions.anyPermsDenied}
-    onStart={() => dictation.startRecord(screenRecordingLive)}
+    onStart={() => dictation.startRecord()}
     onStop={() => dictation.stop(TRAILING_SILENCE_MS)}
     onScrollToModelPicker={openModelSettings}
     onOpenPermissionsTab={() => nav.openSettingsTab("permissions")}
