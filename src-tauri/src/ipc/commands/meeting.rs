@@ -30,7 +30,7 @@ use crate::meeting::export::{
     meeting_session_csv, meeting_session_json, meeting_session_text, MeetingExportFormat,
 };
 
-use super::{IpcError, IpcResult};
+use super::{validate_export_path, IpcError, IpcResult};
 
 /// List all meeting sessions, newest-first. Returns whatever the
 /// `SessionManager` pump has persisted — empty for a fresh
@@ -170,6 +170,7 @@ pub async fn meeting_session_export(
     format: MeetingExportFormat,
     path: String,
 ) -> IpcResult<()> {
+    validate_export_path(&path)?;
     let session = state
         .data
         .meetings

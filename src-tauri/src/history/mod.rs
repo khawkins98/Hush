@@ -127,6 +127,11 @@ pub trait HistoryRepository: Send + Sync {
     /// pattern simple to wire up.
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<HistoryEntry>>;
 
+    /// Fetch a single row by primary-key id. Returns `None` if the row
+    /// does not exist — callers that need the row to be present should
+    /// `.ok_or_else(|| ...)` at the call site.
+    async fn get_by_id(&self, id: i64) -> Result<Option<HistoryEntry>>;
+
     /// Delete a single row by id. A no-op (returns `Ok`) if the id does
     /// not exist — the caller's expressed intent has been satisfied
     /// either way, and surfacing the not-found case as an error would

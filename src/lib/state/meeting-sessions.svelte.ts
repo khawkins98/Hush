@@ -114,10 +114,15 @@ export const meeting = {
     meetingRefreshSeq += 1;
     const seq = meetingRefreshSeq;
     try {
+      // Use the cheaper list IPC when no search query is active — avoids
+      // spinning up the FTS5 engine on every idle poll.
+      const sessionsP = meetingSearchQuery
+        ? invoke<MeetingSession[]>("meeting_sessions_search", {
+            query: meetingSearchQuery,
+          })
+        : invoke<MeetingSession[]>("meeting_sessions_list");
       const [sessions, active] = await Promise.all([
-        invoke<MeetingSession[]>("meeting_sessions_search", {
-          query: meetingSearchQuery,
-        }),
+        sessionsP,
         invoke<ActiveMeetingSession>("meeting_active_session"),
       ]);
       // Discard if a newer refresh already completed.
@@ -139,7 +144,10 @@ export const meeting = {
         { id },
       );
     } catch (e) {
-      meetingSessionsError = formatErrorDisplay(e);
+      // Transient poll failures are logged but not surfaced — the next
+      // poll cycle will self-heal and we don't want to clobber the
+      // session-list error field with an ephemeral detail-fetch blip.
+      console.warn("refreshActiveDetail failed:", e);
     }
   },
   clearActiveDetail() {

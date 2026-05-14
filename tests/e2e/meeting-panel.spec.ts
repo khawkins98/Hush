@@ -26,7 +26,7 @@ test.describe("meeting rows in unified History feed", () => {
     page,
   }) => {
     await installMocks(page, {
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 55,
           appName: "us.zoom.xos",
@@ -61,7 +61,7 @@ test.describe("meeting rows in unified History feed", () => {
       },
     );
     await installMocks(page, {
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 55,
           appName: "us.zoom.xos",
@@ -136,7 +136,7 @@ test.describe("meeting rows in unified History feed", () => {
     page,
   }) => {
     await installMocks(page, {
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 55,
           appName: "us.zoom.xos",
@@ -204,7 +204,7 @@ test.describe("meeting rows in unified History feed", () => {
     page,
   }) => {
     await installMocks(page, {
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 55,
           appName: "us.zoom.xos",
@@ -251,7 +251,7 @@ test.describe("meeting rows in unified History feed", () => {
     page,
   }) => {
     await installMocks(page, {
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 55,
           appName: "us.zoom.xos",
@@ -335,7 +335,7 @@ test.describe("meeting rows in unified History feed", () => {
         },
       ],
       history_count: () => 1,
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 55,
           appName: "us.zoom.xos",

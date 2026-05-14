@@ -105,7 +105,7 @@ test.describe("row-level export IPCs", () => {
     );
 
     await installMocks(page, {
-      meeting_sessions_search: () => [
+      meeting_sessions_list: () => [
         {
           id: 99,
           appName: "Zoom",

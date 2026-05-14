@@ -112,6 +112,20 @@ impl HistoryRepository for SqliteHistoryRepository {
         .context("search history")
     }
 
+    async fn get_by_id(&self, id: i64) -> Result<Option<HistoryEntry>> {
+        // Single B-tree probe via the PK index — mirrors the column list in
+        // `list()` so a future column add only needs to touch one place.
+        sqlx::query_as::<_, HistoryEntry>(
+            "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at \
+             FROM history \
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(self.db.pool())
+        .await
+        .context("get history row by id")
+    }
+
     async fn delete(&self, id: i64) -> Result<()> {
         // The AFTER DELETE trigger from migration 0001 keeps the FTS5
         // index in sync, so we don't need to touch `history_fts` here.

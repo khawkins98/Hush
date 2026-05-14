@@ -181,6 +181,14 @@ export const history = {
       void history.feedRefresh();
     }, 200);
   },
+  /** Cancel any pending search debounce. Call from component `onDestroy`
+   *  to prevent a stale timer firing an IPC call after navigation. */
+  cancelSearchDebounce() {
+    if (_searchDebounceTimer !== null) {
+      clearTimeout(_searchDebounceTimer);
+      _searchDebounceTimer = null;
+    }
+  },
   async refresh() {
     historyError = null;
     historySearching = true;
