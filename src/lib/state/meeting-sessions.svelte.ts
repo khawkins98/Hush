@@ -314,6 +314,19 @@ export const meeting = {
       meeting.sourceFailedNotice = `${label} ${verb}.`;
     });
 
+    const unlistenEnded = await listen<{ sessionId: number }>(
+      Events.MeetingSessionEnded,
+      (e) => {
+        // Clear activeId if it still matches the session that just ended.
+        // Guards against a race where the user stopped manually (already
+        // cleared activeId) before this event arrives (#799).
+        if (meeting.activeId === e.payload.sessionId) {
+          meeting.activeId = null;
+          void meeting.refresh();
+        }
+      },
+    );
+
     const unlistenAppendFailed = await listen<{ error: string }>(
       Events.DictationMeetingAppendFailed,
       (e) => {
@@ -326,6 +339,7 @@ export const meeting = {
     return () => {
       unlistenStarted();
       unlistenSourceFailed();
+      unlistenEnded();
       unlistenAppendFailed();
     };
   },

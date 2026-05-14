@@ -1331,6 +1331,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn diarize_and_dispatch_merged_skips_partials_for_diarizer() {
+        // #800: partials should not be fed to label_utterances. Only
+        // finals earn a diarizer inference; partials get the source-
+        // derived fall-through label. Mixing partials in bloated
+        // cluster history with near-duplicate embeddings and wasted
+        // ~50–100 ms per partial inference.
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(
+                vec![AudioSource::default_microphone(), AudioSource::SystemAudio],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let recorder = Arc::new(RecordingDiarizer {
+            seen_starts: Mutex::new(Vec::new()),
+            seen_audio_lens: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+
+        let mic_bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            // One final + one partial.
+            utterances: vec![
+                make_final("hello", 100, 200, "mic"),
+                make_partial("partial revision", 300, 400, "mic"),
+            ],
+            audio: vec![vec![0.0; 100], vec![0.0; 100]],
+        };
+        let sys_bucket = TickBucket {
+            source_label: "system".to_owned(),
+            utterances: vec![make_final("world", 150, 250, "system")],
+            audio: vec![vec![0.0; 100]],
+        };
+
+        diarize_and_dispatch_merged(
+            session.id,
+            vec![mic_bucket, sys_bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+            &crate::events::NoopEventEmitter,
+        )
+        .await;
+
+        // Diarizer only saw the two finals' start times, not the partial.
+        let seen = recorder.seen_starts.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![100, 150],
+            "diarizer must only see finals, not partials; saw {:?}",
+            seen
+        );
+
+        // Only finals landed in the DB.
+        let persisted = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert_eq!(persisted.len(), 2, "only 2 finals should be persisted");
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn stop_manual_clears_partials_for_the_session() {
         // Defence in depth: stop_manual clears any partials still
         // in the store for the closing session. Without this, a

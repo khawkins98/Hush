@@ -270,6 +270,28 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         }
     }
 
+    // One final drain + inference pass to capture audio that arrived in
+    // the hardware ring buffer since the last tick drained it (#797).
+    // `tick_drain_sources` reads the ring buffer into `drain_buffers`.
+    // `tick_inference` feeds those samples into each streaming session
+    // and emits any utterances it finds into `tail_buckets`. Then the
+    // regular `flush_sessions` call below calls `session.finish()` to
+    // flush the streaming session's own internal buffer — those finals
+    // also land in `tail_buckets` and are dispatched together.
+    let final_tick_formats = tick_drain_sources(&mut ctx, &mut state);
+    tick_inference(&mut ctx, &mut state, &final_tick_formats, &mut tick_buckets).await;
+    if !tick_buckets.is_empty() {
+        diarize_and_dispatch_merged(
+            ctx.session_id,
+            std::mem::take(&mut tick_buckets),
+            &ctx.diarize,
+            &ctx.partials,
+            &ctx.repo,
+            ctx.event_emitter.as_ref(),
+        )
+        .await;
+    }
+
     // Tail flush: finish each streaming session, merge-sort-label-split, dispatch.
     let mut tail_buckets: Vec<TickBucket> = Vec::new();
     flush_sessions(&mut ctx, &mut state, &mut tail_buckets).await;
@@ -307,6 +329,11 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         );
     }
     tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
+    // Notify the frontend the session is done regardless of how the pump
+    // stopped (normal stop, backend auto-stop, device failure). Without this
+    // event, a backend-driven stop leaves `meeting.activeId` stuck set on the
+    // frontend, keeping the "meeting active" UI indefinitely (#799).
+    crate::meeting::events::emit_meeting_session_ended(ctx.event_emitter.as_ref(), ctx.session_id);
 }
 
 fn tick_drain_sources(
