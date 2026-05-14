@@ -258,9 +258,20 @@ pub async fn stop_dictation(
     // short-circuit is virtually free of false positives. Users
     // who hold the hotkey deliberately for longer always reach the
     // inference path.
-    const MIN_TRANSCRIBE_MS: i64 = 200;
+    // User-facing minimum: anything under 1 s is treated as an
+    // accidental tap or background noise rather than a deliberate
+    // dictation press. The user sees a dimmed "Too short" history entry
+    // so they know the press was detected, but no transcription runs
+    // and the clipboard is left untouched.
+    //
+    // Note: this absorbs the old 200 ms crash-prevention floor —
+    // whisper.cpp can't process near-empty audio, and 1 s is well
+    // above that technical floor while still catching accidental
+    // presses. ("No" / "yes" / "k" run 250–400 ms but that's faster
+    // than most users hold a push-to-talk key intentionally.)
+    const MIN_DICTATION_MS: i64 = 1000;
     let too_short = match duration_ms {
-        Some(ms) => ms < MIN_TRANSCRIBE_MS,
+        Some(ms) => ms < MIN_DICTATION_MS,
         // Conservative: missing duration (impossible format) →
         // treat as too-short rather than crash whisper with
         // unknown input.
@@ -280,6 +291,17 @@ pub async fn stop_dictation(
         // nothing; the last clipboard contents (their previous
         // dictation, or whatever they copied manually) should
         // survive the no-op press.
+        spawn_history_create(
+            Arc::clone(&state.data.history),
+            NewHistoryEntry {
+                transcript: String::new(),
+                app_name: foreground.as_ref().map(|f| f.app_name.clone()),
+                window_title: foreground.as_ref().map(|f| f.window_title.clone()),
+                model: String::new(),
+                duration_ms,
+                ignored: true,
+            },
+        );
         return Ok(DictationResult {
             text: String::new(),
             foreground,
@@ -391,6 +413,7 @@ pub async fn stop_dictation(
             window_title: foreground.as_ref().map(|f| f.window_title.clone()),
             model: transcriber.model_label(),
             duration_ms,
+            ignored: false,
         },
     );
 

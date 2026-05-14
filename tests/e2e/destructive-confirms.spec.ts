@@ -124,6 +124,7 @@ test.describe("destructive confirm — History row Delete", () => {
           model: "ggml-base.bin",
           durationMs: 1234,
           createdAt: "2026-04-26T15:00:00Z",
+          ignored: false,
         },
       ],
       history_count: () => 1,

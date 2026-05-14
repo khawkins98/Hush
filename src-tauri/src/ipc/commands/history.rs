@@ -198,6 +198,7 @@ mod tests {
             model: "ggml-base.bin".to_owned(),
             duration_ms: duration,
             created_at: "2026-05-01T10:00:00Z".to_owned(),
+            ignored: false,
         }
     }
 
