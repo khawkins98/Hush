@@ -22,7 +22,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
-  import { SvelteMap } from "svelte/reactivity";
 
   import DebugTab from "./DebugTab.svelte";
   import GeneralTab from "./GeneralTab.svelte";
@@ -33,18 +32,15 @@
   import VocabularyTab from "./VocabularyTab.svelte";
   import {
     formatErrorDisplay,
-    formatErrorMessage,
-    type ErrorDisplay,
   } from "./errors";
   import { Events } from "./events";
   import { formatMb } from "./format";
   import { readDebugConsoleEnabled } from "./debug-console";
+  import { models } from "$lib/state/models.svelte";
   import type {
     DiarizerModelStatus,
-    DownloadProgress,
     IpcError,
     ModelCard,
-    ModelSelectNotice,
   } from "./types";
 
   export type SettingsTab =
@@ -100,95 +96,30 @@
     debugConsoleEnabled ? baseTabs : baseTabs.filter((t) => t.key !== "debug"),
   );
 
-  type ModelFetch = {
-    models: ModelCard[];
-    loaded: boolean;
-    error: ErrorDisplay | null;
-    restartNotice: ModelSelectNotice;
-    // SvelteMap rather than plain Map: per-card mutations
-    // (`.set` / `.delete`) trigger reactivity. A plain Map inside
-    // `$state(...)` looks reactive at type level but Svelte 5's
-    // proxy doesn't intercept Map operations, so a `Cancel` /
-    // `download-done` mutation only repainted on the next unrelated
-    // re-render (e.g. tab switch). See docs.svelte.dev → reactive
-    // built-ins.
-    downloading: SvelteMap<string, DownloadProgress>;
-    failed: SvelteMap<string, string>;
-  };
-
-  let modelFetch = $state<ModelFetch>({
-    models: [],
-    loaded: false,
-    error: null,
-    restartNotice: null,
-    downloading: new SvelteMap(),
-    failed: new SvelteMap(),
-  });
-
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
   let unlistenDownloadFailed: UnlistenFn | null = null;
   let unlistenGotoTab: UnlistenFn | null = null;
-
-  async function loadModels(): Promise<void> {
-    try {
-      modelFetch.models = await invoke<ModelCard[]>("model_list");
-      modelFetch.error = null;
-    } catch (e) {
-      modelFetch.error = formatErrorDisplay(e);
-    } finally {
-      modelFetch.loaded = true;
-    }
-  }
 
   async function selectModel(card: ModelCard) {
     try {
       const result = await invoke<{ loaded: boolean }>("model_select", {
         id: card.id,
       });
-      modelFetch.restartNotice = result.loaded ? "loaded" : "needs-restart";
-      modelFetch.error = null;
+      models.restartNotice = result.loaded ? "loaded" : "needs-restart";
+      models.error = null;
       if (result.loaded) {
         onModelLoaded?.();
       }
-      await loadModels();
+      await models.loadModels();
     } catch (e) {
-      modelFetch.error = formatErrorDisplay(e);
+      models.error = formatErrorDisplay(e);
       if (typeof e === "object" && e !== null && "kind" in e) {
         const ipc = e as IpcError;
         if (ipc.kind === "model-not-downloaded") {
-          modelFetch.restartNotice = "needs-download";
+          models.restartNotice = "needs-download";
         }
       }
-    }
-  }
-
-  async function downloadModel(card: ModelCard) {
-    modelFetch.failed.delete(card.id);
-    modelFetch.downloading.set(card.id, { received: 0, total: null });
-    try {
-      await invoke("model_download", { id: card.id });
-    } catch (e) {
-      modelFetch.failed.set(card.id, formatErrorMessage(e));
-      modelFetch.downloading.delete(card.id);
-    }
-  }
-
-  async function cancelDownload(card: ModelCard) {
-    try {
-      await invoke("model_cancel_download", { id: card.id });
-    } catch (e) {
-      console.warn("[hush] cancel download failed", e);
-    }
-    modelFetch.downloading.delete(card.id);
-  }
-
-  async function removeModel(card: ModelCard) {
-    try {
-      await invoke("model_remove", { id: card.id });
-      await loadModels();
-    } catch (e) {
-      modelFetch.error = formatErrorDisplay(e);
     }
   }
 
@@ -203,7 +134,7 @@
     unlistenDownloadProgress = await listen<DownloadProgressEvent>(
       Events.ModelDownloadProgress,
       (e) => {
-        modelFetch.downloading.set(e.payload.id, {
+        models.downloading.set(e.payload.id, {
           received: e.payload.bytesReceived,
           total: e.payload.bytesTotal,
         });
@@ -212,8 +143,8 @@
     unlistenDownloadDone = await listen<DownloadStatusEvent>(
       Events.ModelDownloadDone,
       async (e) => {
-        modelFetch.downloading.delete(e.payload.id);
-        void loadModels();
+        models.downloading.delete(e.payload.id);
+        void models.loadModels();
         // Auto-bundle the wespeaker (speaker diarization) download
         // sequentially after a Whisper model finishes (#478). The
         // user is already committing to a model download in the
@@ -248,11 +179,11 @@
     unlistenDownloadFailed = await listen<DownloadStatusEvent>(
       Events.ModelDownloadFailed,
       (e) => {
-        modelFetch.failed.set(
+        models.failed.set(
           e.payload.id,
           e.payload.message ?? "Download failed.",
         );
-        modelFetch.downloading.delete(e.payload.id);
+        models.downloading.delete(e.payload.id);
       },
     );
 
@@ -277,7 +208,7 @@
     });
 
     debugConsoleEnabled = readDebugConsoleEnabled();
-    await loadModels();
+    await models.loadModels();
   });
 
   onDestroy(() => {
@@ -310,17 +241,17 @@
       <GeneralTab {onDebugConsoleChange} />
     {:else if activeTab === "model"}
       <ModelPickerPanel
-        models={modelFetch.models}
-        modelsLoaded={modelFetch.loaded}
-        modelsError={modelFetch.error}
-        modelsRestartNotice={modelFetch.restartNotice}
-        downloading={modelFetch.downloading}
-        downloadFailed={modelFetch.failed}
+        models={models.models}
+        modelsLoaded={models.loaded}
+        modelsError={models.error}
+        modelsRestartNotice={models.restartNotice}
+        downloading={models.downloading}
+        downloadFailed={models.failed}
         {formatMb}
         onSelect={selectModel}
-        onDownload={downloadModel}
-        onCancel={cancelDownload}
-        onRemove={removeModel}
+        onDownload={(card) => models.downloadModel(card)}
+        onCancel={(card) => models.cancelDownload(card)}
+        onRemove={(card) => models.removeModel(card)}
       />
     {:else if activeTab === "vocabulary"}
       <VocabularyTab />

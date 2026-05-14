@@ -76,6 +76,7 @@
   let unlistenAudioDeviceLost: UnlistenFn | null = null;
   let unlistenAudioDeviceRestored: UnlistenFn | null = null;
   let unlistenMeetingSessionStarted: UnlistenFn | null = null;
+  let unlistenMeetingAppendFailed: UnlistenFn | null = null;
 
   // PTT state machine.
   //
@@ -362,6 +363,17 @@
       meeting.sourceFailedNotice = null;
     });
 
+    unlistenMeetingAppendFailed = await listen<{ error: string }>(
+      Events.DictationMeetingAppendFailed,
+      (e) => {
+        console.warn("[DictationMeetingAppendFailed]", e.payload.error);
+        // Show a warning banner so the user knows the meeting session log is
+        // missing this utterance, even though it landed on the clipboard (#696).
+        meeting.appendFailedNotice =
+          "A transcription couldn't be saved to your meeting session. The text is still on your clipboard.";
+      },
+    );
+
     window.addEventListener("keydown", _keydownHandler);
   });
 
@@ -377,6 +389,7 @@
     unlistenAudioDeviceLost?.();
     unlistenAudioDeviceRestored?.();
     unlistenMeetingSessionStarted?.();
+    unlistenMeetingAppendFailed?.();
     if (pttPressTimer !== null) {
       clearTimeout(pttPressTimer);
       pttPressTimer = null;

@@ -429,12 +429,26 @@ pub async fn stop_dictation(
         .sum::<i64>();
     let manager_handle = Arc::clone(&state.meeting_manager);
     let meeting_text = text.clone();
+    // Clone the handle so the spawned task can emit without holding
+    // a reference to the outer `app` borrow past the task boundary.
+    let app_for_spawn = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = manager_handle
             .append_if_active(&meeting_text, utterance_duration_ms)
             .await
         {
             tracing::error!(error = ?e, "failed to append utterance to active meeting session");
+            // Surface the failure to the frontend (#696). The transcript
+            // itself landed on the clipboard; this is a secondary data-
+            // loss path that deserves a visible warning rather than a
+            // silent log entry. `ok()` swallows emit errors — if the
+            // window is already closed the warning is moot.
+            if let Err(emit_err) = app_for_spawn.emit(
+                "dictation:meeting-append-failed",
+                serde_json::json!({ "error": e.to_string() }),
+            ) {
+                tracing::warn!(error = ?emit_err, "emit dictation:meeting-append-failed failed");
+            }
         }
     });
 
