@@ -704,3 +704,580 @@ fn autostart_mode_decode_falls_back_to_off_for_unknown_bytes() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// In-memory HistoryRepository for IPC integration tests
+// ---------------------------------------------------------------------------
+
+/// Fully-functional in-memory implementation of [`HistoryRepository`].
+/// Unlike [`NoopHistory`] (which swallows all writes), `MemHistory`
+/// actually stores entries so the `history_*` command path can be
+/// exercised end-to-end without spinning up a SQLite database.
+///
+/// `search` uses a simple substring match rather than FTS5 — sufficient
+/// for exercising the IPC routing; the SQL correctness is tested in
+/// `history/sqlite.rs`.
+pub(crate) struct MemHistory {
+    entries: std::sync::Mutex<Vec<crate::history::HistoryEntry>>,
+    next_id: std::sync::atomic::AtomicI64,
+}
+
+impl MemHistory {
+    fn new() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(Vec::new()),
+            next_id: std::sync::atomic::AtomicI64::new(1),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::history::HistoryRepository for MemHistory {
+    async fn create(&self, entry: crate::history::NewHistoryEntry) -> anyhow::Result<i64> {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut entries = self.entries.lock().unwrap();
+        entries.push(crate::history::HistoryEntry {
+            id,
+            transcript: entry.transcript,
+            app_name: entry.app_name,
+            window_title: entry.window_title,
+            model: entry.model,
+            duration_ms: entry.duration_ms,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            ignored: entry.ignored,
+        });
+        Ok(id)
+    }
+
+    async fn list(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
+        let entries = self.entries.lock().unwrap();
+        // Newest first (insertion order reversed)
+        let mut all: Vec<_> = entries.iter().cloned().collect();
+        all.reverse();
+        let offset = offset.max(0) as usize;
+        let limit = limit.max(0) as usize;
+        Ok(all.into_iter().skip(offset).take(limit).collect())
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        limit: i64,
+        offset: i64,
+    ) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
+        let q = query.trim();
+        if q.is_empty() {
+            return self.list(limit, offset).await;
+        }
+        let entries = self.entries.lock().unwrap();
+        let mut matched: Vec<_> = entries
+            .iter()
+            .filter(|e| e.transcript.to_lowercase().contains(&q.to_lowercase()))
+            .cloned()
+            .collect();
+        matched.reverse();
+        let offset = offset.max(0) as usize;
+        let limit = limit.max(0) as usize;
+        Ok(matched.into_iter().skip(offset).take(limit).collect())
+    }
+
+    async fn delete(&self, id: i64) -> anyhow::Result<()> {
+        self.entries.lock().unwrap().retain(|e| e.id != id);
+        Ok(())
+    }
+
+    async fn clear(&self) -> anyhow::Result<i64> {
+        let mut entries = self.entries.lock().unwrap();
+        let count = entries.len() as i64;
+        entries.clear();
+        Ok(count)
+    }
+
+    async fn count(&self) -> anyhow::Result<i64> {
+        Ok(self.entries.lock().unwrap().len() as i64)
+    }
+
+    async fn get_stats(&self) -> anyhow::Result<crate::history::DictationStats> {
+        let entries = self.entries.lock().unwrap();
+        let session_count = entries.iter().filter(|e| !e.ignored).count() as i64;
+        let word_count = entries
+            .iter()
+            .filter(|e| !e.ignored)
+            .map(|e| e.transcript.split_whitespace().count() as i64)
+            .sum();
+        let total_recording_ms = entries
+            .iter()
+            .filter(|e| !e.ignored)
+            .map(|e| e.duration_ms.unwrap_or(0))
+            .sum();
+        let total_chars = entries
+            .iter()
+            .filter(|e| !e.ignored)
+            .map(|e| e.transcript.len() as i64)
+            .sum();
+        Ok(crate::history::DictationStats {
+            session_count,
+            word_count,
+            total_recording_ms,
+            total_chars,
+        })
+    }
+}
+
+/// Construct an `AppState` backed by a `MemHistory` so history IPC
+/// integration tests can seed data and verify the command paths.
+fn state_with_mem_history(history: std::sync::Arc<MemHistory>) -> AppState {
+    AppStateBuilder::new()
+        .audio(Arc::new(MockAudio::new(fake_audio())))
+        .history(history)
+        .replacements(Arc::new(NoopReplacements))
+        .vocabulary(Arc::new(NoopVocabulary))
+        .settings(Arc::new(MemSettings {
+            map: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }))
+        .meetings({
+            let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
+            m
+        })
+        .meeting_app_overrides({
+            let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                Arc::new(NoopMeetingAppOverrides);
+            o
+        })
+        .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test({
+            let m: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(NoopMeetings);
+            m
+        })))
+        .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+        .build()
+        .expect("state_with_mem_history: builder fields complete")
+}
+
+// ---------------------------------------------------------------------------
+// History IPC integration tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn history_list_returns_entries_newest_first() {
+    let repo = Arc::new(MemHistory::new());
+    seed_history(Arc::clone(&repo), 3).await;
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    let entries = state.data.history.list(100, 0).await.unwrap();
+    assert_eq!(entries.len(), 3, "all 3 entries returned");
+    // Newest-first: id 3 before id 2 before id 1.
+    assert_eq!(
+        entries.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![3, 2, 1],
+        "entries returned newest-first"
+    );
+}
+
+#[tokio::test]
+async fn history_list_respects_limit_and_offset() {
+    let repo = Arc::new(MemHistory::new());
+    seed_history(Arc::clone(&repo), 5).await;
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    // limit=2, offset=0 → ids 5,4
+    let page1 = state.data.history.list(2, 0).await.unwrap();
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1[0].id, 5);
+
+    // limit=2, offset=2 → ids 3,2
+    let page2 = state.data.history.list(2, 2).await.unwrap();
+    assert_eq!(page2.len(), 2);
+    assert_eq!(page2[0].id, 3);
+}
+
+#[tokio::test]
+async fn history_search_filters_by_transcript_substring() {
+    let repo = Arc::new(MemHistory::new());
+    repo.create(crate::history::NewHistoryEntry {
+        transcript: "Hello world".into(),
+        app_name: None,
+        window_title: None,
+        model: "test".into(),
+        duration_ms: Some(1000),
+        ignored: false,
+    })
+    .await
+    .unwrap();
+    repo.create(crate::history::NewHistoryEntry {
+        transcript: "Goodbye cruel world".into(),
+        app_name: None,
+        window_title: None,
+        model: "test".into(),
+        duration_ms: Some(1000),
+        ignored: false,
+    })
+    .await
+    .unwrap();
+    repo.create(crate::history::NewHistoryEntry {
+        transcript: "Completely unrelated".into(),
+        app_name: None,
+        window_title: None,
+        model: "test".into(),
+        duration_ms: Some(1000),
+        ignored: false,
+    })
+    .await
+    .unwrap();
+
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    let results = state.data.history.search("world", 100, 0).await.unwrap();
+    assert_eq!(results.len(), 2, "two entries contain 'world'");
+    assert!(
+        results.iter().all(|e| e.transcript.to_lowercase().contains("world")),
+        "all results contain the query"
+    );
+}
+
+#[tokio::test]
+async fn history_search_empty_query_falls_through_to_list() {
+    let repo = Arc::new(MemHistory::new());
+    seed_history(Arc::clone(&repo), 3).await;
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    let results = state.data.history.search("  ", 100, 0).await.unwrap();
+    assert_eq!(results.len(), 3, "whitespace-only query returns all entries");
+}
+
+#[tokio::test]
+async fn history_delete_removes_the_specified_entry() {
+    let repo = Arc::new(MemHistory::new());
+    seed_history(Arc::clone(&repo), 3).await;
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    state.data.history.delete(2).await.unwrap();
+
+    let remaining = state.data.history.list(100, 0).await.unwrap();
+    assert_eq!(remaining.len(), 2);
+    assert!(
+        remaining.iter().all(|e| e.id != 2),
+        "id=2 should no longer be present"
+    );
+}
+
+#[tokio::test]
+async fn history_delete_is_idempotent_for_missing_id() {
+    let repo = Arc::new(MemHistory::new());
+    seed_history(Arc::clone(&repo), 2).await;
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    // Deleting a non-existent id must succeed silently.
+    state.data.history.delete(999).await.unwrap();
+    assert_eq!(state.data.history.count().await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn history_count_tracks_insertions_and_deletions() {
+    let repo = Arc::new(MemHistory::new());
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    assert_eq!(state.data.history.count().await.unwrap(), 0, "empty at start");
+    seed_history(Arc::clone(&repo), 3).await;
+    assert_eq!(state.data.history.count().await.unwrap(), 3, "after 3 inserts");
+    state.data.history.delete(1).await.unwrap();
+    assert_eq!(state.data.history.count().await.unwrap(), 2, "after delete");
+}
+
+#[tokio::test]
+async fn history_clear_removes_all_entries_and_returns_count() {
+    let repo = Arc::new(MemHistory::new());
+    seed_history(Arc::clone(&repo), 4).await;
+    let state = state_with_mem_history(Arc::clone(&repo));
+
+    let removed = state.data.history.clear().await.unwrap();
+    assert_eq!(removed, 4, "clear returns the number of removed rows");
+    assert_eq!(state.data.history.count().await.unwrap(), 0, "table empty");
+}
+
+#[tokio::test]
+async fn history_get_stats_aggregates_non_ignored_entries() {
+    let repo = Arc::new(MemHistory::new());
+    // Two real dictations and one ignored (too-short) recording.
+    repo.create(crate::history::NewHistoryEntry {
+        transcript: "hello world".into(),
+        app_name: None,
+        window_title: None,
+        model: "test".into(),
+        duration_ms: Some(2_000),
+        ignored: false,
+    })
+    .await
+    .unwrap();
+    repo.create(crate::history::NewHistoryEntry {
+        transcript: "foo bar baz".into(),
+        app_name: None,
+        window_title: None,
+        model: "test".into(),
+        duration_ms: Some(1_500),
+        ignored: false,
+    })
+    .await
+    .unwrap();
+    repo.create(crate::history::NewHistoryEntry {
+        transcript: "".into(),
+        app_name: None,
+        window_title: None,
+        model: "test".into(),
+        duration_ms: Some(200),
+        ignored: true, // too short — must be excluded from stats
+    })
+    .await
+    .unwrap();
+
+    let state = state_with_mem_history(Arc::clone(&repo));
+    let stats = state.data.history.get_stats().await.unwrap();
+
+    assert_eq!(stats.session_count, 2, "ignored rows excluded from session_count");
+    // "hello world" = 2 words, "foo bar baz" = 3 words → 5 total.
+    assert_eq!(stats.word_count, 5, "'hello world'(2) + 'foo bar baz'(3)");
+    assert_eq!(stats.total_recording_ms, 3_500);
+    assert_eq!(stats.total_chars, 22, "'hello world'=11 + 'foo bar baz'=11");
+}
+
+// ---------------------------------------------------------------------------
+// Settings IPC integration tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn hud_enabled_round_trips_through_atomic_and_settings_row() {
+    use super::commands::settings::set_hud_enabled_inner;
+    let state = mock_state();
+
+    // Default (no persisted row): runtime flag reflects the parse-time default.
+    let initial = state
+        .runtime_flags
+        .hud_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!(initial, "hud_enabled defaults to true (no persisted row)");
+
+    // Disable via the inner function and verify both the atomic and the row.
+    set_hud_enabled_inner(&state, false).await.unwrap();
+    assert!(
+        !state
+            .runtime_flags
+            .hud_enabled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "atomic should be false after set_hud_enabled_inner(false)"
+    );
+    let row = state
+        .settings
+        .get(crate::settings::keys::HUD_ENABLED)
+        .await
+        .unwrap();
+    assert_eq!(row.as_deref(), Some("false"), "settings row persisted as 'false'");
+
+    // Re-enable.
+    set_hud_enabled_inner(&state, true).await.unwrap();
+    assert!(
+        state
+            .runtime_flags
+            .hud_enabled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "atomic should be true after set_hud_enabled_inner(true)"
+    );
+    let row = state
+        .settings
+        .get(crate::settings::keys::HUD_ENABLED)
+        .await
+        .unwrap();
+    assert_eq!(row.as_deref(), Some("true"), "settings row persisted as 'true'");
+}
+
+#[tokio::test]
+async fn sound_cues_enabled_round_trips() {
+    use super::commands::settings::set_sound_cues_enabled_inner;
+    let state = mock_state();
+
+    set_sound_cues_enabled_inner(&state, true).await.unwrap();
+    assert!(state
+        .runtime_flags
+        .sound_cues_enabled
+        .load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        state
+            .settings
+            .get(crate::settings::keys::SOUND_CUES_ENABLED)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+
+    set_sound_cues_enabled_inner(&state, false).await.unwrap();
+    assert!(!state
+        .runtime_flags
+        .sound_cues_enabled
+        .load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn diarization_enabled_round_trips_through_atomic_and_settings_row() {
+    use super::commands::settings::set_diarization_enabled_inner;
+    let state = mock_state();
+
+    // Enable diarization.
+    set_diarization_enabled_inner(&state, true).await.unwrap();
+    assert!(
+        state
+            .runtime_flags
+            .diarization_enabled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "atomic reflects enabled=true"
+    );
+    assert_eq!(
+        state
+            .settings
+            .get(crate::settings::keys::DIARIZATION_ENABLED)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("true"),
+        "settings row persisted as 'true'"
+    );
+
+    // Disable diarization.
+    set_diarization_enabled_inner(&state, false).await.unwrap();
+    assert!(
+        !state
+            .runtime_flags
+            .diarization_enabled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "atomic reflects enabled=false"
+    );
+    assert_eq!(
+        state
+            .settings
+            .get(crate::settings::keys::DIARIZATION_ENABLED)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("false"),
+        "settings row persisted as 'false'"
+    );
+}
+
+#[tokio::test]
+async fn set_inference_threads_clamps_below_minimum() {
+    use super::commands::settings::set_inference_threads_inner;
+    let state = mock_state();
+
+    // 0 is below the minimum of 1.
+    set_inference_threads_inner(&state, 0).await.unwrap();
+    assert_eq!(
+        state
+            .runtime_flags
+            .inference_threads
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "0 clamped to minimum of 1"
+    );
+}
+
+#[tokio::test]
+async fn set_inference_threads_clamps_above_maximum() {
+    use super::commands::settings::set_inference_threads_inner;
+    let state = mock_state();
+
+    // 32 is above the maximum of 16.
+    set_inference_threads_inner(&state, 32).await.unwrap();
+    assert_eq!(
+        state
+            .runtime_flags
+            .inference_threads
+            .load(std::sync::atomic::Ordering::Relaxed),
+        16,
+        "32 clamped to maximum of 16"
+    );
+}
+
+#[tokio::test]
+async fn set_inference_threads_accepts_valid_range() {
+    use super::commands::settings::set_inference_threads_inner;
+    let state = mock_state();
+
+    set_inference_threads_inner(&state, 4).await.unwrap();
+    assert_eq!(
+        state
+            .runtime_flags
+            .inference_threads
+            .load(std::sync::atomic::Ordering::Relaxed),
+        4
+    );
+    assert_eq!(
+        state
+            .settings
+            .get(crate::settings::keys::INFERENCE_THREADS)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("4"),
+        "persisted value is the string representation"
+    );
+}
+
+#[tokio::test]
+async fn set_mic_gain_db_clamps_to_valid_range() {
+    use super::commands::settings::set_mic_gain_db_inner;
+    let state = mock_state();
+
+    // Below minimum (0.0).
+    set_mic_gain_db_inner(&state, -5.0).await.unwrap();
+    let stored = f32::from_bits(
+        state
+            .runtime_flags
+            .mic_gain_db
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
+    assert_eq!(stored, 0.0, "-5.0 clamped to 0.0");
+
+    // Above maximum (20.0).
+    set_mic_gain_db_inner(&state, 25.0).await.unwrap();
+    let stored = f32::from_bits(
+        state
+            .runtime_flags
+            .mic_gain_db
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
+    assert_eq!(stored, 20.0, "25.0 clamped to 20.0");
+
+    // In-range value is stored as-is.
+    set_mic_gain_db_inner(&state, 6.0).await.unwrap();
+    let stored = f32::from_bits(
+        state
+            .runtime_flags
+            .mic_gain_db
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
+    assert_eq!(stored, 6.0);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers shared across the history tests
+// ---------------------------------------------------------------------------
+
+/// Insert `n` dummy history entries into `repo`.
+async fn seed_history(repo: std::sync::Arc<MemHistory>, n: usize) {
+    for i in 1..=n {
+        repo.create(crate::history::NewHistoryEntry {
+            transcript: format!("transcript {i}"),
+            app_name: Some("TestApp".into()),
+            window_title: None,
+            model: "ggml-test.bin".into(),
+            duration_ms: Some(1_000 * i as i64),
+            ignored: false,
+        })
+        .await
+        .unwrap();
+    }
+}
