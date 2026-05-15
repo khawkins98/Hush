@@ -129,7 +129,8 @@
 
   // Inline name editing.
   let editingName = $state(false);
-  let nameInputValue = $state(entry.name ?? "");
+  let nameInputValue = $state("");
+  $effect(() => { if (!editingName) nameInputValue = entry.name ?? ""; });
 
   function startNameEdit(e: Event) {
     e.stopPropagation();
