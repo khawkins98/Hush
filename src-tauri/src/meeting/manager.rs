@@ -119,6 +119,14 @@ pub(super) enum SessionState {
     Idle,
     Opening,
     Active(ActiveSession),
+    /// Pump has been signalled to cancel and is draining its tail
+    /// transcription. `start_manual` and `append_if_active` treat
+    /// this state as busy so a new session cannot claim audio device
+    /// handles while the old pump still holds them (#839). Transitions
+    /// to `Idle` once `close_session` succeeds, or back to
+    /// `Active(close_attempted = true)` if the DB close fails and
+    /// a retry is needed.
+    Stopping,
 }
 
 /// In-memory state for an open meeting session. Held inside the
@@ -261,7 +269,7 @@ impl SessionManager {
     pub fn active_session_id(&self) -> Option<i64> {
         self.state.lock().ok().and_then(|guard| match &*guard {
             SessionState::Active(a) => Some(a.id),
-            SessionState::Idle | SessionState::Opening => None,
+            SessionState::Idle | SessionState::Opening | SessionState::Stopping => None,
         })
     }
 }
@@ -293,6 +301,9 @@ impl Drop for SessionManager {
         let active = self.state.lock().ok().and_then(|mut guard| {
             match std::mem::replace(&mut *guard, SessionState::Idle) {
                 SessionState::Active(a) => Some(a),
+                // Stopping means the pump was already signalled — grab the
+                // cancel + handle for the abort below, same as Active.
+                SessionState::Stopping => None, // pump is already signalled; nothing to abort
                 state @ (SessionState::Opening | SessionState::Idle) => {
                     *guard = state;
                     None
@@ -557,6 +568,9 @@ mod tests {
             SessionState::Opening => {
                 panic!("expected Active(old) after close failure; got Opening")
             }
+            SessionState::Stopping => {
+                panic!("expected Active(old) after close failure; got Stopping")
+            }
         }
     }
 
@@ -667,6 +681,9 @@ mod tests {
             }
             SessionState::Opening => {
                 panic!("expected Active(NEW_SESSION_ID) preserved; got Opening")
+            }
+            SessionState::Stopping => {
+                panic!("expected Active(NEW_SESSION_ID) preserved; got Stopping")
             }
         }
     }
