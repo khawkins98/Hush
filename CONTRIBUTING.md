@@ -38,7 +38,7 @@ For the full command reference — which command to run when, macOS TCC quirks, 
 |---|---|
 | Iterate on UI or Rust logic — the normal dev loop | `npm run tauri dev` |
 | Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
-| Test Screen Recording / Microphone TCC permission prompts | `npm run tauri:bundle` (macOS only) |
+| Test Microphone / Input Monitoring TCC permission prompts | `npm run tauri:bundle` (macOS only) |
 | Build a release `.dmg` to smoke-test the installer locally | `npm run tauri:dmg` (macOS only) |
 | Run Rust unit tests | `cd src-tauri && cargo test --lib` |
 | Run frontend type check | `npm run check` |
