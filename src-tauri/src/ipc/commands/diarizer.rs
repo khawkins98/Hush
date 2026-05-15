@@ -67,8 +67,12 @@ pub struct DiarizeModelStatus {
 pub fn get_diarizer_model_status(state: State<'_, AppState>) -> IpcResult<DiarizeModelStatus> {
     let model = crate::diarization::catalog::default_diarizer_model();
     let path = state.models_dir.join(&model.filename);
+    let downloaded = path
+        .metadata()
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false);
     Ok(DiarizeModelStatus {
-        downloaded: path.exists(),
+        downloaded,
         display_name: model.display_name,
         size_mb: model.size_mb,
         sha256: model.sha256,
@@ -231,7 +235,11 @@ pub(crate) async fn download_diarizer_model_inner(
     let cancel = crate::transcription::download::CancelHandle::new();
     {
         let mut guard = deps.downloads.lock().map_err(poisoned)?;
-        if dest.exists() {
+        if dest
+            .metadata()
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+        {
             return Err(IpcError::Settings(format!(
                 "{} is already downloaded",
                 model.display_name

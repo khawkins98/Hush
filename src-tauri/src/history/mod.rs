@@ -157,4 +157,14 @@ pub trait HistoryRepository: Send + Sync {
     /// the simple split-on-whitespace shape a user would intuit
     /// without bringing a tokenizer into the path.
     async fn get_stats(&self) -> Result<DictationStats>;
+
+    /// Fetch **all** non-ignored rows for export, bypassing the
+    /// pagination cap on [`list`]. Optional `query` filters by FTS5
+    /// phrase match on the transcript column, just like [`search`].
+    ///
+    /// Separate from `list` / `search` so the `MAX_LIMIT` guard in
+    /// the SQLite impl cannot be inadvertently removed from the
+    /// paginated IPC path while allowing export to pull the full
+    /// table (#858).
+    async fn list_all_for_export(&self, query: Option<&str>) -> Result<Vec<HistoryEntry>>;
 }

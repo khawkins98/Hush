@@ -124,17 +124,11 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
             "unknown model id: {id} (not in the Whisper catalog)"
         )));
     }
-    state
-        .settings
-        .set(settings_keys::SELECTED_MODEL_ID, &id)
-        .await
-        .map_err(|e| IpcError::Settings(e.to_string()))?;
 
-    // Try to hot-load. The GGUF parse can take ~50–500 ms depending on
-    // model size; do it on a blocking task so the IPC handler doesn't
-    // hold the tokio runtime. If the file isn't on disk yet this
-    // returns Ok(None) and we report `loaded: false` — selection has
-    // already persisted, so the picker remembers across restarts.
+    // Try to hot-load BEFORE persisting so a corrupt/unloadable GGUF
+    // does not write a bad selection that breaks the next restart (#823).
+    // The GGUF parse can take ~50–500 ms; run on a blocking task so the
+    // IPC handler doesn't hold the tokio runtime.
     //
     // Loaded twice — once for the dictation slot, once for the
     // meeting-pump slot (#248). Both share the mmap'd weights on
@@ -163,22 +157,46 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
 
     match load_result {
         Ok((Some(dictation), Some(meeting))) => {
+            // Persist first so a swap failure still leaves the setting
+            // consistent; if swap panics the app likely restarts anyway.
+            state
+                .settings
+                .set(settings_keys::SELECTED_MODEL_ID, &id)
+                .await
+                .map_err(|e| IpcError::Settings(e.to_string()))?;
             state
                 .swap_transcriber(Some(dictation), Some(meeting))
                 .map_err(|e| IpcError::Internal(e.to_string()))?;
             Ok(ModelSelectResult { loaded: true })
         }
-        Ok((None, _)) | Ok((_, None)) => {
-            // File not yet on disk, or whisper feature off. Selection
-            // still persisted; user just needs to Download (or rebuild
-            // with the whisper feature, but that's a contributor
-            // concern, not an end-user one).
+        Ok((None, None)) => {
+            // File not yet on disk, or whisper feature off. Persist
+            // the selection so the picker remembers across restarts
+            // and the user just needs to Download.
+            state
+                .settings
+                .set(settings_keys::SELECTED_MODEL_ID, &id)
+                .await
+                .map_err(|e| IpcError::Settings(e.to_string()))?;
             Ok(ModelSelectResult { loaded: false })
+        }
+        Ok((Some(_), None)) | Ok((None, Some(_))) => {
+            // One slot loaded and the other didn't — the two
+            // WhisperContext instances would be out of sync. Log and
+            // surface an error without persisting (#870).
+            tracing::error!(
+                model_id = %id,
+                "model_select: partial load success — dictation/meeting slots out of sync; \
+                 likely the file changed between the two loads"
+            );
+            Err(IpcError::Internal(
+                "partial model load (one slot succeeded, one failed) — try again".into(),
+            ))
         }
         Err(e) => {
             // File was on disk but failed to load (corrupted GGUF,
-            // wrong format). Surface as a clear error so the user
-            // knows to redownload.
+            // wrong format). Do NOT persist — saving a known-bad
+            // selection would break the next restart (#823).
             Err(IpcError::Transcription(format!(
                 "failed to load {id}: {e:#}"
             )))

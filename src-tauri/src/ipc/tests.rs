@@ -168,6 +168,12 @@ impl HistoryRepository for NoopHistory {
     async fn get_stats(&self) -> anyhow::Result<crate::history::DictationStats> {
         Ok(crate::history::DictationStats::default())
     }
+    async fn list_all_for_export(
+        &self,
+        _: Option<&str>,
+    ) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
+        Ok(vec![])
+    }
 }
 
 /// Tiny mock that returns an empty rules list so the dictation
@@ -840,6 +846,24 @@ impl crate::history::HistoryRepository for MemHistory {
             total_recording_ms,
             total_chars,
         })
+    }
+
+    async fn list_all_for_export(
+        &self,
+        query: Option<&str>,
+    ) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
+        let entries = self.entries.lock().unwrap();
+        let mut all: Vec<_> = entries
+            .iter()
+            .filter(|e| !e.ignored)
+            .filter(|e| match query {
+                None | Some("") => true,
+                Some(q) => e.transcript.to_lowercase().contains(&q.to_lowercase()),
+            })
+            .cloned()
+            .collect();
+        all.reverse();
+        Ok(all)
     }
 }
 
