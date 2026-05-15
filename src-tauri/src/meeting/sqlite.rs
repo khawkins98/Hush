@@ -162,7 +162,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
             "INSERT INTO utterances (session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final) \
              SELECT ?, ?, ?, ?, ?, 1 \
              WHERE EXISTS (SELECT 1 FROM meeting_sessions WHERE id = ? AND ended_at IS NULL) \
-             RETURNING id, session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final",
+             RETURNING id, session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final, speaker_identity_id",
         )
         .bind(new.session_id)
         .bind(new.started_at_ms)
@@ -192,7 +192,8 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
 
     async fn list_utterances(&self, session_id: i64) -> Result<Vec<PersistedUtterance>> {
         sqlx::query_as::<_, PersistedUtterance>(
-            "SELECT id, session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final \
+            "SELECT id, session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final, \
+                    speaker_identity_id \
              FROM utterances \
              WHERE session_id = ? \
              ORDER BY started_at_ms ASC",
@@ -382,6 +383,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for PersistedUtterance {
             speaker_label: row.try_get("speaker_label")?,
             text: row.try_get("text")?,
             is_final: is_final_int != 0,
+            speaker_identity_id: row.try_get("speaker_identity_id")?,
         })
     }
 }

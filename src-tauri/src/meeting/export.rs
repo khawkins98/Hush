@@ -214,6 +214,7 @@ mod tests {
                 speaker_label: Some("mic".to_owned()),
                 text: "Hello everyone, thanks for joining.".to_owned(),
                 is_final: true,
+                speaker_identity_id: None,
             },
             crate::meeting::PersistedUtterance {
                 id: 101,
@@ -223,6 +224,7 @@ mod tests {
                 speaker_label: Some("system".to_owned()),
                 text: "Hi! Can you share your screen?".to_owned(),
                 is_final: true,
+                speaker_identity_id: None,
             },
             crate::meeting::PersistedUtterance {
                 id: 102,
@@ -232,6 +234,7 @@ mod tests {
                 speaker_label: None,
                 text: "Sure, one second.".to_owned(),
                 is_final: true,
+                speaker_identity_id: None,
             },
         ]
     }

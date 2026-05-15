@@ -267,6 +267,8 @@ pub(super) async fn fresh_manager_no_transcriber() -> SessionManager {
         diarize,
         app_overrides,
         Arc::new(AtomicU32::new(0f32.to_bits())),
+        Arc::new(crate::speakers::MemSpeakerStore),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
 }
 
