@@ -24,6 +24,7 @@ pub mod meeting;
 pub mod permissions;
 pub mod repository;
 pub mod settings;
+pub mod speakers;
 pub mod transcription;
 pub mod tray;
 pub mod updater;
@@ -1009,6 +1010,12 @@ pub fn run() {
             ipc::commands::meeting::meeting_app_override_set_profile,
             ipc::commands::meeting::meeting_app_override_delete,
             ipc::commands::meeting::meeting_app_classifier_defaults,
+            ipc::commands::speakers::speaker_list,
+            ipc::commands::speakers::speaker_rename,
+            ipc::commands::speakers::speaker_delete,
+            ipc::commands::speakers::speaker_merge,
+            ipc::commands::speakers::get_speaker_identity_enabled,
+            ipc::commands::speakers::set_speaker_identity_enabled,
             ipc::commands::updater::install_pending_update,
             ipc::commands::debug::get_log_entries,
         ])

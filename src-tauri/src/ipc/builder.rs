@@ -66,6 +66,7 @@ pub struct AppStateBuilder {
     settings: Option<Arc<dyn SettingsRepository>>,
     meetings: Option<Arc<dyn crate::meeting::MeetingSessionRepository>>,
     meeting_app_overrides: Option<Arc<dyn crate::meeting::MeetingAppOverrideRepository>>,
+    speakers: Option<Arc<dyn crate::speakers::SpeakerStore>>,
     meeting_manager: Option<Arc<crate::meeting::SessionManager>>,
     models_dir: Option<PathBuf>,
     ptt_combo: Option<crate::hotkey::ptt::PttCombo>,
@@ -76,6 +77,7 @@ pub struct AppStateBuilder {
     sound_cue_complete_enabled: Option<bool>,
     meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
     diarization_enabled: Option<bool>,
+    speaker_identity_enabled: Option<bool>,
     /// Pre-built `Arc<AtomicBool>` for the diarization-enabled
     /// flag. Set via [`AppStateBuilder::diarization_enabled_arc`]
     /// when the production wiring (`build_default`) needs to
@@ -84,6 +86,7 @@ pub struct AppStateBuilder {
     /// `build` constructs a fresh Arc seeded from
     /// [`Self::diarization_enabled`].
     diarization_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
+    speaker_identity_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Pre-built [`crate::diarization::DiarizeSlot`] for hot-swap
     /// support (#301). Set via
     /// [`AppStateBuilder::diarize_slot`] when the production
@@ -200,6 +203,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn speakers(mut self, speakers: Arc<dyn crate::speakers::SpeakerStore>) -> Self {
+        self.speakers = Some(speakers);
+        self
+    }
+
     pub fn models_dir(mut self, models_dir: PathBuf) -> Self {
         self.models_dir = Some(models_dir);
         self
@@ -245,12 +253,25 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn speaker_identity_enabled(mut self, enabled: bool) -> Self {
+        self.speaker_identity_enabled = Some(enabled);
+        self
+    }
+
     /// Set the pre-built `Arc<AtomicBool>` that the FlagGatedDiarizer
     /// already holds. The AppState's `diarization_enabled` field
     /// becomes that same Arc, so the IPC `set_diarization_enabled`
     /// path flips both views with one atomic store.
     pub fn diarization_enabled_arc(mut self, arc: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.diarization_enabled_arc = Some(arc);
+        self
+    }
+
+    pub fn speaker_identity_enabled_arc(
+        mut self,
+        arc: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.speaker_identity_enabled_arc = Some(arc);
         self
     }
 
@@ -344,6 +365,9 @@ impl AppStateBuilder {
                 meeting_app_overrides: self.meeting_app_overrides.ok_or_else(|| {
                     anyhow::anyhow!("AppStateBuilder: meeting_app_overrides not set")
                 })?,
+                speakers: self
+                    .speakers
+                    .unwrap_or_else(|| Arc::new(crate::speakers::MemSpeakerStore)),
             },
             settings: self
                 .settings
@@ -439,6 +463,11 @@ impl AppStateBuilder {
                 diarization_enabled: self.diarization_enabled_arc.unwrap_or_else(|| {
                     Arc::new(std::sync::atomic::AtomicBool::new(
                         self.diarization_enabled.unwrap_or(false),
+                    ))
+                }),
+                speaker_identity_enabled: self.speaker_identity_enabled_arc.unwrap_or_else(|| {
+                    Arc::new(std::sync::atomic::AtomicBool::new(
+                        self.speaker_identity_enabled.unwrap_or(false),
                     ))
                 }),
                 inference_threads: self

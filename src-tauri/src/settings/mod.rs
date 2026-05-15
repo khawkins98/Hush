@@ -115,6 +115,14 @@ pub mod keys {
     /// for proper speaker IDs.
     pub const DIARIZATION_ENABLED: &str = "diarization_enabled";
 
+    /// Whether cross-session speaker identity (voice fingerprinting) should
+    /// run at session close (#667). Stored as `"true"` / `"false"`; absent
+    /// means false (default off — biometric data, explicit opt-in required).
+    /// Intentionally separate from `diarization_enabled` (in-session speaker
+    /// labelling) because the consent scope differs: diarization labels a
+    /// single session; speaker identity persists embeddings indefinitely.
+    pub const SPEAKER_IDENTITY_ENABLED: &str = "speaker_identity_enabled";
+
     /// Whisper inference thread count (#255). Stored as the
     /// integer literal in decimal (e.g. `"4"`); parsed back via
     /// `i32::from_str` and clamped to `[MIN_INFERENCE_THREADS,

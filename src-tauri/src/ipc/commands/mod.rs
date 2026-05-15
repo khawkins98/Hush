@@ -47,6 +47,7 @@ pub mod models;
 pub mod permissions;
 pub mod ptt;
 pub mod settings;
+pub mod speakers;
 pub mod system;
 pub mod updater;
 

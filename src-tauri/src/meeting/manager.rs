@@ -106,6 +106,12 @@ pub struct SessionManager {
     /// Passed to `PumpContext` at session start so the pump can apply
     /// the current gain value each tick without a session restart.
     pub(super) mic_gain_db: Arc<AtomicU32>,
+    /// Cross-session speaker identity store (#667). Queried at
+    /// session close to link centroids to known identities.
+    pub(super) speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
+    /// Whether speaker identity resolution is enabled. Shared Arc
+    /// from `RuntimeFlags::speaker_identity_enabled`.
+    pub(super) speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Lifecycle state for the manager's session slot. Three-valued
@@ -203,6 +209,7 @@ impl SessionManager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repo: Arc<dyn MeetingSessionRepository>,
         audio: Arc<dyn AudioCapture>,
@@ -211,6 +218,8 @@ impl SessionManager {
         diarize: Arc<dyn crate::diarization::Diarize>,
         app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
         mic_gain_db: Arc<AtomicU32>,
+        speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
+        speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
             repo,
@@ -223,6 +232,8 @@ impl SessionManager {
             event_emitter,
             diarize,
             mic_gain_db,
+            speaker_store,
+            speaker_identity_enabled,
         }
     }
 

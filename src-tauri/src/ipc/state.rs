@@ -101,6 +101,11 @@ pub struct DataServices {
     /// `SessionManager` reads at every session start so edits take
     /// effect without an app restart.
     pub meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository>,
+    /// Cross-session speaker identity store (#667). Opt-in; only
+    /// queried at session close when `RuntimeFlags::speaker_identity_enabled`
+    /// is true. Always present in `DataServices` so the IPC speaker-
+    /// management commands work regardless of the enabled flag.
+    pub speakers: Arc<dyn crate::speakers::SpeakerStore>,
 }
 
 /// Long-lived application state, registered with `tauri::Builder::manage`.
@@ -113,7 +118,7 @@ pub struct DataServices {
 ///   backend is gated behind the `whisper` Cargo feature *and* requires a
 ///   model path. When either is absent the `stop_dictation` command returns
 ///   [`commands::IpcError::TranscriptionUnavailable`] rather than crashing.
-/// - `data` bundles the four user-data repositories — see [`DataServices`]
+/// - `data` bundles the user-data repositories — see [`DataServices`]
 ///   for the grouping rationale. Each is `Arc<dyn …Repository>` so the IPC
 ///   layer can hold handles without knowing about the SQLite-specific impl;
 ///   tests swap in deterministic mocks at the trait seam.
@@ -128,7 +133,7 @@ pub struct AppState {
     /// for the per-field rationale.
     pub inference: InferenceState,
     /// Persistent user-data repositories bundled together. See
-    /// [`DataServices`] for why these four group naturally and why
+    /// [`DataServices`] for why these group naturally and why
     /// `settings` stays separate.
     pub data: DataServices,
     pub settings: Arc<dyn SettingsRepository>,
@@ -364,6 +369,11 @@ pub struct RuntimeFlags {
     /// free; flipped by `set_diarization_enabled`, which also writes
     /// the `diarization_enabled` settings row.
     pub diarization_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether cross-session speaker identity (voice fingerprinting) is
+    /// enabled (#667). Separate from `diarization_enabled` — different
+    /// consent scope (biometric data, indefinitely persisted). Default
+    /// false; opt-in required.
+    pub speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
     /// Whisper inference thread count (#255). Settings → General
     /// slider writes through the `set_inference_threads` IPC; the
     /// loaded `WhisperTranscription` shares this same Arc via
@@ -623,6 +633,8 @@ impl AppState {
         let meetings: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(
             crate::meeting::SqliteMeetingSessionRepository::new(Arc::clone(&db)),
         );
+        let speakers: Arc<dyn crate::speakers::SpeakerStore> =
+            Arc::new(crate::speakers::SqliteSpeakerStore::new(Arc::clone(&db)));
         let meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
             Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db));
         record_phase("database and repositories");
@@ -729,6 +741,18 @@ impl AppState {
         let diarization_enabled_arc = Arc::new(std::sync::atomic::AtomicBool::new(
             diarization_enabled_initial,
         ));
+        let speaker_identity_enabled_initial = matches!(
+            Self::startup_setting(
+                settings.as_ref(),
+                crate::settings::keys::SPEAKER_IDENTITY_ENABLED,
+            )
+            .await
+            .as_deref(),
+            Some("true")
+        );
+        let speaker_identity_enabled_arc = Arc::new(std::sync::atomic::AtomicBool::new(
+            speaker_identity_enabled_initial,
+        ));
         // Hot-swappable inner-diarizer slot (#301). Owned by
         // AppState; cloned into the FlagGatedDiarizer below; cloned
         // again into the IPC `download_diarizer_model` writer so a
@@ -758,6 +782,8 @@ impl AppState {
             Arc::clone(&diarize),
             Arc::clone(&meeting_app_overrides),
             Arc::clone(&mic_gain_db_arc),
+            Arc::clone(&speakers),
+            Arc::clone(&speaker_identity_enabled_arc),
         ));
 
         // Restore the user's persisted PTT combo, if any. Falls back
@@ -865,6 +891,7 @@ impl AppState {
             .settings(settings)
             .meetings(meetings)
             .meeting_app_overrides(meeting_app_overrides)
+            .speakers(speakers)
             .meeting_manager(meeting_manager)
             .models_dir(models_dir)
             .ptt_combo(ptt_combo)
@@ -875,6 +902,7 @@ impl AppState {
             .sound_cue_complete_enabled(sound_cue_complete_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
             .diarization_enabled_arc(diarization_enabled_arc)
+            .speaker_identity_enabled_arc(speaker_identity_enabled_arc)
             .diarize_slot(diarize_slot)
             .inference_threads_arc(inference_threads_arc)
             .mic_gain_db_arc(mic_gain_db_arc)

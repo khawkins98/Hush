@@ -618,6 +618,26 @@ impl SessionManager {
         // regardless of whether the DB write succeeded (a failed close will be
         // retried; the orphan row gets reconciled at next launch if needed).
         emit_meeting_session_ended(self.event_emitter.as_ref(), session_id);
+
+        // Cross-session speaker identity resolution (#667).
+        // Non-fatal: identity errors must not block session close or
+        // cause stop_manual to return Err.
+        if close_result.is_ok()
+            && self
+                .speaker_identity_enabled
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // Snapshot centroids BEFORE reset (reset clears them).
+            // Called after pump join so all utterances are in the DB.
+            let centroids = self.diarize.session_centroids();
+            if !centroids.is_empty() {
+                let store = Arc::clone(&self.speaker_store);
+                tokio::spawn(async move {
+                    resolve_speaker_identities(store, session_id, centroids).await;
+                });
+            }
+        }
+
         close_result
     }
 
@@ -686,6 +706,133 @@ impl SessionManager {
                 );
                 Ok(false)
             }
+        }
+    }
+}
+
+/// Match session centroids against known speaker identities, creating
+/// provisional new identities for unmatched clusters. Links utterances
+/// in the session to their resolved `speaker_identity_id`.
+///
+/// Non-fatal: each step logs errors and continues rather than aborting.
+async fn resolve_speaker_identities(
+    store: Arc<dyn crate::speakers::SpeakerStore>,
+    session_id: i64,
+    centroids: Vec<(usize, Vec<f32>, usize)>,
+) {
+    let known = match store.list_with_embeddings().await {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                session_id,
+                "speaker identity: failed to load known identities; skipping"
+            );
+            return;
+        }
+    };
+
+    for (cluster_id, centroid, utterance_count) in &centroids {
+        // Cold-start guard: skip clusters with too few utterances.
+        if *utterance_count < crate::speakers::MIN_UTTERANCE_COUNT_FOR_MATCH {
+            tracing::debug!(
+                cluster_id,
+                utterance_count,
+                "speaker identity: skipping cluster (too few utterances)"
+            );
+            continue;
+        }
+
+        let speaker_label = format!("Speaker {}", cluster_id + 1);
+
+        // Find best match in known identities.
+        let match_result = crate::speakers::sqlite::find_best_match(&known, centroid);
+
+        let identity_id = match match_result {
+            Some((id, dist)) if dist < crate::speakers::AUTO_ACCEPT_THRESHOLD => {
+                // Auto-accept: update the centroid with a weighted mean.
+                let known_count = known
+                    .iter()
+                    .find(|(k_id, _, _)| *k_id == id)
+                    .map(|(_, _, c)| *c)
+                    .unwrap_or(0);
+                let total_count = known_count + *utterance_count as i64;
+                let new_centroid: Vec<f32> = known
+                    .iter()
+                    .find(|(k_id, _, _)| *k_id == id)
+                    .map(|(_, k_emb, _)| {
+                        k_emb
+                            .iter()
+                            .zip(centroid.iter())
+                            .map(|(k, s)| {
+                                (k * known_count as f32 + s * *utterance_count as f32)
+                                    / total_count as f32
+                            })
+                            .collect::<Vec<f32>>()
+                    })
+                    .unwrap_or_else(|| centroid.clone());
+                tracing::info!(
+                    cluster_id,
+                    identity_id = id,
+                    distance = dist,
+                    "speaker identity: auto-accepted match"
+                );
+                if let Err(e) = store.update_centroid(id, &new_centroid, total_count).await {
+                    tracing::warn!(
+                        error = %e,
+                        identity_id = id,
+                        "speaker identity: centroid update failed"
+                    );
+                }
+                id
+            }
+            Some((_, dist)) => {
+                tracing::info!(
+                    cluster_id,
+                    best_distance = dist,
+                    "speaker identity: no auto-accept match; creating provisional identity"
+                );
+                match store.create(centroid, *utterance_count as i64).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "speaker identity: failed to create provisional identity"
+                        );
+                        continue;
+                    }
+                }
+            }
+            None => {
+                tracing::info!(
+                    cluster_id,
+                    "speaker identity: first known speaker; creating identity"
+                );
+                match store.create(centroid, *utterance_count as i64).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "speaker identity: failed to create first identity"
+                        );
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // Link all utterances with this speaker_label in this session.
+        if let Err(e) = store
+            .link_utterances(session_id, &speaker_label, identity_id)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                session_id,
+                speaker_label,
+                identity_id,
+                "speaker identity: failed to link utterances"
+            );
         }
     }
 }
