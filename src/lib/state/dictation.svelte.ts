@@ -206,10 +206,12 @@ export const dictation = {
         // System audio disappeared or lost permission — must disable (#844).
         audio.meetingIncludeSystemAudio = false;
       }
+      // Only mark loaded after a successful source fetch so the first-load
+      // meetingIncludeSystemAudio initialization isn't skipped on a transient
+      // failure at startup (#924).
+      audio.sourcesLoaded = true;
     } catch (e) {
       error = formatErrorDisplay(e);
-    } finally {
-      audio.sourcesLoaded = true;
     }
   },
   // ---- recording lifecycle ----
