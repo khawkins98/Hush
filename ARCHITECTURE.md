@@ -1,6 +1,6 @@
 # Architecture
 
-How Hush is built. For *what* it is, see [`hush-prd.md`](./hush-prd.md). For *what's shipped right now*, see [`STATUS.md`](./STATUS.md). For the *contributor workflow*, see [`CLAUDE.md`](./CLAUDE.md) and [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+How Hush is built. For *what it is*, see [`README.md`](./README.md). For *what's shipped right now*, see [`STATUS.md`](./STATUS.md). For the *contributor workflow*, see [`CLAUDE.md`](./CLAUDE.md) and [`CONTRIBUTING.md`](./CONTRIBUTING.md). For attribution and legal posture (black-box reimplementation discipline), see [`hush-prd.md` §13.8](./hush-prd.md).
 
 ---
 
@@ -65,12 +65,29 @@ The load-bearing seams:
 | `dictionary::ReplacementRepository` | `dictionary/replacements/mod.rs` | `SqliteReplacementRepository` | `NoopReplacements` in `ipc/tests.rs` |
 | `settings::SettingsRepository` | `settings/mod.rs` | `SqliteSettingsRepository` | `MemSettings` in `ipc/tests.rs` |
 
-`AppState` (in `ipc/`) is the composition root. `AppStateBuilder` wires the prod impls; tests compose mocks. Tauri's `manage` makes `AppState` available to every command handler. In addition to the trait seams above, two small AppState fields are load-bearing for correctness: `hotkey_toggle_error` records the one-time boot result of `register_hotkeys` for the UI's toggle-hotkey status surface, and `transcriber_generation` prevents a stale background rebuild from overwriting a newer user-selected model.
+`AppState` (in `ipc/`) is the composition root. `AppStateBuilder` wires the prod impls; tests compose mocks. Tauri's `manage` makes `AppState` available to every command handler.
 
-**Hot-swappable slots.**
+`AppState` is organised into six domain sub-structs (completed in #737) plus two flat fields:
 
-- `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` — model hot-swap propagates without restart. `AppState` holds **two** independent slots ([#248](https://github.com/khawkins98/Hush/issues/248)): `transcribe` (dictation hot path, read by `stop_dictation`) and `transcribe_meeting` (cloned into `SessionManager`). `model_select` loads two `WhisperTranscription` instances from the same GGUF and writes both via `swap_transcriber(new_dictation, new_meeting)` — the underlying model weights are mmap'd, so the marginal RAM cost is small. The split removes mutex contention between a dictation-hotkey press and an in-flight meeting pump tick.
-- `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` — wespeaker model download takes effect on the next pump tick.
+| Sub-struct / field | Fields | Purpose |
+|---|---|---|
+| `data: DataServices` | `history`, `replacements`, `vocabulary`, `meetings`, `overrides` | Repository seams for all persisted domain data |
+| `flags: RuntimeFlags` | `hud_visible`, `sound_cues`, `diarization_enabled`, `inference_in_progress`, `hotkey_toggle_error`, `recorder_active_sessions` | `AtomicBool`/`Mutex` runtime state shared between the IPC layer and background tasks |
+| `ptt: PttState` | `combo`, `active`, `spawned` | Push-to-talk hotkey combo, active flag, and listener task handle |
+| `update_check: UpdateCheckCache` | `last`, `inflight` | Manual update-check result cache + in-flight de-dup lock |
+| `inference: InferenceState` | `transcribe`, `transcribe_meeting`, `diarize`, `diarize_slot`, `transcriber_generation` | Hot-swap slots for both transcription paths and the diarizer; generation counter guards stale rebuild races |
+| `models: ModelStore` | `models_dir`, `downloads` | GGUF/ONNX directory path + in-flight download cancel-handle registry |
+| `http: reqwest::Client` | — | Single shared HTTP client (used by both downloads and update-check) |
+| `settings: Arc<dyn SettingsRepository>` | — | Settings seam (flat because it's used across sub-struct domains) |
+
+Two `InferenceState` fields carry cross-layer invariants worth flagging when adjacent code changes:
+- `transcriber_generation: Arc<AtomicU64>` — race guard for background transcriber rebuilds. Any async task that rebuilds a transcriber must snapshot/compare the generation before installing its result ([#801](https://github.com/khawkins98/Hush/issues/801)).
+- `hotkey_toggle_error` lives in `RuntimeFlags` and records the one-time startup result of `register_hotkeys`; the UI surfaces it via IPC. Don't re-diagnose by retrying from the frontend.
+
+**Hot-swappable slots** (all in `InferenceState`):
+
+- `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` — model hot-swap propagates without restart. `AppState` holds **two** independent slots ([#248](https://github.com/khawkins98/Hush/issues/248)): `inference.transcribe` (dictation hot path, read by `stop_dictation`) and `inference.transcribe_meeting` (cloned into `SessionManager`). `model_select` loads two `WhisperTranscription` instances from the same GGUF and writes both via `swap_transcriber(new_dictation, new_meeting)` — the underlying model weights are mmap'd, so the marginal RAM cost is small. The split removes mutex contention between a dictation-hotkey press and an in-flight meeting pump tick.
+- `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` (`inference.diarize_slot`) — wespeaker model download takes effect on the next pump tick.
 - `inference_threads: Arc<AtomicI32>` ([#255](https://github.com/khawkins98/Hush/issues/255)) — Settings → General slider value, shared between AppState and every loaded `WhisperTranscription` (both slots above) so a slider change takes effect on the next inference call without a model reload.
 
 On macOS, the `screencapturekit` crate is still linked **unconditionally** (no feature flag) for the permission-diagnostic path and its objc2 bindings, even though runtime system-audio capture moved to the CoreAudio process-tap backend in #588.

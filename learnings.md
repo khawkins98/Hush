@@ -4,6 +4,33 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-15 — `AppState` decomposition complete (#737)
+
+`AppState` was incrementally split into six domain sub-structs over a series of PRs (#937, #938, #941–#944, #959, #961, #963), closing issue #737:
+
+| Sub-struct | Fields grouped |
+|---|---|
+| `DataServices` | `history`, `replacements`, `vocabulary`, `meetings`, `overrides` |
+| `RuntimeFlags` | atomic booleans + `hotkey_toggle_error`, `recorder_active_sessions` |
+| `PttState` | `combo`, `active`, `spawned` |
+| `UpdateCheckCache` | `last`, `inflight` |
+| `InferenceState` | `transcribe`, `transcribe_meeting`, `diarize`, `diarize_slot`, `transcriber_generation` |
+| `ModelStore` | `models_dir`, `downloads` |
+
+`http: reqwest::Client` and `settings: Arc<dyn SettingsRepository>` remain flat — both are cross-domain concerns that don't fit a single sub-struct.
+
+**Rustfmt note:** chained accesses on deeply-nested paths (e.g. `state.inference.diarize_slot.write()`) must be broken across lines to satisfy `rustfmt`'s chain-length rule:
+```rust
+state
+    .inference
+    .diarize_slot
+    .write()
+```
+
+**Type inference note:** `unwrap_or_else(|e| e.into_inner())` on a `RwLock::write()` or `Mutex::lock()` result inside a closure sometimes requires an explicit `|e: std::sync::PoisonError<_>|` annotation when the surrounding context doesn't constrain the error type.
+
+---
+
 ## 2026-05-15 — Current invariants surfaced by docs sweep (#960)
 
 ### `AppState` coordination state is load-bearing, not incidental

@@ -82,13 +82,14 @@ Backend shape is still the same high-level trait-seam pattern:
 
 ### v0.6.x-dev refactors (unreleased, landed on main post-v0.6.3)
 
-Five PRs reorganised internals without user-visible changes:
+Multiple PRs reorganised internals without user-visible changes:
 
 - **#688** — Split 1155-line dictation handler into `mod.rs` (handlers) + `pipeline.rs` (helpers) + `tests.rs` (integration tests).
 - **#689** — Extracted `AppLifecycle.svelte` (Tauri event listeners) and `lib/state/palette.svelte.ts` (command palette state) from `+page.svelte`.
 - **#690** — Extracted shared `HistoryActionRow.svelte` from the two history row types; eliminates duplicate action-row markup.
 - **#691** — Added `MemHistory` in-memory mock + `AppStateBuilder` composition pattern; 18 new IPC integration tests for history/settings/diarizer commands (run via `cargo test --lib`).
 - **#692** — Added `dictionary/packs.rs` — static preset vocabulary packs (compile-time, never DB-materialised). New settings keys `enabled_packs` (JSON array of active pack slugs) and `language_style` (Whisper prompt tone prefix). UI for pack selection is live in Settings → Vocabulary.
+- **#737 (closes)** — `AppState` decomposed into six domain sub-structs: `DataServices`, `RuntimeFlags`, `PttState`, `UpdateCheckCache`, `InferenceState`, `ModelStore`. Landed across a series of PRs (#937, #938, #941–#944, #959, #961, #963). No behaviour change; reduces the surface area of any single command handler and groups semantically related fields.
 
 ---
 
