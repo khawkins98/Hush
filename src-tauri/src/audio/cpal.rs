@@ -646,11 +646,32 @@ fn start_cpal_session(
     level: Arc<AtomicU32>,
 ) -> Result<Session> {
     let device = match device_id {
-        Some(id) => host
-            .input_devices()
-            .context("enumerate input devices")?
-            .find(|d| d.name().map(|n| n == id).unwrap_or(false))
-            .ok_or_else(|| anyhow!("input device '{id}' not found"))?,
+        Some(id) => {
+            // Try the requested device first; fall back to system default
+            // (#705) so a session can still start when the saved device is
+            // unplugged. Pre-session fallback mirrors mid-session DeviceLost
+            // recovery — the user gets audio capture rather than a hard error.
+            let found = host
+                .input_devices()
+                .context("enumerate input devices")?
+                .find(|d| d.name().map(|n| n == id).unwrap_or(false));
+            match found {
+                Some(d) => d,
+                None => {
+                    tracing::warn!(
+                        device_id = id,
+                        "configured input device not found; \
+                         falling back to system default (#705)"
+                    );
+                    host.default_input_device().ok_or_else(|| {
+                        anyhow!(
+                            "configured device '{id}' not found \
+                             and no default input device available"
+                        )
+                    })?
+                }
+            }
+        }
         None => host
             .default_input_device()
             .ok_or_else(|| anyhow!("no default input device available"))?,
