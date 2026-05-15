@@ -197,6 +197,37 @@ impl HistoryRepository for SqliteHistoryRepository {
             total_chars: row.3,
         })
     }
+
+    async fn list_all_for_export(&self, query: Option<&str>) -> Result<Vec<HistoryEntry>> {
+        match query {
+            None | Some("") => sqlx::query_as::<_, HistoryEntry>(
+                "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at, \
+                        ignored \
+                 FROM history \
+                 WHERE ignored = 0 \
+                 ORDER BY id DESC",
+            )
+            .fetch_all(self.db.pool())
+            .await
+            .context("list_all_for_export"),
+            Some(q) => {
+                let phrase = format!("\"{}\"", q.replace('"', "\"\""));
+                sqlx::query_as::<_, HistoryEntry>(
+                    "SELECT h.id, h.transcript, h.app_name, h.window_title, h.model, \
+                            h.duration_ms, h.created_at, h.ignored \
+                     FROM history h \
+                     INNER JOIN history_fts fts ON fts.rowid = h.id \
+                     WHERE history_fts MATCH ? \
+                       AND h.ignored = 0 \
+                     ORDER BY h.id DESC",
+                )
+                .bind(phrase)
+                .fetch_all(self.db.pool())
+                .await
+                .context("list_all_for_export (search)")
+            }
+        }
+    }
 }
 
 // `FromRow` impl deliberately hand-rolled rather than derived: the

@@ -113,26 +113,16 @@ pub async fn history_export_bundle(
     let mut written: i64 = 0;
 
     if options.kind == ExportKind::Both || options.kind == ExportKind::Dictation {
-        // Pull every matching dictation row. The IPC's `i64::MAX`
-        // limit matches the per-row export's "list everything"
-        // shape — the underlying repo caps at a sane number, so
-        // this is already bounded.
-        let entries = match trimmed_query {
-            Some(q) => state
-                .data
-                .history
-                .search(q, i64::MAX, 0)
-                .await
-                .map_err(|e| IpcError::History(format!("history search: {e:#}")))?,
-            None => state
-                .data
-                .history
-                .list(i64::MAX, 0)
-                .await
-                .map_err(|e| IpcError::History(format!("history list: {e:#}")))?,
-        };
+        // Pull every matching dictation row via the export-specific
+        // method that bypasses the pagination cap (#858).
+        let entries = state
+            .data
+            .history
+            .list_all_for_export(trimmed_query)
+            .await
+            .map_err(|e| IpcError::History(format!("history export: {e:#}")))?;
 
-        for entry in entries.iter().filter(|e| !e.ignored) {
+        for entry in &entries {
             let body = history_csv_for_entries(std::slice::from_ref(entry))
                 .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;
             let path = bundle_path(&dir, &format!("dictation-{}.csv", entry.id))?;
