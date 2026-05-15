@@ -375,14 +375,19 @@ pub(crate) async fn model_download_inner(
                 );
             }
             Err(e) => {
-                tracing::error!(error = ?e, model_id = %id_for_task, "model download failed");
-                emitter_for_task.emit(
-                    "model:download-failed",
-                    &DownloadStatus {
-                        id: id_for_task,
-                        message: Some(format!("{e:#}")),
-                    },
-                );
+                if cancel.is_cancelled() {
+                    // User cancelled — not a failure; no event needed.
+                    tracing::debug!(model_id = %id_for_task, "model download cancelled by user");
+                } else {
+                    tracing::error!(error = ?e, model_id = %id_for_task, "model download failed");
+                    emitter_for_task.emit(
+                        "model:download-failed",
+                        &DownloadStatus {
+                            id: id_for_task,
+                            message: Some(format!("{e:#}")),
+                        },
+                    );
+                }
             }
         }
     });
@@ -656,5 +661,59 @@ mod tests {
             .as_str()
             .expect("failure event should carry a message string");
         assert!(!msg.is_empty(), "failure event message should be populated");
+    }
+
+    #[tokio::test]
+    async fn model_download_cancel_does_not_emit_failure() {
+        // Verify that a user-cancelled download never emits
+        // `model:download-failed`, even if the cancel causes an error.
+        // We spawn the download task, immediately cancel via the handle
+        // in the downloads map (before the task runs), then wait for
+        // cleanup and assert no failure event was emitted.
+        let downloads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            CancelHandle,
+        >::new()));
+        let recorder = crate::ipc::events::RecordingEventEmitter::new();
+        let emitter: std::sync::Arc<dyn EventEmitter> = std::sync::Arc::new(recorder.clone());
+        let tmp = tempfile::tempdir().unwrap();
+        let model = make_test_model("http://127.0.0.1:1/will-fail");
+        let deps = build_deps(
+            emitter,
+            std::sync::Arc::clone(&downloads),
+            tmp.path().to_path_buf(),
+        );
+
+        model_download_inner(deps, model.clone())
+            .await
+            .expect("inner returns Ok before the spawn");
+
+        // Cancel before the spawned task runs. In a single-threaded tokio
+        // runtime (the default for #[tokio::test]) the task cannot start
+        // until we yield, so the handle is guaranteed to be in the map.
+        {
+            let guard = downloads.lock().unwrap();
+            if let Some(handle) = guard.get(&model.id) {
+                handle.cancel();
+            }
+        }
+
+        let cleared = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !downloads.lock().unwrap().contains_key(&model.id) {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+        assert!(cleared, "cancel handle not removed within timeout");
+
+        let failures = recorder.payloads_for("model:download-failed");
+        assert!(
+            failures.is_empty(),
+            "cancelled download must not emit model:download-failed; got {failures:?}"
+        );
     }
 }
