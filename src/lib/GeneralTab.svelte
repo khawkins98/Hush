@@ -31,6 +31,8 @@
   } from "./debug-console";
   import { readStoredTheme, setTheme, type ThemePref } from "./theme";
   import "./settings-tab.css";
+  import { invoke } from "@tauri-apps/api/core";
+  import type { ToggleHotkeyStatus } from "./types";
 
   type Props = {
     /// Callback invoked when the developer console toggle changes.
@@ -41,6 +43,7 @@
   let { onDebugConsoleChange }: Props = $props();
 
   let isMacOS = $state(false);
+  let toggleHotkeyError = $state<ToggleHotkeyStatus>(null);
 
   // F5 technical status line — opt-in display under the main
   // window's waveform that surfaces "🎤 device · model". No IPC;
@@ -98,6 +101,13 @@
     themePref = readStoredTheme();
     statusLineEnabled = readStatusLineEnabled();
     debugConsoleEnabled = readDebugConsoleEnabled();
+    try {
+      toggleHotkeyError = await invoke<ToggleHotkeyStatus>(
+        "get_toggle_hotkey_status"
+      );
+    } catch (e) {
+      console.warn("[hush] get_toggle_hotkey_status failed", e);
+    }
   });
 </script>
 
@@ -155,6 +165,12 @@
       <span class="row-note">Not currently editable — the push-to-talk combo below is.</span>
     </span>
   </p>
+  {#if toggleHotkeyError}
+    <p class="settings-error" data-testid="toggle-hotkey-error">
+      ⚠️ Toggle hotkey could not be registered: {toggleHotkeyError}. Check that
+      Hush has Input Monitoring access in System Settings → Privacy &amp; Security.
+    </p>
+  {/if}
   <h3 class="subgroup-heading">Push-to-talk</h3>
   <PttHotkeyEditor {isMacOS} />
 </section>

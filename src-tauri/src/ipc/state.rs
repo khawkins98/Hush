@@ -259,6 +259,12 @@ pub struct AppState {
     /// so contributors can spot startup-time regressions without
     /// reaching for Instruments.
     pub startup_timings: Vec<crate::ipc::commands::system::StartupPhase>,
+    /// Error string from the Ctrl+⌥+H toggle-hotkey registration attempt
+    /// (#904). `None` means registration succeeded; `Some(msg)` means it
+    /// failed and the user needs to take action (e.g. grant Input
+    /// Monitoring, dismiss a conflicting app). Written once at boot by
+    /// `register_hotkeys`; the IPC `get_toggle_hotkey_status` reads it.
+    pub hotkey_toggle_error: Mutex<Option<String>>,
 }
 
 /// User-facing runtime flags that mirror Settings rows (#431).

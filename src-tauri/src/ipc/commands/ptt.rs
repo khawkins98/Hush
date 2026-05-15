@@ -154,6 +154,19 @@ pub async fn ptt_set_config(
     Ok(())
 }
 
+/// Returns the error from the Ctrl+⌥+H toggle-hotkey registration attempt
+/// at boot (#904). `None` means it registered successfully; `Some(msg)`
+/// means it failed — the Settings UI should show the message and tell the
+/// user what to do (usually: grant Input Monitoring in System Settings).
+#[tauri::command]
+pub fn get_toggle_hotkey_status(state: State<'_, AppState>) -> IpcResult<Option<String>> {
+    state
+        .hotkey_toggle_error
+        .lock()
+        .map(|g| g.clone())
+        .map_err(|_| IpcError::Internal("hotkey_toggle_error lock poisoned".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ipc::tests::mock_state;

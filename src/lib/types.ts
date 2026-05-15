@@ -319,6 +319,11 @@ export type PttConfig = {
   listenerRunning: boolean;
 };
 
+// Result of `get_toggle_hotkey_status` (#904). `error` is null when the
+// Ctrl+⌥+H registration succeeded; otherwise holds the error message.
+// Mirrors the Rust return type `Option<String>` from ptt.rs.
+export type ToggleHotkeyStatus = string | null;
+
 // Status of the wespeaker speaker-embedding model on disk.
 // Returned by `get_diarizer_model_status` (#304); read by Settings
 // → Meeting → Speakers on mount + after every download lifecycle
