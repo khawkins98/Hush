@@ -122,18 +122,22 @@ impl AudioRollingBuffer {
             return;
         }
 
-        let mono: Vec<f32> = if chunk_format.channels > 1 {
+        let mut mono: Vec<f32> = if chunk_format.channels > 1 {
             crate::audio::downmix_to_mono(chunk, chunk_format.channels)
         } else {
             chunk.to_vec()
         };
-        let canonical: Vec<f32> = if chunk_format.sample_rate == CANONICAL_SAMPLE_RATE_HZ {
-            mono
+        // Zeroize temp PCM copies before drop so meeting audio doesn't linger
+        // in the allocator's free list between ticks (#882).
+        if chunk_format.sample_rate == CANONICAL_SAMPLE_RATE_HZ {
+            self.samples.extend(mono.iter().copied());
         } else {
-            resample_to_mono(&mono, chunk_format.sample_rate, CANONICAL_SAMPLE_RATE_HZ)
-        };
-
-        self.samples.extend(canonical);
+            let mut canonical =
+                resample_to_mono(&mono, chunk_format.sample_rate, CANONICAL_SAMPLE_RATE_HZ);
+            self.samples.extend(canonical.iter().copied());
+            canonical.zeroize();
+        }
+        mono.zeroize();
 
         let max_samples = ms_to_samples(MAX_BUFFER_MS);
         if self.samples.len() > max_samples {
