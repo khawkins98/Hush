@@ -348,11 +348,6 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         );
     }
     tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
-    // Notify the frontend the session is done regardless of how the pump
-    // stopped (normal stop, backend auto-stop, device failure). Without this
-    // event, a backend-driven stop leaves `meeting.activeId` stuck set on the
-    // frontend, keeping the "meeting active" UI indefinitely (#799).
-    crate::meeting::events::emit_meeting_session_ended(ctx.event_emitter.as_ref(), ctx.session_id);
 }
 
 fn tick_drain_sources(

@@ -38,7 +38,9 @@ use crate::audio::{AudioSession, AudioSource};
 use crate::transcription::StreamingTranscribeSession;
 
 use super::classifier::AppClassifier;
-use super::events::{emit_meeting_session_started, emit_meeting_source_failed};
+use super::events::{
+    emit_meeting_session_ended, emit_meeting_session_started, emit_meeting_source_failed,
+};
 use super::manager::{ActiveSession, SessionManager, SessionState};
 use super::pump;
 use super::{MeetingSession, NewMeetingSession, NewPersistedUtterance};
@@ -502,7 +504,8 @@ impl SessionManager {
             );
         }
 
-        match self.repo.close_session(active.id).await {
+        let session_id = active.id;
+        let close_result = match self.repo.close_session(active.id).await {
             Ok(()) => Ok(()),
             Err(e) => {
                 // Restore the active record with `close_attempted`
@@ -549,7 +552,16 @@ impl SessionManager {
                 }
                 Err(e)
             }
-        }
+        };
+        // Notify the frontend only after close_session has been attempted
+        // so a `meeting_session_get` or `meeting_sessions_list` called
+        // immediately from the frontend event handler sees `ended_at` already
+        // set in the database (#809). Emitted on both success and failure
+        // paths: the pump is already gone either way, and the UI should clear
+        // regardless of whether the DB write succeeded (a failed close will be
+        // retried; the orphan row gets reconciled at next launch if needed).
+        emit_meeting_session_ended(self.event_emitter.as_ref(), session_id);
+        close_result
     }
 
     /// Append a final utterance to the active session, if any.
