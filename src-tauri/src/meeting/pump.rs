@@ -1269,8 +1269,12 @@ pub(super) fn open_source_handle(
             let mut scratch = Vec::new();
             match handle.drain_into(&mut scratch) {
                 Ok(format) => match t.start_stream(format, "") {
-                    Ok(sess) => Some(sess),
+                    Ok(sess) => {
+                        scratch.zeroize(); // (#930) pre-warm PCM must not linger
+                        Some(sess)
+                    }
                     Err(e) => {
+                        scratch.zeroize();
                         tracing::warn!(
                             error = ?e,
                             source_kind = source.kind_label(),
@@ -1280,6 +1284,7 @@ pub(super) fn open_source_handle(
                     }
                 },
                 Err(e) => {
+                    scratch.zeroize();
                     tracing::warn!(
                         error = ?e,
                         source_kind = source.kind_label(),

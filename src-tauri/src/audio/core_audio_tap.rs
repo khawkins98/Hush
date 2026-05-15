@@ -156,9 +156,11 @@ impl CoreAudioTapSession {
             channels: channels as u16, // safe: guarded above
         };
 
-        // SPSC ring large enough for ~2 min of 48 kHz stereo (same ceiling as
-        // the cpal path — see MAX_BUFFER_FRAMES in mod.rs).
-        let capacity = MAX_BUFFER_FRAMES * channels as usize;
+        // SPSC ring sized to MAX_BUFFER_FRAMES (48 kHz × 2 ch × 120 s samples —
+        // same constant and same capacity the cpal path uses; see mod.rs).
+        // Do NOT multiply by `channels` here: the constant is already in samples
+        // (not frames), so multiplying again would double-allocate for stereo (#929).
+        let capacity = MAX_BUFFER_FRAMES;
         // #612 candidate-2 diagnostic: log the channel count and ring
         // size so we can rule out an over-allocated ring when the tap
         // reports >2 channels (e.g. an aggregate device). Downstream

@@ -43,6 +43,10 @@ let historyFilter = $state<HistoryFilter>("all");
 
 let effectiveFilter = $derived<HistoryFilter>(historyFilter);
 
+// Seq counter for stale-response guard in refresh() — mirrors meetingRefreshSeq
+// in meeting-sessions.svelte.ts (#933).
+let historyRefreshSeq = 0;
+
 // Debounce handle for setSearchQuery(). 200 ms is the empirical
 // sweet spot — fast enough to feel live, slow enough not to spam
 // SQLite on every keystroke.
@@ -192,6 +196,7 @@ export const history = {
   async refresh() {
     historyError = null;
     historySearching = true;
+    const seq = ++historyRefreshSeq;
     try {
       const [entries, total] = await Promise.all([
         invoke<HistoryEntry[]>("history_search", {
@@ -201,14 +206,18 @@ export const history = {
         }),
         invoke<number>("history_count"),
       ]);
+      if (seq !== historyRefreshSeq) return;
       historyEntries = entries;
       historyTotalCount = total;
       historyVersion += 1;
     } catch (e) {
+      if (seq !== historyRefreshSeq) return;
       historyError = formatErrorDisplay(e);
     } finally {
-      historyLoaded = true;
-      historySearching = false;
+      if (seq === historyRefreshSeq) {
+        historyLoaded = true;
+        historySearching = false;
+      }
     }
   },
   async copyEntry(entry: HistoryEntry) {
