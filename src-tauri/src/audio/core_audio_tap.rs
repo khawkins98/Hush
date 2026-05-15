@@ -58,6 +58,10 @@ pub(super) struct TapInner {
     child: Mutex<Option<Child>>,
     consumer: Mutex<Consumer<f32>>,
     overflow_flag: Arc<AtomicBool>,
+    /// Set to `true` by the reader thread when the helper process exits or
+    /// errors — lets `drain_into` surface an error once the ring is exhausted
+    /// so the pump emits `meeting:source-failed` instead of recording silence.
+    reader_exited: Arc<AtomicBool>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -170,6 +174,8 @@ impl CoreAudioTapSession {
         let (mut producer, consumer) = RingBuffer::new(capacity);
         let overflow_flag = Arc::new(AtomicBool::new(false));
         let overflow_writer = Arc::clone(&overflow_flag);
+        let reader_exited = Arc::new(AtomicBool::new(false));
+        let reader_exited_writer = Arc::clone(&reader_exited);
         let level_writer = Arc::clone(&level);
 
         let reader_thread = thread::Builder::new()
@@ -184,7 +190,12 @@ impl CoreAudioTapSession {
 
                 loop {
                     match reader.read(&mut chunk_buf[tail..]) {
-                        Ok(0) => break, // EOF — child exited, normal shutdown
+                        Ok(0) => {
+                            // EOF — child exited. Signal drain_into so it can
+                            // surface an error once the ring is exhausted (#910).
+                            reader_exited_writer.store(true, Ordering::Release);
+                            break;
+                        }
                         Ok(n) => {
                             let total = tail + n;
                             let samples = total / 4;
@@ -209,6 +220,7 @@ impl CoreAudioTapSession {
                                 error = %e,
                                 "CoreAudio tap reader: stdout read error; stopping"
                             );
+                            reader_exited_writer.store(true, Ordering::Release);
                             break;
                         }
                     }
@@ -229,6 +241,7 @@ impl CoreAudioTapSession {
                 child: Mutex::new(Some(child)),
                 consumer: Mutex::new(consumer),
                 overflow_flag,
+                reader_exited,
                 reader_thread: Mutex::new(Some(reader_thread)),
             }),
             active_sessions,
@@ -263,6 +276,13 @@ impl AudioSession for CoreAudioTapSession {
         {
             use zeroize::Zeroize;
             samples.zeroize();
+        }
+        // Surface a helper-exit error once the ring is fully drained so the
+        // pump can emit meeting:source-failed instead of recording silence (#910).
+        if sink.is_empty() && inner.reader_exited.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "CoreAudio tap helper exited; system audio capture stopped"
+            ));
         }
         Ok(inner.format)
     }
