@@ -337,8 +337,8 @@ mod tests {
     use crate::meeting::events::MeetingSourceFailedPayload;
     use crate::meeting::pump::{diarize_and_dispatch_merged, dispatch_utterances, TickBucket};
     use crate::meeting::test_support::{
-        fresh_manager, make_final, make_partial, manager_with_repo, FailingCloseRepo,
-        RecordingDiarizer,
+        fresh_manager, fresh_manager_no_transcriber, make_final, make_partial, manager_with_repo,
+        FailingCloseRepo, RecordingDiarizer,
     };
     use crate::meeting::{MeetingAppKind, SqliteMeetingSessionRepository};
 
@@ -407,6 +407,29 @@ mod tests {
             .expect("post-rollback start must succeed");
         assert_eq!(mgr.active_session_id(), Some(session.id));
         mgr.stop_manual().await.unwrap();
+    }
+
+    /// #898: `start_manual` fails fast — before opening any audio handles —
+    /// when no transcription model is loaded. The slot is returned to Idle
+    /// so a follow-up start (once a model is loaded) succeeds.
+    #[tokio::test]
+    async fn start_manual_fails_when_no_transcriber_loaded() {
+        let mgr = fresh_manager_no_transcriber().await;
+        let err = mgr
+            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .await
+            .expect_err("must error with no transcriber");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("no transcription model loaded"),
+            "error must name the precondition; got: {msg}"
+        );
+
+        // Slot is back to Idle — the user can load a model and retry.
+        assert!(
+            mgr.active_session_id().is_none(),
+            "slot must be Idle after fail-fast so a subsequent start can succeed"
+        );
     }
 
     #[tokio::test]

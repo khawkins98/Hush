@@ -30,7 +30,7 @@ use crate::meeting::export::{
     meeting_session_csv, meeting_session_json, meeting_session_text, MeetingExportFormat,
 };
 
-use super::{validate_export_path, IpcError, IpcResult};
+use super::{poisoned, validate_export_path, IpcError, IpcResult};
 
 /// List all meeting sessions, newest-first. Returns whatever the
 /// `SessionManager` pump has persisted — empty for a fresh
@@ -392,6 +392,17 @@ pub async fn meeting_start_manual(
 ) -> IpcResult<crate::meeting::MeetingSession> {
     let sources = sanitise_meeting_sources(sources)
         .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e:#}")))?;
+
+    // Pre-flight: fail fast if no transcription model is loaded (#898).
+    // Mirrors the dictation path (dictation/pipeline.rs:54) — same guard,
+    // same error variant. Runs before opening any audio handles so the user
+    // sees the error before any recording is started.
+    {
+        let guard = state.transcribe_meeting.lock().map_err(poisoned)?;
+        if guard.is_none() {
+            return Err(IpcError::TranscriptionUnavailable);
+        }
+    }
 
     // Snapshot the foreground app once at click time. The
     // `active-win-pos-rs` call is single-millisecond synchronous,
