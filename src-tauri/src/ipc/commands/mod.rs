@@ -215,15 +215,27 @@ pub(super) fn poisoned<T>(_: PoisonError<T>) -> IpcError {
 /// already anchors paths to user-accessible locations; this guard
 /// enforces that a compromised frontend cannot use `..` to write
 /// somewhere unexpected.
+/// Validate a user-chosen export path returned by the dialog plugin.
+///
+/// Guards applied, in order:
+/// - Empty path rejected.
+/// - Relative paths rejected — a dialog-supplied path is always absolute;
+///   a relative path implies the renderer constructed it manually, which is
+///   enough reason to reject it (#883).
+/// - Paths with `..` components rejected — prevents traversal past any
+///   anchor the OS dialog would otherwise enforce (#883).
 pub(super) fn validate_export_path(path: &str) -> IpcResult<()> {
     use std::path::{Component, Path};
     if path.is_empty() {
         return Err(IpcError::Internal("export path is empty".into()));
     }
-    if Path::new(path)
-        .components()
-        .any(|c| c == Component::ParentDir)
-    {
+    let p = Path::new(path);
+    if p.is_relative() {
+        return Err(IpcError::Internal(format!(
+            "relative export path rejected: {path:?}"
+        )));
+    }
+    if p.components().any(|c| c == Component::ParentDir) {
         return Err(IpcError::Internal(format!(
             "unsafe export path rejected: {path:?}"
         )));

@@ -194,6 +194,11 @@ pub struct AppState {
     /// threshold. The frontend's `updateChecking` flag covers the
     /// in-flight case; this covers the back-to-back case.
     pub last_update_check: Mutex<Option<(std::time::Instant, crate::updater::UpdateCheckResult)>>,
+    /// Serialises concurrent callers to `check_for_updates_inner` so only one
+    /// network probe is in flight at a time (#876). A caller that arrives while
+    /// another is probing will wait here, then re-check `last_update_check` and
+    /// return the cached result without issuing a duplicate request.
+    pub update_check_inflight: Arc<tokio::sync::Mutex<()>>,
     /// Cancel handles for in-flight downloads, keyed by model id.
     /// Inserted by `model_download` when it spawns a task; the cancel
     /// command flips the handle's flag; the spawned task removes its
