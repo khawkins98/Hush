@@ -66,7 +66,7 @@ impl HistoryRepository for SqliteHistoryRepository {
 
         sqlx::query_as::<_, HistoryEntry>(
             "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at, \
-                    ignored \
+                    ignored, name \
              FROM history \
              ORDER BY id DESC \
              LIMIT ? OFFSET ?",
@@ -98,7 +98,7 @@ impl HistoryRepository for SqliteHistoryRepository {
 
         sqlx::query_as::<_, HistoryEntry>(
             "SELECT h.id, h.transcript, h.app_name, h.window_title, h.model, \
-                    h.duration_ms, h.created_at, h.ignored \
+                    h.duration_ms, h.created_at, h.ignored, h.name \
              FROM history h \
              INNER JOIN history_fts fts ON fts.rowid = h.id \
              WHERE history_fts MATCH ? \
@@ -118,7 +118,7 @@ impl HistoryRepository for SqliteHistoryRepository {
         // `list()` so a future column add only needs to touch one place.
         sqlx::query_as::<_, HistoryEntry>(
             "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at, \
-                    ignored \
+                    ignored, name \
              FROM history \
              WHERE id = ?",
         )
@@ -202,7 +202,7 @@ impl HistoryRepository for SqliteHistoryRepository {
         match query {
             None | Some("") => sqlx::query_as::<_, HistoryEntry>(
                 "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at, \
-                        ignored \
+                        ignored, name \
                  FROM history \
                  WHERE ignored = 0 \
                  ORDER BY id DESC",
@@ -214,7 +214,7 @@ impl HistoryRepository for SqliteHistoryRepository {
                 let phrase = format!("\"{}\"", q.replace('"', "\"\""));
                 sqlx::query_as::<_, HistoryEntry>(
                     "SELECT h.id, h.transcript, h.app_name, h.window_title, h.model, \
-                            h.duration_ms, h.created_at, h.ignored \
+                            h.duration_ms, h.created_at, h.ignored, h.name \
                      FROM history h \
                      INNER JOIN history_fts fts ON fts.rowid = h.id \
                      WHERE history_fts MATCH ? \
@@ -227,6 +227,20 @@ impl HistoryRepository for SqliteHistoryRepository {
                 .context("list_all_for_export (search)")
             }
         }
+    }
+
+    async fn set_name(&self, id: i64, name: Option<String>) -> Result<()> {
+        let name = name.and_then(|n| {
+            let t = n.trim().to_owned();
+            if t.is_empty() { None } else { Some(t) }
+        });
+        sqlx::query("UPDATE history SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(id)
+            .execute(self.db.pool())
+            .await
+            .context("set history entry name")?;
+        Ok(())
     }
 }
 
@@ -247,6 +261,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for HistoryEntry {
             duration_ms: row.try_get("duration_ms")?,
             created_at: row.try_get("created_at")?,
             ignored: row.try_get::<i64, _>("ignored").unwrap_or(0) != 0,
+            name: row.try_get("name")?,
         })
     }
 }

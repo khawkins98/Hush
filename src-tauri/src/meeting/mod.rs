@@ -160,6 +160,9 @@ pub struct MeetingSession {
     /// when `active-win-pos-rs` couldn't resolve a title (lock
     /// screen, fullscreen game).
     pub app_title: Option<String>,
+    /// User-editable short label for this session. `None` until the
+    /// user sets one via `meeting_session_set_name`.
+    pub name: Option<String>,
 }
 
 /// Fields the caller supplies when opening a session. Separate from
@@ -276,6 +279,11 @@ pub trait MeetingSessionRepository:
     /// blur of the notes textarea.
     async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()>;
 
+    /// Set (or clear) the user-defined short label for a session.
+    /// `None` removes the label. Trims + converts blank strings to
+    /// `None` so callers don't need to normalise beforehand.
+    async fn set_name(&self, id: i64, name: Option<String>) -> Result<()>;
+
     /// Single-row lookup by primary key. Replaces the previous
     /// `list().find()` pattern in `meeting_session_get` (#253) —
     /// the panel's "show transcript" path was loading every
@@ -354,6 +362,7 @@ mod tests {
             notes: None,
             sources: Some(vec!["mic".into(), "system".into()]),
             app_title: Some("Demo Standup".into()),
+            name: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""appName":"us.zoom.xos""#), "got: {json}");

@@ -223,6 +223,23 @@ pub async fn meeting_session_set_notes(
         .map_err(|e| IpcError::MeetingSessions(format!("session set_notes: {e:#}")))
 }
 
+/// Set (or clear) the user-defined short label for a session.
+/// Passing `null` / `None` removes the label. Blank strings are
+/// treated as `None` by the repository.
+#[tauri::command]
+pub async fn meeting_session_set_name(
+    state: State<'_, AppState>,
+    id: i64,
+    name: Option<String>,
+) -> IpcResult<()> {
+    state
+        .data
+        .meetings
+        .set_name(id, name)
+        .await
+        .map_err(|e| IpcError::MeetingSessions(format!("session set_name: {e:#}")))
+}
+
 // -- Per-app classifier overrides (Phase E, #112) ----------------------
 //
 // User-supplied overrides for the meeting-app classifier. The

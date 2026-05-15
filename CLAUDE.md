@@ -92,9 +92,11 @@ npm run test:e2e:tauri
 # Reset stale dev servers (kills tauri/vite processes only)
 npm run dev-cleanup
 
-# Full vanilla reset — kills processes AND wipes TCC grants, app database,
-# preferences, and caches. Use before testing onboarding or new-user flows.
-# Pass --nuke-models to also remove downloaded models; --user <name> for another account.
+# Full vanilla reset — kills processes AND wipes TCC grants, settings,
+# dictionary, preferences, and caches. Transcription/meeting history preserved
+# by default. Use before testing onboarding or new-user flows.
+# Pass --nuke-db to also wipe history; --nuke-models to remove downloaded models;
+# --user <name> for another account.
 npm run dev-reset
 
 # Lint + format

@@ -200,6 +200,7 @@ mod tests {
             notes: Some("Action: send recap".to_owned()),
             sources: Some(vec!["mic".to_owned(), "system".to_owned()]),
             app_title: Some("Q3 sync".to_owned()),
+            name: None,
         }
     }
 

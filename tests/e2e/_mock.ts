@@ -284,6 +284,7 @@ export async function installMocks(
       history_list: () => [],
       history_search: () => [],
       history_delete: () => undefined,
+      history_set_name: () => undefined,
       history_count: () => 0,
       history_clear: () => 0,
       // Dictation stats (#293). Default to all-zeros so the
@@ -404,6 +405,7 @@ export async function installMocks(
       // per-test.
       meeting_session_export: () => undefined,
       meeting_session_set_notes: () => undefined,
+      meeting_session_set_name: () => undefined,
       meeting_active_session: () => ({ active: null }),
       meeting_start_manual: () => ({
         id: 1,
@@ -416,6 +418,7 @@ export async function installMocks(
         notes: null,
         sources: ["mic", "system"],
         appTitle: null,
+        name: null,
       }),
       meeting_stop_manual: () => undefined,
 

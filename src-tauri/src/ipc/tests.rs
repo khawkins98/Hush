@@ -174,6 +174,9 @@ impl HistoryRepository for NoopHistory {
     ) -> anyhow::Result<Vec<crate::history::HistoryEntry>> {
         Ok(vec![])
     }
+    async fn set_name(&self, _: i64, _: Option<String>) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Tiny mock that returns an empty rules list so the dictation
@@ -287,6 +290,9 @@ impl crate::meeting::MeetingSessionRepository for NoopMeetings {
         Ok(vec![])
     }
     async fn set_notes(&self, _: i64, _: Option<String>) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn set_name(&self, _: i64, _: Option<String>) -> anyhow::Result<()> {
         Ok(())
     }
     async fn get_by_id(&self, _: i64) -> anyhow::Result<Option<crate::meeting::MeetingSession>> {
@@ -758,6 +764,7 @@ impl crate::history::HistoryRepository for MemHistory {
             duration_ms: entry.duration_ms,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
             ignored: entry.ignored,
+            name: None,
         });
         Ok(id)
     }
@@ -866,6 +873,18 @@ impl crate::history::HistoryRepository for MemHistory {
             .collect();
         all.reverse();
         Ok(all)
+    }
+
+    async fn set_name(&self, id: i64, name: Option<String>) -> anyhow::Result<()> {
+        let name = name.and_then(|n| {
+            let t = n.trim().to_owned();
+            if t.is_empty() { None } else { Some(t) }
+        });
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+            entry.name = name;
+        }
+        Ok(())
     }
 }
 

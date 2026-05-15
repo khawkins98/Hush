@@ -302,6 +302,7 @@
             {onCopy}
             onDelete={handleRowDelete}
             onExportCsv={onExportDictationCsv}
+            onSetName={(id, name) => void history.setEntryName(id, name)}
           />
         {:else}
           <HistoryMeetingRow
@@ -311,6 +312,7 @@
             onDelete={handleMeetingDelete}
             onExport={onMeetingExport}
             onCopy={onMeetingCopy}
+            onSetName={(id, name) => void meeting.setSessionName(id, name)}
           />
         {/if}
       {/each}

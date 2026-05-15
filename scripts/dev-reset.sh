@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
 # Full Hush dev reset — restores the machine to vanilla "first-ever-install" state.
 #
-# Use this when you want to experience Hush exactly as a new user would:
-# fresh onboarding, no permissions pre-granted, no settings, no history.
+# By default, transcription and meeting history is preserved so you keep your
+# recordings between dev cycles.  Use --nuke-db to also wipe the database (full
+# wipe, equivalent to pre-2026-06 behaviour).
 #
 # Usage:
 #   npm run dev-reset                        # reset for the current (or sudo-originating) user
 #   npm run dev-reset -- --user alice        # reset for a specific macOS user account
 #   npm run dev-reset -- --nuke-models       # also delete downloaded models (~GB)
+#   npm run dev-reset -- --nuke-db           # also wipe transcription + meeting history
 #   npm run dev-reset -- --user alice --nuke-models
 #
-# What gets removed:
+# What gets removed (default):
 #   macOS TCC permissions (ScreenCapture, Microphone, ListenEvent, Accessibility)
-#   <home>/Library/Application Support/io.github.khawkins98.hush/hush.db  (settings + history)
+#   settings / dictionary terms / text replacements rows (inside hush.db)
 #   <home>/Library/Preferences/io.github.khawkins98.hush.plist             (NSUserDefaults)
 #   <home>/Library/Caches/io.github.khawkins98.hush/                       (WebKit etc.)
 #   <home>/Library/Caches/hush/
 #   autostart LaunchAgent (if enabled via Settings → Launch at Login)
 #   Legacy com.khawkins.hush data/TCC/prefs (from before PR #526 bundle rename)
+#
+# What is PRESERVED by default (to keep your dev recordings):
+#   transcription history
+#   meeting sessions + utterances
+#
+# With --nuke-db the entire database file is deleted (no history preserved).
 #
 # Models are kept by default because they are large and slow to re-download.
 # Pass --nuke-models to wipe them too.
@@ -36,6 +44,7 @@ BUNDLE_ID="io.github.khawkins98.hush"
 # app-support data keyed to this ID linger after an upgrade and must be purged.
 LEGACY_BUNDLE_ID="com.khawkins.hush"
 nuke_models=0
+nuke_db=0
 explicit_user=""
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -43,6 +52,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --nuke-models)
       nuke_models=1
+      shift
+      ;;
+    --nuke-db)
+      nuke_db=1
       shift
       ;;
     --user)
@@ -142,16 +155,40 @@ _tccutil reset ListenEvent   "$LEGACY_BUNDLE_ID" 2>/dev/null && echo "  legacy L
 _tccutil reset Accessibility "$LEGACY_BUNDLE_ID" 2>/dev/null && echo "  legacy Accessibility cleared" || true
 
 # ── 3. App data ───────────────────────────────────────────────────────────────
-echo "[dev-reset] removing app data..."
+echo "[dev-reset] clearing app data..."
 
-# SQLite database (settings table + meeting history + dictionary)
-for f in hush.db hush.db-shm hush.db-wal; do
-  target="$APP_SUPPORT/$f"
-  if [ -f "$target" ]; then
-    rm "$target"
-    echo "  removed $target"
+DB_FILE="$APP_SUPPORT/hush.db"
+
+if [ "$nuke_db" -eq 1 ]; then
+  # Hard wipe: remove the entire database file (and WAL/SHM).
+  for f in hush.db hush.db-shm hush.db-wal; do
+    target="$APP_SUPPORT/$f"
+    if [ -f "$target" ]; then
+      rm "$target"
+      echo "  removed $target"
+    fi
+  done
+elif [ -f "$DB_FILE" ]; then
+  # Soft wipe: preserve transcription and meeting history; clear settings,
+  # dictionary, and replacements only so the next launch feels like a
+  # first-run for settings/permissions without losing recordings.
+  _sqlite3() {
+    if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
+      sudo -u "$TARGET_USER" sqlite3 "$@"
+    else
+      sqlite3 "$@"
+    fi
+  }
+  if command -v sqlite3 >/dev/null 2>&1; then
+    _sqlite3 "$DB_FILE" \
+      "DELETE FROM settings; DELETE FROM dictionary_terms; DELETE FROM replacements;" \
+      && echo "  cleared settings, dictionary_terms, replacements (history preserved)"
+  else
+    echo "  sqlite3 not found — skipping selective DB clear (install sqlite3 or use --nuke-db)" >&2
   fi
-done
+else
+  echo "  no database found, nothing to clear"
+fi
 
 # Models: kept by default; wiped with --nuke-models
 if [ "$nuke_models" -eq 1 ]; then
