@@ -224,7 +224,7 @@ pub(super) fn stop_audio_capture(state: &AppState) -> IpcResult<crate::audio::Ca
 /// 2. Vocabulary from any enabled preset packs (appended after user
 ///    terms so the user's casing / spelling wins on collision).
 /// 3. A language-style prefix prepended before the term list.
-pub(super) async fn load_vocabulary_prompt(state: &AppState) -> String {
+pub(crate) async fn load_vocabulary_prompt(state: &AppState) -> String {
     // User terms — load first so user spellings win deduplication.
     let mut all_terms: Vec<VocabularyTerm> = match state.data.vocabulary.list().await {
         Ok(terms) => terms,
@@ -265,7 +265,7 @@ pub(super) async fn load_vocabulary_prompt(state: &AppState) -> String {
 /// Enabled pack replacement rules are prepended (at sort_order −1) so
 /// they run before user rules (sort_order 0 default). This means user
 /// rules can override or layer on top of pack corrections.
-pub(super) async fn load_replacement_rules(state: &AppState) -> Vec<ReplacementRule> {
+pub(crate) async fn load_replacement_rules(state: &AppState) -> Vec<ReplacementRule> {
     let user_rules = match state.data.replacements.list().await {
         Ok(rules) => rules,
         Err(e) => {
@@ -302,7 +302,7 @@ pub(super) async fn load_replacement_rules(state: &AppState) -> Vec<ReplacementR
 /// Read the list of enabled pack slugs from the settings table. Returns
 /// an empty list on any error so callers can always treat the result as
 /// best-effort.
-pub(super) async fn load_enabled_packs(state: &AppState) -> Vec<String> {
+pub(crate) async fn load_enabled_packs(state: &AppState) -> Vec<String> {
     match state
         .settings
         .get(crate::settings::keys::ENABLED_PACKS)

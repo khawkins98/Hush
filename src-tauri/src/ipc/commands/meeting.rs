@@ -29,7 +29,9 @@ use crate::ipc::AppState;
 use crate::meeting::export::{
     meeting_session_csv, meeting_session_json, meeting_session_text, MeetingExportFormat,
 };
+use crate::meeting::SessionDictOpts;
 
+use super::dictation::{load_replacement_rules, load_vocabulary_prompt};
 use super::{poisoned, validate_export_path, IpcError, IpcResult};
 
 /// List all meeting sessions, newest-first. Returns whatever the
@@ -420,9 +422,20 @@ pub async fn meeting_start_manual(
         })
         .or(probed_app_name);
 
+    // Load vocabulary prompt and replacement rules at session-open time
+    // (#913). Snapshotted here so mid-session dictionary edits don't
+    // take effect until the next session, matching the dictation path's
+    // snapshot semantics.
+    let vocab_prompt = load_vocabulary_prompt(&state).await;
+    let replacement_rules = Arc::new(load_replacement_rules(&state).await);
+    let dict_opts = SessionDictOpts {
+        vocab_prompt,
+        replacement_rules,
+    };
+
     let session = state
         .meeting_manager
-        .start_manual(sources, resolved_app_name, app_title)
+        .start_manual(sources, resolved_app_name, app_title, dict_opts)
         .await
         .map_err(|e| {
             // Promote permission-shaped chains to the typed

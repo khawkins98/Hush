@@ -1259,9 +1259,23 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                     .map(|w| w.title.trim().to_owned())
                     .filter(|t| !t.is_empty());
 
+                // Load vocabulary prompt + replacement rules at auto-start
+                // time (#913). Same snapshot semantics as the manual path in
+                // `meeting_start_manual`: if the user edits their dictionary
+                // mid-session the change takes effect on the next session.
+                let vocab_prompt =
+                    crate::ipc::commands::dictation::load_vocabulary_prompt(&state).await;
+                let replacement_rules = std::sync::Arc::new(
+                    crate::ipc::commands::dictation::load_replacement_rules(&state).await,
+                );
+                let dict_opts = crate::meeting::SessionDictOpts {
+                    vocab_prompt,
+                    replacement_rules,
+                };
+
                 if let Err(e) = state
                     .meeting_manager
-                    .start_manual(sources, Some(app_name.clone()), app_title)
+                    .start_manual(sources, Some(app_name.clone()), app_title, dict_opts)
                     .await
                 {
                     tracing::warn!(
