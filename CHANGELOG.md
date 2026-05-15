@@ -7,15 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.4] - 2026-05-15
+## [0.7.0] - 2026-05-15
 
 ### Added
 
+- **Dictionary: preset word packs + language style selector.** Settings → Dictionary now ships with curated preset packs (tech, medical, legal, etc.) and a language style chooser (US/UK/AU English) that injects the correct spelling variants into every Whisper prompt automatically (#664).
+- **Meetings: vocabulary and text-replacement rules now apply in the meeting pipeline.** Custom words and find/replace rules defined in Settings → Dictionary / Replacements are now injected into meeting transcription sessions, matching the behaviour of single-shot dictation (#913).
+- **Meetings: graceful degradation when system audio is unavailable.** If the CoreAudio process tap fails to open at auto-start time, the session now falls back to microphone-only mode instead of refusing to start (#953).
+- **Meetings: tail-dropped event on streaming stop failure.** When the background transcriber fails to flush the final audio chunk at session end, a `meeting:tail-dropped` event is emitted so the UI can surface a warning rather than silently losing the last few seconds (#833).
+- **HUD: processing and "Copied!" states now reflected in the main Transcribe window.** The live status dot and status label in the main window now track the same idle → processing → copied transitions that the floating HUD overlay shows, so users who keep the main window open get the same feedback (#937).
 - **History: user-defined name labels on dictation and meeting entries.** Any history entry or meeting session can now be given a short label. Click the dashed "Add label…" badge at the top of a row to enter edit mode; press Enter or click away to save; Escape cancels; clearing the text removes the label. Labels persist to the database and survive app restarts.
 - **dev-reset: transcription history preserved by default.** `npm run dev-reset` now does a selective wipe of settings, dictionary terms, and text-replacement rules only — recordings are kept between dev cycles. New `--nuke-db` flag restores the original full-database-delete behaviour for clean onboarding tests.
 
 ### Fixed
 
+#### Audio reliability
+- **Mic device fallback at session start.** If the saved input device is no longer present (unplugged, Bluetooth disconnected), Hush now falls back to the system default microphone instead of refusing to start a session (#705).
+- **Circular ring-buffer overflow preserves newest audio.** The eviction policy previously dropped the most-recent chunk on overflow; it now evicts the oldest chunk, so the audio captured closest to the Whisper inference window is always retained (#827).
+- **CoreAudio tap level measured as RMS.** System-audio volume metering switched from peak to RMS to match the CPAL microphone path, making the waveform visualisation consistent regardless of which input source is active (#822).
+- **CoreAudio HAL listener: safety, wall-clock timestamps, and generation counter.** Listener callbacks are now guarded against use-after-free, all audio packets carry wall-clock timestamps derived from the host time base, and a generation counter prevents stale data from a prior session being fed to a newly started one (#826, #818, #801).
+- **Per-cluster centroid computation is now O(K) not O(N).** The diarizer previously recomputed all embeddings per assignment step; centroids are now maintained as running means, cutting CPU time proportional to segment count (#954).
+
+#### Meeting reliability
+- **Stopping lifecycle state prevents double-stop and device conflicts.** A new `Stopping` state inserted between `Active` and `Stopped` closes the race where a second Stop could re-enter teardown and open a conflicting audio device (#944).
+- **Fail-fast when no transcriber is available; pre-warm replay on retry.** If the meeting pump finds no loaded Whisper model, it immediately surfaces an error rather than silently buffering audio. On retry after a model is loaded, the buffered audio is replayed before live capture resumes (#898, #868).
+- **`session-ended` event emitted after `close_session`.** Emitting the event before the DB write completed caused the frontend to refresh a row that did not yet exist, producing an empty ghost entry. The event is now deferred until the close transaction commits (#809).
+- **Async-runtime safety: timeouts + `spawn_blocking` for blocking DB calls.** Long-running SQLite writes inside the meeting pump are now dispatched via `spawn_blocking` and wrapped with per-operation timeouts to prevent Tokio executor starvation (#940).
+- **Graceful-stop active recordings before process exit.** Closing the app window or receiving SIGTERM now waits for any active dictation or meeting session to flush and close before the process exits (#798, #846).
+
+#### Security / updater
+- **In-flight guard prevents concurrent update checks.** A second "Check for updates" action while one is already in progress is now a no-op rather than launching a parallel network request (#943).
+- **Export path validated against the history directory.** The export IPC command now rejects paths that resolve outside `~/Library/Application Support/…` to prevent path-traversal writes (#943).
+- **Atomic-write for all file exports and updater cache.** Exports and the update-check response are now written to a `.tmp` file then renamed, preventing partial files if the process is interrupted (#942).
+- **Updater now sends a `User-Agent` header and streams the response body.** Some CDNs reject requests without a `User-Agent`; streaming avoids buffering the full DMG in memory (#905, #906).
+
+#### UI
+- **Live-transcript panel always uses a light text colour.** The always-dark meeting live-transcript panel was using `var(--text-primary)` which resolved to near-black in light mode, making it illegible. Switched to a fixed light colour (#948).
+- **"Include system audio" setting now respected in Record path.** The `meetingIncludeSystemAudio` toggle was read at auto-detection time but ignored when the user pressed the manual Record button; both paths now read the same setting (#915, #916).
+
+#### Search
 - **History search now matches against name labels.** Searching the history panel returns entries/sessions whose label matches the query, in addition to the existing transcript/utterance text match.
 
 ## [0.6.3] - 2026-05-14
