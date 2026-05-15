@@ -15,7 +15,7 @@
 //! (#106) / Windows (#107) audio backend can land as a peer file
 //! rather than doubling the size of `mod.rs`.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -30,6 +30,11 @@ use super::{
     drain_consumer, log_overflow_if_set, AudioCapture, AudioDevice, AudioSession, AudioSource,
     CaptureFormat, CapturedAudio, DeviceLost, MAX_BUFFER_FRAMES,
 };
+
+/// `legacy_source` sentinel values (stored in `AtomicU8`).
+const LEGACY_IDLE: u8 = 0;
+const LEGACY_MIC: u8 = 1;
+const LEGACY_SYS: u8 = 2;
 
 pub struct CpalAudioCapture {
     /// Wrapped in a [`Mutex`] because [`mpsc::Sender`] is `Send` but `!Sync`,
@@ -79,6 +84,16 @@ pub struct CpalAudioCapture {
     level: Arc<AtomicU32>,
     /// Joined on drop. Wrapped in [`Option`] so [`Drop`] can take ownership.
     worker: Option<JoinHandle<()>>,
+    /// State machine for the legacy singleton `start_with_source` / `stop`
+    /// path. Prevents a race where mic + system-audio can both be started
+    /// via separate `start_with_source` calls, leaving `stop()` only able
+    /// to clear one of them (#903).
+    ///
+    /// Values: `LEGACY_IDLE` | `LEGACY_MIC` | `LEGACY_SYS`.
+    /// CAS-guarded in `start_with_source` so a second call while non-idle
+    /// returns an error. `stop()` swaps back to `LEGACY_IDLE` and dispatches
+    /// to exactly the backend that was started.
+    legacy_source: AtomicU8,
     /// Active CoreAudio tap session for system-audio capture (#600).
     /// Lives outside the cpal worker because the tap delivers samples on
     /// its own reader thread — there is no Stream object to babysit
@@ -135,6 +150,7 @@ impl CpalAudioCapture {
             active_sessions,
             level,
             worker: Some(worker),
+            legacy_source: AtomicU8::new(LEGACY_IDLE),
             #[cfg(target_os = "macos")]
             cat_session: Mutex::new(None),
             #[cfg(target_os = "macos")]
@@ -189,25 +205,57 @@ impl AudioCapture for CpalAudioCapture {
 
     fn start_with_source(&self, source: AudioSource) -> Result<()> {
         match source {
-            AudioSource::Microphone(device_id) => self.start(device_id.as_deref()),
+            AudioSource::Microphone(device_id) => {
+                // CAS IDLE → MIC; reject if another legacy session is active (#903).
+                self.legacy_source
+                    .compare_exchange(
+                        LEGACY_IDLE,
+                        LEGACY_MIC,
+                        Ordering::Acquire,
+                        Ordering::Relaxed,
+                    )
+                    .map_err(|_| anyhow!("a legacy audio session is already in progress"))?;
+                match self.start(device_id.as_deref()) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        self.legacy_source.store(LEGACY_IDLE, Ordering::Release);
+                        Err(e)
+                    }
+                }
+            }
             #[cfg(target_os = "macos")]
             AudioSource::SystemAudio => {
+                // CAS IDLE → SYS; reject if another legacy session is active (#903).
+                self.legacy_source
+                    .compare_exchange(
+                        LEGACY_IDLE,
+                        LEGACY_SYS,
+                        Ordering::Acquire,
+                        Ordering::Relaxed,
+                    )
+                    .map_err(|_| anyhow!("a legacy audio session is already in progress"))?;
                 let mut guard = self
                     .cat_session
                     .lock()
                     .map_err(|_| anyhow!("cat session lock poisoned"))?;
                 if guard.is_some() {
+                    self.legacy_source.store(LEGACY_IDLE, Ordering::Release);
                     return Err(anyhow!("system-audio capture already in progress"));
                 }
-                let session = core_audio_tap::CoreAudioTapSession::start(
+                match core_audio_tap::CoreAudioTapSession::start(
                     &self.resource_dir,
                     Arc::clone(&self.active_sessions),
                     Arc::clone(&self.level),
-                )?;
-                // active_sessions already incremented inside start(); no
-                // additional fetch_add here.
-                *guard = Some(session);
-                Ok(())
+                ) {
+                    Ok(session) => {
+                        *guard = Some(session);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        self.legacy_source.store(LEGACY_IDLE, Ordering::Release);
+                        Err(e)
+                    }
+                }
             }
             #[cfg(not(target_os = "macos"))]
             AudioSource::SystemAudio => Err(anyhow!(
@@ -224,23 +272,33 @@ impl AudioCapture for CpalAudioCapture {
     }
 
     fn stop(&self) -> Result<CapturedAudio> {
-        // CoreAudio tap path first: if a system-audio session is active, drain
-        // it and skip the cpal worker round-trip entirely. Order matters —
-        // we must clear the cat slot before the caller can observe
-        // is_recording() == false; active_sessions decrement is inside stop().
-        #[cfg(target_os = "macos")]
-        {
-            let mut guard = self
-                .cat_session
-                .lock()
-                .map_err(|_| anyhow!("cat session lock poisoned"))?;
-            if let Some(session) = guard.take() {
-                // stop() decrements active_sessions unconditionally inside
-                // CoreAudioTapSession::stop — #555 pattern preserved.
-                return Box::new(session).stop();
+        // Swap to IDLE atomically so we know which backend to stop.
+        // AcqRel: we need to observe any stores done by start_with_source
+        // (Acquire) and make our swap visible before active_sessions
+        // can read 0 (Release).
+        let prior = self.legacy_source.swap(LEGACY_IDLE, Ordering::AcqRel);
+        match prior {
+            LEGACY_SYS => {
+                #[cfg(target_os = "macos")]
+                {
+                    let mut guard = self
+                        .cat_session
+                        .lock()
+                        .map_err(|_| anyhow!("cat session lock poisoned"))?;
+                    if let Some(session) = guard.take() {
+                        // stop() decrements active_sessions unconditionally inside
+                        // CoreAudioTapSession::stop — #555 pattern preserved.
+                        return Box::new(session).stop();
+                    }
+                }
+                Err(anyhow!(
+                    "legacy system-audio session was marked active but cat_session was empty"
+                ))
             }
+            // LEGACY_MIC or LEGACY_IDLE (backward-compat: callers that use
+            // stop() without a matching start_with_source, e.g. tests).
+            _ => self.dispatch(Cmd::Stop),
         }
-        self.dispatch(Cmd::Stop)
     }
 
     fn is_recording(&self) -> bool {
