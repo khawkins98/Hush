@@ -46,10 +46,7 @@ manually — running local `cargo fmt --all` won't reproduce the CI version's
 output. Tracked in `learnings.md` under "2026-05-05 — CI rustfmt version
 differs from local toolchain".
 
-The first `npm run tauri dev` will:
-
-1. Download the ONNX Runtime vendored binaries (~50 MB) via the `ort` `download-binaries` feature — needs network access once.
-2. Compile whisper.cpp via `whisper-rs`. Takes several minutes on a clean machine.
+The first `npm run tauri dev` will compile whisper.cpp via `whisper-rs` (several minutes on a clean machine) and build the default-on `tract-onnx` diarizer from source. There are **no** vendored ORT binaries or one-time network downloads in the current path.
 
 Subsequent runs are incremental.
 
@@ -62,7 +59,7 @@ Subsequent runs are incremental.
 | Iterate on UI or Rust logic — the normal dev loop | `npm run tauri dev` |
 | Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
 | Diarizer only (no whisper compile cost) | `cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx` |
-| Test Screen Recording / Microphone TCC permission prompts | `npm run tauri:bundle` (macOS only) |
+| Test Microphone / Input Monitoring TCC permission prompts | `npm run tauri:bundle` (macOS only) |
 | Build a release `.dmg` to smoke-test the installer | `npm run tauri:dmg` (macOS only) |
 | Run Rust unit tests | `cd src-tauri && cargo test --lib` |
 | Run frontend type check | `npm run check` |
@@ -78,8 +75,9 @@ Subsequent runs are incremental.
 # Run the full app. Default features are `whisper` (needs cmake on macOS) +
 # `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
 # no vendored binaries — compiles from source, no network needed).
-# CoreAudio process tap and Input Monitoring are unconditional macOS
-# dependencies; system-audio capture works without an extra feature flag.
+# ScreenCaptureKit is linked unconditionally on macOS for the
+# permission-diagnostic path; system-audio capture itself uses the
+# CoreAudio process-tap backend and needs no extra feature flag.
 npm run tauri dev
 
 # UI-only path: app shell with no Whisper backend and no ONNX diarizer.
@@ -93,7 +91,7 @@ cd src-tauri && cargo tauri dev --no-default-features --features diarization-onn
 
 # macOS-only: build a debug .app bundle and open it. Use this for
 # smoke-testing anything that depends on macOS treating Hush as a proper
-# app — Screen Recording / Microphone TCC prompts in particular. The bare
+# app — Microphone / Input Monitoring TCC prompts in particular. The bare
 # `cargo tauri dev` binary doesn't register reliably with TCC (see below).
 # Slow: 30 s – 2 min. Not a hot-iteration tool.
 npm run tauri:bundle
@@ -105,8 +103,8 @@ npm run tauri:dmg
 
 # Rust unit tests.
 # Default features include `whisper` + `diarization-onnx`, so the
-# default build needs cmake and pulls ORT binaries on first run.
-# For a lightweight path (no cmake, no ORT), use --no-default-features.
+# default build needs cmake and builds tract-onnx from source.
+# For a lightweight path (no cmake), use --no-default-features.
 cd src-tauri && cargo test --lib
 cd src-tauri && cargo test --lib --no-default-features        # fast, no cmake needed
 cd src-tauri && cargo test --lib --features whisper            # plus whisper-gated paths
@@ -118,22 +116,19 @@ cd src-tauri && cargo test --lib meeting::
 
 # Integration tests (#[ignore]'d by default — need external resources)
 # HUSH_TEST_AUDIO defaults to the bundled jfk.wav; only HUSH_TEST_MODEL is required.
-HUSH_TEST_MODEL=/path/to/ggml-base.bin \
-  cd src-tauri && cargo test --features whisper --test audio_fixture -- --ignored
+cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test audio_fixture -- --ignored
 
 # Streaming + meeting pump integration tests (also #[ignore]'d)
-HUSH_TEST_MODEL=/path/to/ggml-base.bin \
-  cd src-tauri && cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
-HUSH_TEST_MODEL=/path/to/ggml-base.bin \
-  cd src-tauri && cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
+cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
+cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
 
 # Diarization integration test (two-speaker assertion + cluster stability)
 # Requires wespeaker ONNX model and two short WAV clips with distinct voices.
 # Download model: huggingface-cli download Wespeaker/wespeaker-voxceleb-resnet34-LM voxceleb_resnet34_LM.onnx
-HUSH_DIARIZATION_MODEL_PATH=/path/to/voxceleb_resnet34_LM.onnx \
-HUSH_TEST_SPEAKER1_WAV=/path/to/speaker1.wav \
-HUSH_TEST_SPEAKER2_WAV=/path/to/speaker2.wav \
-  cd src-tauri && cargo test --features diarization-onnx --test diarization_fixture -- --ignored --nocapture
+cd src-tauri && HUSH_DIARIZATION_MODEL_PATH=/path/to/voxceleb_resnet34_LM.onnx \
+  HUSH_TEST_SPEAKER1_WAV=/path/to/speaker1.wav \
+  HUSH_TEST_SPEAKER2_WAV=/path/to/speaker2.wav \
+  cargo test --features diarization-onnx --test diarization_fixture -- --ignored --nocapture
 
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check
@@ -228,7 +223,6 @@ CI does not run a real Tauri runtime. A panic at app boot — plugin init, capab
 - `src-tauri/.cargo/config.toml` (link-arg / rpath changes)
 - `src-tauri/capabilities/*.json`
 - `src-tauri/src/app_menu/` — a malformed `MenuBuilder` chain panics during `setup`
-- `src-tauri/src/settings_window/` — referencing a window label not in `tauri.conf.json` is a runtime error
 - Anything that adds or removes a `.plugin(...)` call
 
 The check is cheap: launch, wait for the "starting Hush" trace log, confirm no panic, kill it (~30 seconds).
@@ -239,10 +233,10 @@ The check is cheap: launch, wait for the "starting Hush" trace log, confirm no p
 
 ### Rust unit tests (`cargo test --lib`)
 
-Pure-logic tests at the trait + module boundaries. No real audio device needed. The default build (features `whisper` + `diarization-onnx`) needs cmake and pulls ORT binaries; for a fast no-cmake pass use `--no-default-features`.
+Pure-logic tests at the trait + module boundaries. No real audio device needed. The default build (features `whisper` + `diarization-onnx`) needs cmake and builds tract-onnx from source; for a fast no-cmake pass use `--no-default-features`.
 
 - **`--no-default-features`** — no cmake required; covers most paths. Fast (~100 ms total).
-- **Default features** — same tests, but also exercises feature-gated code. Needs cmake + ORT.
+- **Default features** — same tests, but also exercises feature-gated code. Needs cmake + tract-onnx.
 - **`--features whisper`** — adds whisper-gated paths. Needs cmake.
 - **`--features diarization-onnx`** — adds diarizer-gated paths.
 - **Hand-rolled mocks** at every trait seam (`Noop*`, `Mem*` impls in `src-tauri/src/ipc/tests.rs`) — preferred over `mockall` for clearer test failure messages. `MemHistory` enables round-trip assertions; `Noop*` variants return defaults. Compose test `AppState` instances via `AppStateBuilder`.
@@ -253,7 +247,7 @@ Pure-logic tests at the trait + module boundaries. No real audio device needed. 
 Two patterns:
 
 - **`wiremock`-driven HTTP tests** for the model-download path. The orchestrator is pure logic; the wiremock server stands in for Hugging Face. See `src-tauri/src/transcription/download.rs`.
-- **`#[ignore]`'d env-var fixtures** for things that need a binary the repo can't ship. The audio fixture reads `HUSH_TEST_AUDIO` and runs a known WAV through the full transcription stack. See `src-tauri/tests/fixtures/README.md`.
+- **`#[ignore]`'d env-var fixtures** for things that need a binary the repo can't ship. `audio_fixture` / `streaming_fixture` / `meeting_fixture` require `HUSH_TEST_MODEL`; `HUSH_TEST_AUDIO` is optional and defaults to the bundled `jfk.wav`. The diarization fixture reads `HUSH_DIARIZATION_MODEL_PATH` plus the speaker WAV env vars documented in `src-tauri/tests/fixtures/README.md`.
 
 When adding an integration test that needs an external resource, prefer `#[ignore]` + an env-var pointer over committing the resource — keeps the repo small and lets contributors opt in.
 
