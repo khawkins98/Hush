@@ -133,6 +133,23 @@ pub async fn history_delete(state: State<'_, AppState>, id: i64) -> IpcResult<()
         .map_err(|e| IpcError::History(format!("{e:#}")))
 }
 
+/// Set (or clear) the user-defined short label for a history entry.
+/// Passing `null` / `None` removes the label. Blank strings are
+/// treated as `None` by the repository.
+#[tauri::command]
+pub async fn history_set_name(
+    state: State<'_, AppState>,
+    id: i64,
+    name: Option<String>,
+) -> IpcResult<()> {
+    state
+        .data
+        .history
+        .set_name(id, name)
+        .await
+        .map_err(|e| IpcError::History(format!("{e:#}")))
+}
+
 /// Total row count, for paginators that need "page X of Y".
 #[tauri::command]
 pub async fn history_count(state: State<'_, AppState>) -> IpcResult<i64> {
@@ -194,6 +211,7 @@ mod tests {
             duration_ms: duration,
             created_at: "2026-05-01T10:00:00Z".to_owned(),
             ignored: false,
+            name: None,
         }
     }
 

@@ -363,6 +363,10 @@ impl MeetingSessionRepository for FailingCloseRepo {
         self.inner.set_notes(id, notes).await
     }
 
+    async fn set_name(&self, id: i64, name: Option<String>) -> Result<()> {
+        self.inner.set_name(id, name).await
+    }
+
     async fn get_by_id(&self, id: i64) -> Result<Option<MeetingSession>> {
         self.inner.get_by_id(id).await
     }

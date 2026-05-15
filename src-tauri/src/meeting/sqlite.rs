@@ -39,7 +39,7 @@ impl Repository<MeetingSession, NewMeetingSession, i64> for SqliteMeetingSession
         // just finished, not the meeting they had three weeks ago.
         sqlx::query_as::<_, MeetingSession>(
             "SELECT id, app_name, app_kind, started_at, ended_at, \
-                    speaker_count, utterance_count, notes, sources, app_title \
+                    speaker_count, utterance_count, notes, sources, app_title, name \
              FROM meeting_sessions \
              ORDER BY started_at DESC, id DESC",
         )
@@ -66,7 +66,7 @@ impl Repository<MeetingSession, NewMeetingSession, i64> for SqliteMeetingSession
             "INSERT INTO meeting_sessions (app_name, app_kind, sources, app_title) \
              VALUES (?, ?, ?, ?) \
              RETURNING id, app_name, app_kind, started_at, ended_at, \
-                       speaker_count, utterance_count, notes, sources, app_title",
+                       speaker_count, utterance_count, notes, sources, app_title, name",
         )
         .bind(&new.app_name)
         .bind(kind_str)
@@ -216,6 +216,23 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         Ok(())
     }
 
+    async fn set_name(&self, id: i64, name: Option<String>) -> Result<()> {
+        let name = name.and_then(|n| {
+            let t = n.trim().to_owned();
+            if t.is_empty() { None } else { Some(t) }
+        });
+        let result = sqlx::query("UPDATE meeting_sessions SET name = ? WHERE id = ?")
+            .bind(&name)
+            .bind(id)
+            .execute(self.db.pool())
+            .await
+            .context("set meeting session name")?;
+        if result.rows_affected() == 0 {
+            anyhow::bail!("meeting session {id} not found");
+        }
+        Ok(())
+    }
+
     async fn get_by_id(&self, id: i64) -> Result<Option<MeetingSession>> {
         // Single B-tree probe via the PK index. Mirrors the
         // column list in `list()` so a future column add (e.g.
@@ -223,7 +240,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         // queries fail loud at compile time if they drift.
         sqlx::query_as::<_, MeetingSession>(
             "SELECT id, app_name, app_kind, started_at, ended_at, \
-                    speaker_count, utterance_count, notes, sources, app_title \
+                    speaker_count, utterance_count, notes, sources, app_title, name \
              FROM meeting_sessions \
              WHERE id = ?",
         )
@@ -242,7 +259,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         // touches genuinely-orphaned rows.
         sqlx::query_as::<_, MeetingSession>(
             "SELECT id, app_name, app_kind, started_at, ended_at, \
-                    speaker_count, utterance_count, notes, sources, app_title \
+                    speaker_count, utterance_count, notes, sources, app_title, name \
              FROM meeting_sessions \
              WHERE ended_at IS NULL \
              ORDER BY started_at DESC, id DESC",
@@ -264,7 +281,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
 
         sqlx::query_as::<_, MeetingSession>(
             "SELECT s.id, s.app_name, s.app_kind, s.started_at, s.ended_at, \
-                    s.speaker_count, s.utterance_count, s.notes, s.sources, s.app_title \
+                    s.speaker_count, s.utterance_count, s.notes, s.sources, s.app_title, s.name \
              FROM meeting_sessions s \
              WHERE s.id IN ( \
                 SELECT DISTINCT u.session_id \
@@ -342,6 +359,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for MeetingSession {
             notes: row.try_get("notes")?,
             sources,
             app_title: row.try_get("app_title")?,
+            name: row.try_get("name")?,
         })
     }
 }

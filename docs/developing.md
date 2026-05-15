@@ -65,7 +65,7 @@ Subsequent runs are incremental.
 | Run frontend type check | `npm run check` |
 | Run frontend e2e tests | `npm run test:e2e` |
 | Kill stale dev server processes | `npm run dev-cleanup` |
-| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes **and** wipes all app state (macOS only) |
+| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/dictionary (preserves transcription history); add `--nuke-db` to also wipe history (macOS only) |
 
 ---
 
@@ -149,11 +149,13 @@ npm run test:e2e:tauri
 # Kill stale tauri/vite processes from a previous dev run (process cleanup only).
 npm run dev-cleanup
 
-# Full vanilla reset — kills processes AND wipes TCC grants, app database,
-# preferences, and caches so the next launch behaves as a brand-new install.
+# Full vanilla reset — kills processes AND wipes TCC grants, settings,
+# dictionary, and preferences. Transcription and meeting history is preserved
+# by default so you don't lose recordings between dev cycles.
 # Use this before testing onboarding, first-run permission prompts, or any
-# "new user" flow. Downloaded models are kept by default.
-# Pass --nuke-models to also remove them; --user <name> to target another account.
+# "new user" flow.
+# Pass --nuke-db to also wipe history; --nuke-models to remove downloaded
+# models; --user <name> to target another account.
 npm run dev-reset
 
 # Lint + format
@@ -190,7 +192,7 @@ To get back to a completely clean state for testing onboarding or first-run perm
 npm run dev-reset
 ```
 
-This wipes all TCC grants, the app database, preferences, and caches. Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
+This wipes all TCC grants, settings, dictionary, preferences, and caches. Transcription history and meeting sessions are **preserved** by default. Pass `--nuke-db` to also wipe history. Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
 
 Full recovery recipes: [`docs/macos-permissions.md`](./macos-permissions.md).
 

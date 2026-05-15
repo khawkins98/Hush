@@ -340,4 +340,16 @@ export const history = {
       historyError = formatErrorDisplay(e);
     }
   },
+  async setEntryName(id: number, name: string | null) {
+    const trimmed = name?.trim() ?? null;
+    const normalized = trimmed === "" ? null : trimmed;
+    try {
+      await invoke("history_set_name", { id, name: normalized });
+      historyEntries = historyEntries.map((e) =>
+        e.id === id ? { ...e, name: normalized } : e,
+      );
+    } catch (e) {
+      historyError = formatErrorDisplay(e);
+    }
+  },
 };

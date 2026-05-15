@@ -52,9 +52,11 @@
     /// parent didn't pass a handler — the Copy button hides so
     /// embeddings without clipboard support stay clean.
     onCopy?: (session: MeetingSession) => void | Promise<void>;
+    /// Set or clear the user-defined short label for this session.
+    onSetName?: (id: number, name: string | null) => void | Promise<void>;
   };
 
-  let { session, confirming, onLoadDetail, onDelete, onExport, onCopy }: Props = $props();
+  let { session, confirming, onLoadDetail, onDelete, onExport, onCopy, onSetName }: Props = $props();
 
   // Local copy-in-flight state so the button shows a spinner while
   // the clipboard write (which may involve a fetch) is pending.
@@ -204,6 +206,30 @@
     );
     return distinct.size >= 2;
   });
+
+  // Inline name editing.
+  let editingName = $state(false);
+  let nameInputValue = $state(session.name ?? "");
+
+  function startNameEdit(e: Event) {
+    e.stopPropagation();
+    nameInputValue = session.name ?? "";
+    editingName = true;
+  }
+
+  async function commitName() {
+    editingName = false;
+    const trimmed = nameInputValue.trim();
+    const newName = trimmed === "" ? null : trimmed;
+    if (newName === session.name) return;
+    await onSetName?.(session.id, newName);
+  }
+
+  function handleNameKeydown(e: KeyboardEvent) {
+    e.stopPropagation();
+    if (e.key === "Enter") { void commitName(); }
+    else if (e.key === "Escape") { editingName = false; }
+  }
 </script>
 
 <li class="history-row meeting-row" class:confirming-active={confirming} data-kind="meeting" data-meeting-id={session.id}>
@@ -218,6 +244,30 @@
       aria-expanded={expanded}
       title={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount} utterances)`}
     >
+      {#if onSetName}
+        {#if editingName}
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="name-input"
+            type="text"
+            bind:value={nameInputValue}
+            placeholder="Add a label…"
+            autofocus
+            onblur={commitName}
+            onkeydown={handleNameKeydown}
+            onclick={(e) => e.stopPropagation()}
+            onpointerdown={(e) => e.stopPropagation()}
+          />
+        {:else}
+          <button
+            class="name-badge"
+            class:name-badge--set={session.name !== null}
+            onclick={startNameEdit}
+            title={session.name ? "Edit label" : "Add a label"}
+            aria-label={session.name ? `Label: ${session.name} — click to edit` : "Add a label"}
+          >{session.name ?? "Add label…"}</button>
+        {/if}
+      {/if}
       <div class="meeting-meta">
         <span class="meeting-app">{session.appName}</span>
         <span class="meeting-started">{formatStarted(session.startedAt)}</span>
@@ -341,6 +391,43 @@
     font-size: 0.88rem;
     color: var(--text-secondary);
     line-height: 1.4;
+  }
+
+  .name-badge {
+    display: inline-block;
+    margin: 0 0 0.3rem;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px dashed var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1.6;
+  }
+  .name-badge--set {
+    border-style: solid;
+    border-color: var(--accent, #5a7fff);
+    color: var(--text-primary);
+    background-color: color-mix(in srgb, var(--accent, #5a7fff) 12%, transparent);
+  }
+  .name-badge:hover {
+    border-color: var(--accent, #5a7fff);
+    color: var(--text-primary);
+  }
+  .name-input {
+    display: block;
+    width: 100%;
+    margin: 0 0 0.3rem;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.82rem;
+    border: 1px solid var(--accent, #5a7fff);
+    border-radius: 4px;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    outline: none;
+    box-sizing: border-box;
   }
 
   .meeting-detail-status {

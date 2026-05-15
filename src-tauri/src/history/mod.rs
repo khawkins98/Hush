@@ -62,6 +62,9 @@ pub struct HistoryEntry {
     /// appear in the history list (so the user can see the press was
     /// detected) but are excluded from stats and bulk export.
     pub ignored: bool,
+    /// User-editable short label for this transcript. `None` until the
+    /// user sets one via `history_set_name`.
+    pub name: Option<String>,
 }
 
 /// Aggregate stats over the entire history table (#293). Powers the
@@ -167,4 +170,9 @@ pub trait HistoryRepository: Send + Sync {
     /// paginated IPC path while allowing export to pull the full
     /// table (#858).
     async fn list_all_for_export(&self, query: Option<&str>) -> Result<Vec<HistoryEntry>>;
+
+    /// Set (or clear) the user-defined short label for a history row.
+    /// `None` removes the label. Trims + converts blank strings to
+    /// `None` so callers don't need to normalise beforehand.
+    async fn set_name(&self, id: i64, name: Option<String>) -> Result<()>;
 }

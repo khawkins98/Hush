@@ -184,6 +184,18 @@ export const meeting = {
       meetingSessionsError = formatErrorDisplay(e);
     }
   },
+  async setSessionName(id: number, name: string | null) {
+    const trimmed = name?.trim() ?? null;
+    const normalized = trimmed === "" ? null : trimmed;
+    try {
+      await invoke("meeting_session_set_name", { id, name: normalized });
+      meetingSessions = meetingSessions.map((s) =>
+        s.id === id ? { ...s, name: normalized } : s,
+      );
+    } catch (e) {
+      meetingSessionsError = formatErrorDisplay(e);
+    }
+  },
   async loadSessionDetail(id: number): Promise<MeetingSessionDetail> {
     try {
       const detail = await invoke<MeetingSessionDetail>("meeting_session_get", {

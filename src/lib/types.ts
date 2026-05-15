@@ -88,6 +88,8 @@ export type HistoryEntry = {
   createdAt: string;
   /** True for recordings that were too short to transcribe. */
   ignored: boolean;
+  /** User-editable short label. `null` until the user sets one. */
+  name: string | null;
 };
 
 // Aggregate dictation stats (#293). Powers the "you've dictated N
@@ -161,6 +163,8 @@ export type MeetingSession = {
   /// fullscreen game) or when the row pre-dates migration
   /// 0005.
   appTitle: string | null;
+  /** User-editable short label. `null` until the user sets one. */
+  name: string | null;
 };
 
 export type PersistedUtterance = {
