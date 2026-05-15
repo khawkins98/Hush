@@ -439,6 +439,7 @@ impl AppStateBuilder {
             },
             startup_timings: self.startup_timings.unwrap_or_default(),
             hotkey_toggle_error: Mutex::new(None),
+            transcriber_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 }

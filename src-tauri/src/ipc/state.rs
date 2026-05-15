@@ -270,6 +270,15 @@ pub struct AppState {
     /// Monitoring, dismiss a conflicting app). Written once at boot by
     /// `register_hotkeys`; the IPC `get_toggle_hotkey_status` reads it.
     pub hotkey_toggle_error: Mutex<Option<String>>,
+    /// Monotonic generation counter that increments every time
+    /// [`Self::swap_transcriber`] installs a new model (#801). The
+    /// background rebuild task in `stop_meeting_and_rebuild_transcriber`
+    /// snapshots this before spawning; if the counter has advanced when
+    /// the task tries to commit its result, a concurrent `model_select`
+    /// ran during the rebuild window and its choice takes priority —
+    /// the stale rebuild result is discarded without overwriting the
+    /// user-selected model.
+    pub transcriber_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// User-facing runtime flags that mirror Settings rows (#431).
@@ -884,6 +893,11 @@ impl AppState {
             .lock()
             .map_err(|_| anyhow::anyhow!("transcribe_meeting mutex poisoned"))?;
         *meeting_guard = new_meeting;
+        // Bump generation so the background rebuild in
+        // stop_meeting_and_rebuild_transcriber can detect that a
+        // model_select completed during the rebuild window (#801).
+        self.transcriber_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok(prev)
     }
 }

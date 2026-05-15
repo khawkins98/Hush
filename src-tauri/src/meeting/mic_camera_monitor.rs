@@ -103,7 +103,7 @@ impl DeviceListenerHandle {
 impl Drop for DeviceListenerHandle {
     fn drop(&mut self) {
         let address = running_somewhere_addr();
-        unsafe {
+        let status: OSStatus = unsafe {
             // Synchronous: waits for any in-flight callback to finish before
             // returning. The Arc<Notify> drop on the next line is therefore
             // always safe — the HAL holds no live reference after this call.
@@ -112,9 +112,23 @@ impl Drop for DeviceListenerHandle {
                 &address,
                 Some(on_property_changed),
                 Arc::as_ptr(&self.notify) as *mut _,
+            )
+        };
+        if status != 0 {
+            // RemovePropertyListener failed — the HAL may still hold the
+            // callback pointer. Deliberately leak the Arc to prevent a
+            // use-after-free if the HAL fires the callback after this drop
+            // (#826). The leaked memory is bounded to one Arc<Notify> per
+            // failed deregistration — acceptable given this path is rare
+            // (device already removed by the HAL, driver bug, etc.).
+            tracing::warn!(
+                device_id = self.device_id,
+                status,
+                "AudioObjectRemovePropertyListener failed; leaking Arc<Notify> to prevent use-after-free"
             );
+            let _ = std::mem::ManuallyDrop::new(self.notify.clone());
         }
-        // Arc<Notify> drops here.
+        // On success: Arc<Notify> drops here and the HAL holds no reference.
     }
 }
 
@@ -149,13 +163,21 @@ impl SystemListenerHandle {
 impl Drop for SystemListenerHandle {
     fn drop(&mut self) {
         let address = devices_list_addr();
-        unsafe {
+        let status: OSStatus = unsafe {
             AudioObjectRemovePropertyListener(
                 kAudioObjectSystemObject as AudioObjectID,
                 &address,
                 Some(on_property_changed),
                 Arc::as_ptr(&self.notify) as *mut _,
+            )
+        };
+        if status != 0 {
+            // Same leak-on-failure guard as DeviceListenerHandle::drop (#826).
+            tracing::warn!(
+                status,
+                "AudioObjectRemovePropertyListener (system) failed; leaking Arc<Notify> to prevent use-after-free"
             );
+            let _ = std::mem::ManuallyDrop::new(self.notify.clone());
         }
     }
 }
