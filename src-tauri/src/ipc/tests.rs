@@ -878,7 +878,11 @@ impl crate::history::HistoryRepository for MemHistory {
     async fn set_name(&self, id: i64, name: Option<String>) -> anyhow::Result<()> {
         let name = name.and_then(|n| {
             let t = n.trim().to_owned();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         });
         let mut entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
