@@ -41,7 +41,7 @@ impl Repository<MeetingSession, NewMeetingSession, i64> for SqliteMeetingSession
             "SELECT id, app_name, app_kind, started_at, ended_at, \
                     speaker_count, utterance_count, notes, sources, app_title \
              FROM meeting_sessions \
-             ORDER BY started_at DESC",
+             ORDER BY started_at DESC, id DESC",
         )
         .fetch_all(self.db.pool())
         .await
@@ -232,7 +232,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
                     speaker_count, utterance_count, notes, sources, app_title \
              FROM meeting_sessions \
              WHERE ended_at IS NULL \
-             ORDER BY started_at DESC",
+             ORDER BY started_at DESC, id DESC",
         )
         .fetch_all(self.db.pool())
         .await
@@ -259,7 +259,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
                 INNER JOIN utterances_fts fts ON fts.rowid = u.id \
                 WHERE utterances_fts MATCH ? \
              ) \
-             ORDER BY s.started_at DESC",
+             ORDER BY s.started_at DESC, s.id DESC",
         )
         .bind(phrase)
         .fetch_all(self.db.pool())
