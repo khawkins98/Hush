@@ -162,7 +162,10 @@
     margin: 0;
     font-size: 0.88rem;
     line-height: 1.55;
-    color: var(--text-primary);
+    /* Panel background is always dark (#1e1e1e fallback) so we must
+       use a fixed light colour here — var(--text-primary) is #111111
+       in light mode, giving invisible text on a dark surface (#948). */
+    color: #e0e0e0;
     white-space: pre-wrap;
     word-break: break-word;
   }
