@@ -57,6 +57,19 @@ Option B — System Settings method (if Option A does not work):
         identified developer."
   6. Click "Open Anyway", then confirm.
 
+Option C — Terminal method (works even when Options A & B are greyed out):
+
+  This is the most reliable method on macOS 14+ / macOS 26 when
+  Gatekeeper fully blocks the app ("quarantine jail").
+
+  1. Drag Hush.app into your Applications folder.
+  2. Open Terminal (Spotlight → type "Terminal" → Enter).
+  3. Paste this command and press Enter:
+
+       xattr -rd com.apple.quarantine /Applications/Hush.app
+
+  4. Open Hush normally — no warning will appear.
+
 
 ──────────────────────────────────────────────────────────────────────────
 APPLE'S OWN EXPLANATION
