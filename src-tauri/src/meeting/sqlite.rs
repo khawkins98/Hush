@@ -119,9 +119,9 @@ impl Repository<MeetingSession, NewMeetingSession, i64> for SqliteMeetingSession
 impl MeetingSessionRepository for SqliteMeetingSessionRepository {
     async fn close_session(&self, id: i64) -> Result<()> {
         // Sets `ended_at = now`. No-op if the row is already closed
-        // (the CASE guards against double-write so a second close
+        // (the COALESCE guards against double-write so a second close
         // doesn't drift the timestamp later than the first.)
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE meeting_sessions \
              SET ended_at = COALESCE(ended_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) \
              WHERE id = ?",
@@ -130,6 +130,9 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         .execute(self.db.pool())
         .await
         .context("close meeting session")?;
+        if result.rows_affected() == 0 {
+            anyhow::bail!("meeting session {id} not found");
+        }
         Ok(())
     }
 
