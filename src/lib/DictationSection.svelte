@@ -40,14 +40,17 @@
 
   let mics = $derived(audio.sources.filter((s) => s.kind === "microphone"));
   let systemAudio = $derived(audio.sources.find((s) => s.kind === "system-audio"));
-  let hasUsableSource = $derived(
-    mics.length > 0 || (systemAudio?.isSupported ?? false),
-  );
+  let hasUsableSource = $derived.by(() => {
+    if (audio.selected === null) return false;
+    if (audio.selected === "system") return systemAudio?.isSupported ?? false;
+    return mics.some((m) => m.id === audio.selected);
+  });
   let willRecordMeeting = $derived(
     !dictation.recording
       && audio.selected !== null
       && audio.selected !== "system"
-      && (systemAudio?.isSupported ?? false),
+      && (systemAudio?.isSupported ?? false)
+      && audio.meetingIncludeSystemAudio,
   );
   let selectedSourceLabel = $derived.by(() => {
     if (audio.selected === null) return null;
