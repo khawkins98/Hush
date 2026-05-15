@@ -10,7 +10,6 @@ import { Events } from "$lib/events";
 import { joinUtterances } from "$lib/transcript-format";
 import type {
   ActiveMeetingSession,
-  AudioSource,
   MeetingSession,
   MeetingSessionDetail,
 } from "$lib/types";
@@ -227,34 +226,6 @@ export const meeting = {
   },
   setNotice(notice: MeetingCopyNotice | null) {
     meetingCopyNotice = notice;
-  },
-  async startSession() {
-    // Guard against same-tick double-calls from hotkey, palette, or UI button.
-    if (meetingBusy || meetingActiveId !== null) return;
-    meetingBusy = true;
-    try {
-      const sources: AudioSource[] = [];
-      if (audio.meetingMicId !== null) {
-        sources.push({ kind: "microphone", deviceId: audio.meetingMicId });
-      }
-      const sys = audio.findSystemAudio();
-      if (audio.meetingIncludeSystemAudio && sys?.isSupported) {
-        sources.push({ kind: "system-audio" });
-      }
-      if (sources.length === 0) {
-        meetingSessionsError = {
-          headline: "No audio sources selected",
-          hint: "Pick at least one source (microphone or system audio) before starting a session.",
-        };
-        return;
-      }
-      await invoke("meeting_start_manual", { sources, appName: null });
-      await meeting.refresh();
-    } catch (e) {
-      meetingSessionsError = formatErrorDisplay(e);
-    } finally {
-      meetingBusy = false;
-    }
   },
   async stopSession() {
     // Guard against same-tick double-calls from hotkey, palette, or UI button.

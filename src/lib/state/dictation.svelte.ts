@@ -281,6 +281,13 @@ export const dictation = {
     }
   },
   async stop(trailingMs = 0) {
+    // Backend/event-initiated meeting session: dictation phase stayed "idle"
+    // throughout (only meeting.activeId was set, not phase). Delegate to
+    // meeting.stopSession() — no dictation phase transition needed.
+    if (meetingOnlyActive) {
+      await meeting.stopSession();
+      return;
+    }
     // Phase guard: only the recording state can transition to stopping.
     // Replaces the old busy-flag re-entrancy guard — illegal transitions
     // are structurally impossible rather than defended at runtime.

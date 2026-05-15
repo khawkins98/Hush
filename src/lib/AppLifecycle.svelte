@@ -166,8 +166,11 @@
 
     unlistenToggle = await listen(Events.HotkeyToggle, () => {
       if (dictation.busy || meeting.busy) return;
-      if (dictation.recording) void dictation.stop(TRAILING_SILENCE_MS);
-      else if (meeting.activeId !== null) void meeting.stopSession();
+      // anyRecordingActive covers both button-click (recording=true) and
+      // event-driven meeting-only (meetingOnlyActive=true) paths.
+      // dictation.stop() routes to meeting.stopSession() internally for
+      // the meetingOnlyActive case, so no explicit branching needed here.
+      if (dictation.anyRecordingActive) void dictation.stop(TRAILING_SILENCE_MS);
       else void dictation.start();
     });
 
