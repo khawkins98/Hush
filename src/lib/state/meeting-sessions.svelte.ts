@@ -147,11 +147,12 @@ export const meeting = {
     const seq = meetingActiveDetailSeq;
     try {
       const detail = await invoke<MeetingSessionDetail>("meeting_session_get", { id });
-      // Discard if a newer refreshActiveDetail already completed.
-      if (seq !== meetingActiveDetailSeq) return;
+      // Discard if a newer refreshActiveDetail already completed, or if
+      // the active session changed while the fetch was in-flight (#890).
+      if (seq !== meetingActiveDetailSeq || meetingActiveId !== id) return;
       meetingActiveDetail = detail;
     } catch (e) {
-      if (seq !== meetingActiveDetailSeq) return;
+      if (seq !== meetingActiveDetailSeq || meetingActiveId !== id) return;
       // Transient poll failures are logged but not surfaced — the next
       // poll cycle will self-heal and we don't want to clobber the
       // session-list error field with an ephemeral detail-fetch blip.
@@ -159,6 +160,9 @@ export const meeting = {
     }
   },
   clearActiveDetail() {
+    // Bump the sequence so any in-flight refreshActiveDetail for the
+    // previous session cannot overwrite state after the session ends.
+    meetingActiveDetailSeq += 1;
     meetingActiveDetail = null;
   },
   async deleteSession(session: MeetingSession) {
@@ -297,7 +301,13 @@ export const meeting = {
         e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
       // Derive multi-source from the session's persisted sources rather
       // than current picker state, which may have changed since session start.
-      const activeSources = meeting.activeDetail?.session.sources ?? [];
+      // Fall back to the session-list entry when activeDetail hasn't loaded
+      // yet (startup race: source-failed can arrive before the detail fetch
+      // completes, #888).
+      const activeSources =
+        meeting.activeDetail?.session.sources ??
+        meeting.sessions.find((s) => s.id === e.payload.sessionId)?.sources ??
+        [];
       const wasMultiSource = activeSources.length > 1;
       const otherSourceLabel =
         e.payload.sourceKind === "mic" ? "system audio" : "microphone";

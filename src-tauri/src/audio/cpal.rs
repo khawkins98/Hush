@@ -365,10 +365,16 @@ impl AudioSession for CpalMicSessionHandle {
         cmd_tx
             .send(Cmd::DrainBuffer(tx))
             .map_err(|_| anyhow!("audio worker thread has exited"))?;
-        let (samples, format) = rx
+        let (mut samples, format) = rx
             .recv()
             .map_err(|_| anyhow!("audio worker dropped reply channel"))??;
         sink.extend_from_slice(&samples);
+        // Zeroize the local copy: the Vec's backing allocation survives
+        // until the next collection cycle and may contain PCM data.
+        {
+            use zeroize::Zeroize;
+            samples.zeroize();
+        }
         Ok(format)
     }
     fn stop(mut self: Box<Self>) -> Result<CapturedAudio> {
