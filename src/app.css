@@ -11,16 +11,22 @@ body {
 /* Global brand tokens for Hush's fixed five-color palette. */
 
 :root {
-  /* ── Brand palette: vibrant dark orange ─────────────────── */
-  /* Surfaces derived from #dc7932 orange / #6e1715 crimson.    */
-  /* Blue (#5ea1c3 / #528eaf) used for info/link only.          */
-  --accent:        #dc7932;
-  --accent-hover:  #e8923f;
-  --accent-subtle: rgba(220, 121, 50, 0.20);
+  /* ── Brand palette: vibrant dark ────────────────────────── */
+  /* Main: warm orange/rust (#dc7932, #6e1715)                  */
+  /* Sidebar: cool blue-navy (#5ea1c3, #528eaf)                 */
+  --accent:           #dc7932;
+  --accent-hover:     #e8923f;
+  --accent-subtle:    rgba(220, 121, 50, 0.20);
+  --accent-blue:      #5ea1c3;
+  --accent-blue-hover:#7ab8d4;
+  --accent-blue-subtle: rgba(94, 161, 195, 0.18);
 
-  /* ── Surfaces (deep dark orange/rust-tinted) ────────────── */
+  /* ── Surfaces ────────────────────────────────────────────── */
+  /* Sidebar: deep blue-navy — visually distinct from warm main */
+  --bg-sidebar:  #0d1720;
+  --bg-sidebar-border: #1a2e40;
+  /* Main canvas + panels: warm orange-brown */
   --bg-app:      #1a0d07;
-  --bg-sidebar:  #140a05;
   --bg-surface:  #231508;
   --bg-elevated: #2c1c0e;
   --bg-input:    #1e1108;
