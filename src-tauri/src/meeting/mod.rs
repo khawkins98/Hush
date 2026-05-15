@@ -63,8 +63,33 @@ pub use sqlite::SqliteMeetingSessionRepository;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::repository::Repository;
+
+/// Vocabulary prompt and replacement rules to use for a session.
+///
+/// Snapshotted at session-open time by the IPC command layer so
+/// personal dictionary and replacement rules are consistent for the
+/// session lifetime — the same snapshot semantics as the dictation
+/// path. If the user updates their dictionary mid-session, the change
+/// takes effect on the *next* session.
+///
+/// `Default` produces empty prompt + empty rules (no-op), which is
+/// the correct shape for tests that don't exercise vocabulary features.
+#[derive(Default)]
+pub struct SessionDictOpts {
+    /// Comma-separated vocabulary terms formatted by
+    /// [`crate::dictionary::format_vocabulary_prompt`]. Passed as the
+    /// `initial_prompt` to [`crate::transcription::Transcribe::start_stream`].
+    /// Empty string disables prompt-biasing.
+    pub vocab_prompt: String,
+    /// Post-transcription find/replace rules applied to final
+    /// utterances before they are persisted. Mirroring the dictation
+    /// path's `load_replacement_rules` behaviour, applied on every
+    /// finalised utterance from any source.
+    pub replacement_rules: Arc<Vec<crate::dictionary::ReplacementRule>>,
+}
 
 /// Classifier verdict at session-open time. Persisted on the row so
 /// a later classifier change doesn't retroactively re-label past

@@ -352,6 +352,7 @@ mod tests {
                 vec![AudioSource::default_microphone()],
                 Some("us.zoom.xos".into()),
                 None,
+                Default::default(),
             )
             .await
             .unwrap();
@@ -367,11 +368,21 @@ mod tests {
     #[tokio::test]
     async fn start_manual_rejects_concurrent_starts() {
         let mgr = fresh_manager().await;
-        mgr.start_manual(vec![AudioSource::default_microphone()], None, None)
-            .await
-            .unwrap();
+        mgr.start_manual(
+            vec![AudioSource::default_microphone()],
+            None,
+            None,
+            Default::default(),
+        )
+        .await
+        .unwrap();
         let err = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .expect_err("second start must error");
         let msg = format!("{err:#}");
@@ -391,7 +402,7 @@ mod tests {
         // and every subsequent start would error indefinitely.
         let mgr = fresh_manager().await;
         let err = mgr
-            .start_manual(Vec::new(), None, None)
+            .start_manual(Vec::new(), None, None, Default::default())
             .await
             .expect_err("empty source list must error");
         let msg = format!("{err:#}");
@@ -402,7 +413,12 @@ mod tests {
 
         // The slot is back to Idle — a valid start now succeeds.
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .expect("post-rollback start must succeed");
         assert_eq!(mgr.active_session_id(), Some(session.id));
@@ -416,7 +432,12 @@ mod tests {
     async fn start_manual_fails_when_no_transcriber_loaded() {
         let mgr = fresh_manager_no_transcriber().await;
         let err = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .expect_err("must error with no transcriber");
         let msg = format!("{err:#}");
@@ -436,7 +457,12 @@ mod tests {
     async fn stop_manual_closes_the_session_and_clears_active_id() {
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -569,6 +595,7 @@ mod tests {
                 vec![AudioSource::default_microphone()],
                 Some("Zoom".into()),
                 None,
+                Default::default(),
             )
             .await
             .unwrap();
@@ -667,6 +694,7 @@ mod tests {
                 vec![AudioSource::default_microphone()],
                 Some("Zoom".into()),
                 None,
+                Default::default(),
             )
             .await
             .unwrap();
@@ -726,6 +754,7 @@ mod tests {
                 vec![AudioSource::default_microphone()],
                 Some("Zoom".into()),
                 None,
+                Default::default(),
             )
             .await
             .unwrap();
@@ -781,7 +810,12 @@ mod tests {
         // empty Vec rather than None / errors.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
         let partials = mgr.current_partials_for(session.id);
@@ -800,6 +834,7 @@ mod tests {
                 vec![AudioSource::default_microphone()],
                 Some("Zoom".into()),
                 None,
+                Default::default(),
             )
             .await
             .unwrap();
@@ -832,7 +867,12 @@ mod tests {
         // panel's italic treatment depends on.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -872,7 +912,12 @@ mod tests {
         // independence.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -916,7 +961,12 @@ mod tests {
         // partial overwrote.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -964,7 +1014,12 @@ mod tests {
         // from one source to vanish on the other's commit.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1002,7 +1057,12 @@ mod tests {
         // dispatch is the last line of defence.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1032,7 +1092,12 @@ mod tests {
         // future refactor that drops the `is_none()` guard fails loud.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1066,7 +1131,12 @@ mod tests {
         // colour-code by.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1100,7 +1170,12 @@ mod tests {
         // tick buckets.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1205,7 +1280,12 @@ mod tests {
         // a no-op.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1272,7 +1352,12 @@ mod tests {
         // this test pins.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1333,7 +1418,12 @@ mod tests {
         // derived labels intact via dispatch_utterances' fallback.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -1395,6 +1485,7 @@ mod tests {
                 vec![AudioSource::default_microphone(), AudioSource::SystemAudio],
                 None,
                 None,
+                Default::default(),
             )
             .await
             .unwrap();
@@ -1454,7 +1545,12 @@ mod tests {
         // pump's last dispatch could expose a stale partial.
         let mgr = fresh_manager().await;
         let session = mgr
-            .start_manual(vec![AudioSource::default_microphone()], None, None)
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
 
