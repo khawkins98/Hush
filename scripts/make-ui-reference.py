@@ -3,9 +3,10 @@
 Generate two UI reference sheets (light + dark) for design review.
 
 Layout:
-  - DMG background image tiled as canvas texture
+  - Solid-colour canvas per theme
   - Header: app icon + title
   - 4-column grid of all screen screenshots with labels
+    (includes DMG installer background as a thumbnail)
   - Footer: "Hush UI Reference — v{version}"
 
 Output: tmp/uxwalk/ui-reference-light.png
@@ -53,7 +54,7 @@ ICON_SIZE = 120
 # ---------- colour themes for the chrome (not the screenshots) ----------
 THEMES = {
     "light": {
-        "bg_tint": (255, 255, 255, 200),       # semi-transparent white overlay on bg
+        "canvas_bg": (235, 235, 240),               # solid canvas background
         "header_bg": (245, 245, 247, 240),
         "cell_bg": (255, 255, 255, 230),
         "shadow": (0, 0, 0, 35),
@@ -63,7 +64,7 @@ THEMES = {
         "border": (210, 210, 215, 180),
     },
     "dark": {
-        "bg_tint": (20, 20, 28, 220),
+        "canvas_bg": (22, 22, 30),                  # solid canvas background
         "header_bg": (28, 28, 36, 240),
         "cell_bg": (38, 38, 48, 230),
         "shadow": (0, 0, 0, 90),
@@ -92,19 +93,10 @@ LABELS = {
     "25-settings-permissions":     "Settings · Permissions",
     "26-settings-about":           "Settings · About",
     "30-hud":                      "HUD pill",
+    "dmg-background":              "DMG installer background",
 }
 
 SHOT_ORDER = list(LABELS.keys())
-
-
-def tile_background(bg_src: Image.Image, w: int, h: int) -> Image.Image:
-    """Tile bg_src to fill w×h."""
-    canvas = Image.new("RGBA", (w, h))
-    bw, bh = bg_src.size
-    for y in range(0, h, bh):
-        for x in range(0, w, bw):
-            canvas.paste(bg_src, (x, y))
-    return canvas
 
 
 def load_font(size: int, bold: bool = False):
@@ -153,13 +145,8 @@ def make_sheet(theme_name: str):
     canvas_w = content_w + 2 * MARGIN
     canvas_h = HEADER_H + rows * CELL_H + FOOTER_H
 
-    # --- background: tile DMG background, then tint ---
-    bg_src = Image.open(BG_PATH).convert("RGBA")
-    canvas = tile_background(bg_src, canvas_w, canvas_h)
-
-    # Apply theme tint overlay
-    tint = Image.new("RGBA", (canvas_w, canvas_h), t["bg_tint"])
-    canvas = Image.alpha_composite(canvas, tint)
+    # --- background: solid colour ---
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), t["canvas_bg"] + (255,))
 
     draw = ImageDraw.Draw(canvas)
 
@@ -200,20 +187,29 @@ def make_sheet(theme_name: str):
         cell_y = HEADER_H + row * CELL_H + GAP // 2
 
         shot_path = shots_dir / f"{key}.png"
-        if not shot_path.exists():
+        if key == "dmg-background":
+            shot = Image.open(BG_PATH).convert("RGBA")
+        elif not shot_path.exists():
             print(f"  [warn] missing {shot_path.name}", file=sys.stderr)
             continue
-
-        shot = Image.open(shot_path).convert("RGBA")
+        else:
+            shot = Image.open(shot_path).convert("RGBA")
 
         if key == "30-hud":
             # HUD is tiny — centre it in the cell area
             thumb = shot.resize((HUD_THUMB_W, HUD_THUMB_H), Image.LANCZOS)
-            # Create a placeholder card the same size as other cells
             card = Image.new("RGBA", (THUMB_W, THUMB_H), t["cell_bg"])
             px = (THUMB_W - HUD_THUMB_W) // 2
             py = (THUMB_H - HUD_THUMB_H) // 2
             card.paste(thumb, (px, py), thumb)
+            thumb_to_paste = card
+        elif key == "dmg-background":
+            # Fit DMG image proportionally, centred on a card
+            shot.thumbnail((THUMB_W, THUMB_H), Image.LANCZOS)
+            card = Image.new("RGBA", (THUMB_W, THUMB_H), t["cell_bg"])
+            px = (THUMB_W - shot.width) // 2
+            py = (THUMB_H - shot.height) // 2
+            card.paste(shot, (px, py), shot)
             thumb_to_paste = card
         else:
             thumb_to_paste = shot.resize((THUMB_W, THUMB_H), Image.LANCZOS)
