@@ -157,14 +157,12 @@ impl SpeakerStore for SqliteSpeakerStore {
         .context("fetch absorb identity for merge")?;
 
         // Re-link utterances before deleting absorb_id.
-        sqlx::query(
-            "UPDATE utterances SET speaker_identity_id = ? WHERE speaker_identity_id = ?",
-        )
-        .bind(keep_id)
-        .bind(absorb_id)
-        .execute(self.db.pool())
-        .await
-        .context("re-link utterances for merge")?;
+        sqlx::query("UPDATE utterances SET speaker_identity_id = ? WHERE speaker_identity_id = ?")
+            .bind(keep_id)
+            .bind(absorb_id)
+            .execute(self.db.pool())
+            .await
+            .context("re-link utterances for merge")?;
 
         // Update keep_id's centroid as weighted mean and delete absorb_id.
         if let (Some((keep_blob, keep_count)), Some((absorb_blob, absorb_count))) = (keep, absorb) {
@@ -175,9 +173,7 @@ impl SpeakerStore for SqliteSpeakerStore {
                 let new_centroid: Vec<f32> = keep_emb
                     .iter()
                     .zip(absorb_emb.iter())
-                    .map(|(k, a)| {
-                        (k * keep_count as f32 + a * absorb_count as f32) / total as f32
-                    })
+                    .map(|(k, a)| (k * keep_count as f32 + a * absorb_count as f32) / total as f32)
                     .collect();
                 let blob = embedding_to_blob(&new_centroid);
                 sqlx::query(

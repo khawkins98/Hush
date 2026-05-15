@@ -267,10 +267,7 @@ impl AppStateBuilder {
         self
     }
 
-    pub fn speaker_identity_enabled_arc(
-        mut self,
-        arc: Arc<std::sync::atomic::AtomicBool>,
-    ) -> Self {
+    pub fn speaker_identity_enabled_arc(mut self, arc: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.speaker_identity_enabled_arc = Some(arc);
         self
     }
