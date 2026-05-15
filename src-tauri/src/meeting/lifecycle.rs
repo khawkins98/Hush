@@ -43,7 +43,7 @@ use super::events::{
 };
 use super::manager::{ActiveSession, SessionManager, SessionState};
 use super::pump;
-use super::{MeetingSession, NewMeetingSession, NewPersistedUtterance};
+use super::{MeetingSession, NewMeetingSession, NewPersistedUtterance, SessionDictOpts};
 
 impl SessionManager {
     /// Start a meeting session manually (button-driven).
@@ -74,6 +74,7 @@ impl SessionManager {
         sources: Vec<AudioSource>,
         app_name: Option<String>,
         app_title: Option<String>,
+        dict_opts: SessionDictOpts,
     ) -> Result<MeetingSession> {
         // Claim the slot via the Opening sentinel. A concurrent
         // start sees Opening and rejects rather than racing past
@@ -306,7 +307,7 @@ impl SessionManager {
                     continue;
                 }
             };
-            match transcriber.start_stream(format, "") {
+            match transcriber.start_stream(format, &dict_opts.vocab_prompt) {
                 Ok(mut sess) => {
                     // Replay pre-warm audio into the streaming session before
                     // zeroizing the buffer (#868). Without this, audio captured
@@ -409,6 +410,8 @@ impl SessionManager {
             audio: Arc::clone(&self.audio),
             transcribe: transcriber_snapshot,
             session_start: started_at,
+            vocab_prompt: dict_opts.vocab_prompt,
+            replacement_rules: dict_opts.replacement_rules,
         }));
 
         // Commit Active. The slot has been Opening since the start

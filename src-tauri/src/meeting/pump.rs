@@ -48,6 +48,7 @@ use anyhow::Result;
 use zeroize::Zeroize;
 
 use crate::audio::{apply_mic_gain, AudioCapture, AudioSession, AudioSource, CaptureFormat};
+use crate::dictionary::apply_replacements;
 use crate::transcription::{StreamingTranscribeSession, Transcribe, Utterance};
 
 use super::events::{
@@ -155,6 +156,16 @@ pub(super) struct PumpContext {
     /// start; adding `stream_epoch_offsets_ms[i]` before persistence
     /// makes them relative to the meeting session start instead.
     pub session_start: Instant,
+    /// Vocabulary prompt passed to `start_stream` at session-open and
+    /// whenever a streaming session is recreated on device reconnect or
+    /// fallback. Empty string disables prompt-biasing (same as the
+    /// pre-#913 behaviour).
+    pub vocab_prompt: String,
+    /// Post-transcription find/replace rules applied to final
+    /// utterances in [`tick_inference`] before they enter the dispatch
+    /// pipeline. Empty slice is a no-op. Snapshotted at session-open
+    /// so mid-session rule edits take effect on the next session.
+    pub replacement_rules: Arc<Vec<crate::dictionary::ReplacementRule>>,
 }
 
 /// Per-tick mutable working state for [`run_pump`]. Bundled so the
@@ -468,6 +479,7 @@ fn tick_drain_sources(
                                 &ctx.audio,
                                 ctx.transcribe.as_ref(),
                                 &fallback_source,
+                                &ctx.vocab_prompt,
                             ) {
                                 Ok((new_handle, new_stream)) => {
                                     let fallback_device_name = ctx
@@ -808,6 +820,25 @@ async fn tick_inference(
             .iter()
             .filter(|u| u.is_final && (u.text == "[BLANK_AUDIO]" || u.text.trim().is_empty()))
             .count() as u64;
+
+        // Apply post-transcription replacement rules to final utterances (#913).
+        // Partials are live-updating text the user sees before finalisation;
+        // applying rules to partials would cause flicker. Only finals are
+        // processed here, mirroring the dictation path's apply_replacements call.
+        let utterances: Vec<Utterance> = if !ctx.replacement_rules.is_empty() {
+            utterances
+                .into_iter()
+                .map(|mut u| {
+                    if u.is_final {
+                        u.text = apply_replacements(&u.text, &ctx.replacement_rules);
+                    }
+                    u
+                })
+                .collect()
+        } else {
+            utterances
+        };
+
         tick_buckets.push(TickBucket {
             source_label,
             utterances,
@@ -842,7 +873,12 @@ fn tick_recovery_check(ctx: &mut PumpContext, state: &mut PumpTickState) {
             drop(ctx.handles[i].take());
             ctx.streaming_sessions[i] = None;
 
-            match open_source_handle(&ctx.audio, ctx.transcribe.as_ref(), &original_source) {
+            match open_source_handle(
+                &ctx.audio,
+                ctx.transcribe.as_ref(),
+                &original_source,
+                &ctx.vocab_prompt,
+            ) {
                 Ok((new_handle, new_stream)) => {
                     tracing::info!(
                         device = %original_device_name,
@@ -1294,6 +1330,7 @@ pub(super) fn open_source_handle(
     audio: &Arc<dyn AudioCapture>,
     transcriber: Option<&Arc<dyn Transcribe>>,
     source: &AudioSource,
+    vocab_prompt: &str,
 ) -> Result<(
     Box<dyn AudioSession>,
     Option<Box<dyn StreamingTranscribeSession>>,
@@ -1303,7 +1340,7 @@ pub(super) fn open_source_handle(
         Some(t) => {
             let mut scratch = Vec::new();
             match handle.drain_into(&mut scratch) {
-                Ok(format) => match t.start_stream(format, "") {
+                Ok(format) => match t.start_stream(format, vocab_prompt) {
                     Ok(mut sess) => {
                         // Replay pre-warm audio so the first inference
                         // window is not cold (#868). Treat feed failure

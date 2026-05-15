@@ -8,6 +8,9 @@
 //! dictation internals.
 
 mod pipeline;
+// Re-export the dict helpers crate-wide so meeting.rs and lib.rs can load
+// vocabulary prompts and replacement rules without a private-module path.
+pub(crate) use pipeline::{load_replacement_rules, load_vocabulary_prompt};
 
 use std::sync::Arc;
 
@@ -27,9 +30,8 @@ use super::{poisoned, DictationResult, IpcError, IpcResult};
 // continue to read `helper(...)` instead of `pipeline::helper(...)`.
 // `pub(super)` items in pipeline.rs are visible at this scope.
 use pipeline::{
-    fire_ready_notification, load_replacement_rules, load_vocabulary_prompt, spawn_history_create,
-    start_dictation_inner, stop_audio_capture, strip_whisper_brackets, take_foreground_snapshot,
-    write_to_clipboard,
+    fire_ready_notification, spawn_history_create, start_dictation_inner, stop_audio_capture,
+    strip_whisper_brackets, take_foreground_snapshot, write_to_clipboard,
 };
 
 /// Enumerate every audio source the user can pick from in the source
