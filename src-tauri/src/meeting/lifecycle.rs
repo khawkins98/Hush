@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{anyhow, Result};
+use zeroize::Zeroize;
 
 use crate::audio::{AudioSession, AudioSource};
 use crate::transcription::StreamingTranscribeSession;
@@ -259,6 +260,7 @@ impl SessionManager {
                 let format = match handles[i].drain_into(&mut scratch) {
                     Ok(f) => f,
                     Err(e) => {
+                        scratch.zeroize();
                         tracing::warn!(
                             error = ?e,
                             source_kind = source.kind_label(),
@@ -292,6 +294,7 @@ impl SessionManager {
                         continue;
                     }
                 };
+                scratch.zeroize(); // (#930) pre-warm PCM must not linger in allocator memory
                 match transcriber.start_stream(format, "") {
                     Ok(sess) => streaming_sessions.push(Some(sess)),
                     Err(e) => {
