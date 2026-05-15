@@ -486,7 +486,7 @@ fn tick_drain_sources(
                                     emit_audio_device_lost(
                                         ctx.event_emitter.as_ref(),
                                         ctx.session_id,
-                                        ctx.sources[i].kind_label(),
+                                        ctx.sources[i].speaker_tag(),
                                         &lost_device,
                                         Some(fallback_device_name.as_str()),
                                     );
@@ -506,7 +506,7 @@ fn tick_drain_sources(
                                     emit_audio_device_lost(
                                         ctx.event_emitter.as_ref(),
                                         ctx.session_id,
-                                        ctx.sources[i].kind_label(),
+                                        ctx.sources[i].speaker_tag(),
                                         &lost_device,
                                         None,
                                     );
@@ -832,7 +832,7 @@ fn tick_recovery_check(ctx: &mut PumpContext, state: &mut PumpTickState) {
                     emit_audio_device_restored(
                         ctx.event_emitter.as_ref(),
                         ctx.session_id,
-                        ctx.sources[i].kind_label(),
+                        ctx.sources[i].speaker_tag(),
                         &original_device_name,
                     );
                 }
@@ -1166,6 +1166,16 @@ pub(super) async fn dispatch_utterances(
                     source_kind = source_label,
                     "meeting pump: utterance append failed; final dropped"
                 );
+                // Restore the partial so the text is not silently lost — the
+                // user can at least see it in the panel even if it wasn't
+                // persisted. The brief window where neither partial nor DB row
+                // is visible (between the clear above and this restore) is
+                // preferable to permanent data loss.
+                if let Ok(mut guard) = partials.write() {
+                    if let Some(per_session) = guard.get_mut(&session_id) {
+                        per_session.insert(source_label.to_owned(), u);
+                    }
+                }
                 // Surface to the user via the same banner the dictation IPC
                 // path uses (#790) — transcript went to clipboard but not to
                 // history, which is worth a visible warning.
