@@ -332,4 +332,153 @@
 </div>
 
 <style>
+  /* Transparent window — override the global body background. */
+  :global(html), :global(body) {
+    margin: 0;
+    padding: 0;
+    background-color: transparent;
+    overflow: hidden;
+    color: #f5efe8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .hud-root {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    height: 100vh;
+    width: 100vw;
+    box-sizing: border-box;
+    padding: 0 0.65rem;
+    /* Dark warm-orange pill, glassy — matches the app's dark canvas */
+    background-color: rgba(26, 13, 7, 0.88);
+    border-radius: 999px;
+    border: 1px solid rgba(220, 121, 50, 0.28);
+    box-shadow:
+      0 4px 16px rgba(0, 0, 0, 0.45),
+      0 0 0 0.5px rgba(220, 121, 50, 0.12);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    user-select: none;
+    --audio-waveform-height: 24px;
+    cursor: grab;
+  }
+  .hud-root:active {
+    cursor: grabbing;
+  }
+
+  .hud-dismiss {
+    margin-left: auto;
+    padding: 0;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.75);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color 0.12s, color 0.12s;
+  }
+  .hud-dismiss:hover {
+    background-color: rgba(255, 255, 255, 0.28);
+    color: #ffffff;
+  }
+  .hud-dismiss:focus-visible {
+    outline: 2px solid rgba(220, 121, 50, 0.7);
+    outline-offset: 1px;
+  }
+
+  .hud-grip {
+    display: inline-flex;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.25);
+    transition: color 0.12s;
+  }
+  .hud-root:hover .hud-grip {
+    color: rgba(255, 255, 255, 0.55);
+  }
+
+  .hud-dot {
+    width: 0.85rem;
+    height: 0.85rem;
+    border-radius: 50%;
+    background-color: #e85050;
+    box-shadow: 0 0 8px rgba(232, 80, 80, 0.6);
+    animation: hud-pulse 1.2s ease-in-out infinite;
+  }
+
+  .hud-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .hud-elapsed {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: rgba(245, 239, 232, 0.72);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    letter-spacing: 0.01em;
+  }
+
+  @keyframes hud-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.85); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hud-dot { animation: none; }
+  }
+
+  /* Processing: dot turns orange (accent), shimmer replaces waveform */
+  .hud-processing .hud-dot {
+    animation: none;
+    background-color: #dc7932;
+    box-shadow: 0 0 6px rgba(220, 121, 50, 0.6);
+  }
+
+  .hud-shimmer {
+    width: 60px;
+    height: var(--audio-waveform-height, 16px);
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .hud-shimmer-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(
+      90deg,
+      rgba(220, 121, 50, 0.1) 0%,
+      rgba(220, 121, 50, 0.55) 50%,
+      rgba(220, 121, 50, 0.1) 100%
+    );
+    background-size: 200% 100%;
+    background-position: 100% 0;
+    animation: hud-shimmer 1.6s linear infinite;
+  }
+  @keyframes hud-shimmer {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hud-shimmer-fill { animation: none; background-position: 50% 0; }
+  }
+
+  /* Done: blue dot + check (matches app's --success-text: #7ab8d4) */
+  .hud-done .hud-dot {
+    animation: none;
+    background-color: #7ab8d4;
+    box-shadow: 0 0 6px rgba(122, 184, 212, 0.55);
+  }
+  .hud-done-check {
+    color: #7ab8d4;
+    width: 16px;
+    height: 16px;
+  }
 </style>

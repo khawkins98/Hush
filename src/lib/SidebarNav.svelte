@@ -250,12 +250,12 @@
 <style>
   .sidebar-nav {
     flex-shrink: 0;
-    /* Fade right edge from sidebar navy into main orange — removes
-       the hard dog-leg where the two surfaces meet. */
+    /* Fade top edge from main orange into sidebar blue — smooth
+       junction at the window chrome rather than a hard dog-leg. */
     background: linear-gradient(
-      to right,
-      var(--bg-sidebar) 75%,
-      var(--bg-app) 100%
+      to bottom,
+      var(--bg-app) 0%,
+      var(--bg-sidebar) 56px
     );
     border-right: none;
     padding: 0.6rem 0;
