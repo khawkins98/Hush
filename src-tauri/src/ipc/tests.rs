@@ -392,7 +392,7 @@ fn appstate_can_be_constructed_with_no_transcriber() {
     // stop. We just check construction here; the unavailable behaviour
     // is exercised by the `commands` module's runtime path.
     let state = mock_state();
-    assert!(state.transcribe.lock().unwrap().is_none());
+    assert!(state.inference.transcribe.lock().unwrap().is_none());
 }
 
 #[test]
@@ -420,8 +420,8 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
 
     let state = mock_state();
     // mock_state() leaves both slots = None (no model loaded).
-    assert!(state.transcribe.lock().unwrap().is_none());
-    assert!(state.transcribe_meeting.lock().unwrap().is_none());
+    assert!(state.inference.transcribe.lock().unwrap().is_none());
+    assert!(state.inference.transcribe_meeting.lock().unwrap().is_none());
 
     let first_d: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "first" });
     let first_m: Arc<dyn Transcribe> = Arc::new(StubTranscriber { label: "first" });
@@ -432,7 +432,7 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
 
     // Now confirm the swap actually landed in both slots.
     {
-        let guard = state.transcribe.lock().unwrap();
+        let guard = state.inference.transcribe.lock().unwrap();
         assert_eq!(
             guard.as_ref().map(|t| t.model_label()),
             Some("first".to_owned()),
@@ -440,7 +440,7 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
         );
     }
     {
-        let guard = state.transcribe_meeting.lock().unwrap();
+        let guard = state.inference.transcribe_meeting.lock().unwrap();
         assert_eq!(
             guard.as_ref().map(|t| t.model_label()),
             Some("first".to_owned()),
@@ -463,6 +463,7 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
     );
     assert_eq!(
         state
+            .inference
             .transcribe
             .lock()
             .unwrap()
@@ -473,6 +474,7 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
     );
     assert_eq!(
         state
+            .inference
             .transcribe_meeting
             .lock()
             .unwrap()
@@ -487,8 +489,8 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
         .swap_transcriber(None, None)
         .expect("clear swap succeeds");
     assert_eq!(prev.map(|t| t.model_label()), Some("second".to_owned()));
-    assert!(state.transcribe.lock().unwrap().is_none());
-    assert!(state.transcribe_meeting.lock().unwrap().is_none());
+    assert!(state.inference.transcribe.lock().unwrap().is_none());
+    assert!(state.inference.transcribe_meeting.lock().unwrap().is_none());
 }
 
 #[test]

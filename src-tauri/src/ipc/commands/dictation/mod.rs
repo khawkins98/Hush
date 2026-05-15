@@ -178,7 +178,7 @@ pub async fn stop_dictation(
         // Lock briefly, clone the Arc, drop the lock. The dictation
         // hot path only needs a snapshot of "what's loaded right now".
         // Hot-swap from `model_select` will land for the *next* call.
-        let guard = state.transcribe.lock().map_err(poisoned)?;
+        let guard = state.inference.transcribe.lock().map_err(poisoned)?;
         guard
             .as_ref()
             .ok_or(IpcError::TranscriptionUnavailable)?
