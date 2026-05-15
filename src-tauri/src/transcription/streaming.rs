@@ -249,6 +249,10 @@ impl SlidingWindowState {
             if self.committed_until_ms < self.window_start_offset_ms {
                 self.committed_until_ms = self.window_start_offset_ms;
             }
+            // The previous partial no longer refers to audio in the window;
+            // clear dedup state so the first post-slide partial is not
+            // falsely suppressed (#871).
+            self.last_partial_text = None;
         }
     }
 

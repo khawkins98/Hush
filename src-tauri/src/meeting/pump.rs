@@ -45,6 +45,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use zeroize::Zeroize;
 
 use crate::audio::{apply_mic_gain, AudioCapture, AudioSession, AudioSource, CaptureFormat};
 use crate::transcription::{StreamingTranscribeSession, Transcribe, Utterance};
@@ -191,6 +192,16 @@ impl PumpTickState {
             recovery_states: vec![SourceRecoveryState::Active; n],
             stream_epoch_offsets_ms: vec![0; n],
             first_drain_logged: vec![false; n],
+        }
+    }
+}
+
+impl Drop for PumpTickState {
+    fn drop(&mut self) {
+        // Zeroize raw PCM scratch buffers so meeting audio doesn't linger
+        // in heap memory after the pump ends (#869).
+        for buf in &mut self.drain_buffers {
+            buf.zeroize();
         }
     }
 }
@@ -616,10 +627,13 @@ async fn tick_inference(
 
         // Apply mic gain to the drained raw samples (#531) before
         // feeding them to both the diarizer buffer and the streaming
-        // inference session. A single application here means neither
-        // consumer needs its own gain path.
-        let gain_db = f32::from_bits(ctx.mic_gain_db.load(Ordering::Relaxed));
-        apply_mic_gain(&mut state.drain_buffers[i], gain_db);
+        // inference session. Only applies to the microphone source —
+        // mic_gain_db is a microphone-only setting and must not distort
+        // system-audio samples captured from the tap (#865).
+        if matches!(ctx.sources[i], AudioSource::Microphone(_)) {
+            let gain_db = f32::from_bits(ctx.mic_gain_db.load(Ordering::Relaxed));
+            apply_mic_gain(&mut state.drain_buffers[i], gain_db);
+        }
 
         let samples = std::mem::take(&mut state.drain_buffers[i]);
         let source_label = ctx.sources[i].speaker_tag().to_owned();
