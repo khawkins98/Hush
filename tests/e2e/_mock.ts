@@ -110,10 +110,10 @@ export async function installMocks(
       // side-effect-only no-ops in tests.
       open_url: () => undefined,
       reveal_log_dir: () => undefined,
-      // Meeting auto-start mode (Settings → Meeting). Default
-      // matches the backend's "off" default; specs that exercise
-      // the dropdown override per-test.
-      get_meeting_autostart_mode: () => "off",
+      // Meeting auto-start mode (Settings → Meeting). Default matches
+      // the real backend default: from_setting(None) returns "always" —
+      // first-run users have autostart on (#843).
+      get_meeting_autostart_mode: () => "always",
       set_meeting_autostart_mode: () => undefined,
       // Diarization toggle (Settings → Meeting → Speakers, #111).
       // Default matches the backend's "off" default; specs that
