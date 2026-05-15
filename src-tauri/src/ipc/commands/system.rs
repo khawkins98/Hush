@@ -281,10 +281,28 @@ pub async fn check_for_updates(
 /// Inner implementation that takes the current instant explicitly
 /// so unit tests can pin time without an actual sleep. The IPC
 /// command always passes `Instant::now()`.
+///
+/// Two-phase cache check prevents duplicate network probes (#876):
+/// 1. Fast path — reads cache under a cheap sync lock; returns early if still fresh.
+/// 2. Slow path — acquires the tokio in-flight mutex, re-checks the cache (a
+///    concurrent caller may have populated it while we waited), then probes.
 pub(crate) async fn check_for_updates_inner(
     state: &AppState,
     now: std::time::Instant,
 ) -> IpcResult<crate::updater::UpdateCheckResult> {
+    // Phase 1: fast cache read (no await, no in-flight mutex overhead).
+    {
+        let cached = state.last_update_check.lock().map_err(poisoned)?;
+        if let Some((at, result)) = cached.as_ref() {
+            if now.duration_since(*at) < UPDATE_CHECK_TTL {
+                return Ok(result.clone());
+            }
+        }
+    }
+    // Phase 2: serialise the probe so only one network call runs at a time.
+    let _guard = state.update_check_inflight.lock().await;
+    // Re-check after acquiring the guard — another caller may have already
+    // refreshed the cache while we were waiting.
     {
         let cached = state.last_update_check.lock().map_err(poisoned)?;
         if let Some((at, result)) = cached.as_ref() {

@@ -29,7 +29,7 @@ use crate::meeting::export::{
 };
 
 use super::history::history_csv_for_entries;
-use super::{IpcError, IpcResult};
+use super::{validate_export_path, IpcError, IpcResult};
 
 /// Which kinds of rows the bulk export covers (#357 phase 3c).
 /// Tagged lowercase to match the frontend literal tokens.
@@ -97,6 +97,7 @@ pub async fn history_export_bundle(
     options: ExportBundleOptions,
     directory: String,
 ) -> IpcResult<ExportBundleResult> {
+    validate_export_path(&directory)?;
     let dir = PathBuf::from(&directory);
     if !dir.is_dir() {
         return Err(IpcError::Internal(format!(
