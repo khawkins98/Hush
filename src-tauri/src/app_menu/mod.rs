@@ -245,9 +245,19 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                         let _guard = InflightGuard;
                         use tauri::Manager as _;
                         let state = app_handle.state::<crate::ipc::AppState>();
-                        match crate::updater::check_for_updates(&state.http).await {
-                            Ok(result) => {
-                                if let Err(e) = app_handle.emit("updater:result", &result) {
+                        // Route through the TTL-cached inner impl so the
+                        // Settings panel's "last checked" timestamp stays
+                        // current after a menu-triggered check, and rapid
+                        // menu clicks don't fire duplicate HTTP requests
+                        // (#831).
+                        let result = crate::ipc::commands::system::check_for_updates_inner(
+                            state.inner(),
+                            std::time::Instant::now(),
+                        )
+                        .await;
+                        match result {
+                            Ok(r) => {
+                                if let Err(e) = app_handle.emit("updater:result", &r) {
                                     tracing::warn!(
                                         error = ?e,
                                         "menu check-for-updates: emit result failed"
