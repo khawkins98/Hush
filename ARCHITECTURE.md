@@ -212,6 +212,7 @@ CoreAudio HAL thread  ──notify_one()──▶  Notify  ──notified().awai
 | Discord | — | `Discord`, `discord`, `Discord.exe` |
 | Skype | — | `Skype`, `skype`, `Skype.exe` |
 | GoToMeeting | — | `GoToMeeting`, `Citrix GoToMeeting.exe` |
+| BlueJeans | — | `BlueJeans`, `BlueJeans.exe` |
 | FaceTime | `com.apple.FaceTime` | — |
 | Tuple | `app.tuple.app` | — |
 | Around | `co.around.Around` | — |

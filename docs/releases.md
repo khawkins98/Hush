@@ -34,13 +34,13 @@ The first wave of releases will surface those warnings to users. The README's in
 
 Three files have to agree on the new version. They're not yet linked, so a stale one will silently produce a release where the binary reports an older version than the tag suggests. CI checks all three and will fail the PR if any disagree.
 
-- [`src-tauri/Cargo.toml`](../src-tauri/Cargo.toml) — `[package].version = "0.2.0"`
-- [`src-tauri/tauri.conf.json`](../src-tauri/tauri.conf.json) — `"version": "0.2.0"`
-- [`package.json`](../package.json) — `"version": "0.2.0"`
+- [`src-tauri/Cargo.toml`](../src-tauri/Cargo.toml) — `[package].version = "x.y.z"`
+- [`src-tauri/tauri.conf.json`](../src-tauri/tauri.conf.json) — `"version": "x.y.z"`
+- [`package.json`](../package.json) — `"version": "x.y.z"`
 
 ### 2. Update the changelog
 
-Move `[Unreleased]` content to a new `[0.2.0] — YYYY-MM-DD` section in [`CHANGELOG.md`](../CHANGELOG.md). Keep the headings (Added / Changed / Fixed / Removed / Deprecated / Security). Empty `[Unreleased]` block stays at the top for the next round.
+Move `[Unreleased]` content to a new `[x.y.z] - YYYY-MM-DD` section in [`CHANGELOG.md`](../CHANGELOG.md). Keep the headings (Added / Changed / Fixed / Removed / Deprecated / Security). Empty `[Unreleased]` block stays at the top for the next round.
 
 **Add a release narrative** — a short paragraph immediately below the version heading and before the first `### Added` heading. This is the "elevator pitch" of the release: what the work was really *about* in plain English, not a bullet list. A good narrative covers:
 - The headline user-facing additions (1–2 sentences)
@@ -50,9 +50,9 @@ Move `[Unreleased]` content to a new `[0.2.0] — YYYY-MM-DD` section in [`CHANG
 Example:
 
 ```markdown
-## [0.2.0] - 2026-01-15
+## [x.y.z] - YYYY-MM-DD
 
-v0.2.0 ships the long-awaited speaker diarisation feature alongside a full rewrite of the audio capture pipeline. Most of the commit count went into reliability: the ring buffer, CoreAudio HAL listener, and diarizer centroid computation all received correctness fixes from real-world call recordings. Internally, `AppState` was reorganised into domain sub-structs — groundwork for the upcoming settings refactor.
+vx.y.z ships [headline feature]. Most of the commit count went into [dominant theme]. Internally, [notable architectural change if any].
 
 ### Added
 ```
@@ -60,9 +60,9 @@ v0.2.0 ships the long-awaited speaker diarisation feature alongside a full rewri
 ### 3. Land the bump
 
 ```bash
-git checkout -b chore/release-0.2.0
+git checkout -b chore/release-x.y.z
 # bump the three version files (Cargo.toml, tauri.conf.json, package.json)
-git commit -m "chore(release): v0.2.0"
+git commit -m "chore(release): vx.y.z"
 gh pr create
 # merge once CI is green
 ```
@@ -72,8 +72,8 @@ gh pr create
 ```bash
 git checkout main
 git pull
-git tag v0.2.0
-git push origin v0.2.0
+git tag vx.y.z
+git push origin vx.y.z
 ```
 
 The workflow fires on the tag push. Watch progress at the [Actions](https://github.com/khawkins98/Hush/actions) page; the slow leg is the macOS Apple Silicon build (whisper.cpp's GGML compile + the per-arch toolchain). Each leg typically takes 10–20 min depending on cache state.
@@ -119,14 +119,14 @@ These are the things that have bitten previous attempts on similar Tauri pipelin
 The tap lives at [khawkins98/homebrew-tap](https://github.com/khawkins98/homebrew-tap). The release workflow patches `Casks/hush.rb` automatically on every tag push. If you need to update it manually (e.g. after a dry-run or a workflow failure):
 
 ```bash
-# Compute the SHA256 of the released DMG
-curl -fsSL "https://github.com/khawkins98/Hush/releases/download/v0.9.0/Hush_0.9.0_aarch64.dmg" \
+# Compute the SHA256 of the released DMG (replace x.y.z with the new version)
+curl -fsSL "https://github.com/khawkins98/Hush/releases/download/vx.y.z/Hush_x.y.z_aarch64.dmg" \
   | shasum -a 256
 
 # Clone the tap, edit Casks/hush.rb (bump version + sha256), then commit + push
 git clone https://github.com/khawkins98/homebrew-tap.git
 # … edit Casks/hush.rb …
-git commit -am "chore: update hush cask to v0.9.0"
+git commit -am "chore: update hush cask to vx.y.z"
 git push
 ```
 
