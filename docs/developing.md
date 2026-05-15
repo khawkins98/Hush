@@ -62,8 +62,9 @@ Subsequent runs are incremental.
 | Test Microphone / Input Monitoring TCC permission prompts | `npm run tauri:bundle` (macOS only) |
 | Build a release `.dmg` to smoke-test the installer | `npm run tauri:dmg` (macOS only) |
 | Run Rust unit tests | `cd src-tauri && cargo test --lib` |
+| Run frontend unit tests (Vitest) | `npm run test:unit` |
 | Run frontend type check | `npm run check` |
-| Run frontend e2e tests | `npm run test:e2e` |
+| Run frontend e2e tests (Playwright) | `npm run test:e2e` |
 | Kill stale dev server processes | `npm run dev-cleanup` |
 | Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/dictionary (preserves transcription history); add `--nuke-db` to also wipe history (macOS only) |
 
@@ -132,6 +133,12 @@ cd src-tauri && HUSH_DIARIZATION_MODEL_PATH=/path/to/voxceleb_resnet34_LM.onnx \
 
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check
+
+# Frontend unit tests (Vitest) — fast, no Tauri runtime or browser needed.
+# Covers Svelte state modules (permissions, dictation, meeting-sessions,
+# history) and their derived/reactive logic.
+npm run test:unit
+npm run test:unit:watch    # re-runs on file changes during development
 
 # Frontend e2e — Path A (Playwright + mocked Tauri IPC)
 npm run test:e2e
