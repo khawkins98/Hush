@@ -589,7 +589,8 @@ impl SessionManager {
         let utterances = self.repo.list_utterances(id).await?;
         let next_start = utterances.last().map(|u| u.ended_at_ms).unwrap_or(0);
 
-        self.repo
+        match self
+            .repo
             .append_utterance(NewPersistedUtterance {
                 session_id: id,
                 started_at_ms: next_start,
@@ -597,9 +598,20 @@ impl SessionManager {
                 speaker_label: None,
                 text: text.to_owned(),
             })
-            .await?;
-
-        Ok(true)
+            .await?
+        {
+            Some(_) => Ok(true),
+            // Session was closed between the in-memory check above and the DB
+            // insert — stop_manual won the race (#917). Treat as "no active
+            // session" so the caller doesn't surface a false error.
+            None => {
+                tracing::debug!(
+                    session_id = id,
+                    "append_if_active: session closed before insert"
+                );
+                Ok(false)
+            }
+        }
     }
 }
 

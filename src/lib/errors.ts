@@ -57,6 +57,7 @@ const KNOWN_IPC_ERROR_KINDS = new Set<KnownIpcErrorKind>([
   "history",
   "replacements",
   "meeting-sessions",
+  "meeting-session-active",
   "permission-denied",
   "updater-unavailable",
   "internal",
@@ -234,6 +235,11 @@ function formatKnownIpcError(ipc: KnownIpcError): ErrorDisplay {
           "Try again, or fall back to a single-source recording " +
           "(microphone only).",
         details: ipc.message,
+      };
+    case "meeting-session-active":
+      return {
+        headline: "Meeting session is active",
+        hint: "Stop the meeting session before using dictation, or use the hotkey while the session is running to append to the session transcript.",
       };
     case "updater-unavailable":
       return {

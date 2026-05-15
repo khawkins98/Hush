@@ -1222,7 +1222,7 @@ pub(super) async fn dispatch_utterances(
                 // Surface to the user via the same banner the dictation IPC
                 // path uses (#790) — transcript went to clipboard but not to
                 // history, which is worth a visible warning.
-                emit_utterance_append_failed(event_emitter, &e.to_string());
+                emit_utterance_append_failed(event_emitter, session_id, &e.to_string());
             }
         } else {
             // Partial — replace the in-flight slot for this source.

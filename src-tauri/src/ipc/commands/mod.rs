@@ -185,6 +185,12 @@ pub enum IpcError {
     #[error("updater-unavailable")]
     UpdaterUnavailable,
 
+    /// `stop_dictation` was called while a meeting session is active.
+    /// The meeting pump owns the audio backend for the duration of the
+    /// session; dictation's stop path must not tear it down (#880).
+    #[error("meeting-session-active")]
+    MeetingSessionActive,
+
     /// In-process state guard panicked while a lock was held. Should not
     /// happen in practice — only the IPC commands lock our internal
     /// mutexes and they don't panic — but a poisoned lock surfacing here

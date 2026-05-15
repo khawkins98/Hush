@@ -276,7 +276,10 @@ impl MeetingSessionRepository for FailingCloseRepo {
         Err(anyhow!("simulated close_session failure"))
     }
 
-    async fn append_utterance(&self, new: NewPersistedUtterance) -> Result<PersistedUtterance> {
+    async fn append_utterance(
+        &self,
+        new: NewPersistedUtterance,
+    ) -> Result<Option<PersistedUtterance>> {
         self.inner.append_utterance(new).await
     }
 
