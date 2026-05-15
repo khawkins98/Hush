@@ -277,7 +277,7 @@ impl crate::meeting::MeetingSessionRepository for NoopMeetings {
     async fn append_utterance(
         &self,
         _: crate::meeting::NewPersistedUtterance,
-    ) -> anyhow::Result<crate::meeting::PersistedUtterance> {
+    ) -> anyhow::Result<Option<crate::meeting::PersistedUtterance>> {
         unreachable!("mock does not exercise append_utterance")
     }
     async fn list_utterances(

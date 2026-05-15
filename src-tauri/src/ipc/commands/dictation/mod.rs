@@ -183,6 +183,14 @@ pub async fn stop_dictation(
             .clone()
     };
 
+    // Refuse to stop the audio backend while a meeting session owns
+    // the microphone capture (#880). The meeting pump drives the
+    // audio lifecycle for the duration of the session; dictation's
+    // stop path must not tear it down from under the pump.
+    if state.meeting_manager.active_session_id().is_some() {
+        return Err(IpcError::MeetingSessionActive);
+    }
+
     // The user pressed Stop. Pre-#291 the HUD hid here, before
     // transcription ran — meaning users would see the HUD vanish,
     // switch to their target app, paste, and get stale clipboard

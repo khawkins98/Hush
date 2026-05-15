@@ -27,8 +27,9 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use rtrb::{Consumer, RingBuffer};
@@ -63,6 +64,10 @@ pub(super) struct TapInner {
     /// so the pump emits `meeting:source-failed` instead of recording silence.
     reader_exited: Arc<AtomicBool>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
+    /// Receives `()` when the reader thread is about to return.  Used by
+    /// `stop_inner` to wait for clean exit with a bounded timeout instead of
+    /// blocking indefinitely on `handle.join()` (#864).
+    reader_done_rx: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 // ── Construction ─────────────────────────────────────────────────────────────
@@ -112,6 +117,10 @@ impl CoreAudioTapSession {
         // the tap is established.  If the binary exits before writing the header
         // the pipe EOF propagates here as `UnexpectedEof`; the KillGuard above
         // ensures the child is reaped even on these early-return paths.
+        //
+        // A 5 s deadline guards against a hung tap binary blocking app startup
+        // forever (#859).  On timeout the KillGuard fires, killing the child
+        // (which causes the spawned thread to see EOF and exit cleanly).
         let stdout = guard
             .0
             .as_mut()
@@ -121,9 +130,23 @@ impl CoreAudioTapSession {
             .ok_or_else(|| anyhow!("child stdout not captured"))?;
         let mut reader = BufReader::new(stdout);
 
-        let mut hdr = [0u8; 12];
-        reader
-            .read_exact(&mut hdr)
+        let (hdr_tx, hdr_rx) =
+            mpsc::channel::<anyhow::Result<([u8; 12], BufReader<std::process::ChildStdout>)>>();
+        thread::Builder::new()
+            .name("hush-cat-hdr".into())
+            .spawn(move || {
+                let mut hdr = [0u8; 12];
+                let result = reader
+                    .read_exact(&mut hdr)
+                    .map(|_| (hdr, reader))
+                    .map_err(anyhow::Error::from);
+                let _ = hdr_tx.send(result);
+            })
+            .context("failed to spawn hush-cat-hdr thread")?;
+
+        let (hdr, mut reader) = hdr_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| anyhow!("timed out waiting for audio tap binary protocol header (5 s)"))?
             .context("read protocol header from audio tap binary")?;
 
         if &hdr[0..4] != b"HUSH" {
@@ -180,6 +203,10 @@ impl CoreAudioTapSession {
         let reader_exited_writer = Arc::clone(&reader_exited);
         let level_writer = Arc::clone(&level);
 
+        // Channel used by the reader thread to signal its exit so stop_inner
+        // can bound the wait with recv_timeout instead of blocking on join (#864).
+        let (reader_done_tx, reader_done_rx) = mpsc::channel::<()>();
+
         let reader_thread = thread::Builder::new()
             .name("hush-cat-reader".into())
             .spawn(move || {
@@ -227,6 +254,8 @@ impl CoreAudioTapSession {
                         }
                     }
                 }
+                // Notify stop_inner that this thread is done (#864).
+                let _ = reader_done_tx.send(());
             })
             .context("failed to spawn hush-cat-reader thread")?;
 
@@ -245,6 +274,7 @@ impl CoreAudioTapSession {
                 overflow_flag,
                 reader_exited,
                 reader_thread: Mutex::new(Some(reader_thread)),
+                reader_done_rx: Mutex::new(Some(reader_done_rx)),
             }),
             active_sessions,
             level,
@@ -353,11 +383,22 @@ fn stop_inner(inner: TapInner) -> Result<Vec<f32>> {
         }
     }
 
-    // 2. Join reader thread — it exits once it sees EOF on the child's stdout.
-    if let Ok(mut guard) = inner.reader_thread.lock() {
-        if let Some(handle) = guard.take() {
-            let _ = handle.join();
+    // 2. Wait for reader thread — bounded by 3 s so a stuck thread doesn't
+    //    block app shutdown forever (#864).  After step 1 above the child is
+    //    already dead, so the reader will see EOF and signal done imminently.
+    if let Ok(mut guard) = inner.reader_done_rx.lock() {
+        if let Some(rx) = guard.take() {
+            if rx.recv_timeout(Duration::from_secs(3)).is_err() {
+                tracing::warn!(
+                    "CoreAudio tap reader thread did not exit within 3 s; \
+                     detaching — samples already drained from ring"
+                );
+            }
         }
+    }
+    // Drop the JoinHandle — detaches the thread if it's somehow still running.
+    if let Ok(mut guard) = inner.reader_thread.lock() {
+        let _ = guard.take();
     }
 
     // 3. Drain remaining samples from the ring.

@@ -348,11 +348,13 @@ export const meeting = {
       },
     );
 
-    const unlistenAppendFailed = await listen<{ error: string }>(
+    const unlistenAppendFailed = await listen<{ sessionId: number; error: string }>(
       Events.DictationMeetingAppendFailed,
       (e) => {
-        // Guard against late events arriving after a session ends (#931).
-        if (meeting.activeId === null) return;
+        // Guard against stale events from a previous session — only
+        // show the banner if the session that failed is the one still
+        // active (#816). Also guards late events after a session ends (#931).
+        if (meeting.activeId === null || meeting.activeId !== e.payload.sessionId) return;
         console.warn("[DictationMeetingAppendFailed]", e.payload.error);
         meeting.appendFailedNotice =
           "A transcription couldn't be saved to your meeting session. The text is still on your clipboard.";
