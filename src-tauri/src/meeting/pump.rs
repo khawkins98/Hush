@@ -73,6 +73,14 @@ use super::{MeetingSessionRepository, NewPersistedUtterance};
 /// late and add jitter to the partial-update cadence.
 pub(super) const PUMP_TICK: Duration = Duration::from_millis(500);
 
+/// Maximum time `flush_sessions` waits for a streaming tail-finish
+/// inference. 60 s gives slow machines enough headroom for a full
+/// 30 s window while still preventing an infinite hang if whisper
+/// stalls. The underlying spawn_blocking task is not cancelled on
+/// timeout — it continues running and will eventually finish or
+/// be cleaned up at process exit; the pump just stops waiting for it.
+const STREAMING_FINISH_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// How many ticks between each reconnect-watcher check (#611).
 /// At the default 500 ms tick this gives a ~5 s check cadence —
 /// fast enough to feel responsive to a replug, slow enough to avoid
@@ -911,10 +919,30 @@ async fn flush_sessions(
         };
         let source_label = ctx.sources[i].speaker_tag().to_owned();
         let session_id = ctx.session_id;
-        let join = tokio::task::spawn_blocking(move || session.finish()).await;
+        let join = tokio::time::timeout(
+            STREAMING_FINISH_TIMEOUT,
+            tokio::task::spawn_blocking(move || session.finish()),
+        )
+        .await;
         let finals = match join {
-            Ok(Ok(u)) => u,
-            Ok(Err(e)) => {
+            Err(_elapsed) => {
+                tracing::warn!(
+                    session_id,
+                    source_kind = source_label,
+                    timeout_secs = STREAMING_FINISH_TIMEOUT.as_secs(),
+                    "meeting pump: streaming finish timed out; tail dropped (blocking task still running)"
+                );
+                continue;
+            }
+            Ok(Err(join_err)) => {
+                tracing::error!(
+                    error = ?join_err,
+                    session_id,
+                    "meeting pump: streaming finish task panicked"
+                );
+                continue;
+            }
+            Ok(Ok(Err(e))) => {
                 tracing::warn!(
                     error = ?e,
                     session_id,
@@ -923,14 +951,7 @@ async fn flush_sessions(
                 );
                 continue;
             }
-            Err(e) => {
-                tracing::error!(
-                    error = ?e,
-                    session_id,
-                    "meeting pump: streaming finish task panicked"
-                );
-                continue;
-            }
+            Ok(Ok(Ok(u))) => u,
         };
         let tail_audio: Vec<Vec<f32>> = finals
             .iter()
@@ -1125,9 +1146,25 @@ pub(super) async fn diarize_and_dispatch_merged(
                 .iter()
                 .map(|&i| chronological_audio[i].clone())
                 .collect();
-            diarize.label_utterances(&mut final_utts, &final_audio, CANONICAL_FORMAT);
-            for (&orig_i, labeled) in final_idxs.iter().zip(final_utts) {
-                chronological[orig_i].speaker_label = labeled.speaker_label;
+            let diarize_bg = Arc::clone(diarize);
+            let labeled_result = tokio::task::spawn_blocking(move || {
+                diarize_bg.label_utterances(&mut final_utts, &final_audio, CANONICAL_FORMAT);
+                final_utts
+            })
+            .await;
+            match labeled_result {
+                Ok(labeled_utts) => {
+                    for (&orig_i, labeled) in final_idxs.iter().zip(labeled_utts) {
+                        chronological[orig_i].speaker_label = labeled.speaker_label;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = ?e,
+                        session_id,
+                        "meeting pump: diarize label_utterances task panicked; utterances will use source labels"
+                    );
+                }
             }
         }
     }
