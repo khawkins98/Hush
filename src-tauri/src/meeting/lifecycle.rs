@@ -100,6 +100,11 @@ impl SessionManager {
                         "meeting session already active; stop the current one first"
                     ));
                 }
+                SessionState::Stopping => {
+                    return Err(anyhow!(
+                        "a meeting session is finishing; wait before starting a new one"
+                    ));
+                }
             }
         }
 
@@ -447,9 +452,9 @@ impl SessionManager {
                 .state
                 .lock()
                 .map_err(|_| anyhow!("session manager mutex poisoned"))?;
-            match std::mem::replace(&mut *guard, SessionState::Idle) {
+            match std::mem::replace(&mut *guard, SessionState::Stopping) {
                 SessionState::Active(a) => Some(a),
-                state @ (SessionState::Opening | SessionState::Idle) => {
+                state @ (SessionState::Opening | SessionState::Idle | SessionState::Stopping) => {
                     // Restore the original state — we didn't have an
                     // Active to take.
                     *guard = state;
@@ -506,7 +511,16 @@ impl SessionManager {
 
         let session_id = active.id;
         let close_result = match self.repo.close_session(active.id).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // Transition Stopping → Idle now that the pump has joined
+                // and the DB row is committed (#839).
+                if let Ok(mut guard) = self.state.lock() {
+                    if matches!(&*guard, SessionState::Stopping) {
+                        *guard = SessionState::Idle;
+                    }
+                }
+                Ok(())
+            }
             Err(e) => {
                 // Restore the active record with `close_attempted`
                 // set so a retry skips the (already-completed)
@@ -530,7 +544,9 @@ impl SessionManager {
                 // on next launch (#249).
                 if let Ok(mut guard) = self.state.lock() {
                     match &*guard {
-                        SessionState::Idle => {
+                        SessionState::Stopping => {
+                            // We own the Stopping slot — restore to Active so
+                            // the caller can retry the DB close (#839).
                             *guard = SessionState::Active(ActiveSession {
                                 id: active.id,
                                 started_at: active.started_at,
@@ -539,13 +555,19 @@ impl SessionManager {
                                 close_attempted: true,
                             });
                         }
-                        SessionState::Opening | SessionState::Active(_) => {
+                        SessionState::Idle
+                        | SessionState::Opening
+                        | SessionState::Active(_) => {
+                            // Should not happen — start_manual blocks on
+                            // Stopping, so no concurrent start can have
+                            // claimed the slot. Log and drop the recovery;
+                            // the orphan row is handled by
+                            // reconcile_orphan_sessions on next launch.
                             tracing::warn!(
                                 session_id = active.id,
-                                "stop_manual close_session failed but slot was \
-                                 claimed by a concurrent start; not clobbering \
-                                 the new session — orphan row will be closed by \
-                                 next-launch reconcile_orphan_sessions"
+                                "stop_manual close_session failed and slot is \
+                                 unexpectedly not Stopping — orphan row will be \
+                                 closed by next-launch reconcile_orphan_sessions"
                             );
                         }
                     }
@@ -583,7 +605,7 @@ impl SessionManager {
                 .map_err(|_| anyhow!("session manager mutex poisoned"))?;
             match &*guard {
                 SessionState::Active(a) => Some(a.id),
-                SessionState::Idle | SessionState::Opening => None,
+                SessionState::Idle | SessionState::Opening | SessionState::Stopping => None,
             }
         };
 
