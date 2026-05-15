@@ -192,9 +192,9 @@ pub async fn request_input_monitoring_permission(
         // it here when it was already started at boot is a no-op.
         if let Err(e) = crate::hotkey::ptt::register_ptt_listener(
             &app,
-            std::sync::Arc::clone(&state.ptt_combo),
-            std::sync::Arc::clone(&state.ptt_active),
-            std::sync::Arc::clone(&state.ptt_listener_spawned),
+            std::sync::Arc::clone(&state.ptt.combo),
+            std::sync::Arc::clone(&state.ptt.active),
+            std::sync::Arc::clone(&state.ptt.listener_spawned),
         ) {
             tracing::warn!(error = ?e, "PTT listener start after IM grant failed; restart may be needed");
         } else {

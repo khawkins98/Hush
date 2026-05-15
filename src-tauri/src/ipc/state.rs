@@ -185,20 +185,11 @@ pub struct AppState {
     /// keep-alive working across consecutive downloads (e.g. Tiny
     /// then Base on first launch).
     pub http: reqwest::Client,
-    /// Cache for the manual "Check for updates" probe (#333).
-    /// GitHub's unauthenticated API rate limit is 60 req/h/IP; a
-    /// shared corporate NAT or an impatient user clicking the
-    /// Settings → About button can collectively burn that limit
-    /// fast. We cache the last successful result for 15 minutes —
-    /// well below the rate-limit window, well above the spam-click
-    /// threshold. The frontend's `updateChecking` flag covers the
-    /// in-flight case; this covers the back-to-back case.
-    pub last_update_check: Mutex<Option<(std::time::Instant, crate::updater::UpdateCheckResult)>>,
-    /// Serialises concurrent callers to `check_for_updates_inner` so only one
-    /// network probe is in flight at a time (#876). A caller that arrives while
-    /// another is probing will wait here, then re-check `last_update_check` and
-    /// return the cached result without issuing a duplicate request.
-    pub update_check_inflight: Arc<tokio::sync::Mutex<()>>,
+    /// Update-check result cache and in-flight serialisation lock.
+    /// Grouped here so `system.rs` commands have a single handle
+    /// to pass around; see [`UpdateCheckCache`] for the per-field
+    /// rationale.
+    pub update_check: UpdateCheckCache,
     /// Cancel handles for in-flight downloads, keyed by model id.
     /// Inserted by `model_download` when it spawns a task; the cancel
     /// command flips the handle's flag; the spawned task removes its
@@ -210,35 +201,10 @@ pub struct AppState {
     /// (untestable, per #315).
     pub downloads: Arc<Mutex<HashMap<String, CancelHandle>>>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
-    /// User's chosen PTT key combo, hot-swappable via
-    /// `ptt_set_combo`. The listener thread reads through this
-    /// `RwLock` on every event so a Settings UI change takes effect
-    /// without restarting the listener (rdev::listen has no clean
-    /// stop API; we don't want to bounce the thread on every edit).
-    /// Initialised from settings DB at boot, falls back to the
-    /// platform default. See `crate::hotkey::ptt::PttCombo`.
-    pub ptt_combo: Arc<std::sync::RwLock<crate::hotkey::ptt::PttCombo>>,
-    /// Whether PTT is currently active. The listener observes
-    /// every keyboard event regardless, but only emits press/release
-    /// to the frontend when this flag is true. The IPC `ptt_set_config`
-    /// command flips it for in-session toggles (no listener restart
-    /// needed). At boot, this mirrors the persisted value and the
-    /// env-var override.
-    ///
-    /// First-time opt-in: when the user enables PTT in a session
-    /// that started with it off, `ptt_set_config` calls
-    /// `register_ptt_listener` to spawn the listener thread on
-    /// demand (which fires the macOS Input Monitoring prompt). The
-    /// `ptt_listener_spawned` latch makes that idempotent.
-    pub ptt_active: Arc<std::sync::atomic::AtomicBool>,
-    /// Latch tracking whether the rdev listener thread has been
-    /// spawned in this session. The spawn is idempotent — re-calling
-    /// `register_ptt_listener` after the thread is up returns
-    /// without spawning a second one. Used by `ptt_set_config` to
-    /// start the listener on demand when the user toggles Enabled
-    /// for the first time, so first-time opt-in doesn't require an
-    /// app restart.
-    pub ptt_listener_spawned: Arc<std::sync::atomic::AtomicBool>,
+    /// Push-to-talk key combo, active flag, and listener-spawned
+    /// latch grouped as a single handle. See [`PttState`] for the
+    /// per-field rationale.
+    pub ptt: PttState,
     /// Hot-swappable diarizer slot (#301). The `FlagGatedDiarizer`
     /// constructed in `build_default` holds an `Arc::clone` of
     /// this slot; the IPC `download_diarizer_model` path replaces
@@ -279,6 +245,64 @@ pub struct AppState {
     /// the stale rebuild result is discarded without overwriting the
     /// user-selected model.
     pub transcriber_generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// Push-to-talk state grouped as a single substruct (#737).
+///
+/// All three fields are `Arc`-wrapped so `register_ptt_listener` (and
+/// `permissions.rs`) can clone individual handles without needing a
+/// reference to the full `AppState`.
+pub struct PttState {
+    /// User's chosen key combo, hot-swappable via `ptt_set_combo`.
+    /// The listener thread reads through this `RwLock` on every event
+    /// so a Settings UI change takes effect without restarting the
+    /// listener (rdev::listen has no clean stop API; we don't want to
+    /// bounce the thread on every edit). Initialised from settings DB
+    /// at boot, falls back to the platform default.
+    pub combo: Arc<std::sync::RwLock<crate::hotkey::ptt::PttCombo>>,
+    /// Whether PTT is currently active. The listener observes every
+    /// keyboard event regardless, but only emits press/release to the
+    /// frontend when this flag is true. The IPC `ptt_set_config`
+    /// command flips it for in-session toggles (no listener restart
+    /// needed). At boot, mirrors the persisted value and the env-var
+    /// override.
+    ///
+    /// First-time opt-in: when the user enables PTT in a session that
+    /// started with it off, `ptt_set_config` calls
+    /// `register_ptt_listener` to spawn the listener thread on demand
+    /// (which fires the macOS Input Monitoring prompt). The
+    /// `listener_spawned` latch makes that idempotent.
+    pub active: Arc<std::sync::atomic::AtomicBool>,
+    /// Latch tracking whether the rdev listener thread has been
+    /// spawned in this session. The spawn is idempotent — re-calling
+    /// `register_ptt_listener` after the thread is up returns without
+    /// spawning a second one. Used by `ptt_set_config` to start the
+    /// listener on demand when the user toggles Enabled for the first
+    /// time, so first-time opt-in doesn't require an app restart.
+    pub listener_spawned: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Update-check result cache and in-flight serialisation lock (#737).
+///
+/// Grouped so `system.rs` commands have a single named handle and
+/// so the two fields' relationship (sync cache check → async inflight
+/// wait → sync re-check) stays visually co-located.
+pub struct UpdateCheckCache {
+    /// Cache for the manual "Check for updates" probe (#333).
+    /// GitHub's unauthenticated API rate limit is 60 req/h/IP; a
+    /// shared corporate NAT or an impatient user clicking the
+    /// Settings → About button can collectively burn that limit fast.
+    /// We cache the last successful result for 15 minutes — well
+    /// below the rate-limit window, well above the spam-click
+    /// threshold. The frontend's `updateChecking` flag covers the
+    /// in-flight case; this covers the back-to-back case.
+    pub last: Mutex<Option<(std::time::Instant, crate::updater::UpdateCheckResult)>>,
+    /// Serialises concurrent callers to `check_for_updates_inner` so
+    /// only one network probe is in flight at a time (#876). A caller
+    /// that arrives while another is probing will wait here, then
+    /// re-check `last` and return the cached result without issuing a
+    /// duplicate request.
+    pub inflight: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// User-facing runtime flags that mirror Settings rows (#431).

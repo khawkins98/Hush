@@ -38,16 +38,18 @@ pub struct PttConfig {
 #[tauri::command]
 pub fn ptt_get_config(state: State<'_, AppState>) -> IpcResult<PttConfig> {
     let combo = state
-        .ptt_combo
+        .ptt
+        .combo
         .read()
         .map_err(|_| IpcError::Internal("ptt_combo lock poisoned".into()))?
         .keys()
         .iter()
         .map(|k| k.as_str().to_string())
         .collect();
-    let enabled = state.ptt_active.load(std::sync::atomic::Ordering::SeqCst);
+    let enabled = state.ptt.active.load(std::sync::atomic::Ordering::SeqCst);
     let listener_running = state
-        .ptt_listener_spawned
+        .ptt
+        .listener_spawned
         .load(std::sync::atomic::Ordering::SeqCst);
     Ok(PttConfig {
         combo,
@@ -120,13 +122,15 @@ pub async fn ptt_set_config(
     // next OS event without restarting.
     {
         let mut guard = state
-            .ptt_combo
+            .ptt
+            .combo
             .write()
             .map_err(|_| IpcError::Internal("ptt_combo lock poisoned".into()))?;
         *guard = new_combo;
     }
     state
-        .ptt_active
+        .ptt
+        .active
         .store(enabled, std::sync::atomic::Ordering::SeqCst);
 
     // Spawn the rdev listener on demand if this is the first time
@@ -139,9 +143,9 @@ pub async fn ptt_set_config(
     if enabled {
         if let Err(e) = crate::hotkey::ptt::register_ptt_listener(
             &app,
-            std::sync::Arc::clone(&state.ptt_combo),
-            std::sync::Arc::clone(&state.ptt_active),
-            std::sync::Arc::clone(&state.ptt_listener_spawned),
+            std::sync::Arc::clone(&state.ptt.combo),
+            std::sync::Arc::clone(&state.ptt.active),
+            std::sync::Arc::clone(&state.ptt.listener_spawned),
         ) {
             // Best-effort: spawn failure is logged but shouldn't
             // un-persist the user's preference. They can try again
@@ -180,14 +184,14 @@ mod tests {
         let state = mock_state();
         // `mock_state()` uses MemSettings with no stored rows, so both
         // atomics must be at their constructed defaults.
-        assert!(!state.ptt_active.load(Ordering::SeqCst));
-        assert!(!state.ptt_listener_spawned.load(Ordering::SeqCst));
+        assert!(!state.ptt.active.load(Ordering::SeqCst));
+        assert!(!state.ptt.listener_spawned.load(Ordering::SeqCst));
     }
 
     #[test]
     fn default_ptt_combo_is_single_key() {
         let state = mock_state();
-        let guard = state.ptt_combo.read().unwrap();
+        let guard = state.ptt.combo.read().unwrap();
         assert_eq!(
             guard.keys().len(),
             1,

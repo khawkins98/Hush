@@ -25,7 +25,10 @@ use crate::settings::SettingsRepository;
 use crate::transcription::Transcribe;
 
 use super::pipeline::{redirect_decision, RedirectDecision};
-use super::state::{encode_autostart_mode, AppState, DataServices, RuntimeFlags, TranscribeSlot};
+use super::state::{
+    encode_autostart_mode, AppState, DataServices, PttState, RuntimeFlags, TranscribeSlot,
+    UpdateCheckCache,
+};
 
 /// Builder for [`AppState`].
 ///
@@ -389,15 +392,19 @@ impl AppStateBuilder {
                 })?,
             downloads: Arc::new(Mutex::new(HashMap::new())),
             pending_foreground: Mutex::new(None),
-            last_update_check: Mutex::new(None),
-            update_check_inflight: Arc::new(tokio::sync::Mutex::new(())),
-            ptt_combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(
-                || crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
-            ))),
-            ptt_active: Arc::new(std::sync::atomic::AtomicBool::new(
-                self.ptt_active.unwrap_or(false),
-            )),
-            ptt_listener_spawned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            update_check: UpdateCheckCache {
+                last: Mutex::new(None),
+                inflight: Arc::new(tokio::sync::Mutex::new(())),
+            },
+            ptt: PttState {
+                combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(
+                    || crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
+                ))),
+                active: Arc::new(std::sync::atomic::AtomicBool::new(
+                    self.ptt_active.unwrap_or(false),
+                )),
+                listener_spawned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
             diarize_slot: self.diarize_slot.unwrap_or_else(|| {
                 Arc::new(std::sync::RwLock::new(
                     Arc::new(crate::diarization::NoopDiarizer)

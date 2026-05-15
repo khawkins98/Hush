@@ -652,7 +652,7 @@ mod tests {
             current: "0.2.0".to_string(),
         };
         let seed_at = std::time::Instant::now();
-        *state.last_update_check.lock().unwrap() = Some((seed_at, seeded.clone()));
+        *state.update_check.last.lock().unwrap() = Some((seed_at, seeded.clone()));
 
         // Just inside the TTL → cache hit.
         let still_within = seed_at + UPDATE_CHECK_TTL - std::time::Duration::from_secs(1);
@@ -674,7 +674,7 @@ mod tests {
             current: "0.2.0".to_string(),
         };
         let seed_at = std::time::Instant::now();
-        *state.last_update_check.lock().unwrap() = Some((seed_at, seeded));
+        *state.update_check.last.lock().unwrap() = Some((seed_at, seeded));
 
         // Past the TTL → cache miss → network call. The runner may
         // or may not have network access; if it does the real GitHub
@@ -706,7 +706,7 @@ mod tests {
         // care that the code path is reached (not stuck behind a
         // non-existent cache entry).
         let state = crate::ipc::tests::mock_state();
-        assert!(state.last_update_check.lock().unwrap().is_none());
+        assert!(state.update_check.last.lock().unwrap().is_none());
         let _result =
             super::system::check_for_updates_inner(&state, std::time::Instant::now()).await;
         // Any Ok or Err result confirms the path was exercised.

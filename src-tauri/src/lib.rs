@@ -731,9 +731,9 @@ fn register_hotkeys(handle: tauri::AppHandle, state: &ipc::AppState) {
     {
         if let Err(e) = hotkey::register_ptt_listener(
             &handle,
-            std::sync::Arc::clone(&state.ptt_combo),
-            std::sync::Arc::clone(&state.ptt_active),
-            std::sync::Arc::clone(&state.ptt_listener_spawned),
+            std::sync::Arc::clone(&state.ptt.combo),
+            std::sync::Arc::clone(&state.ptt.active),
+            std::sync::Arc::clone(&state.ptt.listener_spawned),
         ) {
             tracing::error!(error = ?e, "failed to start PTT listener");
         }
