@@ -42,6 +42,21 @@ Three files have to agree on the new version. They're not yet linked, so a stale
 
 Move `[Unreleased]` content to a new `[0.2.0] — YYYY-MM-DD` section in [`CHANGELOG.md`](../CHANGELOG.md). Keep the headings (Added / Changed / Fixed / Removed / Deprecated / Security). Empty `[Unreleased]` block stays at the top for the next round.
 
+**Add a release narrative** — a short paragraph immediately below the version heading and before the first `### Added` heading. This is the "elevator pitch" of the release: what the work was really *about* in plain English, not a bullet list. A good narrative covers:
+- The headline user-facing additions (1–2 sentences)
+- The dominant theme of the maintenance/fix work (e.g. "most of the commit count went into hardening the meeting pipeline")
+- Any significant internal/architectural work worth flagging to future contributors
+
+Example:
+
+```markdown
+## [0.2.0] - 2026-01-15
+
+v0.2.0 ships the long-awaited speaker diarisation feature alongside a full rewrite of the audio capture pipeline. Most of the commit count went into reliability: the ring buffer, CoreAudio HAL listener, and diarizer centroid computation all received correctness fixes from real-world call recordings. Internally, `AppState` was reorganised into domain sub-structs — groundwork for the upcoming settings refactor.
+
+### Added
+```
+
 ### 3. Land the bump
 
 ```bash

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - 2026-05-15
 
+v0.7.0 adds two user-facing features — dictionary preset packs and name labels on history entries — then spends the bulk of its commit count making the meeting and audio pipelines substantially more reliable. The meeting pump gained a proper `Stopping` lifecycle state, graceful fallback when system audio isn't available, vocabulary and text-replacement support, and a raft of async-safety and race-condition fixes accumulated from real-world call recordings. On the audio side, the ring buffer, RMS metering, CoreAudio HAL listener, and diarizer centroid computation all received correctness and performance fixes. The updater and export paths were hardened with in-flight guards, atomic writes, and path validation. Internally, `AppState` was reorganised into domain sub-structs and the frontend state layer was extracted into focused modules — groundwork that makes the codebase easier to navigate as it grows.
+
 ### Added
 
 - **Dictionary: preset word packs + language style selector.** Settings → Dictionary now ships with curated preset packs (tech, medical, legal, etc.) and a language style chooser (US/UK/AU English) that injects the correct spelling variants into every Whisper prompt automatically (#664).
