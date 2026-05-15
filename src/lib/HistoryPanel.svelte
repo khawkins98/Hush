@@ -264,7 +264,10 @@
   {/if}
 
   {#if history.error}
-    <ErrorDisplay error={history.error} scope="History" />
+    <ErrorDisplay error={history.error} scope="Dictation history" />
+  {/if}
+  {#if meeting.error}
+    <ErrorDisplay error={meeting.error} scope="Meeting history" />
   {/if}
 
   {#if !history.feedLoaded}

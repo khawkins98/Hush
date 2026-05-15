@@ -68,7 +68,6 @@ impl HistoryRepository for SqliteHistoryRepository {
             "SELECT id, transcript, app_name, window_title, model, duration_ms, created_at, \
                     ignored \
              FROM history \
-             WHERE ignored = 0 \
              ORDER BY id DESC \
              LIMIT ? OFFSET ?",
         )
@@ -102,7 +101,7 @@ impl HistoryRepository for SqliteHistoryRepository {
                     h.duration_ms, h.created_at, h.ignored \
              FROM history h \
              INNER JOIN history_fts fts ON fts.rowid = h.id \
-             WHERE history_fts MATCH ? AND h.ignored = 0 \
+             WHERE history_fts MATCH ? \
              ORDER BY h.id DESC \
              LIMIT ? OFFSET ?",
         )
@@ -155,7 +154,7 @@ impl HistoryRepository for SqliteHistoryRepository {
     }
 
     async fn count(&self) -> Result<i64> {
-        let row: (i64,) = sqlx::query_as("SELECT count(*) FROM history WHERE ignored = 0")
+        let row: (i64,) = sqlx::query_as("SELECT count(*) FROM history")
             .fetch_one(self.db.pool())
             .await
             .context("count history")?;
