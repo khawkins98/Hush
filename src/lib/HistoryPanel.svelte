@@ -175,9 +175,14 @@
 
 <section class="history panel-history" aria-labelledby="history-heading">
   <header class="history-header">
-    <h2 id="history-heading">History</h2>
+    <div class="history-title-block">
+      <h2 id="history-heading">History</h2>
+      <p class="history-subtitle">Your local transcriptions and meeting recordings</p>
+    </div>
     <div class="header-actions">
       <div class="search-wrap">
+        <!-- search icon -->
+        <svg class="search-icon" aria-hidden="true" focusable="false" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input
           type="search"
           placeholder="Search history…"
@@ -273,23 +278,26 @@
   {#if !history.feedLoaded}
     <p class="loading-skeleton">Loading history…</p>
   {:else if history.mergedFeed.length === 0}
-    <p class="empty-history">
-      {#if hasQuery}
-        No matches for "<em>{history.historyQuery}</em>". Try a shorter query.
-      {:else if history.effectiveFilter === "dictation"}
-        No dictation transcripts yet. Press the toggle hotkey or
-        the Start button on the Dictation panel — the transcript
-        will land here.
-      {:else if history.effectiveFilter === "meetings"}
-        No meeting sessions yet. Start a meeting from the
-        Dictation panel — the session shows up here once it
-        wraps up.
-      {:else}
-        Nothing here yet. Press the toggle hotkey or the Start
-        button on the Dictation panel — your first transcript
-        will land here.
+    <div class="empty-history">
+      <!-- archive icon -->
+      <svg class="empty-icon" aria-hidden="true" focusable="false" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+      <p class="empty-text">
+        {#if hasQuery}
+          No matches for "<em>{history.historyQuery}</em>". Try a shorter query.
+        {:else if history.effectiveFilter === "dictation"}
+          No dictation transcripts yet.
+        {:else if history.effectiveFilter === "meetings"}
+          No meeting sessions yet.
+        {:else}
+          Nothing here yet.
+        {/if}
+      </p>
+      {#if !hasQuery}
+        <div class="empty-hint">
+          <p>Press the toggle hotkey or the Start button on the Dictation panel — your first transcript will land here.</p>
+        </div>
       {/if}
-    </p>
+    </div>
   {:else}
     <ul class="history-list" data-version={history.version}>
       {#each history.mergedFeed as row (row.kind + ":" + (row.kind === "dictation" ? row.entry.id : row.session.id))}
@@ -340,10 +348,16 @@
 
 .history-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1rem;
+}
+
+.history-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
 }
 
 .history-header h2 {
@@ -353,10 +367,16 @@
   color: var(--text-primary);
 }
 
+.history-subtitle {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 .history-header input[type="search"] {
   flex: 1;
   max-width: 18rem;
-  padding: 0.5em 0.85em;
+  padding: 0.5em 0.85em 0.5em 2.2rem;
   font-size: 0.9rem;
 }
 
@@ -416,9 +436,9 @@
   border-color: var(--border);
 }
 .filter-chip.active {
-  background-color: rgba(44, 62, 143, 0.14);
-  border-color: rgba(44, 62, 143, 0.4);
-  color: var(--info-text);
+  background-color: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--bg-surface);
   font-weight: 600;
 }
 .filter-chip:disabled {
@@ -511,21 +531,40 @@ button.ghost.danger:hover:not(:disabled) {
 }
 
 .empty-history {
-  margin: 0.5rem 0;
-  padding: 1rem;
-  background-color: var(--bg-surface);
-  border: 1px dashed #d1d1d1;
-  border-radius: 8px;
-  color: var(--text-muted);
-  font-size: 0.9rem;
+  margin: 2rem 0 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-icon {
+  margin-bottom: 0.75rem;
+  opacity: 0.35;
+}
+
+.empty-text {
+  font-size: 0.9rem;
+  margin: 0 0 1rem;
+}
+
+.empty-hint {
+  padding: 0.75rem 1.25rem;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  max-width: 22rem;
+}
+
+.empty-hint p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 
 .panel-history {
   margin-top: 2.5rem;
   text-align: left;
-  border-left: 3px solid #c0c0c0;
-  padding-left: 1rem;
   padding-bottom: 0.25rem;
 }
 
@@ -545,6 +584,14 @@ button.ghost.danger:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+.search-icon {
+  position: absolute;
+  left: 0.65rem;
+  pointer-events: none;
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 
 .search-spinner {

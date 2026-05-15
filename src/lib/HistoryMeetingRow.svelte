@@ -328,54 +328,79 @@
       class="row-content"
       role="button"
       tabindex="0"
-      onclick={toggleExpand}
-      onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpand()}
+      onclick={(e) => {
+        const target = e.target as HTMLElement;
+        const interactive = target.closest("button,input,a,[role='button']");
+        if (interactive && interactive !== e.currentTarget) return;
+        toggleExpand();
+      }}
+      onkeydown={(e) => (e.key === "Enter" || e.key === " ") && e.currentTarget === e.target && toggleExpand()}
       aria-expanded={expanded}
       title={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount} utterances)`}
     >
-      {#if onSetName}
-        {#if editingName}
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            class="name-input"
-            type="text"
-            bind:value={nameInputValue}
-            placeholder="Add a label…"
-            autofocus
-            onblur={commitName}
-            onkeydown={handleNameKeydown}
-            onclick={(e) => e.stopPropagation()}
-            onpointerdown={(e) => e.stopPropagation()}
-          />
+      <!-- Title row: custom name, or meeting app name + optional "Add name" affordance -->
+      <div class="meeting-title-row">
+        {#if onSetName}
+          {#if editingName}
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              class="name-input"
+              type="text"
+              bind:value={nameInputValue}
+              placeholder="Add a name…"
+              autofocus
+              onblur={commitName}
+              onkeydown={handleNameKeydown}
+              onclick={(e) => e.stopPropagation()}
+              onpointerdown={(e) => e.stopPropagation()}
+            />
+          {:else if session.name !== null}
+            <button
+              class="card-title card-title--set"
+              onclick={startNameEdit}
+              title="Edit name"
+              aria-label={`Name: ${session.name} — click to edit`}
+            >{session.name}</button>
+          {:else}
+            <span class="meeting-app-name">{session.appName}</span>
+          {/if}
         {:else}
-          <button
-            class="name-badge"
-            class:name-badge--set={session.name !== null}
-            onclick={startNameEdit}
-            title={session.name ? "Edit label" : "Add a label"}
-            aria-label={session.name ? `Label: ${session.name} — click to edit` : "Add a label"}
-          >{session.name ?? "Add label…"}</button>
+          <span class="meeting-app-name">{session.name ?? session.appName}</span>
         {/if}
+        <span class="meta-chip meta-chip--meeting">Meeting</span>
+      </div>
+
+      <!-- Subheading: app context when a custom name is set -->
+      {#if session.name !== null}
+        <p class="meeting-subtitle">{session.appName}{session.appTitle && session.appTitle !== session.appName ? ` · ${session.appTitle}` : ""}</p>
+      {:else if session.appTitle && session.appTitle !== session.appName}
+        <p class="meeting-subtitle">{session.appTitle}</p>
       {/if}
-      <div class="meeting-meta">
-        <span class="meeting-app">{session.appName}</span>
-        <span class="meeting-started">{formatStarted(session.startedAt)}</span>
-        <span class="meeting-duration">
+
+      <!-- Metadata row with icons -->
+      <div class="row-meta">
+        <span class="meta-item">
+          <!-- calendar icon -->
+          <svg class="meta-icon" aria-hidden="true" focusable="false" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          {formatStarted(session.startedAt)}
+        </span>
+        <span class="meta-item">
+          <!-- clock icon -->
+          <svg class="meta-icon" aria-hidden="true" focusable="false" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           {formatDuration(session.startedAt, session.endedAt)}
         </span>
-        <span class="meeting-utterances">
+        <span class="meta-chip">
           {session.utteranceCount} utterance{session.utteranceCount === 1 ? "" : "s"}
         </span>
         {#if session.sources && session.sources.length > 0}
-          <span class="meeting-sources" aria-label="Audio sources">
-            {sourceListLabel(session.sources)}
-          </span>
+          <span class="meta-item" aria-label="Audio sources">{sourceListLabel(session.sources)}</span>
         {/if}
       </div>
 
-      {#if session.appTitle && session.appTitle !== session.appName}
-        <p class="meeting-app-title" title={session.appTitle}>{session.appTitle}</p>
+      {#if onSetName && !editingName && session.name === null}
+        <button class="add-name-btn" onclick={startNameEdit}>+ Add name</button>
       {/if}
+
       {#if session.notes}
         <p class="meeting-notes">{session.notes}</p>
       {/if}
@@ -492,41 +517,88 @@
     user-select: none;
   }
 
-  .meeting-meta {
+  .meeting-title-row {
     display: flex;
+    align-items: center;
     flex-wrap: wrap;
-    gap: 0.4rem 0.6rem;
-    font-size: 0.82rem;
-    color: var(--text-secondary);
+    gap: 0.4rem;
+    margin-bottom: 0.15rem;
   }
-  .meeting-app {
+
+  .meeting-app-name {
     font-weight: 600;
+    font-size: 0.95rem;
     color: var(--text-primary);
   }
-  .meeting-utterances,
-  .meeting-sources {
+
+  .meeting-subtitle {
+    margin: 0 0 0.1rem;
+    font-size: 0.8rem;
     color: var(--text-muted);
-  }
-  .meeting-app-title {
-    margin: 0.3rem 0 0;
-    font-size: 0.85rem;
-    color: var(--text-secondary);
     font-style: italic;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
   }
-  .meeting-notes {
-    margin: 0.3rem 0 0;
-    font-size: 0.88rem;
-    color: var(--text-secondary);
-    line-height: 1.4;
+
+  .row-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.25rem 0 0.1rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
   }
 
-  .name-badge {
+  .meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .meta-icon {
+    flex-shrink: 0;
+    opacity: 0.7;
+  }
+
+  .meta-chip {
     display: inline-block;
-    margin: 0 0 0.3rem;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background-color: var(--bg-app);
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .meta-chip--meeting {
+    border-color: color-mix(in srgb, var(--accent, #5a7fff) 40%, transparent);
+    color: var(--accent, #5a7fff);
+    background-color: color-mix(in srgb, var(--accent, #5a7fff) 10%, transparent);
+  }
+
+  .add-name-btn {
+    display: inline;
+    margin: 0.2rem 0 0;
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .add-name-btn:hover {
+    color: var(--accent, #5a7fff);
+  }
+
+  .card-title {
+    display: inline-block;
+    margin: 0;
     padding: 0.1rem 0.45rem;
     font-size: 0.78rem;
     font-weight: 500;
@@ -536,16 +608,26 @@
     color: var(--text-muted);
     cursor: pointer;
     line-height: 1.6;
+    font-family: inherit;
   }
-  .name-badge--set {
+  .card-title--set {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
     border-style: solid;
     border-color: var(--accent, #5a7fff);
-    color: var(--text-primary);
     background-color: color-mix(in srgb, var(--accent, #5a7fff) 12%, transparent);
   }
-  .name-badge:hover {
+  .card-title:hover {
     border-color: var(--accent, #5a7fff);
     color: var(--text-primary);
+  }
+
+  .meeting-notes {
+    margin: 0.3rem 0 0;
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
   }
   .name-input {
     display: block;
@@ -665,14 +747,10 @@
   }
 
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .meeting-utterances,
-    :root:not([data-theme="light"]) .meeting-sources { color: #9a9aa0; }
     :root:not([data-theme="light"]) .meeting-detail-status { color: #9a9aa0; }
     :root:not([data-theme="light"]) .meeting-detail-error { color: #f0a0a0; }
     :root:not([data-theme="light"]) .speaker-rename-input { background-color: #1e1e24; }
   }
-  :root[data-theme="dark"] .meeting-utterances,
-  :root[data-theme="dark"] .meeting-sources { color: #9a9aa0; }
   :root[data-theme="dark"] .meeting-detail-status { color: #9a9aa0; }
   :root[data-theme="dark"] .meeting-detail-error { color: #f0a0a0; }
   :root[data-theme="dark"] .speaker-rename-input { background-color: #1e1e24; }
