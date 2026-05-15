@@ -29,7 +29,7 @@ Upstream VoiceInk does not accept pull requests, so Hush is a parallel project, 
 - Foreground application name captured on each transcription, stored as metadata.
 - Local SQLite history with search, copy, and delete.
 - Personal Dictionary: custom vocabulary and find/replace pairs applied post-transcription.
-- Auto-update channel via the Tauri updater plugin.
+- Auto-update channel via the Tauri updater plugin. **Reality check (2026-05-15):** Hush currently ships a manual update check against GitHub Releases; signed auto-update remains blocked on the updater-signing decision tracked in #10.
 
 ## 4. Non-goals (v1)
 
@@ -58,11 +58,11 @@ When Parakeet lands, the model picker grows a second engine card alongside the W
 
 Hush v1's core flow is one-shot dictation: the user holds a hotkey, talks, gets a transcript on the clipboard. v1.x adds a passive-transcription surface ("Meeting Mode") that captures system audio + microphone during meetings, transcribes streaming, and persists per-utterance transcripts grouped into sessions. Audio never lands on disk — only transcripts and timestamps.
 
-Meeting auto-start is controlled by a **global Always / Off toggle** in Settings → Meeting → Auto-start mode. The default for new installs is **Always** (enabled out of the box). When `Always` is active, Hush monitors CoreAudio device state via the HAL property listener; when the microphone activates and the frontmost app is a recognised meeting client (Zoom, Teams, Meet, Discord, Slack-call, Webex, FaceTime, Skype), Hush automatically starts a meeting session and auto-stops it when the meeting app releases the mic. The user can turn this off globally, or manually start/stop sessions regardless of the mode.
+Meeting auto-start is controlled by a **global Always / Off toggle** in Settings → Meeting → Auto-start mode. The default for new installs is **Always** (enabled out of the box). When `Always` is active, Hush monitors CoreAudio device state via the HAL property listener; when the microphone activates and the frontmost app is a recognised meeting client (currently Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, Skype, GoToMeeting, BlueJeans, Loom, Tuple, or Around), Hush automatically starts a meeting session and auto-stops it when the meeting app releases the mic. The user can turn this off globally, or manually start/stop sessions regardless of the mode.
 
 Media apps (YouTube, Spotify, Apple Music) are intentionally absent from the default classifier table, so playback does not trigger auto-start.
 
-**Phase E (#112)** — per-app policy overrides ("always for Zoom, never for Discord") — is the next layer on top and is not yet shipped. The global toggle is the shipped v1.x design.
+**Historical note (2026-05-15):** this section is partly overtaken by reality. The global toggle is still the base control, but per-app override support has since shipped on top of it (see `STATUS.md` / current Settings → Meeting UI).
 
 Streaming transcription depends on either the Whisper.cpp sliding-window pattern or Parakeet (the streaming-friendly second engine — see §5). Whichever ships first is the v1.x default; the other becomes a settable preference.
 
@@ -90,7 +90,7 @@ Design memo at `docs/system-audio-meeting-mode-proposal.md`. The privacy framing
 
 ## 6. Architecture overview
 
-**Frontend.** Tauri webview rendering an SPA. Proposed stack: Svelte + Tailwind (smaller bundle than React, better for the HUD overlay). Handles settings, history view, dictionary management, and the floating recording HUD.
+**Frontend.** Tauri webview rendering an SPA. Historical proposal: Svelte + Tailwind (smaller bundle than React, better for the HUD overlay). **Shipped reality (2026-05-15):** SvelteKit / Svelte 5 with hand-written styling rather than Tailwind. It handles settings, history view, dictionary management, and the floating recording HUD.
 
 **Backend (Rust).** Tauri command handlers exposing audio capture, transcription, history queries, hotkey registration, meeting auto-detection (CoreAudio HAL listener on macOS), dictionary application, and clipboard writes.
 
@@ -152,8 +152,8 @@ These are tagged as future work, with a brief note on what each will need when p
 - History view: paginated list, full-text search, copy-to-clipboard, delete, export to CSV.
 - Personal Dictionary: custom terms biased into the Whisper prompt, plus literal find/replace pairs applied post-transcription.
 - Foreground app name and window title captured on each history entry.
-- Settings: model, hotkeys, audio input device, dictionary, launch-at-login, update channel, telemetry opt-in (off by default).
-- Auto-update via signed updater feed.
+- Settings: historical scope included model, hotkeys, audio input device, dictionary, launch-at-login, update channel, and telemetry opt-in. **Shipped reality (2026-05-15):** model / hotkeys / audio / dictionary / meeting / history / debug / launch-at-login settings are live; telemetry opt-in is not.
+- Auto-update via signed updater feed. **Not shipped as of 2026-05-15:** the app exposes a manual "Check for updates" flow instead.
 
 ## 10. Risks and open questions
 

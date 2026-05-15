@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project shape
 
-Hush is a Tauri 2 desktop app: Rust backend (`src-tauri/`) + SvelteKit / Svelte 5 frontend (`src/`). Three windows (`main`, `settings`, `hud`) each with their own capability file. The full architecture — stack, three-window topology, trait-seam pattern, meeting pump dataflow, module map — lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md). Read it before non-trivial cross-module changes.
+Hush is a Tauri 2 desktop app: Rust backend (`src-tauri/`) + SvelteKit / Svelte 5 frontend (`src/`). Four windows are configured: three production surfaces (`main`, `hud`, `menu-bar`) plus the developer-only `debug` console, each with its own capability file. Settings is inline in the main window, not a separate Tauri window. The full architecture — stack, window topology, trait-seam pattern, meeting pump dataflow, module map — lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md). Read it before non-trivial cross-module changes.
 
 Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scope — don't add backwards-compat shims or `@available`-style version guards. Linux and Windows compile cleanly via CI but are not hands-on tested.
 
@@ -13,9 +13,9 @@ Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scop
 ```bash
 # Run the full app. Default features are `whisper` (needs cmake on
 # macOS) + `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
-# no vendored binaries — compiles from source, no network needed). ScreenCaptureKit
-# is linked unconditionally on macOS, so system-audio capture works
-# without an extra feature flag.
+# no vendored binaries — compiles from source, no network needed).
+# ScreenCaptureKit is linked unconditionally on macOS, so the
+# permission-diagnostic path works with no extra feature flag.
 npm run tauri dev
 
 # UI-only path: launches the app shell with no Whisper backend
@@ -29,7 +29,7 @@ cd src-tauri && cargo tauri dev --no-default-features --features diarization-onn
 
 # macOS-only: build a debug .app bundle and open it. Use this for
 # smoke-testing anything that depends on macOS treating Hush as a
-# proper app — Screen Recording / Microphone TCC prompts in
+# proper app — Microphone / Input Monitoring TCC prompts in
 # particular. The bare `cargo tauri dev` binary has no .app wrapper
 # and doesn't register reliably with TCC (see "macOS TCC dev-binary
 # quirk" below). Slow: 30 s – 2 min, not a hot-iteration tool.
@@ -57,7 +57,9 @@ cd src-tauri && cargo test --lib audio::tests::name_of_test
 cd src-tauri && cargo test --lib meeting::                       # whole module
 
 # Integration tests (#[ignore]'d by default, need external resources)
-cd src-tauri && HUSH_TEST_AUDIO=/path/to/sample.wav cargo test --features whisper -- --ignored
+cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test audio_fixture -- --ignored
+cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
+cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
 
 # Frontend type check (svelte-check) — required clean for every PR
 npm run check
@@ -142,7 +144,7 @@ A `#[tauri::command]` lives in **four** places that must stay aligned. CI catche
 
 A new `IpcError` variant also needs `formatErrorDisplay` in `src/lib/errors.ts` updated to map it to the structured `{ headline, hint?, details? }` shape that `ErrorDisplay.svelte` renders. Page-level surfaces wrap that in their own `ErrorDisplay` slot.
 
-A new IPC the **settings window** needs to invoke isn't automatically allowed by the `default` capability — the settings window has its own `capabilities/settings.json`. Custom `#[tauri::command]` functions don't need permission entries, but Tauri plugin commands (autostart, clipboard, etc.) do. Add explicitly.
+A new IPC the **settings UI** needs to invoke runs in the main window, so any required Tauri plugin permissions belong in `capabilities/default.json`. The non-main windows (`hud`, `menu-bar`, `debug`) each have their own capability file and must be granted separately if they ever start invoking plugin commands. Custom `#[tauri::command]` functions don't need permission entries, but Tauri plugin commands (autostart, clipboard, etc.) do. Add explicitly.
 
 ## Dev-launch smoke (required for startup-touching changes)
 
@@ -154,7 +156,6 @@ CI does not run a real Tauri runtime. A panic at app boot (plugin init, capabili
 - `src-tauri/.cargo/config.toml` (link-arg / rpath changes)
 - `src-tauri/capabilities/*.json`
 - `src-tauri/src/app_menu/` (native macOS menu — a malformed `MenuBuilder` chain panics during `setup`).
-- `src-tauri/src/settings_window/` (window-show path — referencing a label not in `tauri.conf.json` is a runtime error).
 - Anything that adds or removes a `.plugin(...)` call
 
 ## macOS TCC dev-binary quirk
@@ -172,7 +173,7 @@ Use `npm run tauri dev` for fast UI/Rust iteration — it can't test TCC reliabl
 `npm run dev-reset` runs a nuclear `tccutil reset ListenEvent` (no bundle ID) that clears all IM grants for the user — necessary because TCC entries created during quarantine or by ad-hoc cdhash don't match the plain bundle-ID-scoped reset. It also removes *both* `~/Applications/Hush.app` and `/Applications/Hush.app`. The `/Applications` removal is critical: old DMG installs from before the re-signing fix carry a linker-signed codesign identifier (`hush-<hash>`) instead of `io.github.khawkins98.hush`. TCC uses the **codesign identifier** (not `CFBundleIdentifier`) to key permission rows, so the two installs have completely separate TCC universes and running both produces a confusing split where one shows Denied and the other shows NotDetermined. See `learnings.md` 2026-05-13 "Linker-signed vs re-signed TCC identity".
 
 **Why `cargo tauri dev` and the raw debug binary don't work for TCC:**  
-`cargo tauri dev` produces an unsigned binary. TCC attributes it to the parent terminal, and Screen Recording in particular effectively requires a real `.app` bundle. Even `cargo tauri build --debug` leaves a linker-signed binary with a hash-based identifier (`hush-<hash>`), not `io.github.khawkins98.hush` — `tauri:bundle` fixes this automatically with `codesign --force --deep --sign -`. See `learnings.md` 2026-05-04 for the full investigation.
+`cargo tauri dev` produces an unsigned binary. TCC attributes it to the parent terminal, and permission flows in general are unreliable without a real `.app` bundle. Even `cargo tauri build --debug` leaves a linker-signed binary with a hash-based identifier (`hush-<hash>`), not `io.github.khawkins98.hush` — `tauri:bundle` fixes this automatically with `codesign --force --deep --sign -`. See `learnings.md` 2026-05-04 for the full investigation.
 
 Stale `Hush.app` rows after rebuilds are recovered by manually removing them with `−` in System Settings → Privacy, then running `npm run dev-reset`, then `npm run tauri:bundle`.
 
@@ -205,9 +206,9 @@ The high-level module map is in [`ARCHITECTURE.md`](./ARCHITECTURE.md). Below ar
 - **Supply-chain pin policy.** `ort` and `ndarray` were removed when we migrated to `tract-onnx` (#641). `rdev` remains a git fork pin. `tract-onnx = "0.22.1"` uses a standard caret pin — no special bump policy. Bump-when policy for `rdev` lives in `learnings.md` "Supply-chain pins" — read it before any `cargo update -p rdev`. CI's `supply-chain-pins` job blocks new RC pins / git deps that aren't on the explicit allowlist (#327).
 - **`tray/` icon-as-template.** Loads `src-tauri/icons/tray-icon@2x.png` — a monochrome alpha-extracted silhouette — and sets `icon_as_template(true)` so macOS adapts to dark/light menu bars. Feeding `default_window_icon()` (full colour) to the template mechanism produces a black blob on light menu bars (#275).
 - **`updater/` is manual only.** Hits GitHub `/releases/latest`, returns a tagged `UpdateCheckResult`. Hush does not poll — every update check is user-initiated. Auto-update via `tauri-plugin-updater` (#10) pends a signing-key decision.
-- **`routes/+page.svelte` ownership.** Does NOT own model picker, vocabulary, replacements, or TCC diagnostic state — those live in the Settings window. Cross-window invalidation is event-driven (`model:download-done` is broadcast; replacements/vocab refresh on the next `start_dictation`). **Owns global recording signals:** derives `meetingOnlyActive` / `anyRecordingActive` (mirroring `DictationSection`) and wires document title, tray `UiRecordingState`, sidebar recording dot, toggle hotkey, and command palette to `anyRecordingActive` so they respond to both dictation and auto-detected meeting sessions.
+- **`routes/+page.svelte` ownership.** Does NOT own model picker, vocabulary, replacements, or TCC diagnostic state — those live in the `src/lib/state/*.svelte.ts` modules rendered by `SettingsPanel.svelte` inside the main window. `+page.svelte` owns the global recording signals: it derives `meetingOnlyActive` / `anyRecordingActive` (mirroring `DictationSection`) and wires document title, tray `UiRecordingState`, sidebar recording dot, toggle hotkey, and command palette to `anyRecordingActive` so they respond to both dictation and auto-detected meeting sessions.
 - **`permissions/` cross-platform split.** Renamed from `macos_perms/` in #597. `permissions/macos.rs` holds the AVFoundation / CoreGraphics / IOKit TCC reads behind `#[cfg(target_os = "macos")]`; `permissions/mod.rs` is the home for future Linux / Windows impls. The IPC layer at `ipc/commands/permissions.rs` (also renamed) wraps them; command names on the wire are unchanged.
 - **Logging has three sinks.** stderr fmt + daily-rolling file appender at `~/Library/Logs/io.github.khawkins98.hush/hush.log.<date>` (#624) + the in-app `DebugLogLayer` ring buffer (#532). `init_tracing` in `lib.rs` composes them. Disable the file sink with `HUSH_LOG_FILE=off`. Settings → Debug surfaces the file path with reveal/copy controls (#627). Architecture detail: see `ARCHITECTURE.md` "Logging / observability".
 - **`tests/e2e/` mock serialization.** Playwright mocks at `tests/e2e/_mock.ts` are serialized via `toString()` and rebuilt in the page context, so they can't capture closure variables — any per-test counters must go through `page.exposeFunction`.
-- **`src-tauri/capabilities/`.** Per-window. Adding a permission to a window is deliberate; every grant widens that window's blast radius. Settings-window IPCs that hit Tauri plugins (autostart, clipboard) need explicit entries in `settings.json`; custom `#[tauri::command]` functions don't.
+- **`src-tauri/capabilities/`.** Per-window. Adding a permission to a window is deliberate; every grant widens that window's blast radius. Settings UI actions live in the main window, so plugin permissions they need belong in `default.json`; the `hud`, `menu-bar`, and `debug` windows must be granted separately if their scope grows. Custom `#[tauri::command]` functions don't need permission entries; Tauri plugin commands do.
 - **`.github/workflows/release.yml`.** macOS deployment target is 14.0 (the `macos-latest` runner's Xcode 16.4 ships the macOS 15 SDK — that's the ceiling); design target stays macOS 26. Maintainer recipe in [`docs/releases.md`](./docs/releases.md).

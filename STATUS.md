@@ -1,6 +1,6 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-05-14, current v0.6.x state
+**Snapshot:** 2026-05-15, current v0.6.x state
 **Latest release:** v0.6.3
 
 A working handoff doc, not the canonical changelog or PRD. The goal is still: *what's the project state right now, what changed recently, and what should the next contributor verify or pick up?* This file is meant to **rot fast** — rewrite it on the next pickup instead of trying to preserve every old bullet forever.
@@ -105,7 +105,7 @@ Five PRs reorganised internals without user-visible changes:
 ### Meeting
 
 - Manual meeting start/stop
-- **Auto-detection via CoreAudio HAL** — starts when mic activates while Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, or Skype is frontmost (macOS, enabled by default; Settings → Meeting → Auto-start)
+- **Auto-detection via CoreAudio HAL** — starts when mic activates while Zoom, Teams, Meet, Discord, Slack, Webex, FaceTime, Skype, GoToMeeting, BlueJeans, Loom, Tuple, or Around is frontmost (macOS, enabled by default; Settings → Meeting → Auto-start)
 - Microphone + system-audio capture on macOS
 - Live chunked transcript updates
 - Speaker labeling via diarization

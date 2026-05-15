@@ -53,22 +53,27 @@ The load-bearing seams:
 
 | Trait | File | Prod impl | Test impl |
 |---|---|---|---|
-| `audio::AudioCapture` | `audio/mod.rs` | `CpalAudioCapture` | inline mocks in `ipc/tests.rs` |
-| `audio::AudioSession` | `audio/mod.rs` | `CpalMicSessionHandle` (handle returned by mic `start_session`); also `CoreAudioTapSession` for system audio | `NoOpSession` / `StubSession` in `meeting/test_support.rs` |
-| `transcription::Transcribe` | `transcription/mod.rs` | `WhisperTranscription` (gated on `whisper`) | trait default + `Noop*` |
-| `diarization::Diarize` | `diarization/mod.rs` | `FlagGatedDiarizer` → `OnnxDiarizer` / `NoopDiarizer` | `NoopDiarizer` |
-| `history::HistoryRepository` | `history/` | `SqliteHistoryRepository` | `Mem*` |
-| `meeting::MeetingSessionRepository` | `meeting/` | `SqliteMeetingSessionRepository` | `Mem*` |
-| `dictionary::*Repository` | `dictionary/` | SQLite-backed | `Mem*` |
-| `settings::SettingsRepository` | `settings/` | SQLite-backed | `Mem*` |
+| `audio::AudioCapture` | `audio/mod.rs` | `CpalAudioCapture` | `MockAudio` / domain-specific stubs in `ipc/tests.rs`, `meeting/test_support.rs`, and `audio/tests.rs`; `WavFileAudioCapture` under `--features test-utils` |
+| `audio::AudioSession` | `audio/mod.rs` | `CpalMicSessionHandle`; `CoreAudioTapSession` for macOS system audio | `NoOpSession` / `StubSession` in `meeting/test_support.rs`; `WavFileAudioSession` under `--features test-utils` |
+| `transcription::Transcribe` | `transcription/mod.rs` | `WhisperTranscription` (gated on `whisper`) | `EchoTranscribe` / `FailingTranscribe` in `ipc/tests.rs`; `NoopStreamTranscribe` in `meeting/test_support.rs`; domain-specific stubs in `commands/**/tests.rs` |
+| `diarization::Diarize` | `diarization/mod.rs` | `FlagGatedDiarizer` → `OnnxDiarizer` / `NoopDiarizer` | `NoopDiarizer`; targeted test doubles such as `RecordingDiarizer` in `diarization/mod.rs` tests |
+| `events::EventEmitter` | `events.rs` | `ipc::events::TauriEventEmitter` | `events::NoopEventEmitter`; `ipc::events::RecordingEventEmitter` |
+| `history::HistoryRepository` | `history/mod.rs` | `SqliteHistoryRepository` | `NoopHistory` / `MemHistory` in `ipc/tests.rs` |
+| `meeting::MeetingSessionRepository` | `meeting/mod.rs` | `SqliteMeetingSessionRepository` | `NoopMeetings` in `ipc/tests.rs`; `FailingCloseRepo` in `meeting/test_support.rs`; in-memory SQLite in `SessionManager::new_for_test` |
+| `meeting::MeetingAppOverrideRepository` | `meeting/app_overrides.rs` | `SqliteMeetingAppOverrideRepository` | `NoOpAppOverrides` in `meeting/test_support.rs`; `NoopMeetingAppOverrides` in `ipc/tests.rs` |
+| `dictionary::VocabularyRepository` | `dictionary/vocabulary/mod.rs` | `SqliteVocabularyRepository` | `NoopVocabulary` in `ipc/tests.rs` |
+| `dictionary::ReplacementRepository` | `dictionary/replacements/mod.rs` | `SqliteReplacementRepository` | `NoopReplacements` in `ipc/tests.rs` |
+| `settings::SettingsRepository` | `settings/mod.rs` | `SqliteSettingsRepository` | `MemSettings` in `ipc/tests.rs` |
 
-`AppState` (in `ipc/`) is the composition root. `AppStateBuilder` wires the prod impls; tests compose mocks. Tauri's `manage` makes `AppState` available to every command handler.
+`AppState` (in `ipc/`) is the composition root. `AppStateBuilder` wires the prod impls; tests compose mocks. Tauri's `manage` makes `AppState` available to every command handler. In addition to the trait seams above, two small AppState fields are load-bearing for correctness: `hotkey_toggle_error` records the one-time boot result of `register_hotkeys` for the UI's toggle-hotkey status surface, and `transcriber_generation` prevents a stale background rebuild from overwriting a newer user-selected model.
 
 **Hot-swappable slots.**
 
 - `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` — model hot-swap propagates without restart. `AppState` holds **two** independent slots ([#248](https://github.com/khawkins98/Hush/issues/248)): `transcribe` (dictation hot path, read by `stop_dictation`) and `transcribe_meeting` (cloned into `SessionManager`). `model_select` loads two `WhisperTranscription` instances from the same GGUF and writes both via `swap_transcriber(new_dictation, new_meeting)` — the underlying model weights are mmap'd, so the marginal RAM cost is small. The split removes mutex contention between a dictation-hotkey press and an in-flight meeting pump tick.
 - `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` — wespeaker model download takes effect on the next pump tick.
 - `inference_threads: Arc<AtomicI32>` ([#255](https://github.com/khawkins98/Hush/issues/255)) — Settings → General slider value, shared between AppState and every loaded `WhisperTranscription` (both slots above) so a slider change takes effect on the next inference call without a model reload.
+
+On macOS, the `screencapturekit` crate is still linked **unconditionally** (no feature flag) for the permission-diagnostic path and its objc2 bindings, even though runtime system-audio capture moved to the CoreAudio process-tap backend in #588.
 
 ---
 
@@ -81,7 +86,7 @@ The load-bearing seams:
 
 `active_sessions: AtomicU32` refcounts in-flight captures so `is_recording()` returns `count > 0` whether the caller went through the singleton or handle path. `MAX_BUFFER_FRAMES` defends against runaway buffer growth in cpal callbacks.
 
-The cpal mic path hands audio to the consumer via an **`rtrb` SPSC ring** ([#251](https://github.com/khawkins98/Hush/issues/251)) — wait-free producer push from the realtime callback thread, wait-free consumer drain. See `learnings.md` 2026-04-30 entry.
+The cpal mic path hands audio to the consumer via an **`rtrb` SPSC ring** ([#251](https://github.com/khawkins98/Hush/issues/251)) — wait-free producer push from the realtime callback thread, wait-free consumer drain. If the user-selected mic is missing at session start, `start_cpal_session` logs a warning and **falls back to the system default input device** ([#705](https://github.com/khawkins98/Hush/issues/705)) rather than hard-failing; mid-session disconnects still surface as typed `DeviceLost` errors so the meeting pump can show recovery UI.
 
 System-audio capture on macOS uses **`AudioHardwareCreateProcessTap`** (the CoreAudio process tap API, macOS 14.2+) via a small Swift helper binary at `resources/macos-audio-tap.swift`, compiled by `build.rs` to `src-tauri/resources/hush-audio-tap-capture` and bundled as a Tauri resource ([#588](https://github.com/khawkins98/Hush/issues/588), [#594](https://github.com/khawkins98/Hush/pull/594)). The Swift binary writes a 12-byte `HUSH` magic + sample-rate + channel-count header to stdout, then streams interleaved f32 LE PCM continuously. The Rust side (`audio/core_audio_tap.rs`) spawns that binary, reads the header, and pumps samples from the child's stdout into an `rtrb` ring that the meeting-pump drains per tick.
 
@@ -96,33 +101,33 @@ Linux ([#106](https://github.com/khawkins98/Hush/issues/106)) and Windows ([#107
 `meeting::SessionManager::start_manual(sources, app_name)` runs continuously:
 
 ```
-                    ┌───────────────────────────────────┐
-                    │   spawn tokio task: run_pump()    │
-                    └─────────────────┬─────────────────┘
-                                      │ every PUMP_TICK (500 ms)
-                                      ▼
-   ┌─────────────────┐    drain    ┌──────────────────┐
-   │  mic handle     │ ──────────▶ │                  │
-   ├─────────────────┤             │  Whisper         │
-   │  system handle  │ ──────────▶ │  spawn_blocking  │
-   └─────────────────┘             └────────┬─────────┘
-                                            │ utterances
-                                            ▼
-                                  ┌──────────────────┐
-                                  │  Diarize         │
-                                  │  label_utts()    │ ◀── audio slice
-                                  └────────┬─────────┘     from rolling buffer
-                                           │
-                                           ▼
-                                  ┌──────────────────┐
-                                  │  emit IPC event  │
-                                  │  + persist row   │
-                                  └──────────────────┘
+open handles + per-source StreamingTranscribeSession(s)
+                    │
+                    ▼
+          spawn tokio task: run_pump()
+                    │ every PUMP_TICK (500 ms)
+                    ▼
+       drain each AudioSession into per-source scratch buffers
+                    │
+                    ├─ mirror canonical 16 kHz mono audio into AudioRollingBuffer
+                    │
+                    └─ feed each source's StreamingTranscribeSession in spawn_blocking
+                                   │
+                                   ▼
+                      collect TickBucket { source, utterances, audio }
+                                   │
+                                   ▼
+                    diarize_and_dispatch_merged(...) across all sources
+                                   │
+                    ┌──────────────┴──────────────┐
+                    ▼                             ▼
+          update in-memory partials      persist final utterances
+          + emit live events             + emit session events / notices
 ```
 
 **State machine.** `Mutex<SessionState>` where `SessionState` is `Idle | Opening | Active(...)`. The `Opening` sentinel is held across the async DB / handle-open work so concurrent `meeting_start_manual` IPC calls can't race past the precondition.
 
-**Shutdown.** `stop_manual` sets the cancel flag, awaits the pump's final-chunk drain, writes `ended_at` on the session row. `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `CoreAudioTapSession` both have `Drop` impls that release their OS resources (the tap session sends `SIGTERM` to the Swift helper, with a `SIGKILL` fallback after 1 s).
+**Shutdown.** `stop_manual` sets the cancel flag, awaits one final drain/inference pass plus each streaming session's `finish()` tail flush, then writes `ended_at` on the session row. `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `CoreAudioTapSession` both have `Drop` impls that release their OS resources (the tap session sends `SIGTERM` to the Swift helper, with a `SIGKILL` fallback after 1 s).
 
 **Privacy.** Audio is buffered in RAM (`AudioRollingBuffer`, ~30 s window) and never written to disk. Only the resulting transcript text is persisted.
 
@@ -285,18 +290,26 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 
 | Module | Responsibility |
 |---|---|
-| `audio/` | cpal mic + macOS CoreAudio process tap (via Swift helper at `resources/macos-audio-tap.swift`) + `AudioSession` handle trait; `WavFileAudioCapture` test seam under `--features test-utils` |
-| `transcription/` | `Transcribe` trait, whisper-rs backend, GGUF download + resample |
-| `diarization/` | `Diarize` trait, ONNX wespeaker impl, online clustering, mel-FB features |
-| `meeting/` | `SessionManager` + chunking pump + `AppClassifier` + per-app overrides + macOS CoreAudio event-driven auto-start (`mic_camera_monitor`). Sub-modules: `manager.rs` (orchestration), `pump.rs` (chunking), `lifecycle.rs` (session lifecycle), `events.rs` (Tauri event emission), `test_support.rs` (in-memory mocks, `#[cfg(test)]` only) |
-| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, command handlers (split by domain); `builder.rs` — explicit-builder for trait-seam composition used in prod and all tests; `tests.rs` — `MemHistory` + cross-domain IPC integration tests; unit tests co-located in each command submodule (`commands/dictionary.rs`, `commands/diarizer.rs`, `commands/permissions.rs`, `commands/meeting.rs`, `commands/system.rs`, `commands/debug.rs`, `commands/history.rs`, `commands/models.rs`, `commands/ptt.rs`, `commands/updater.rs`, `commands/export.rs`, `dictation/tests.rs`); parallel whisper context load at startup via `tokio::join!` |
-| `dictionary/` | Vocabulary + replacement repositories; `packs.rs` — static preset pack definitions (compile-time constants, never DB-materialised; enabled slugs persisted as JSON in settings) |
+| `app_menu/` | Native macOS menu bar wiring (`Hush`, `View`, update check, section navigation) |
+| `audio/` | cpal mic capture + macOS CoreAudio process tap (via Swift helper at `resources/macos-audio-tap.swift`) + `AudioSession` handle trait; `file_source.rs` adds the WAV-backed test seam under `--features test-utils` |
+| `audio_cues.rs` | Start / done cue synthesis and playback |
+| `db/` | SQLite database bootstrap / migrations wiring |
+| `debug_log/` | In-memory tracing ring buffer for the debug console |
+| `diarization/` | `Diarize` trait, tract-onnx wespeaker impl, online clustering, mel-FB features |
+| `dictionary/` | Vocabulary + replacement repositories; `packs.rs` defines compile-time preset packs whose enabled slugs live in settings |
+| `events.rs` | Crate-root `EventEmitter` trait seam shared by IPC and meeting code |
+| `history/` | Dictation history repository + FTS-backed search/export |
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
-| `app_menu/` | Native macOS menu bar (no-op elsewhere) |
-| `tray/` | Status-bar / system-tray icon (cross-platform) |
+| `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, production startup helpers, Tauri event emitters, and command handlers split by domain (`dictation/`, `meeting`, `models`, `permissions`, `ptt`, `system`, etc.) |
+| `meeting/` | `SessionManager`, streaming pump, lifecycle, recovery, event emission, app classifier, per-app overrides, repository, and macOS CoreAudio event-driven auto-start (`autostart.rs`, `mic_camera_monitor.rs`) |
 | `permissions/` | Cross-platform permission state. `permissions/macos.rs` does programmatic TCC reads via AVFoundation / CoreGraphics / IOKit; `permissions/mod.rs` is the home for future Linux / Windows impls. Renamed from `macos_perms/` in #597. |
-| `updater/` | Manual "Check for updates" probe against GitHub releases |
+| `repository.rs` | Generic CRUD supertrait used by vocabulary / replacements / meetings |
+| `settings/` | Settings repository plus string/JSON codec helpers |
+| `transcription/` | `Transcribe` trait, whisper-rs backend, streaming session machinery, GGUF download/catalog, resample |
+| `tray/` | Status-bar / system-tray icon and menu-bar popover launcher |
+| `updater/` | Manual `check_for_updates` probe against GitHub releases |
+| `lib.rs` / `main.rs` | Tauri builder, plugin registration, tracing init, and binary entrypoint |
 
 **Frontend** (`src/`):
 
@@ -319,7 +332,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `lib/state/replacements.svelte.ts` | Replacements CRUD (find/replace rules, load/add/remove) |
 | `lib/state/ptt.svelte.ts` | PTT persisted config: combo, enabled, listenerRunning; load/persist IPC |
 | `lib/state/general-settings.svelte.ts` | General settings (autostart, clipboard, sound cues, theme) |
-| `lib/state/general-runtime.svelte.ts` | Runtime/performance settings (inference threads, GPU) |
+| `lib/state/general-runtime.svelte.ts` | Runtime/performance settings (inference threads, mic gain, first-run reset) |
 | `lib/state/palette.svelte.ts` | Command palette (Cmd+K) state: open/close, query, filtered results |
 | `lib/state/nav.svelte.ts` | Sidebar + settings tab navigation state |
 | `lib/AppLifecycle.svelte` | App-level lifecycle container: Tauri event listeners (hotkey, PTT, menu, model-download, meetings), permission side-effects, first-run checks; no markup |
@@ -348,8 +361,8 @@ type RecordingPhase =
 **Two start paths, one stop path:**
 
 - `start()` — uses `start_dictation` / `stop_dictation`. Applies vocabulary biasing, text replacements, and backend clipboard write. Used by toggle hotkey and PTT.
-- `startRecord(includeSystemAudio)` — uses `meeting_start_manual` / `meeting_stop_manual`. Adds system-audio when the platform reports `is_supported = true` for the `system-audio` source listing (today: macOS only). The parameter name in the source is currently `screenRecordingLive` for historical reasons; system audio no longer requires Screen Recording permission post-#588. Used by the UI record button.
-- `stop(trailingMs?)` — shared stop path, guards on `phase.tag === 'recording'`. Applies the trailing-silence buffer (500 ms by default) then delegates to `_stopDictation()` or `_stopMeeting()`.
+- `startRecord()` — uses `meeting_start_manual` / `meeting_stop_manual`. Adds system-audio when the platform reports `is_supported = true` for the `system-audio` source listing (today: macOS only). The derived flag is still named `screenRecordingLive` in source for historical reasons; system audio no longer requires Screen Recording permission post-#588. Used by the UI record button.
+- `stop(trailingMs?)` — shared stop path. If `meetingOnlyActive` is true (auto-detected meeting session running outside the dictation state machine), it delegates straight to `meeting.stopSession()` ([#959](https://github.com/khawkins98/Hush/issues/959)). Otherwise it guards on `phase.tag === 'recording'`, applies the trailing-silence buffer (500 ms by default), then delegates to `_stopDictation()` or `_stopMeeting()`.
 
 **Stop helpers:**
 

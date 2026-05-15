@@ -4,6 +4,23 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-15 — Current invariants surfaced by docs sweep (#960)
+
+### `AppState` coordination state is load-bearing, not incidental
+
+Two small `AppState` fields now carry real cross-layer meaning and should stay documented when adjacent code changes:
+
+- `transcriber_generation: Arc<AtomicU64>` is the race guard for background transcriber rebuilds. Any async task that rebuilds or swaps a transcriber must snapshot/compare the generation before installing its result, or a stale task can overwrite a newer model selection. This shipped in #801 and resolves the open race noted in the older `#636` investigation.
+- `hotkey_toggle_error: Mutex<Option<String>>` is the persisted startup registration result for the global toggle hotkey. Startup failures are surfaced through IPC/UI from this stored field; don't "re-diagnose" by opportunistically retrying registration from the frontend. This shipped in #904.
+
+### Audio + meeting mode invariants that docs kept drifting on
+
+- `audio/cpal.rs` falls back to the system default input device when a previously-selected named mic is missing. Missing hardware is no longer a hard startup failure; preserve the warning + fallback behaviour (#705).
+- The frontend no longer has a separate `meeting.startSession()` path for the main recording control. `dictation.stop()` delegates to `meeting.stopSession()` when `meetingOnlyActive`, so auto-detected meeting-only sessions tear down through one stop path (#959).
+- The diarizer's default cosine-distance threshold is **0.4** (not 0.6). Runtime override remains `HUSH_DIARIZER_THRESHOLD` (#633).
+
+---
+
 ## 2026-05-14 — Frontend state module pattern: thin tabs + `.svelte.ts` state modules (#694 et al.)
 
 ### Rule: thin tab + state module separation
@@ -181,7 +198,7 @@ The 200 ms floor is a crash-prevention *floor*: below that, whisper.cpp's mel fr
 
 ---
 
-## 2026-05-13 — IOHIDCheckAccess staleness: DMG-installed release binary returns NotDetermined after TCC grant
+## [SUPERSEDED] 2026-05-13 — IOHIDCheckAccess staleness: DMG-installed release binary returns NotDetermined after TCC grant
 
 **Symptom.** After granting Input Monitoring for the DMG-installed release build and using the "Quit & Reopen" restart path, the relaunched app showed PTT as non-functional. Logs showed `registered toggle-record hotkey` but no `starting PTT rdev listener` — PTT startup was being silently skipped. `npm run tauri:bundle` (debug build installed to `~/Applications`) did not reproduce the issue.
 
@@ -2393,8 +2410,8 @@ The same logic applies to the diarizer. An intermediate iteration kept the diari
 `has_active_session()` is checked *before* `stop_manual()` to record whether a session was live, then cleanup runs based on that flag regardless of the error path.
 
 ### Known open items
-- **Mid-meeting growth still unbounded** at ~1.25 GB/min. Per-stop cleanup bounds between-meeting footprint; a single very long meeting still grows. Mid-meeting reload would require a user-visible interruption (dictation outage) and is deferred.
-- **`model_select` race:** a model change that completes during the background reload will be overwritten when the reload task installs its freshly-built context. Low-risk in practice (tagged TODO(#636) in code); fix with a generation counter if it surfaces.
+- **[SUPERSEDED by #641] Mid-meeting growth still unbounded** at ~1.25 GB/min. This was true in the pre-tract ORT era; the `2026-05-08 — #641 root-cause fix: ORT → tract-onnx` entry below is the resolution.
+- **[RESOLVED #801] `model_select` race:** a model change that completed during the background reload used to be overwritten when the reload task installed its freshly-built context. `transcriber_generation` is now the guard against stale installs.
 - **Verify with `vmmap -summary`**, not RSS. Physical footprint should return to ~1.5–2 GB baseline within a few seconds of meeting stop. Without mimalloc override the destructors fire correctly but footprint stays pinned (system malloc hoarding) — this was confirmed on a 5:30 meeting post-#636 (8 GB before and after stop). The `override` feature is required for observable recovery.
 
 ---
