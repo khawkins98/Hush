@@ -369,7 +369,11 @@ fn tick_drain_sources(
             continue;
         };
         let buf = &mut state.drain_buffers[i];
-        buf.clear();
+        // Zeroize before reuse: buf holds the previous tick's audio bytes
+        // from the last spawn_blocking round-trip.  clear() sets len = 0
+        // without touching the backing allocation, so those samples would
+        // survive until the next tick's drain overwrites them.
+        buf.zeroize();
         match handle.drain_into(buf) {
             Ok(format) => {
                 tracing::debug!(
@@ -490,6 +494,20 @@ fn tick_drain_sources(
                                     }
                                     ctx.handles[i] = Some(new_handle);
                                     ctx.streaming_sessions[i] = new_stream;
+                                    // If transcription was active but start_stream
+                                    // failed, audio capture is running but whisper
+                                    // won't produce utterances — surface this.
+                                    if ctx.transcribe.is_some()
+                                        && ctx.streaming_sessions[i].is_none()
+                                    {
+                                        emit_meeting_source_failed(
+                                            ctx.event_emitter.as_ref(),
+                                            ctx.session_id,
+                                            ctx.sources[i].speaker_tag(),
+                                            "audio capture restored at fallback device but transcription could not restart",
+                                            false,
+                                        );
+                                    }
                                     state.recovery_states[i] = SourceRecoveryState::Fallback {
                                         original_source,
                                         original_device_name: lost_device.clone(),
@@ -842,6 +860,17 @@ fn tick_recovery_check(ctx: &mut PumpContext, state: &mut PumpTickState) {
                     }
                     ctx.handles[i] = Some(new_handle);
                     ctx.streaming_sessions[i] = new_stream;
+                    // Same guard as the fallback path: if start_stream failed
+                    // the audio is flowing but whisper is dark.
+                    if ctx.transcribe.is_some() && ctx.streaming_sessions[i].is_none() {
+                        emit_meeting_source_failed(
+                            ctx.event_emitter.as_ref(),
+                            ctx.session_id,
+                            ctx.sources[i].speaker_tag(),
+                            "audio capture restored but transcription could not restart",
+                            false,
+                        );
+                    }
                     state.recovery_states[i] = SourceRecoveryState::Active;
                     emit_audio_device_restored(
                         ctx.event_emitter.as_ref(),
