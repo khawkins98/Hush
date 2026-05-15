@@ -175,10 +175,6 @@
 
 <section class="history panel-history" aria-labelledby="history-heading">
   <header class="history-header">
-    <div class="history-title-block">
-      <h2 id="history-heading">History</h2>
-      <p class="history-subtitle">Your local transcriptions and meeting recordings</p>
-    </div>
     <div class="header-actions">
       <div class="search-wrap">
         <!-- search icon -->
@@ -352,25 +348,6 @@
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1rem;
-}
-
-.history-title-block {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-}
-
-.history-header h2 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.history-subtitle {
-  margin: 0;
-  font-size: 0.8rem;
-  color: var(--text-muted);
 }
 
 .history-header input[type="search"] {
@@ -622,9 +599,6 @@ button.ghost.danger:hover:not(:disabled) {
   :root:not([data-theme="light"]) button:hover:not(:disabled) {
     border-color: var(--accent);
   }
-  :root:not([data-theme="light"]) .history-header h2 {
-    color: #d8d8d8;
-  }
   :root:not([data-theme="light"]) .filter-chip {
     background-color: #2a2a2d;
     border-color: #38383b;
@@ -663,9 +637,6 @@ button.ghost.danger:hover:not(:disabled) {
 }
 :root[data-theme="dark"] button:hover:not(:disabled) {
   border-color: var(--accent);
-}
-:root[data-theme="dark"] .history-header h2 {
-  color: #d8d8d8;
 }
 :root[data-theme="dark"] .filter-chip {
   background-color: #2a2a2d;
