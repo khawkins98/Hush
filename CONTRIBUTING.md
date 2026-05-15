@@ -341,7 +341,7 @@ To smoke the release pipeline without cutting a real tag: `gh workflow run relea
 ## Project documents at a glance
 
 - [`README.md`](./README.md) — what Hush is, install, current status.
-- [`hush-prd.md`](./hush-prd.md) — product requirements doc; the policy document for v1 scope, non-goals, and milestone plan.
+- [`hush-prd.md`](./hush-prd.md) — historical product spec. Most of v1 has shipped; what's worth reading is §13.8 (attribution and black-box reimplementation posture) and §4 (non-goals). For current feature state see STATUS.md and CHANGELOG.md.
 - [`CHANGELOG.md`](./CHANGELOG.md) — Keep-a-Changelog-formatted record of what's shipped.
 - [`docs/releases.md`](./docs/releases.md) — maintainer's release-cutting recipe.
 - [`learnings.md`](./learnings.md) — append-only engineering decision log. Why we picked X over Y, what false starts cost us, what would surprise the next contributor.
