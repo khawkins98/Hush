@@ -231,7 +231,33 @@ pub(super) fn validate_export_path(path: &str) -> IpcResult<()> {
     Ok(())
 }
 
-/// Inspect an error chain and, if it looks permission-shaped,
+/// Write `body` to `path` atomically via a sibling `.tmp` file (#837).
+///
+/// Writes to `<path>.tmp` first, then renames over `path`. If the
+/// write fails the `.tmp` file is removed (best-effort). The rename
+/// step is atomic on every supported FS so a crash between write-
+/// complete and rename-start leaves the original file intact and a
+/// stale `.tmp` beside it — safe to delete manually; won't corrupt
+/// the destination.
+///
+/// Used by all three export code paths (per-row dictation CSV, per-
+/// session meeting export, and bulk-export bundle) so the guarantee
+/// is consistent.
+pub(super) async fn atomic_write(path: &std::path::Path, body: &[u8]) -> IpcResult<()> {
+    let tmp = path.with_extension({
+        let orig_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("out");
+        format!("{orig_ext}.tmp")
+    });
+    if let Err(e) = tokio::fs::write(&tmp, body).await {
+        // Ignore removal error — the write failure is the primary one.
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(IpcError::Internal(format!("write {}: {e}", tmp.display())));
+    }
+    tokio::fs::rename(&tmp, path)
+        .await
+        .map_err(|e| IpcError::Internal(format!("rename {}: {e}", path.display())))
+}
+
 /// return the permission name (`"microphone"` or `"input-monitoring"`)
 /// so a caller can promote it to [`IpcError::PermissionDenied`] (#386).
 /// Uses the same substring patterns the frontend's pre-typed-variant
