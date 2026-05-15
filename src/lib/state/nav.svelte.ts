@@ -1,4 +1,8 @@
-import type { SettingsTab } from "$lib/SettingsPanel.svelte";
+import {
+  readDebugConsoleEnabled,
+  setDebugConsoleEnabled as persistDebugConsoleEnabled,
+} from "$lib/debug-console";
+import type { SettingsTab } from "$lib/settings-tabs";
 import type { SidebarSection } from "$lib/SidebarNav.svelte";
 
 const SIDEBAR_OPEN_KEY = "hush.sidebar.open";
@@ -10,6 +14,7 @@ let sidebarOpen = $state<boolean>(
     ? localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false"
     : true,
 );
+let debugConsoleEnabled = $state<boolean>(readDebugConsoleEnabled());
 
 export const nav = {
   get activeSection() {
@@ -30,8 +35,15 @@ export const nav = {
   set sidebarOpen(val: boolean) {
     sidebarOpen = val;
   },
+  get debugConsoleEnabled() {
+    return debugConsoleEnabled;
+  },
   onSidebarSelect(id: SidebarSection) {
     activeSection = id;
+    // Settings accordion requires the sidebar to be expanded (labels need
+    // ~180 px). Force-expand without persisting so the user's collapsed
+    // preference survives the next launch.
+    if (id === "settings") sidebarOpen = true;
   },
   onSidebarToggle() {
     sidebarOpen = !sidebarOpen;
@@ -52,5 +64,15 @@ export const nav = {
     }
     settingsActiveTab = tab;
     activeSection = "settings";
+    // Force-expand sidebar so the settings accordion is reachable from
+    // every programmatic entry point (command palette, banners, menus).
+    sidebarOpen = true;
+  },
+  setDebugConsoleEnabled(enabled: boolean) {
+    persistDebugConsoleEnabled(enabled);
+    debugConsoleEnabled = enabled;
+    if (!enabled && settingsActiveTab === "debug") {
+      settingsActiveTab = "general";
+    }
   },
 };

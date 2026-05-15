@@ -24,6 +24,11 @@
   and keeps focus on the toggle for keyboard ergonomics.
 -->
 <script lang="ts">
+  import { slide } from "svelte/transition";
+  import { SETTINGS_TABS } from "$lib/settings-tabs";
+  import type { SettingsTab } from "$lib/settings-tabs";
+  import { motionDuration } from "$lib/motion";
+
   export type SidebarSection = "dictation" | "history" | "settings" | "about";
 
   type Item = {
@@ -46,15 +51,22 @@
     /// the persisted preference via `localStorage["hush.sidebar.open"]`
     /// and wires it through this prop.
     open: boolean;
+    /// The currently active settings sub-tab. Drives the accordion
+    /// highlight when the settings section is active.
+    settingsTab: SettingsTab;
+    /// Whether the Debug tab should appear in the settings accordion.
+    showDebugTab: boolean;
     /// Called when the user clicks an item OR activates one with
     /// keyboard.
     onSelect: (id: SidebarSection) => void | Promise<void>;
     /// Called when the user clicks the open/collapse toggle. The
     /// orchestrator flips `open` and persists.
     onToggle: () => void | Promise<void>;
+    /// Called when the user selects a settings sub-tab in the accordion.
+    onSettingsTabSelect: (tab: SettingsTab) => void;
   };
 
-  let { active = $bindable(), recording, open, onSelect, onToggle }: Props =
+  let { active = $bindable(), recording, open, settingsTab, showDebugTab, onSelect, onToggle, onSettingsTabSelect }: Props =
     $props();
 
   let primaryItems = $derived<Item[]>([
@@ -62,10 +74,9 @@
     { id: "history", label: "History" },
   ]);
 
-  let footerItems = $derived<Item[]>([
-    { id: "settings", label: "Settings" },
-    { id: "about", label: "About" },
-  ]);
+  let visibleSettingsTabs = $derived(
+    showDebugTab ? SETTINGS_TABS : SETTINGS_TABS.filter((t) => t.key !== "debug"),
+  );
 
   function handleClick(id: SidebarSection) {
     void onSelect(id);
@@ -159,40 +170,80 @@
   </ul>
 
   <ul class="sidebar-nav-footer">
-    {#each footerItems as item (item.id)}
-      <li>
-        <button
-          type="button"
-          class="sidebar-nav-item"
-          class:active={active === item.id}
-          aria-label={item.label}
-          aria-current={active === item.id ? "page" : undefined}
-          title={open ? undefined : item.label}
-          data-testid="sidebar-nav-{item.id}"
-          onclick={() => handleClick(item.id)}
+    <!-- Settings with accordion sub-navigation -->
+    <li>
+      <button
+        type="button"
+        class="sidebar-nav-item"
+        class:active={active === "settings"}
+        aria-label="Settings"
+        aria-current={active === "settings" ? "page" : undefined}
+        aria-expanded={active === "settings" && open}
+        aria-controls="sidebar-settings-tabs"
+        title={open ? undefined : "Settings"}
+        data-testid="sidebar-nav-settings"
+        onclick={() => handleClick("settings")}
+      >
+        <span class="sidebar-nav-icon" aria-hidden="true">
+          <!-- Settings gear -->
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+          </svg>
+        </span>
+        {#if open}
+          <span class="sidebar-nav-label">Settings</span>
+        {/if}
+      </button>
+
+      {#if active === "settings" && open}
+        <ul
+          id="sidebar-settings-tabs"
+          class="sidebar-settings-tabs"
+          aria-label="Settings sections"
+          transition:slide={{ duration: motionDuration(160) }}
         >
-          <span class="sidebar-nav-icon" aria-hidden="true">
-            {#if item.id === "settings"}
-              <!-- Settings gear -->
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" />
-                <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-              </svg>
-            {:else}
-              <!-- Info circle (About) -->
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="8" stroke-width="2.5" stroke-linecap="round" />
-                <path d="M11 12h1v5h1" />
-              </svg>
-            {/if}
-          </span>
-          {#if open}
-            <span class="sidebar-nav-label">{item.label}</span>
-          {/if}
-        </button>
-      </li>
-    {/each}
+          {#each visibleSettingsTabs as tab (tab.key)}
+            <li>
+              <button
+                type="button"
+                class="sidebar-settings-tab-btn"
+                class:active={settingsTab === tab.key}
+                aria-current={settingsTab === tab.key ? "page" : undefined}
+                data-testid={tab.testId}
+                onclick={() => onSettingsTabSelect(tab.key)}
+              >{tab.label}</button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </li>
+
+    <!-- About -->
+    <li>
+      <button
+        type="button"
+        class="sidebar-nav-item"
+        class:active={active === "about"}
+        aria-label="About"
+        aria-current={active === "about" ? "page" : undefined}
+        title={open ? undefined : "About"}
+        data-testid="sidebar-nav-about"
+        onclick={() => handleClick("about")}
+      >
+        <span class="sidebar-nav-icon" aria-hidden="true">
+          <!-- Info circle -->
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="8" stroke-width="2.5" stroke-linecap="round" />
+            <path d="M11 12h1v5h1" />
+          </svg>
+        </span>
+        {#if open}
+          <span class="sidebar-nav-label">About</span>
+        {/if}
+      </button>
+    </li>
   </ul>
 </nav>
 
@@ -204,6 +255,7 @@
     padding: 0.6rem 0;
     display: flex;
     flex-direction: column;
+    overflow-y: auto;
     /* Animate width changes so the open/collapsed transition
        reads as a smooth state flip rather than a jarring jump.
        Reduced-motion users get the instant transition via the
@@ -352,6 +404,44 @@
   @keyframes sidebar-recording-pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.55; transform: scale(0.85); }
+  }
+
+  .sidebar-settings-tabs {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0.25rem;
+    overflow: hidden;
+  }
+
+  /* Settings sub-tab buttons — indented under the gear icon so the
+     visual hierarchy is clear: gear is the parent, tabs are children. */
+  .sidebar-settings-tab-btn {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    padding: 0.35rem 0.75rem 0.35rem 2.3rem;
+    width: 100%;
+    text-align: left;
+    font-size: 0.8rem;
+    font-family: inherit;
+    font-weight: 400;
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 120ms ease, border-color 120ms ease;
+  }
+  .sidebar-settings-tab-btn:hover {
+    color: var(--text-primary);
+  }
+  .sidebar-settings-tab-btn.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    font-weight: 500;
+  }
+  .sidebar-settings-tab-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -3px;
   }
 
   @media (prefers-reduced-motion: reduce) {

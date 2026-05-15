@@ -26,7 +26,7 @@
   import { meeting } from "$lib/state/meeting-sessions.svelte";
   import { onboarding } from "$lib/state/onboarding.svelte";
   import { permissions } from "$lib/state/permissions.svelte";
-  import type { SettingsTab } from "$lib/SettingsPanel.svelte";
+  import type { SettingsTab } from "$lib/settings-tabs";
   import { nav } from "$lib/state/nav.svelte";
 
   type Props = {
