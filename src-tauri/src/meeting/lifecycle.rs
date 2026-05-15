@@ -134,6 +134,22 @@ impl SessionManager {
             return Err(anyhow!("meeting session needs at least one audio source"));
         }
 
+        // Snapshot the transcriber Arc once at start time. We take the
+        // snapshot here (before opening audio handles) so we can fail fast
+        // when no model is loaded — opening mic/screen handles just to
+        // discard them is wasteful and confusing (#898). If the user
+        // hot-swaps models mid-session, the new model affects the *next*
+        // session, not this one — the sliding-window state machine carries
+        // inference history that wouldn't transfer cleanly across a model
+        // change.
+        let transcriber_snapshot = self.transcribe.lock().ok().and_then(|g| g.clone());
+        if transcriber_snapshot.is_none() {
+            let _ = revert_to_idle(Vec::new());
+            return Err(anyhow!(
+                "no transcription model loaded; load a model before starting a meeting session"
+            ));
+        }
+
         // Open all the capture handles BEFORE the DB write. If any
         // source fails (Screen Recording permission denied, mic
         // already in use), we want to fail loud now rather than
@@ -218,22 +234,10 @@ impl SessionManager {
         };
 
         // Open one streaming inference session per audio source.
-        // The transcribe slot may be empty (no model loaded yet) or
-        // may carry a backend that doesn't override `start_stream`
-        // — in either case the pump degrades gracefully (sources
-        // that fail to open a streaming session are dropped from the
-        // pump's per-tick loop and the session row stays open with
-        // no utterances, mirroring the pre-#108 "no transcriber"
-        // path).
-        //
-        // We snapshot the transcriber Arc once at start time. If the
-        // user hot-swaps models mid-session via the picker, the new
-        // model affects the *next* session, not this one — the
-        // sliding-window state machine carries inference history
-        // that wouldn't transfer cleanly across a model change. A
-        // future tightening could re-open streaming sessions on
-        // hot-swap; not the day-one shape.
-        let transcriber_snapshot = self.transcribe.lock().ok().and_then(|g| g.clone());
+        // The transcriber was snapshotted (and null-checked) above
+        // before opening audio handles — we know it's Some here.
+        // Sources that fail `start_stream` are excluded from the pump's
+        // per-tick loop; if ALL fail we abort below (#898).
         let mut streaming_sessions: Vec<Option<Box<dyn StreamingTranscribeSession>>> =
             Vec::with_capacity(sources.len());
         // Collect source-failure events to emit AFTER session-started (#881).
@@ -242,112 +246,142 @@ impl SessionManager {
         // defer them here and drain the vec after emit_meeting_session_started.
         let mut deferred_source_failures: Vec<(String, String, bool)> =
             Vec::with_capacity(sources.len());
-        if let Some(transcriber) = &transcriber_snapshot {
-            // Source ordering matches `handles` and `sources`. The
-            // pump's per-tick loop iterates by index into all three.
-            for (i, source) in sources.iter().enumerate() {
-                // Per-handle format read: each AudioSession knows
-                // its capture format, but the trait surface today
-                // exposes it only through `stop()` / `drain_into()`
-                // returns. We pre-warm by issuing a no-op drain
-                // into a scratch buffer to learn the format. The
-                // drain itself is cheap (lock + mem::take of an
-                // empty Vec) and the streaming session needs the
-                // format to set up its internal resampler at
-                // construction.
-                //
-                // If the pre-warm fails (ScreenCaptureKit denied
-                // mid-start, mic device vanished), we skip opening
-                // a streaming session for that source — the audio
-                // handle is still valid for the legacy `stop()`
-                // path, but the streaming pump won't process its
-                // samples. Logged loudly so the user sees the
-                // diagnostic in the panel.
-                let mut scratch = Vec::new();
-                let format = match handles[i].drain_into(&mut scratch) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        scratch.zeroize();
-                        tracing::warn!(
-                            error = ?e,
-                            source_kind = source.kind_label(),
-                            "meeting pump: drain_into pre-warm failed; streaming disabled for this source"
-                        );
-                        // Downcast for DeviceLost so the frontend can
-                        // distinguish "device vanished between picker
-                        // and start" from generic capture failures
-                        // (#617). The mid-session pump path already
-                        // does this; the pre-warm path was the
-                        // asymmetric arm.
-                        let device_lost = e.downcast_ref::<crate::audio::DeviceLost>().is_some();
-                        let reason = if device_lost {
-                            "audio device disconnected before session start"
-                        } else {
-                            "audio capture pre-warm failed at session start"
-                        };
-                        // Surface the failure to the frontend (#533, #881). Deferred
-                        // until after session-started so the frontend's activeId is
-                        // set before the event arrives; it would silently drop
-                        // source-failed events received while activeId is null.
-                        deferred_source_failures.push((
-                            // Use speaker_tag() ("mic"/"system") to match the
-                            // mid-session pump path and the frontend's "mic"
-                            // branch in the MeetingSourceFailed listener (#810).
-                            source.speaker_tag().to_owned(),
-                            reason.to_owned(),
-                            device_lost,
-                        ));
-                        streaming_sessions.push(None);
-                        continue;
+        // transcriber_snapshot is always Some at this point — the None case
+        // was caught and returned early above. Unwrap is safe.
+        let transcriber = transcriber_snapshot.as_ref().unwrap();
+        // Source ordering matches `handles` and `sources`. The
+        // pump's per-tick loop iterates by index into all three.
+        for (i, source) in sources.iter().enumerate() {
+            // Per-handle format read: each AudioSession knows
+            // its capture format, but the trait surface today
+            // exposes it only through `stop()` / `drain_into()`
+            // returns. We pre-warm by issuing a drain into a
+            // scratch buffer to discover the format and capture
+            // any audio that accumulated between handle-open and
+            // stream-start (#868). The streaming session replays
+            // this buffer so the first inference window is not cold.
+            //
+            // If the pre-warm fails (ScreenCaptureKit denied
+            // mid-start, mic device vanished), we skip opening
+            // a streaming session for that source — the audio
+            // handle is still valid for the legacy `stop()`
+            // path, but the streaming pump won't process its
+            // samples. Logged loudly so the user sees the
+            // diagnostic in the panel.
+            let mut scratch = Vec::new();
+            let format = match handles[i].drain_into(&mut scratch) {
+                Ok(f) => f,
+                Err(e) => {
+                    scratch.zeroize();
+                    tracing::warn!(
+                        error = ?e,
+                        source_kind = source.kind_label(),
+                        "meeting pump: drain_into pre-warm failed; streaming disabled for this source"
+                    );
+                    // Downcast for DeviceLost so the frontend can
+                    // distinguish "device vanished between picker
+                    // and start" from generic capture failures
+                    // (#617). The mid-session pump path already
+                    // does this; the pre-warm path was the
+                    // asymmetric arm.
+                    let device_lost = e.downcast_ref::<crate::audio::DeviceLost>().is_some();
+                    let reason = if device_lost {
+                        "audio device disconnected before session start"
+                    } else {
+                        "audio capture pre-warm failed at session start"
+                    };
+                    // Surface the failure to the frontend (#533, #881). Deferred
+                    // until after session-started so the frontend's activeId is
+                    // set before the event arrives; it would silently drop
+                    // source-failed events received while activeId is null.
+                    deferred_source_failures.push((
+                        // Use speaker_tag() ("mic"/"system") to match the
+                        // mid-session pump path and the frontend's "mic"
+                        // branch in the MeetingSourceFailed listener (#810).
+                        source.speaker_tag().to_owned(),
+                        reason.to_owned(),
+                        device_lost,
+                    ));
+                    streaming_sessions.push(None);
+                    continue;
+                }
+            };
+            match transcriber.start_stream(format, "") {
+                Ok(mut sess) => {
+                    // Replay pre-warm audio into the streaming session before
+                    // zeroizing the buffer (#868). Without this, audio captured
+                    // between handle-open and stream-start (the caller's first
+                    // words before the first pump tick) is silently dropped.
+                    // If feed fails, treat it as a stream-setup failure for
+                    // this source rather than pushing a broken session.
+                    if !scratch.is_empty() {
+                        if let Err(e) = sess.feed(&scratch) {
+                            tracing::warn!(
+                                error = ?e,
+                                source_kind = source.kind_label(),
+                                "meeting pump: pre-warm replay failed; streaming disabled for this source"
+                            );
+                            scratch.zeroize(); // (#930) clear PCM from allocator memory
+                            deferred_source_failures.push((
+                                source.speaker_tag().to_owned(),
+                                "pre-warm replay failed at session start".to_owned(),
+                                false,
+                            ));
+                            streaming_sessions.push(None);
+                            continue;
+                        }
                     }
-                };
-                scratch.zeroize(); // (#930) pre-warm PCM must not linger in allocator memory
-                match transcriber.start_stream(format, "") {
-                    Ok(sess) => streaming_sessions.push(Some(sess)),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = ?e,
-                            source_kind = source.kind_label(),
-                            "meeting pump: start_stream failed; streaming disabled for this source"
-                        );
-                        // Same surface-to-frontend pattern as the pre-warm
-                        // failure arm above (#533, #881): a start_stream failure
-                        // means this source will produce 0 utterances. Deferred
-                        // until after session-started (see comment above).
-                        deferred_source_failures.push((
-                            source.speaker_tag().to_owned(),
-                            "streaming session creation failed at session start".to_owned(),
-                            false,
-                        ));
-                        streaming_sessions.push(None);
-                    }
+                    scratch.zeroize(); // (#930) clear PCM from allocator memory after feeding
+                    streaming_sessions.push(Some(sess));
+                }
+                Err(e) => {
+                    scratch.zeroize(); // (#930) clear PCM from allocator memory
+                    tracing::warn!(
+                        error = ?e,
+                        source_kind = source.kind_label(),
+                        "meeting pump: start_stream failed; streaming disabled for this source"
+                    );
+                    // Same surface-to-frontend pattern as the pre-warm
+                    // failure arm above (#533, #881): a start_stream failure
+                    // means this source will produce 0 utterances. Deferred
+                    // until after session-started (see comment above).
+                    deferred_source_failures.push((
+                        source.speaker_tag().to_owned(),
+                        "streaming session creation failed at session start".to_owned(),
+                        false,
+                    ));
+                    streaming_sessions.push(None);
                 }
             }
-        } else {
-            // No transcriber loaded — streaming sessions stay None
-            // for every source. The pump still runs (so cancellation
-            // works) but emits no utterances. Same end-state as
-            // pre-#108 with no model loaded.
-            tracing::warn!(
-                session_id = session.id,
-                "meeting pump: no transcriber loaded; pump will run idle until model is picked"
-            );
-            streaming_sessions.resize_with(sources.len(), || None);
         }
 
-        // If all sources failed to open a streaming session despite a
-        // transcriber being loaded, the entire session will be silent.
-        // Log at error level so it's immediately visible in any log
-        // level — warn-only was the original oversight that made #533
-        // hard to diagnose (#533 hardening).
+        // If all sources failed to open a streaming session, abort
+        // rather than starting a silent session that produces 0
+        // utterances despite the user expecting transcription (#898).
+        // Stop audio handles immediately, close the DB row (best-effort),
+        // then surface an error through the IPC layer.
         let active_streaming = streaming_sessions.iter().filter(|s| s.is_some()).count();
-        if transcriber_snapshot.is_some() && active_streaming == 0 && !sources.is_empty() {
+        if active_streaming == 0 {
             tracing::error!(
                 session_id = session.id,
                 sources = sources.len(),
                 "meeting pump: ALL streaming sessions failed at startup; \
-                 session will produce 0 utterances despite transcriber being loaded"
+                 aborting so the user sees an error rather than a silent recording"
             );
+            // Stop audio capture before the async DB close so no PCM
+            // is captured during the cleanup window.
+            let _ = revert_to_idle(handles);
+            if let Err(e) = self.repo.close_session(session.id).await {
+                tracing::warn!(
+                    error = ?e,
+                    session_id = session.id,
+                    "rollback: close_session failed after all-streams-fail; session row may be orphaned"
+                );
+            }
+            return Err(anyhow!(
+                "all audio sources failed to open transcription streams; \
+                 check microphone and screen-recording permissions"
+            ));
         }
 
         let cancel = Arc::new(AtomicBool::new(false));

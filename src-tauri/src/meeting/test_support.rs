@@ -15,7 +15,7 @@ use crate::audio::{
 };
 use crate::db::SqliteDatabase;
 use crate::repository::Repository;
-use crate::transcription::{Transcribe, Utterance};
+use crate::transcription::{streaming::StreamingTranscribeSession, Transcribe, Utterance};
 
 use super::manager::SessionManager;
 use super::{
@@ -179,6 +179,13 @@ impl AudioSession for StubSession {
         &self.source
     }
 
+    fn drain_into(&self, _sink: &mut Vec<f32>) -> Result<CaptureFormat> {
+        Ok(CaptureFormat {
+            sample_rate: 16_000,
+            channels: 1,
+        })
+    }
+
     fn stop(self: Box<Self>) -> Result<CapturedAudio> {
         Ok(CapturedAudio {
             samples: vec![],
@@ -190,6 +197,48 @@ impl AudioSession for StubSession {
     }
 }
 
+/// No-op streaming session for tests. Every `feed` and `drain` call succeeds
+/// and returns nothing — the pump tick-loop runs cleanly with zero utterances.
+pub(super) struct NoopStreamingSession;
+
+impl StreamingTranscribeSession for NoopStreamingSession {
+    fn feed(&mut self, _captured: &[f32]) -> Result<()> {
+        Ok(())
+    }
+
+    fn drain(&mut self) -> Result<Vec<Utterance>> {
+        Ok(vec![])
+    }
+
+    fn finish(self: Box<Self>) -> Result<Vec<Utterance>> {
+        Ok(vec![])
+    }
+}
+
+/// No-op `Transcribe` backend that supports streaming via `NoopStreamingSession`.
+/// Used by `fresh_manager` / `manager_with_repo` so the lifecycle's
+/// fail-fast transcriber check passes and the pump has a working streaming
+/// session without a real Whisper model.
+pub(super) struct NoopStreamTranscribe;
+
+impl Transcribe for NoopStreamTranscribe {
+    fn transcribe(&self, _audio: &CapturedAudio) -> Result<String> {
+        Ok(String::new())
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn start_stream(
+        &self,
+        _format: CaptureFormat,
+        _prompt: &str,
+    ) -> Result<Box<dyn StreamingTranscribeSession>> {
+        Ok(Box::new(NoopStreamingSession))
+    }
+}
+
 pub(super) async fn fresh_manager() -> SessionManager {
     let db = SqliteDatabase::open_in_memory().await.unwrap();
     let repo: Arc<dyn MeetingSessionRepository> =
@@ -197,12 +246,35 @@ pub(super) async fn fresh_manager() -> SessionManager {
     manager_with_repo(repo)
 }
 
+/// Same as [`fresh_manager`] but with `transcribe = None`. Use for tests
+/// that specifically exercise the fail-fast "no transcriber loaded" path.
+pub(super) async fn fresh_manager_no_transcriber() -> SessionManager {
+    let db = SqliteDatabase::open_in_memory().await.unwrap();
+    let repo: Arc<dyn MeetingSessionRepository> =
+        Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+    let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
+    let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
+    let emitter: Arc<dyn crate::events::EventEmitter> = Arc::new(crate::events::NoopEventEmitter);
+    let diarize: Arc<dyn crate::diarization::Diarize> = Arc::new(crate::diarization::NoopDiarizer);
+    let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
+    SessionManager::new(
+        repo,
+        audio,
+        transcribe,
+        emitter,
+        diarize,
+        app_overrides,
+        Arc::new(AtomicU32::new(0f32.to_bits())),
+    )
+}
+
 /// Same as [`fresh_manager`] but lets the caller supply a pre-built repo —
 /// used by tests that need to insert rows directly before constructing the
 /// manager that will exercise them.
 pub(super) fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> SessionManager {
     let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
-    let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
+    let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> =
+        Arc::new(Mutex::new(Some(Arc::new(NoopStreamTranscribe))));
     let emitter: Arc<dyn crate::events::EventEmitter> = Arc::new(crate::events::NoopEventEmitter);
     let diarize: Arc<dyn crate::diarization::Diarize> = Arc::new(crate::diarization::NoopDiarizer);
     let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
