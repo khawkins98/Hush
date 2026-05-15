@@ -68,14 +68,20 @@ pub(super) const MEETING_APPEND_FAILED_EVENT: &str = "dictation:meeting-append-f
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct MeetingAppendFailedPayload {
+    pub session_id: i64,
     pub error: String,
 }
 
-pub(super) fn emit_utterance_append_failed(event_emitter: &dyn EventEmitter, error: &str) {
+pub(super) fn emit_utterance_append_failed(
+    event_emitter: &dyn EventEmitter,
+    session_id: i64,
+    error: &str,
+) {
     emit_payload(
         event_emitter,
         MEETING_APPEND_FAILED_EVENT,
         &MeetingAppendFailedPayload {
+            session_id,
             error: error.to_owned(),
         },
     );

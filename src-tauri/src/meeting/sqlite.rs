@@ -136,12 +136,21 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         Ok(())
     }
 
-    async fn append_utterance(&self, new: NewPersistedUtterance) -> Result<PersistedUtterance> {
+    async fn append_utterance(
+        &self,
+        new: NewPersistedUtterance,
+    ) -> Result<Option<PersistedUtterance>> {
         // Two-step transaction: insert the utterance, bump the
         // session's denormalised count. Atomic so the count never
         // drifts past a concurrent insert. is_final=1 forced — the
         // schema column exists for a future "persist partials"
         // feature but v1 only writes finals.
+        //
+        // The INSERT uses a conditional SELECT form so it only fires
+        // if the session is still open (ended_at IS NULL). This closes
+        // the race between stop_manual and append_if_active (#917):
+        // if stop_manual won the race, fetch_optional returns None and
+        // we skip the count bump, leaving the closed session clean.
         let mut tx = self
             .db
             .pool()
@@ -149,9 +158,10 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
             .await
             .context("begin append_utterance tx")?;
 
-        let utterance: PersistedUtterance = sqlx::query_as(
+        let utterance: Option<PersistedUtterance> = sqlx::query_as(
             "INSERT INTO utterances (session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final) \
-             VALUES (?, ?, ?, ?, ?, 1) \
+             SELECT ?, ?, ?, ?, ?, 1 \
+             WHERE EXISTS (SELECT 1 FROM meeting_sessions WHERE id = ? AND ended_at IS NULL) \
              RETURNING id, session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final",
         )
         .bind(new.session_id)
@@ -159,19 +169,22 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         .bind(new.ended_at_ms)
         .bind(&new.speaker_label)
         .bind(&new.text)
-        .fetch_one(&mut *tx)
+        .bind(new.session_id)
+        .fetch_optional(&mut *tx)
         .await
         .context("insert utterance")?;
 
-        sqlx::query(
-            "UPDATE meeting_sessions \
-             SET utterance_count = utterance_count + 1 \
-             WHERE id = ?",
-        )
-        .bind(new.session_id)
-        .execute(&mut *tx)
-        .await
-        .context("bump session utterance_count")?;
+        if utterance.is_some() {
+            sqlx::query(
+                "UPDATE meeting_sessions \
+                 SET utterance_count = utterance_count + 1 \
+                 WHERE id = ?",
+            )
+            .bind(new.session_id)
+            .execute(&mut *tx)
+            .await
+            .context("bump session utterance_count")?;
+        }
 
         tx.commit().await.context("commit append_utterance tx")?;
         Ok(utterance)
@@ -480,7 +493,8 @@ mod tests {
                 text: "hello world".into(),
             })
             .await
-            .unwrap();
+            .unwrap()
+            .expect("session open — utterance should be inserted");
         assert!(u.id > 0);
         assert_eq!(u.session_id, s.id);
         assert!(u.is_final);

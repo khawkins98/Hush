@@ -235,7 +235,13 @@ pub trait MeetingSessionRepository:
     /// Persist a final utterance against an open session. Bumps the
     /// session's `utterance_count` atomically (in a single transaction)
     /// so the denormalised count never drifts from the actual row count.
-    async fn append_utterance(&self, new: NewPersistedUtterance) -> Result<PersistedUtterance>;
+    ///
+    /// Returns `None` if the session was already closed when the INSERT
+    /// ran (race between `stop_manual` and `append_if_active` — #917).
+    async fn append_utterance(
+        &self,
+        new: NewPersistedUtterance,
+    ) -> Result<Option<PersistedUtterance>>;
 
     /// All utterances for a session, oldest-first. Used by the
     /// session-detail view to render the transcript.

@@ -54,6 +54,7 @@ export type KnownIpcError =
   | { kind: "history"; message: string }
   | { kind: "replacements"; message: string }
   | { kind: "meeting-sessions"; message: string }
+  | { kind: "meeting-session-active" }
   | { kind: "permission-denied"; message: string }
   | { kind: "updater-unavailable" }
   | { kind: "internal"; message: string };
