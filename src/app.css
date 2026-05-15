@@ -11,30 +11,30 @@ body {
 /* Global brand tokens for Hush's fixed five-color palette. */
 
 :root {
-  /* ── Brand palette: vibrant dark ────────────────────────── */
-  /* Source colors: #5ea1c3 (blue), #528eaf (blue-dark),       */
-  /* #dc7932 (orange), #ba5733 (orange-dark), #6e1715 (crimson) */
+  /* ── Brand palette: vibrant dark orange ─────────────────── */
+  /* Surfaces derived from #dc7932 orange / #6e1715 crimson.    */
+  /* Blue (#5ea1c3 / #528eaf) used for info/link only.          */
   --accent:        #dc7932;
   --accent-hover:  #e8923f;
   --accent-subtle: rgba(220, 121, 50, 0.20);
 
-  /* ── Surfaces (deep tinted navy) ────────────────────────── */
-  --bg-app:      #111c26;
-  --bg-sidebar:  #0d1720;
-  --bg-surface:  #182535;
-  --bg-elevated: #1e2f40;
-  --bg-input:    #162030;
+  /* ── Surfaces (deep dark orange/rust-tinted) ────────────── */
+  --bg-app:      #1a0d07;
+  --bg-sidebar:  #140a05;
+  --bg-surface:  #231508;
+  --bg-elevated: #2c1c0e;
+  --bg-input:    #1e1108;
 
   /* ── Text ───────────────────────────────────────────────── */
-  --text-primary:   #eef4f8;
-  --text-secondary: #9ab8cc;
-  --text-muted:     #5a7a8a;
+  --text-primary:   #f5efe8;
+  --text-secondary: #c4a882;
+  --text-muted:     #7a5838;
   --text-on-accent: #ffffff;
 
   /* ── Borders ────────────────────────────────────────────── */
-  --border:        #1e3248;
-  --border-subtle: #162a3c;
-  --border-input:  #254060;
+  --border:        #3d2510;
+  --border-subtle: #2c1a09;
+  --border-input:  #4a2d14;
   --border-focus:  var(--accent);
 
   /* ── Semantic ───────────────────────────────────────────── */
