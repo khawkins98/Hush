@@ -100,7 +100,8 @@
     When meetingOnlyActive is true (meeting pump running, dictation
     idle) RecordPanel shifts into meeting mode: red waveform bars,
     "MEETING" button label, "Stop meeting recording" aria-label,
-    and the stop action routes to meeting.stopSession().
+    and the stop action routes through dictation.stop() which
+    delegates to meeting.stopSession() internally.
   -->
   <RecordPanel
     recording={effectiveRecording}
@@ -116,7 +117,7 @@
     meetingActiveDetail={meeting.activeDetail}
     meetingOnlyActive={dictation.meetingOnlyActive}
     {onStart}
-    onStop={dictation.meetingOnlyActive ? () => meeting.stopSession() : onStop}
+    {onStop}
     onOpenPermissions={onOpenPermissionsTab}
   >
     {#snippet leftAdjunct()}

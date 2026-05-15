@@ -30,8 +30,7 @@ const _actions = $derived<CommandAction[]>([
     group: "Transcribe",
     enabled: dictation.recording || dictation.meetingOnlyActive,
     run: () => {
-      if (dictation.meetingOnlyActive) void meeting.stopSession();
-      else void dictation.stop(TRAILING_SILENCE_MS);
+      void dictation.stop(TRAILING_SILENCE_MS);
     },
   },
   {
