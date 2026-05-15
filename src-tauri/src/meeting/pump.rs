@@ -1304,8 +1304,23 @@ pub(super) fn open_source_handle(
             let mut scratch = Vec::new();
             match handle.drain_into(&mut scratch) {
                 Ok(format) => match t.start_stream(format, "") {
-                    Ok(sess) => {
-                        scratch.zeroize(); // (#930) pre-warm PCM must not linger
+                    Ok(mut sess) => {
+                        // Replay pre-warm audio so the first inference
+                        // window is not cold (#868). Treat feed failure
+                        // as stream-setup failure — a broken session
+                        // is worse than no session.
+                        if !scratch.is_empty() {
+                            if let Err(e) = sess.feed(&scratch) {
+                                tracing::warn!(
+                                    error = ?e,
+                                    source_kind = source.kind_label(),
+                                    "open_source_handle: pre-warm replay failed; audio-only"
+                                );
+                                scratch.zeroize(); // (#930)
+                                return Ok((handle, None));
+                            }
+                        }
+                        scratch.zeroize(); // (#930) after successful feed
                         Some(sess)
                     }
                     Err(e) => {
