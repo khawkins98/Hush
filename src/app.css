@@ -33,14 +33,16 @@ body {
 
   /* ── Text ───────────────────────────────────────────────── */
   --text-primary:   #f5efe8;
-  --text-secondary: #c4a882;
-  --text-muted:     #7a5838;
+  --text-secondary: #d4be9a;
+  --text-muted:     #a07850;
   --text-on-accent: #ffffff;
+  /* Uppercase tracking labels (field captions, section labels) */
+  --text-label:     #7ab8d4;
 
   /* ── Borders ────────────────────────────────────────────── */
-  --border:        #3d2510;
-  --border-subtle: #2c1a09;
-  --border-input:  #4a2d14;
+  --border:        #4a3018;
+  --border-subtle: #3a2010;
+  --border-input:  #5a3a1e;
   --border-focus:  var(--accent);
 
   /* ── Semantic ───────────────────────────────────────────── */

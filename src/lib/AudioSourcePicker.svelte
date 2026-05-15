@@ -98,7 +98,7 @@
   .field-label {
     font-size: 0.68rem;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--text-label);
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
