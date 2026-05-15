@@ -423,6 +423,16 @@ impl Diarize for OnnxDiarizer {
         *clusters = SessionClusterState::new(threshold);
         tracing::debug!("OnnxDiarizer: cluster state reset for new session");
     }
+
+    fn session_centroids(&self) -> Vec<(usize, Vec<f32>, usize)> {
+        let clusters = self.clusters.lock().unwrap_or_else(|e| e.into_inner());
+        clusters
+            .clusters
+            .iter()
+            .enumerate()
+            .map(|(id, (centroid, count))| (id, centroid.clone(), *count))
+            .collect()
+    }
 }
 
 /// Load, optimise, and compile the wespeaker ONNX model into a

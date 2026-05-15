@@ -130,6 +130,8 @@ impl SessionManager {
             diarize,
             app_overrides,
             Arc::new(AtomicU32::new(0f32.to_bits())),
+            Arc::new(crate::speakers::MemSpeakerStore),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
     }
 }
@@ -286,6 +288,8 @@ pub(super) fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> Sess
         diarize,
         app_overrides,
         Arc::new(AtomicU32::new(0f32.to_bits())),
+        Arc::new(crate::speakers::MemSpeakerStore),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
 }
 

@@ -94,6 +94,22 @@ pub trait Diarize: Send + Sync {
     /// don't bleed into the next one. The default no-op is correct for
     /// stateless impls (`NoopDiarizer`).
     fn reset(&self) {}
+
+    /// Snapshot the per-session cluster centroids for cross-session
+    /// speaker identity resolution (#667). Returns
+    /// `(cluster_id, centroid, utterance_count)` for every cluster
+    /// that was assigned at least one utterance in this session.
+    ///
+    /// **Call this BEFORE `reset()`** — `reset()` clears the cluster
+    /// state. The caller (lifecycle::stop_manual) is responsible for
+    /// the ordering.
+    ///
+    /// Default returns an empty `Vec` — correct for stateless impls
+    /// (`NoopDiarizer`) and for callers that haven't opted into the
+    /// feature.
+    fn session_centroids(&self) -> Vec<(usize, Vec<f32>, usize)> {
+        Vec::new()
+    }
 }
 
 /// Fallback impl. Leaves `speaker_label` as it is so the pump's
@@ -178,6 +194,15 @@ impl Diarize for FlagGatedDiarizer {
     fn reset(&self) {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.reset();
+    }
+
+    /// Forward to the inner diarizer regardless of the enabled flag.
+    /// If the user toggled diarization off mid-session, no embeddings
+    /// were computed, so the inner will return an empty Vec — correct.
+    /// If it was on, we snapshot the centroids before reset clears them.
+    fn session_centroids(&self) -> Vec<(usize, Vec<f32>, usize)> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        inner.session_centroids()
     }
 }
 

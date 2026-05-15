@@ -123,6 +123,16 @@ export type VocabularyTerm = {
   term: string;
 };
 
+// Speaker identity types (#667).
+export type SpeakerIdentity = {
+  id: number;
+  displayName: string | null;
+  utteranceCount: number;
+  confidenceState: "provisional" | "confirmed";
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PackStatus = {
   slug: string;
   name: string;

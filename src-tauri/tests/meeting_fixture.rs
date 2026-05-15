@@ -140,6 +140,8 @@ fn meeting_pump_transcribes_fixture_via_audiosession_seam() {
             diarize,
             override_repo,
             mic_gain_db,
+            Arc::new(hush_lib::speakers::MemSpeakerStore),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         );
 
         // Start a manual meeting session on the mic source.

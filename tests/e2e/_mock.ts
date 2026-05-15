@@ -120,6 +120,14 @@ export async function installMocks(
       // exercise the toggle override per-test.
       get_diarization_enabled: () => false,
       set_diarization_enabled: () => undefined,
+      // Cross-session speaker identity toggle + CRUD (#667).
+      // Default mirrors the backend's opt-in-off state and empty store.
+      get_speaker_identity_enabled: () => false,
+      set_speaker_identity_enabled: () => undefined,
+      speaker_list: () => [],
+      speaker_rename: () => undefined,
+      speaker_delete: () => undefined,
+      speaker_merge: () => undefined,
       // Diarizer model status (#301). Default is "downloaded" so
       // the toggle is interactable in specs that don't care about
       // the missing-model state. Specs that exercise the download
