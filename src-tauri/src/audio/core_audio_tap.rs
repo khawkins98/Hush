@@ -149,35 +149,9 @@ impl CoreAudioTapSession {
             .map_err(|_| anyhow!("timed out waiting for audio tap binary protocol header (5 s)"))?
             .context("read protocol header from audio tap binary")?;
 
-        if &hdr[0..4] != b"HUSH" {
-            return Err(anyhow!(
-                "audio tap binary sent unexpected magic: {:?}",
-                &hdr[0..4]
-            ));
-        }
-        let sample_rate = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
-        let channels = u32::from_le_bytes(hdr[8..12].try_into().unwrap());
-
-        if sample_rate == 0 || channels == 0 {
-            return Err(anyhow!(
-                "audio tap binary reported degenerate format: sr={sample_rate} ch={channels}"
-            ));
-        }
-        // Guard against a tap binary reporting a pathological channel count
-        // that would silently truncate when cast to the u16 stored in
-        // CaptureFormat — the ring-buffer capacity (below) was already using
-        // the pre-cast u32, so the two values would diverge. Any real audio
-        // device tops out at far fewer than 65535 channels; reject early.
-        if channels > u16::MAX as u32 {
-            return Err(anyhow!(
-                "audio tap binary reported implausible channel count: {channels}"
-            ));
-        }
-
-        let format = CaptureFormat {
-            sample_rate,
-            channels: channels as u16, // safe: guarded above
-        };
+        let format = parse_tap_header(&hdr).context("invalid protocol header from audio tap")?;
+        let sample_rate = format.sample_rate;
+        let channels = format.channels as u32;
 
         // SPSC ring sized to MAX_BUFFER_FRAMES (48 kHz × 2 ch × 120 s samples —
         // same constant and same capacity the cpal path uses; see mod.rs).
@@ -428,4 +402,115 @@ pub fn capture_binary_path(resource_dir: &Path) -> PathBuf {
     resource_dir
         .join("resources")
         .join("hush-audio-tap-capture")
+}
+
+// ── Protocol header parser ────────────────────────────────────────────────────
+
+/// Parse the 12-byte binary protocol header emitted by the hush-audio-tap-capture
+/// binary before its first PCM sample.
+///
+/// Wire format (all fields little-endian):
+/// - bytes 0–3:  "HUSH" magic (0x48 55 53 48)
+/// - bytes 4–7:  `sample_rate` as u32
+/// - bytes 8–11: `channel_count` as u32
+///
+/// Returns a `CaptureFormat` on success. Fails on bad magic, zero sample_rate
+/// or channels, or a channel count that would overflow u16.
+pub(super) fn parse_tap_header(hdr: &[u8; 12]) -> anyhow::Result<CaptureFormat> {
+    if &hdr[0..4] != b"HUSH" {
+        return Err(anyhow::anyhow!(
+            "audio tap binary sent unexpected magic: {:?}",
+            &hdr[0..4]
+        ));
+    }
+    let sample_rate = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
+    let channels = u32::from_le_bytes(hdr[8..12].try_into().unwrap());
+
+    if sample_rate == 0 || channels == 0 {
+        return Err(anyhow::anyhow!(
+            "audio tap binary reported degenerate format: sr={sample_rate} ch={channels}"
+        ));
+    }
+    // Guard against pathological channel count silently truncating on u16 cast.
+    // Real devices top out well below 65535; reject early so CaptureFormat is
+    // always accurate (#776).
+    if channels > u16::MAX as u32 {
+        return Err(anyhow::anyhow!(
+            "audio tap binary reported implausible channel count: {channels}"
+        ));
+    }
+
+    Ok(CaptureFormat {
+        sample_rate,
+        channels: channels as u16,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_hdr(magic: &[u8; 4], sample_rate: u32, channels: u32) -> [u8; 12] {
+        let mut hdr = [0u8; 12];
+        hdr[0..4].copy_from_slice(magic);
+        hdr[4..8].copy_from_slice(&sample_rate.to_le_bytes());
+        hdr[8..12].copy_from_slice(&channels.to_le_bytes());
+        hdr
+    }
+
+    #[test]
+    fn valid_stereo_48k_header_parses_correctly() {
+        let hdr = make_hdr(b"HUSH", 48000, 2);
+        let fmt = parse_tap_header(&hdr).expect("valid header should parse");
+        assert_eq!(fmt.sample_rate, 48000);
+        assert_eq!(fmt.channels, 2);
+    }
+
+    #[test]
+    fn valid_mono_44100_header_parses_correctly() {
+        let hdr = make_hdr(b"HUSH", 44100, 1);
+        let fmt = parse_tap_header(&hdr).expect("mono 44.1 kHz header should parse");
+        assert_eq!(fmt.sample_rate, 44100);
+        assert_eq!(fmt.channels, 1);
+    }
+
+    #[test]
+    fn bad_magic_returns_error() {
+        let hdr = make_hdr(b"HACK", 48000, 2);
+        let err = parse_tap_header(&hdr).expect_err("bad magic should fail");
+        assert!(err.to_string().contains("unexpected magic"), "{err}");
+    }
+
+    #[test]
+    fn zero_sample_rate_returns_error() {
+        let hdr = make_hdr(b"HUSH", 0, 2);
+        let err = parse_tap_header(&hdr).expect_err("zero sample_rate should fail");
+        assert!(err.to_string().contains("degenerate"), "{err}");
+    }
+
+    #[test]
+    fn zero_channels_returns_error() {
+        let hdr = make_hdr(b"HUSH", 48000, 0);
+        let err = parse_tap_header(&hdr).expect_err("zero channels should fail");
+        assert!(err.to_string().contains("degenerate"), "{err}");
+    }
+
+    #[test]
+    fn channel_count_overflow_returns_error() {
+        // 65536 would truncate to 0 on u16 cast — reject before that.
+        let hdr = make_hdr(b"HUSH", 48000, u16::MAX as u32 + 1);
+        let err = parse_tap_header(&hdr).expect_err("channel overflow should fail");
+        assert!(
+            err.to_string().contains("implausible channel count"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn max_u16_channel_count_is_accepted() {
+        // u16::MAX itself is technically within range (bizarre but not overflow).
+        let hdr = make_hdr(b"HUSH", 48000, u16::MAX as u32);
+        let fmt = parse_tap_header(&hdr).expect("u16::MAX channels should not overflow");
+        assert_eq!(fmt.channels, u16::MAX);
+    }
 }
