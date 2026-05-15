@@ -262,6 +262,16 @@ async fn check_for_updates_at(
         .timeout(UPDATE_CHECK_TIMEOUT)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
+        // GitHub's API requires a valid User-Agent; missing UA can return 403
+        // which would be mapped to a misleading rate-limiting message (#905).
+        .header(
+            reqwest::header::USER_AGENT,
+            concat!(
+                "Hush/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/khawkins98/Hush)"
+            ),
+        )
         .send()
         .await
     {
@@ -289,28 +299,38 @@ async fn check_for_updates_at(
     }
 
     // Read the body with an explicit size cap so a MITM can't push
-    // a multi-GB JSON document through. We deliberately read into a
-    // bounded `Vec<u8>` first and parse JSON ourselves rather than
-    // relying on `response.json()` (which has no body cap).
-    let body_bytes = match response.bytes().await {
-        Ok(b) if b.len() > UPDATE_CHECK_MAX_BYTES => {
-            tracing::warn!(
-                len = b.len(),
-                cap = UPDATE_CHECK_MAX_BYTES,
-                "check_for_updates: response body exceeded cap"
-            );
-            return Ok(UpdateCheckResult::CheckFailed {
-                reason: "GitHub returned an unexpectedly large response.".into(),
-            });
+    // a multi-GB JSON document through. We stream chunk-by-chunk and
+    // abort as soon as the running total exceeds the cap, rather than
+    // buffering the full body first — that would consume unbounded
+    // memory before the check fires (#906).
+    let mut body_bytes: Vec<u8> = Vec::with_capacity(16 * 1024);
+    let mut stream = response.bytes_stream();
+    loop {
+        use futures_util::StreamExt as _;
+        match stream.next().await {
+            None => break,
+            Some(Err(e)) => {
+                tracing::warn!(error = ?e, "check_for_updates: body read failed");
+                return Ok(UpdateCheckResult::CheckFailed {
+                    reason: map_failure(e),
+                });
+            }
+            Some(Ok(chunk)) => {
+                if body_bytes.len().saturating_add(chunk.len()) > UPDATE_CHECK_MAX_BYTES {
+                    tracing::warn!(
+                        len_so_far = body_bytes.len(),
+                        next_chunk_len = chunk.len(),
+                        cap = UPDATE_CHECK_MAX_BYTES,
+                        "check_for_updates: response body exceeded cap"
+                    );
+                    return Ok(UpdateCheckResult::CheckFailed {
+                        reason: "GitHub returned an unexpectedly large response.".into(),
+                    });
+                }
+                body_bytes.extend_from_slice(&chunk);
+            }
         }
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(error = ?e, "check_for_updates: body read failed");
-            return Ok(UpdateCheckResult::CheckFailed {
-                reason: map_failure(e),
-            });
-        }
-    };
+    }
 
     let release: GhRelease = match serde_json::from_slice(&body_bytes) {
         Ok(r) => r,
@@ -417,7 +437,7 @@ mod tests {
     // branches — non-success status, oversize body, malformed JSON —
     // are nearly impossible to exercise without a fake HTTP endpoint.
 
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Builds the URL the production code would build, but pointed
@@ -446,6 +466,7 @@ mod tests {
                 "/repos/{RELEASE_OWNER}/{RELEASE_REPO}/releases/latest"
             )))
             .and(header("Accept", "application/vnd.github+json"))
+            .and(header_exists("user-agent"))
             .respond_with(ResponseTemplate::new(200).set_body_json(release_json("v0.2.0")))
             .expect(1)
             .mount(&server)
