@@ -156,6 +156,38 @@ pub(super) fn emit_meeting_session_ended(event_emitter: &dyn EventEmitter, sessi
     );
 }
 
+/// Fired when one or more streaming-session tail flushes fail or time out at
+/// meeting stop. The tail utterances (last few seconds of audio) were lost and
+/// won't appear in the session transcript. Lets the frontend warn the user
+/// their transcript may be incomplete.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MeetingTailDroppedPayload {
+    pub session_id: i64,
+    /// Human-readable label of the source whose tail was dropped (e.g.
+    /// "mic", "system-audio"). Included for potential per-source UI display.
+    pub source_kind: String,
+}
+
+/// Tauri event name for [`MeetingTailDroppedPayload`]. Matches the
+/// TypeScript constant `Events.MeetingTailDropped` in `events.ts`.
+pub(super) const MEETING_TAIL_DROPPED_EVENT: &str = "meeting:tail-dropped";
+
+pub(super) fn emit_meeting_tail_dropped(
+    event_emitter: &dyn EventEmitter,
+    session_id: i64,
+    source_kind: &str,
+) {
+    emit_payload(
+        event_emitter,
+        MEETING_TAIL_DROPPED_EVENT,
+        &MeetingTailDroppedPayload {
+            session_id,
+            source_kind: source_kind.to_owned(),
+        },
+    );
+}
+
 pub(super) fn emit_meeting_session_started(event_emitter: &dyn EventEmitter, session_id: i64) {
     emit_payload(
         event_emitter,

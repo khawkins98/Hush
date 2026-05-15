@@ -35,6 +35,12 @@ let meetingSourceFailedNotice = $state<string | null>(null);
 /// the clipboard; this warns the user the session log is incomplete.
 /// Cleared when the session ends or the user dismisses it.
 let meetingAppendFailedNotice = $state<string | null>(null);
+/// Warning set when the backend emits `meeting:tail-dropped` (#833).
+/// Fires when one or more streaming-session tail flushes failed or
+/// timed out at meeting stop — the last few seconds of audio from that
+/// source were lost. NOT cleared on session-ended (the notice is
+/// caused by the session ending); dismissed only by user action.
+let meetingTailDroppedNotice = $state<string | null>(null);
 /// Latest-wins guard for `meeting.refresh()`. Incremented on every
 /// call so a stale response from a previous in-flight request can't
 /// overwrite state already set by a newer one.
@@ -108,6 +114,12 @@ export const meeting = {
   },
   set appendFailedNotice(val: string | null) {
     meetingAppendFailedNotice = val;
+  },
+  get tailDroppedNotice() {
+    return meetingTailDroppedNotice;
+  },
+  set tailDroppedNotice(val: string | null) {
+    meetingTailDroppedNotice = val;
   },
   /** Keep the local search-query mirror in sync. Called by
    *  history.setSearchQuery() so this module doesn't need to import
@@ -361,11 +373,24 @@ export const meeting = {
       },
     );
 
+    const unlistenTailDropped = await listen<{ sessionId: number; sourceKind: string }>(
+      Events.MeetingTailDropped,
+      (e) => {
+        // Tail-dropped fires at session end — no activeId guard needed;
+        // the session may already be cleared by the time this arrives.
+        // Show unconditionally and let the user dismiss it (#833).
+        console.warn("[MeetingTailDropped]", e.payload.sourceKind);
+        meeting.tailDroppedNotice =
+          "The last few seconds of audio couldn't be transcribed when the meeting ended. Your session transcript may be slightly incomplete.";
+      },
+    );
+
     return () => {
       unlistenStarted();
       unlistenSourceFailed();
       unlistenEnded();
       unlistenAppendFailed();
+      unlistenTailDropped();
     };
   },
 };

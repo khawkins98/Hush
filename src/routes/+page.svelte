@@ -190,6 +190,25 @@
   </div>
   {/if}
   <!--
+    Meeting-tail-dropped banner (#833): shown when one or more streaming
+    sessions failed to flush their tail utterances at meeting stop. The
+    last few seconds of audio were lost. Unlike source-failed and
+    append-failed, this banner is NOT cleared on session-ended (it fires
+    because the session ended) — only dismissed manually.
+  -->
+  {#if meeting.tailDroppedNotice}
+  <div class="source-failed-banner" role="alert" data-testid="tail-dropped-banner">
+    <span class="source-failed-banner-icon" aria-hidden="true">⚠️</span>
+    <span class="source-failed-banner-text">{meeting.tailDroppedNotice}</span>
+    <button
+      type="button"
+      class="source-failed-banner-dismiss"
+      aria-label="Dismiss"
+      onclick={() => (meeting.tailDroppedNotice = null)}
+    >✕</button>
+  </div>
+  {/if}
+  <!--
     Dictation section markup extracted into a leaf (#432 slice
     3/3). Action functions + hotkey listeners stay in this
     orchestrator because they touch a sprawl of cross-section
