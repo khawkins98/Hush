@@ -56,10 +56,10 @@ body {
   --info-border:    #5ea1c3;
   --info-text:      #9ac8e0;
 
-  /* ── Success (for green status indicators) ──────────────── */
-  --success-text:   #6ed09a;
-  --success-border: #2a6b3c;
-  --success-bg:     #0d2518;
+  /* ── Success — blue-tinted (consistent with brand blue accent) */
+  --success-text:   #7ab8d4;
+  --success-border: #2a5a7a;
+  --success-bg:     #0d1f2e;
 
   /* ── Shape ──────────────────────────────────────────────── */
   --radius-sm:   4px;
