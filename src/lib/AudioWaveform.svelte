@@ -63,8 +63,8 @@
   - A visible current-dB label overlaid in the top-right corner
     of the waveform container so the level is readable at a
     glance while recording. Uses integer precision (floor -60 dB)
-    with a semi-transparent backdrop pill for legibility on both
-    light and dark themes.
+    with a semi-transparent backdrop pill for legibility against the
+    fixed app palette.
 
   Metering is a no-op outside `recording` mode so the breathing
   idle wave doesn't trip the meter.

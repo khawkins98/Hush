@@ -312,16 +312,14 @@
     "Apple Color Emoji", "Segoe UI Emoji";
 
   /* Layer 1 of "feel native". Two CSS primitives, no per-OS code:
-     - `color-scheme` opts into the user agent's native dark-mode
-       rendering for form controls, scrollbars, and the document
-       background. Without this, scrollbars on macOS render as the
-       light-mode style even when the rest of the app is dark.
+     - `color-scheme: light` keeps native form controls and scrollbars
+       aligned with the app's fixed warm-white palette.
      - `accent-color: auto` makes checkboxes / radios / range
        sliders / progress bars pick up the user's OS accent (the
        Mac highlight blue, the Windows accent, the GNOME accent)
        instead of the browser default cobalt. One line, real
        impact on perceived nativeness. */
-  color-scheme: light dark;
+  color-scheme: light;
   accent-color: auto;
 
   font-size: 16px;
@@ -463,68 +461,6 @@
   background-color: rgba(0, 0, 0, 0.07);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .stale-perm-banner {
-    background-color: #2a2200;
-    border-color: #7a5500;
-  }
-  :root:not([data-theme="light"]) .stale-perm-banner-text {
-    color: #f0c878;
-  }
-  :root:not([data-theme="light"]) .stale-perm-banner-btn {
-    background-color: #2a2200;
-    border-color: #7a5500;
-    color: #f0c878;
-  }
-  :root:not([data-theme="light"]) .stale-perm-banner-btn:hover {
-    background-color: #3a3000;
-  }
-  :root:not([data-theme="light"]) .stale-perm-banner-dismiss {
-    color: #c08000;
-  }
-}
-:root[data-theme="dark"] .stale-perm-banner {
-  background-color: #2a2200;
-  border-color: #7a5500;
-}
-:root[data-theme="dark"] .stale-perm-banner-text {
-  color: #f0c878;
-}
-:root[data-theme="dark"] .stale-perm-banner-btn {
-  background-color: #2a2200;
-  border-color: #7a5500;
-  color: #f0c878;
-}
-:root[data-theme="dark"] .stale-perm-banner-btn:hover {
-  background-color: #3a3000;
-}
-:root[data-theme="dark"] .stale-perm-banner-dismiss {
-  color: #c08000;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .source-failed-banner {
-    background-color: #2a2200;
-    border-color: #7a5500;
-  }
-  :root:not([data-theme="light"]) .source-failed-banner-text {
-    color: #f0c878;
-  }
-  :root:not([data-theme="light"]) .source-failed-banner-dismiss {
-    color: #c08000;
-  }
-}
-:root[data-theme="dark"] .source-failed-banner {
-  background-color: #2a2200;
-  border-color: #7a5500;
-}
-:root[data-theme="dark"] .source-failed-banner-text {
-  color: #f0c878;
-}
-:root[data-theme="dark"] .source-failed-banner-dismiss {
-  color: #c08000;
-}
-
 /* About as a standalone sidebar section. AboutTab's own
    .tab-title gives the "About" heading; just add breathing room
    to match the Settings panel's visual top-padding. */
@@ -546,7 +482,6 @@
   margin-top: 2rem;
   padding-top: 2.5rem;
 }
-
 
 .section-header {
   margin-bottom: 1.5rem;
@@ -576,9 +511,9 @@
   border-radius: 8px;
   font-size: 0.88rem;
   line-height: 1.4;
-  border: 1px solid var(--accent-subtle, rgba(124, 111, 247, 0.18));
-  background-color: var(--accent-subtle, rgba(124, 111, 247, 0.12));
-  color: var(--accent-hover, #5c4fd4);
+  border: 1px solid var(--accent-subtle, rgba(220, 121, 50, 0.18));
+  background-color: var(--accent-subtle, rgba(220, 121, 50, 0.12));
+  color: var(--accent-hover, #ba5733);
 }
 .app-profile-notice-icon {
   font-weight: 700;

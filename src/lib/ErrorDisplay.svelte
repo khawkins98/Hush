@@ -145,34 +145,4 @@
   padding-left: 1rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .error-card {
-    background-color: #4a1a1a;
-    border-color: var(--danger);
-    color: #ffd0d0;
-  }
-  :root:not([data-theme="light"]) .error-hint {
-    color: #ffb0b0;
-  }
-  :root:not([data-theme="light"]) .error-details {
-    color: #d8a0a0;
-  }
-  :root:not([data-theme="light"]) .error-details-body {
-    color: #c89898;
-  }
-}
-:root[data-theme="dark"] .error-card {
-  background-color: #4a1a1a;
-  border-color: var(--danger);
-  color: #ffd0d0;
-}
-:root[data-theme="dark"] .error-hint {
-  color: #ffb0b0;
-}
-:root[data-theme="dark"] .error-details {
-  color: #d8a0a0;
-}
-:root[data-theme="dark"] .error-details-body {
-  color: #c89898;
-}
 </style>

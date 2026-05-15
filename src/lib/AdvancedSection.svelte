@@ -107,7 +107,7 @@
   color: var(--text-primary);
 }
 .advanced-toggle:focus-visible {
-  outline: 2px solid var(--accent, #7c6ff7);
+  outline: 2px solid var(--accent, #dc7932);
   outline-offset: 2px;
 }
 .chevron {
@@ -121,27 +121,4 @@
   padding-left: 0.1rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .advanced-toggle {
-    color: #aaa;
-  }
-  :root:not([data-theme="light"]) .advanced-toggle:hover {
-    background-color: rgba(255, 255, 255, 0.06);
-    color: #d8d8d8;
-  }
-  :root:not([data-theme="light"]) .chevron {
-    color: #777;
-  }
-}
-
-:root[data-theme="dark"] .advanced-toggle {
-  color: #aaa;
-}
-:root[data-theme="dark"] .advanced-toggle:hover {
-  background-color: rgba(255, 255, 255, 0.06);
-  color: #d8d8d8;
-}
-:root[data-theme="dark"] .chevron {
-  color: #777;
-}
 </style>

@@ -242,7 +242,7 @@
 
 .macos-diag-reset-result {
   padding: 0.5rem 0.75rem;
-  background-color: rgba(124, 111, 247, 0.1);
+  background-color: rgba(220, 121, 50, 0.1);
   border-left: 3px solid var(--accent);
   border-radius: 4px;
   font-size: 0.9rem;
@@ -324,79 +324,6 @@
   color: var(--text-secondary);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .macos-diagnostic details {
-    border-color: #3a3a3a;
-    background-color: rgba(255, 255, 255, 0.03);
-  }
-  :root:not([data-theme="light"]) .macos-diag-bundle code,
-  :root:not([data-theme="light"]) .macos-diag-bundle-list code {
-    background-color: rgba(255, 255, 255, 0.08);
-  }
-  :root:not([data-theme="light"]) .macos-diag-doc-pointer {
-    color: #aaa;
-  }
-  :root:not([data-theme="light"]) .macos-diag-why {
-    border-color: #3a3a3a;
-    background-color: rgba(255, 255, 255, 0.03);
-  }
-  :root:not([data-theme="light"]) .macos-diag-why summary {
-    color: #ccc;
-  }
-  :root:not([data-theme="light"]) .macos-reset-guide {
-    background-color: #2a2200;
-    border-color: #7a5500;
-  }
-  :root:not([data-theme="light"]) .macos-reset-guide-intro,
-  :root:not([data-theme="light"]) .macos-reset-guide-steps {
-    color: #f0c878;
-  }
-  :root:not([data-theme="light"]) .guide-pane-btn {
-    background-color: #2a2200;
-    border-color: #7a5500;
-    color: #f0c878;
-  }
-  :root:not([data-theme="light"]) .guide-pane-btn:hover {
-    background-color: #3a3000;
-    border-color: #c08000;
-  }
-}
-:root[data-theme="dark"] .macos-diagnostic details {
-  border-color: #3a3a3a;
-  background-color: rgba(255, 255, 255, 0.03);
-}
-:root[data-theme="dark"] .macos-diag-bundle code,
-:root[data-theme="dark"] .macos-diag-bundle-list code {
-  background-color: rgba(255, 255, 255, 0.08);
-}
-:root[data-theme="dark"] .macos-diag-doc-pointer {
-  color: #aaa;
-}
-:root[data-theme="dark"] .macos-diag-why {
-  border-color: #3a3a3a;
-  background-color: rgba(255, 255, 255, 0.03);
-}
-:root[data-theme="dark"] .macos-diag-why summary {
-  color: #ccc;
-}
-:root[data-theme="dark"] .macos-reset-guide {
-  background-color: #2a2200;
-  border-color: #7a5500;
-}
-:root[data-theme="dark"] .macos-reset-guide-intro,
-:root[data-theme="dark"] .macos-reset-guide-steps {
-  color: #f0c878;
-}
-:root[data-theme="dark"] .guide-pane-btn {
-  background-color: #2a2200;
-  border-color: #7a5500;
-  color: #f0c878;
-}
-:root[data-theme="dark"] .guide-pane-btn:hover {
-  background-color: #3a3000;
-  border-color: #c08000;
-}
-
 button {
   border-radius: 8px;
   border: 1px solid #d1d1d1;
@@ -437,36 +364,4 @@ button.danger:hover:not(:disabled) {
   border-color: var(--danger);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) button {
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  :root:not([data-theme="light"]) button:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-  :root:not([data-theme="light"]) button.danger {
-    background-color: transparent;
-    color: #ff9090;
-  }
-  :root:not([data-theme="light"]) button.danger:hover:not(:disabled) {
-    background-color: #3a1818;
-    border-color: var(--danger);
-  }
-}
-:root[data-theme="dark"] button {
-  background-color: #2a2a2a;
-  border-color: #3a3a3a;
-}
-:root[data-theme="dark"] button:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-:root[data-theme="dark"] button.danger {
-  background-color: transparent;
-  color: #ff9090;
-}
-:root[data-theme="dark"] button.danger:hover:not(:disabled) {
-  background-color: #3a1818;
-  border-color: var(--danger);
-}
 </style>

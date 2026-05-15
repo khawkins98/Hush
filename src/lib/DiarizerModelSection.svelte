@@ -363,7 +363,7 @@
   .diarizer-installed-details summary {
     cursor: pointer;
     font-size: 0.85rem;
-    color: #2c3e8f;
+    color: #1a4a63;
     user-select: none;
   }
   .diarizer-details {
@@ -433,38 +433,4 @@
     font-size: 0.8rem;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .diarizer-model-status {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-    }
-    :root:not([data-theme="light"]) .diarizer-manual-install > summary {
-      color: #aaa;
-    }
-    :root:not([data-theme="light"]) .diarizer-manual-install > summary:hover {
-      color: #d8d8d8;
-    }
-    :root:not([data-theme="light"]) .path-code {
-      background-color: rgba(255, 255, 255, 0.08);
-    }
-    :root:not([data-theme="light"]) .speaker-identity-toggle-row {
-      border-left-color: #38383b;
-    }
-  }
-  :root[data-theme="dark"] .diarizer-model-status {
-    background-color: #2a2a2d;
-    border-color: #38383b;
-  }
-  :root[data-theme="dark"] .diarizer-manual-install > summary {
-    color: #aaa;
-  }
-  :root[data-theme="dark"] .diarizer-manual-install > summary:hover {
-    color: #d8d8d8;
-  }
-  :root[data-theme="dark"] .path-code {
-    background-color: rgba(255, 255, 255, 0.08);
-  }
-  :root[data-theme="dark"] .speaker-identity-toggle-row {
-    border-left-color: #38383b;
-  }
 </style>

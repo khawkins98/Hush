@@ -143,18 +143,4 @@
     color: var(--text-muted);
     line-height: 1.3;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .stats-hero {
-      color: #d8d8d8;
-    }
-    :root:not([data-theme="light"]) .tile-label {
-      color: #a8a8a8;
-    }
-  }
-  :root[data-theme="dark"] .stats-hero {
-    color: #d8d8d8;
-  }
-  :root[data-theme="dark"] .tile-label {
-    color: #a8a8a8;
-  }
 </style>

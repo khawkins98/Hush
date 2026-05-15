@@ -527,7 +527,7 @@
 </section>
 
 <style>
-  /* `.tab-title` + `button.ghost` (light + dark) imported from
+  /* `.tab-title` + `button.ghost` imported from
      `settings-tab.css` (#392). The .about-* classes below are
      genuinely About-tab-specific. */
   .about-tab {
@@ -575,7 +575,7 @@
   }
   .about-update-available {
     background-color: var(--info-bg);
-    border: 1px solid #c7d2fe;
+    border: 1px solid #5ea1c3;
     color: var(--info-text);
   }
   .about-update-failed {
@@ -585,7 +585,7 @@
   }
   .about-update-installing {
     background-color: var(--info-bg);
-    border: 1px solid #c7d2fe;
+    border: 1px solid #5ea1c3;
     color: var(--info-text);
     font-variant-numeric: tabular-nums;
   }
@@ -633,8 +633,8 @@
     text-decoration: none;
   }
   .about-release-notes-btn:hover {
-    background-color: var(--accent-hover, #5c4fd4);
-    border-color: var(--accent-hover, #5c4fd4);
+    background-color: var(--accent-hover, #ba5733);
+    border-color: var(--accent-hover, #ba5733);
     color: white;
   }
   .about-update-fallback {
@@ -669,35 +669,5 @@
   }
   .about-tab a {
     color: var(--accent-hover);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .about-tab a {
-      color: var(--accent);
-    }
-    :root:not([data-theme="light"]) .about-update-ok {
-      background-color: rgba(46, 170, 83, 0.15);
-      border-color: #2a6b3c;
-      color: #b6e5c5;
-    }
-    :root:not([data-theme="light"]) .about-update-available {
-      border-color: #3a4a7a;
-    }
-    :root:not([data-theme="light"]) .about-update-failed {
-      border-color: #6b5300;
-    }
-  }
-  :root[data-theme="dark"] .about-tab a {
-    color: var(--accent);
-  }
-  :root[data-theme="dark"] .about-update-ok {
-    background-color: rgba(46, 170, 83, 0.15);
-    border-color: #2a6b3c;
-    color: #b6e5c5;
-  }
-  :root[data-theme="dark"] .about-update-available {
-    border-color: #3a4a7a;
-  }
-  :root[data-theme="dark"] .about-update-failed {
-    border-color: #6b5300;
   }
 </style>

@@ -343,7 +343,7 @@
   }
 
   /* `.toggle-row`, `.toggle-label`, `.toggle-name`, `.toggle-desc`,
-     `.row-label`, `button.ghost` (+ dark-mode variants), `kbd`,
+     `.row-label`, `button.ghost`, `kbd`,
      `.settings-error` imported from `settings-tab.css` (#392). */
 
   .combo-row {
@@ -402,26 +402,4 @@
     font-size: 0.85rem;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .combo-row {
-      background-color: #2a2a2d;
-      border-color: #38383b;
-    }
-    :root:not([data-theme="light"]) .settings-hint { color: #a8a8a8; }
-    :root:not([data-theme="light"]) .settings-hint.warn {
-      color: #ffd591;
-      background-color: #3a2c00;
-      border-color: #6b5300;
-    }
-  }
-  :root[data-theme="dark"] .combo-row {
-    background-color: #2a2a2d;
-    border-color: #38383b;
-  }
-  :root[data-theme="dark"] .settings-hint { color: #a8a8a8; }
-  :root[data-theme="dark"] .settings-hint.warn {
-    color: #ffd591;
-    background-color: #3a2c00;
-    border-color: #6b5300;
-  }
 </style>

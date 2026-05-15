@@ -179,44 +179,4 @@
 .link-button:hover {
   text-decoration: none;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .permissions-banner {
-    background-color: #3a2c00;
-    border-color: #6b5300;
-  }
-  :root:not([data-theme="light"]) .permissions-banner-text strong {
-    color: #ffd591;
-  }
-  :root:not([data-theme="light"]) .permissions-banner-text span {
-    color: #f0c87b;
-  }
-  :root:not([data-theme="light"]) .permissions-pill {
-    background-color: #1a3a23;
-    border-color: #2a6b3c;
-    color: #b6e5c5;
-  }
-  :root:not([data-theme="light"]) .permissions-pill .dot {
-    background-color: #4ad07a;
-    box-shadow: 0 0 0 2px rgba(74, 208, 122, 0.2);
-  }
-}
-:root[data-theme="dark"] .permissions-banner {
-  background-color: #3a2c00;
-  border-color: #6b5300;
-}
-:root[data-theme="dark"] .permissions-banner-text strong {
-  color: #ffd591;
-}
-:root[data-theme="dark"] .permissions-banner-text span {
-  color: #f0c87b;
-}
-:root[data-theme="dark"] .permissions-pill {
-  background-color: #1a3a23;
-  border-color: #2a6b3c;
-  color: #b6e5c5;
-}
-:root[data-theme="dark"] .permissions-pill .dot {
-  background-color: #4ad07a;
-  box-shadow: 0 0 0 2px rgba(74, 208, 122, 0.2);
-}
 </style>
