@@ -368,6 +368,10 @@ pub async fn stop_dictation(
     // surface the misbehaviour as a Transcription error rather than
     // letting it look like the user's audio was empty.
     if final_count == 0 && !utterances.is_empty() {
+        // Unhook the progress callback before returning — every other
+        // error path does so; omitting it here would leave the
+        // Arc<AppHandle> held and emit spurious progress events (#901).
+        transcriber.set_progress_hook(None);
         // Hide the HUD before returning; every other error path in
         // this function does so, and omitting it leaves the "Processing…"
         // overlay stuck on screen (#803).
