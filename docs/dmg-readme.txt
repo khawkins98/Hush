@@ -96,7 +96,10 @@ Apple describes exactly this scenario and both workarounds here:
 MORE HELP
 ──────────────────────────────────────────────────────────────────────────
 
-Full install guide and permissions troubleshooting:
+macOS permissions troubleshooting:
+  https://github.com/khawkins98/Hush/blob/main/docs/macos-permissions.md
+
+Full project README:
   https://github.com/khawkins98/Hush/blob/main/README.md
 
 Report a problem:
