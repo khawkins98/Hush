@@ -7,10 +7,7 @@
 //! cpal-specific tests (i16/u16 conversion, rms math, push_samples
 //! overflow) live in `cpal.rs` next to the code they cover.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use anyhow::{anyhow, Result};
-use rtrb::RingBuffer;
 
 use super::*;
 
@@ -522,7 +519,7 @@ fn audio_source_serde_round_trips() {
     );
 }
 
-// -- drain_consumer + log_overflow_if_set helpers --------------------
+// -- drain_buffer + push_samples_circular helpers --------------------
 //
 // PR #77 fixed a real bug surfaced in hands-on testing: stop_session
 // used Arc::try_unwrap to take the buffer Vec, requiring sole Arc
@@ -541,43 +538,34 @@ fn audio_source_serde_round_trips() {
 // strong-count-sensitive operation) back fails these tests.
 
 #[test]
-fn drain_consumer_takes_contents() {
-    // Push three samples into a tiny ring, drain, observe the
-    // values come out in FIFO order. Replaces the pre-#55
-    // `drain_buffer_takes_contents_when_arc_is_unique` test —
-    // the rtrb shape doesn't have an Arc to hold (single-owner
-    // halves), so the Arc-clone variants from the old suite are
-    // gone too.
-    let (mut p, mut c) = RingBuffer::<f32>::new(8);
-    for v in [1.0_f32, 2.0, 3.0] {
-        p.push(v).expect("ring has room for 3 samples");
-    }
-    let samples = drain_consumer(&mut c);
+fn drain_buffer_takes_contents() {
+    let buf = std::sync::Mutex::new(std::collections::VecDeque::<f32>::with_capacity(8));
+    push_samples_circular(&buf, &[1.0_f32, 2.0, 3.0], 8);
+    let samples = drain_buffer(&buf);
     assert_eq!(samples, vec![1.0_f32, 2.0, 3.0]);
 }
 
 #[test]
-fn drain_consumer_returns_empty_for_empty_ring() {
-    // The "user pressed Stop almost immediately" path. Drain
-    // returns an empty Vec rather than erroring; the
-    // transcription stack will surface a more useful error
-    // downstream if the silence matters.
-    let (_p, mut c) = RingBuffer::<f32>::new(8);
-    let samples = drain_consumer(&mut c);
+fn drain_buffer_returns_empty_when_no_samples() {
+    let buf = std::sync::Mutex::new(std::collections::VecDeque::<f32>::with_capacity(8));
+    let samples = drain_buffer(&buf);
     assert!(samples.is_empty());
 }
 
 #[test]
-fn log_overflow_if_set_resets_the_flag() {
-    // Defensive: a chronic overflow should log once per drain,
-    // not once per callback. The flag is reset on observation
-    // so the next drain only logs again if the next batch of
-    // callbacks overflowed.
-    let flag = AtomicBool::new(true);
-    log_overflow_if_set(&flag);
-    assert!(!flag.load(Ordering::Relaxed));
-    log_overflow_if_set(&flag); // no-op when unset
-    assert!(!flag.load(Ordering::Relaxed));
+fn circular_buffer_evicts_oldest_at_capacity() {
+    // #827: when the buffer is full, push_samples_circular must evict
+    // the OLDEST sample (pop_front) and admit the newest one, so that
+    // long dictation sessions preserve the tail (most recent audio).
+    let buf = std::sync::Mutex::new(std::collections::VecDeque::<f32>::with_capacity(2));
+    push_samples_circular(&buf, &[1.0_f32, 2.0], 2); // fills capacity
+    push_samples_circular(&buf, &[3.0_f32], 2); // evicts 1.0
+    let samples = drain_buffer(&buf);
+    assert_eq!(
+        samples,
+        vec![2.0_f32, 3.0],
+        "oldest sample should be evicted"
+    );
 }
 
 // -- DeviceLost typed-error round-trip (#587 PR 1) --------------------

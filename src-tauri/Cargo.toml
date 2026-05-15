@@ -78,13 +78,6 @@ tracing-appender = "0.2"
 
 # Audio capture (cross-platform)
 cpal = "0.15"
-# Realtime-safe SPSC ring buffer for the cpal callback → worker
-# thread handoff (#55). The producer side is wait-free, doesn't
-# allocate, and doesn't lock — three properties the cpal callback
-# needs to honour the realtime-audio discipline. Replaces a
-# Mutex<Vec<f32>> that worked in practice but violated the
-# discipline; #55 has the full reasoning.
-rtrb = "0.3"
 # Audio playback for the start/done cue files (#446). `default-
 # features = false` drops the MP3 / OGG / FLAC decoders we don't
 # use; the cue files are short PCM WAVs synthesised at build time
