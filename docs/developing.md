@@ -280,6 +280,29 @@ npm run test:uxwalk
 
 The script is `tests/e2e/zz-uxwalk.spec.ts`. It runs as part of the normal CI suite (all tests pass/fail the spec, but no screenshot diffing is enforced — screenshots are for human review only). Meeting panel shots are `test.skip`'d pending real meeting-state mocking.
 
+### UI reference sheets (`npm run test:screenshots`)
+
+Captures all 16 screens in **both light and dark mode** (32 PNGs total) and composites them into two large reference images. Intended for design handoff or design review — pass the images to a designer working on UI changes without needing the app running.
+
+```bash
+# 1. Capture all 32 screenshots (light + dark, 800×600 each)
+npm run test:screenshots
+# Output: tmp/uxwalk/light/*.png  tmp/uxwalk/dark/*.png
+
+# 2. Composite into two reference sheets
+python3 scripts/make-ui-reference.py
+# Output: tmp/uxwalk/ui-reference-light.png
+#         tmp/uxwalk/ui-reference-dark.png
+```
+
+The reference sheets are **not committed** — `tmp/` is in `.gitignore`. Regenerate any time after a UI change by running both commands above.
+
+**What the sheets include:** 4-column grid of every major screen state (dictation idle/recording/transcribing/populated, first-run modal, history empty/populated/meeting, and all settings tabs), app icon in the header, DMG background tiled as the canvas texture with a theme-appropriate tint, and per-screenshot labels.
+
+**Scripts involved:**
+- `tests/e2e/zz-screenshots.spec.ts` — Playwright spec; forces theme via `localStorage.setItem("hush.theme", ...)` before page load
+- `scripts/make-ui-reference.py` — Pillow compositing script; requires `pip3 install Pillow`
+
 ### Type check (`npm run check`)
 
 Runs `svelte-check` across the full frontend including `vite.config.js`. Required clean for every PR; CI runs the same command.
