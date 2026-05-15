@@ -630,7 +630,11 @@ fn spawn_background_tasks(handle: tauri::AppHandle, state: &ipc::AppState) {
 /// functions expect the default Wry runtime).
 fn register_hotkeys(handle: tauri::AppHandle, state: &ipc::AppState) {
     if let Err(e) = hotkey::register_default(&handle) {
+        let msg = format!("{e:#}");
         tracing::error!(error = ?e, "failed to register default toggle hotkey");
+        if let Ok(mut guard) = state.hotkey_toggle_error.lock() {
+            *guard = Some(msg);
+        }
     }
 
     let im_status = crate::permissions::read_all().input_monitoring;
@@ -896,6 +900,7 @@ pub fn run() {
             ipc::commands::system::reveal_log_dir,
             ipc::commands::ptt::ptt_get_config,
             ipc::commands::ptt::ptt_set_config,
+            ipc::commands::ptt::get_toggle_hotkey_status,
             ipc::commands::permissions::open_macos_privacy_pane,
             ipc::commands::permissions::diagnose_macos_permissions,
             ipc::commands::permissions::reset_macos_permissions,

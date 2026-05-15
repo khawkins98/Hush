@@ -158,6 +158,10 @@ export async function installMocks(
         listenerRunning: false,
       }),
       ptt_set_config: () => undefined,
+      // Toggle-hotkey registration status (#904). Default `null` means
+      // registration succeeded; tests that exercise the error banner
+      // override with a string per-test.
+      get_toggle_hotkey_status: () => null,
       // Autostart plugin commands. The plugin's JS layer routes
       // through `plugin:autostart|<verb>` commands. The settings
       // window's General tab calls these on mount + toggle.

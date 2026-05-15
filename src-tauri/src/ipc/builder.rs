@@ -437,6 +437,7 @@ impl AppStateBuilder {
                 autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             startup_timings: self.startup_timings.unwrap_or_default(),
+            hotkey_toggle_error: Mutex::new(None),
         })
     }
 }
