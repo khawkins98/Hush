@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-05-15
+
+### Added
+
+- **History: user-defined name labels on dictation and meeting entries.** Any history entry or meeting session can now be given a short label. Click the dashed "Add label…" badge at the top of a row to enter edit mode; press Enter or click away to save; Escape cancels; clearing the text removes the label. Labels persist to the database and survive app restarts.
+- **dev-reset: transcription history preserved by default.** `npm run dev-reset` now does a selective wipe of settings, dictionary terms, and text-replacement rules only — recordings are kept between dev cycles. New `--nuke-db` flag restores the original full-database-delete behaviour for clean onboarding tests.
+
+### Fixed
+
+- **History search now matches against name labels.** Searching the history panel returns entries/sessions whose label matches the query, in addition to the existing transcript/utterance text match.
+
 ## [0.6.3] - 2026-05-14
 
 ### Added
