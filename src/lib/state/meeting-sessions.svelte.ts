@@ -275,6 +275,10 @@ export const meeting = {
     const unlistenStarted = await listen<{ sessionId: number }>(
       Events.MeetingSessionStarted,
       (e) => {
+        // Clear any banners from a previous session before setting the new
+        // active ID — ensures stale notices never bleed into a new recording.
+        meetingSourceFailedNotice = null;
+        meetingAppendFailedNotice = null;
         meeting.activeId = e.payload.sessionId;
         void meeting.refresh();
       },
@@ -333,6 +337,8 @@ export const meeting = {
         // cleared activeId) before this event arrives (#799).
         if (meeting.activeId === e.payload.sessionId) {
           meeting.activeId = null;
+          meetingSourceFailedNotice = null;
+          meetingAppendFailedNotice = null;
           void meeting.refresh();
         }
       },

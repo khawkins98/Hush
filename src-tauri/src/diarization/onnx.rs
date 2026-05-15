@@ -202,6 +202,20 @@ impl SessionClusterState {
     }
 }
 
+impl Drop for SessionClusterState {
+    fn drop(&mut self) {
+        // Zeroize speaker embeddings before the backing allocations are
+        // returned to the allocator.  These are biometric voiceprints —
+        // 256 f32 per utterance — and satisfy the same privacy claim as
+        // the raw PCM buffers: they must not outlive the session in
+        // readable heap memory.
+        use zeroize::Zeroize;
+        for (embedding, _) in &mut self.history {
+            embedding.zeroize();
+        }
+    }
+}
+
 /// Resolve the diarizer's cosine-distance threshold, honouring an
 /// optional `HUSH_DIARIZER_THRESHOLD` env-var override (#316). Falls
 /// back to [`DEFAULT_DISTANCE_THRESHOLD`] when the var is unset or

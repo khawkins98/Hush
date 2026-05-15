@@ -256,9 +256,14 @@ impl AudioSession for CoreAudioTapSession {
             .consumer
             .lock()
             .map_err(|_| anyhow!("CoreAudio tap consumer lock poisoned"))?;
-        let samples = drain_consumer(&mut consumer);
+        let mut samples = drain_consumer(&mut consumer);
         log_overflow_if_set(&inner.overflow_flag);
         sink.extend_from_slice(&samples);
+        // Zeroize before drop: same discipline as the cpal drain_into path.
+        {
+            use zeroize::Zeroize;
+            samples.zeroize();
+        }
         Ok(inner.format)
     }
 
