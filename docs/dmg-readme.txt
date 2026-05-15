@@ -7,6 +7,18 @@ what to do about it.
 
 
 ──────────────────────────────────────────────────────────────────────────
+QUICKEST FIX: HOMEBREW
+──────────────────────────────────────────────────────────────────────────
+
+If you have Homebrew installed, uninstall this copy and use Homebrew
+instead — it skips the warning entirely:
+
+    brew install --cask --no-quarantine khawkins98/tap/hush
+
+Otherwise, follow one of the options below.
+
+
+──────────────────────────────────────────────────────────────────────────
 WHY DOES macOS SHOW A WARNING?
 ──────────────────────────────────────────────────────────────────────────
 
