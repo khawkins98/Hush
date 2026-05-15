@@ -211,6 +211,11 @@ pub struct PersistedUtterance {
     /// column exists so a future "show recent partials in the
     /// timeline" feature can persist them without a migration.
     pub is_final: bool,
+    /// FK to `speaker_identities.id` when the utterance was matched
+    /// to a cross-session identity at session close (#667). NULL for
+    /// sessions before the feature was enabled, or for utterances
+    /// whose speaker cluster didn't meet the auto-accept threshold.
+    pub speaker_identity_id: Option<i64>,
 }
 
 /// Fields a caller supplies when persisting a final utterance.

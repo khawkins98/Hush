@@ -22,10 +22,12 @@
   matching the dictation row redesign.
 -->
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import type {
     MeetingExportFormat,
     MeetingSession,
     MeetingSessionDetail,
+    SpeakerIdentity,
   } from "./types";
   import HistoryActionRow, { type ExpandAction, type ExportMenuEntry } from "./HistoryActionRow.svelte";
 
@@ -113,6 +115,13 @@
     detailError = null;
     try {
       detail = await onLoadDetail(session.id);
+      // Load speaker identities if any utterance was linked to one.
+      if (detail.utterances.some((u) => u.speakerIdentityId !== null)) {
+        const list = await invoke<SpeakerIdentity[]>("speaker_list");
+        const m = new Map<number, SpeakerIdentity>();
+        for (const s of list) m.set(s.id, s);
+        speakerIdentityMap = m;
+      }
     } catch (e) {
       detailError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -132,6 +141,85 @@
       : `Show transcript (${session.utteranceCount} utterances)`,
     testId: `meeting-show-transcript-${session.id}`,
   });
+
+  // Speaker identity map: identity id → SpeakerIdentity. Populated after
+  // expand when at least one utterance has a speakerIdentityId (#667).
+  let speakerIdentityMap = $state<Map<number, SpeakerIdentity>>(new Map());
+
+  // Map from raw speakerLabel (e.g. "Speaker 1") to the identity id for
+  // that label in this session. Built from the first utterance per label
+  // that carries a speakerIdentityId.
+  let labelToIdentityId = $derived.by((): Map<string, number> => {
+    const m = new Map<string, number>();
+    if (!detail) return m;
+    for (const u of detail.utterances) {
+      if (u.speakerLabel !== null && u.speakerIdentityId !== null && !m.has(u.speakerLabel)) {
+        m.set(u.speakerLabel, u.speakerIdentityId);
+      }
+    }
+    return m;
+  });
+
+  // Ordered list of identified speakers in this session (label → identity),
+  // deduped and in first-appearance order.
+  let identifiedSpeakers = $derived.by((): Array<{ label: string; identity: SpeakerIdentity }> => {
+    const result: Array<{ label: string; identity: SpeakerIdentity }> = [];
+    for (const [label, identityId] of labelToIdentityId) {
+      const identity = speakerIdentityMap.get(identityId);
+      if (identity) result.push({ label, identity });
+    }
+    return result;
+  });
+
+  // Resolve the display name for an utterance's speaker label. Uses the
+  // identity's displayName if present, otherwise falls back to speakerCopy.
+  function resolvedSpeakerName(label: string | null): string {
+    if (label !== null) {
+      const identityId = labelToIdentityId.get(label);
+      if (identityId !== undefined) {
+        const identity = speakerIdentityMap.get(identityId);
+        if (identity?.displayName) return identity.displayName;
+      }
+    }
+    return speakerCopy(label);
+  }
+
+  // Inline speaker rename state. `editingIdentityId` is the id of the
+  // identity currently being renamed; null when no rename is in progress.
+  let editingIdentityId = $state<number | null>(null);
+  let renameValue = $state("");
+
+  function startRename(identity: SpeakerIdentity, e: Event) {
+    e.stopPropagation();
+    editingIdentityId = identity.id;
+    renameValue = identity.displayName ?? "";
+  }
+
+  async function commitRename() {
+    const id = editingIdentityId;
+    if (id === null) return;
+    editingIdentityId = null;
+    const trimmed = renameValue.trim();
+    const newName = trimmed === "" ? null : trimmed;
+    try {
+      await invoke("speaker_rename", { id, displayName: newName });
+      // Update local map so the transcript re-renders immediately.
+      const existing = speakerIdentityMap.get(id);
+      if (existing) {
+        const updated = new Map(speakerIdentityMap);
+        updated.set(id, { ...existing, displayName: newName });
+        speakerIdentityMap = updated;
+      }
+    } catch {
+      // Rename failed silently — user can retry.
+    }
+  }
+
+  function handleRenameKeydown(e: KeyboardEvent) {
+    e.stopPropagation();
+    if (e.key === "Enter") void commitRename();
+    else if (e.key === "Escape") editingIdentityId = null;
+  }
 
   function formatStarted(iso: string): string {
     const d = new Date(iso);
@@ -326,11 +414,53 @@
         This session didn't capture any speech.
       </p>
     {:else if detail}
+      {#if identifiedSpeakers.length > 0}
+        <div class="speakers-bar" aria-label="Speakers in this meeting">
+          <span class="speakers-bar-label">Speakers</span>
+          {#each identifiedSpeakers as { label, identity } (identity.id)}
+            <span class="speaker-chip">
+              {#if editingIdentityId === identity.id}
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  class="speaker-rename-input"
+                  type="text"
+                  bind:value={renameValue}
+                  placeholder="Enter name…"
+                  autofocus
+                  onblur={() => void commitRename()}
+                  onkeydown={handleRenameKeydown}
+                  onclick={(e) => e.stopPropagation()}
+                  onpointerdown={(e) => e.stopPropagation()}
+                  data-testid="speaker-rename-input-{identity.id}"
+                />
+              {:else}
+                <button
+                  class="speaker-chip-btn"
+                  class:speaker-chip-btn--named={identity.displayName !== null}
+                  onclick={(e) => startRename(identity, e)}
+                  title={identity.displayName
+                    ? `${identity.displayName} (${label}) — click to rename`
+                    : `${label} — click to add name`}
+                  aria-label={identity.displayName
+                    ? `Rename ${identity.displayName}`
+                    : `Name ${label}`}
+                  data-testid="speaker-chip-{identity.id}"
+                >
+                  {identity.displayName ?? label}
+                  <svg class="pencil-icon" aria-hidden="true" width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354zm.262 2.794-1.439-1.44-6.194 6.193a.268.268 0 0 0-.063.108l-.655 2.295 2.294-.656a.268.268 0 0 0 .108-.063z"/>
+                  </svg>
+                </button>
+              {/if}
+            </span>
+          {/each}
+        </div>
+      {/if}
       <ol class="meeting-transcript" aria-label="Meeting transcript">
         {#each detail.utterances as utt (utt.id)}
           <li class="utterance">
             {#if showSpeakerLabels}
-              <span class="utterance-speaker">{speakerCopy(utt.speakerLabel)}</span>
+              <span class="utterance-speaker">{resolvedSpeakerName(utt.speakerLabel)}</span>
             {/if}
             <span class="utterance-text">{utt.text}</span>
           </li>
@@ -467,14 +597,82 @@
     white-space: pre-wrap;
   }
 
+  /* Identified-speakers bar above the transcript (#667). */
+  .speakers-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.6rem;
+    padding: 0.45rem 0.6rem;
+    background-color: var(--bg-app);
+    border-radius: 6px;
+    font-size: 0.82rem;
+  }
+  .speakers-bar-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 0.15rem;
+    flex-shrink: 0;
+  }
+  .speaker-chip {
+    display: inline-flex;
+    align-items: center;
+  }
+  .speaker-chip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    line-height: 1.5;
+  }
+  .speaker-chip-btn--named {
+    border-color: var(--accent, #5a7fff);
+    color: var(--text-primary);
+    background-color: color-mix(in srgb, var(--accent, #5a7fff) 10%, transparent);
+  }
+  .speaker-chip-btn:hover {
+    border-color: var(--accent, #5a7fff);
+    color: var(--text-primary);
+  }
+  .pencil-icon {
+    opacity: 0.55;
+    flex-shrink: 0;
+  }
+  .speaker-chip-btn:hover .pencil-icon {
+    opacity: 0.85;
+  }
+  .speaker-rename-input {
+    padding: 0.12rem 0.4rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--accent, #5a7fff);
+    border-radius: 4px;
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+    outline: none;
+    width: 11rem;
+  }
+
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) .meeting-utterances,
     :root:not([data-theme="light"]) .meeting-sources { color: #9a9aa0; }
     :root:not([data-theme="light"]) .meeting-detail-status { color: #9a9aa0; }
     :root:not([data-theme="light"]) .meeting-detail-error { color: #f0a0a0; }
+    :root:not([data-theme="light"]) .speaker-rename-input { background-color: #1e1e24; }
   }
   :root[data-theme="dark"] .meeting-utterances,
   :root[data-theme="dark"] .meeting-sources { color: #9a9aa0; }
   :root[data-theme="dark"] .meeting-detail-status { color: #9a9aa0; }
   :root[data-theme="dark"] .meeting-detail-error { color: #f0a0a0; }
+  :root[data-theme="dark"] .speaker-rename-input { background-color: #1e1e24; }
 </style>

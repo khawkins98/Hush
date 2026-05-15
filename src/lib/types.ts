@@ -185,6 +185,11 @@ export type PersistedUtterance = {
   speakerLabel: string | null;
   text: string;
   isFinal: boolean;
+  /// FK to a `SpeakerIdentity` when this utterance was matched to a
+  /// cross-session identity at session close (#667). `null` for sessions
+  /// before the feature was enabled, or utterances whose cluster didn't
+  /// meet the auto-accept threshold.
+  speakerIdentityId: number | null;
 };
 
 export type MeetingSessionDetail = {

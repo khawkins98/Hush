@@ -104,6 +104,7 @@ test.describe("meeting rows in unified History feed", () => {
               speakerLabel: "mic",
               text: "Hello from mic.",
               isFinal: true,
+              speakerIdentityId: null,
             },
             {
               id: 2,
@@ -113,6 +114,7 @@ test.describe("meeting rows in unified History feed", () => {
               speakerLabel: "system",
               text: "Hello from system.",
               isFinal: true,
+              speakerIdentityId: null,
             },
           ],
           currentPartials: [],
@@ -172,6 +174,7 @@ test.describe("meeting rows in unified History feed", () => {
             speakerLabel: "mic",
             text: "Hello from mic.",
             isFinal: true,
+              speakerIdentityId: null,
           },
           {
             id: 2,
@@ -181,6 +184,7 @@ test.describe("meeting rows in unified History feed", () => {
             speakerLabel: "system",
             text: "Hello from system.",
             isFinal: true,
+              speakerIdentityId: null,
           },
         ],
         currentPartials: [],
@@ -287,6 +291,7 @@ test.describe("meeting rows in unified History feed", () => {
             speakerLabel: "mic",
             text: "Hello from mic.",
             isFinal: true,
+              speakerIdentityId: null,
           },
           {
             id: 2,
@@ -296,6 +301,7 @@ test.describe("meeting rows in unified History feed", () => {
             speakerLabel: "system",
             text: "Hello from system.",
             isFinal: true,
+              speakerIdentityId: null,
           },
         ],
         currentPartials: [],
