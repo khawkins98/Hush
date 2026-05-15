@@ -77,7 +77,7 @@ use crate::repository::Repository;
 ///
 /// `Default` produces empty prompt + empty rules (no-op), which is
 /// the correct shape for tests that don't exercise vocabulary features.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SessionDictOpts {
     /// Comma-separated vocabulary terms formatted by
     /// [`crate::dictionary::format_vocabulary_prompt`]. Passed as the
