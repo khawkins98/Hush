@@ -219,7 +219,11 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
     async fn set_name(&self, id: i64, name: Option<String>) -> Result<()> {
         let name = name.and_then(|n| {
             let t = n.trim().to_owned();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         });
         let result = sqlx::query("UPDATE meeting_sessions SET name = ? WHERE id = ?")
             .bind(&name)
