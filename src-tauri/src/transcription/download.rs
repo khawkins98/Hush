@@ -122,6 +122,14 @@ pub async fn download_with_progress(
 
     let part_path = with_part_suffix(dest);
 
+    // Pre-flight cancel check: if the handle was flipped before this
+    // async task had a chance to run (common in tests and rapid
+    // double-cancel sequences), bail out immediately rather than
+    // incurring the TCP connect round-trip only to ignore the result.
+    if cancel.is_cancelled() {
+        return Err(anyhow!("download cancelled by user"));
+    }
+
     // Tear down a stale `.part` from a prior interrupted run before
     // we start. The atomic rename at the end means a successful
     // download never leaves a `.part` behind, so anything we find
