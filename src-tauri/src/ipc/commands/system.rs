@@ -294,7 +294,12 @@ pub(crate) async fn check_for_updates_inner(
         }
     }
     let fresh = crate::updater::check_for_updates(&state.http).await?;
-    *state.last_update_check.lock().map_err(poisoned)? = Some((now, fresh.clone()));
+    // Only cache actionable results. CheckFailed is a transient condition
+    // (network error, GitHub 5xx, rate-limit) — caching it for the full TTL
+    // would suppress retries until the window expires (#873).
+    if !matches!(fresh, crate::updater::UpdateCheckResult::CheckFailed { .. }) {
+        *state.last_update_check.lock().map_err(poisoned)? = Some((now, fresh.clone()));
+    }
     Ok(fresh)
 }
 

@@ -178,13 +178,21 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // Listener is detached and lives for the lifetime of the app.
     let toggle_for_listener = toggle.clone();
     app.listen("ui:recording-state", move |event| {
-        let recording: bool = serde_json::from_str(event.payload()).unwrap_or(false);
+        let recording: bool = match serde_json::from_str(event.payload()) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(payload = event.payload(), error = %e, "tray: malformed ui:recording-state payload; defaulting to not-recording");
+                false
+            }
+        };
         let label = if recording {
             "Stop Recording"
         } else {
             "Start Recording"
         };
-        let _ = toggle_for_listener.set_text(label);
+        if let Err(e) = toggle_for_listener.set_text(label) {
+            tracing::warn!(label, error = %e, "tray: failed to update toggle label");
+        }
     });
 
     Ok(())
