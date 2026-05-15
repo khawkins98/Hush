@@ -195,13 +195,9 @@
     gap: 1rem;
   }
 
-  /* Section-header subtitle. Lifted from +page.svelte when the
-     History tagline was removed and this became the only consumer
-     — keeping it in the parent file would have left a Svelte
-     unused-selector warning since Svelte component styles are
-     scoped per file. */
+  /* Section-header subtitle. */
   .tagline {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     margin: 0 0 1.25rem;
   }
 
@@ -267,16 +263,16 @@
     text-align: center;
     font-size: 0.82rem;
     line-height: 1.6;
-    color: var(--text-muted);
+    color: var(--text-secondary);
   }
   .shortcut-hint kbd {
     display: inline-block;
     padding: 0.05rem 0.4rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.85em;
-    color: var(--text-secondary);
-    background-color: var(--bg-surface);
-    border: 1px solid var(--border);
+    color: var(--text-primary);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-input);
     border-radius: var(--radius-sm);
     margin: 0 0.1rem;
   }

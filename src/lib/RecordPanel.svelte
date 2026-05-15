@@ -396,7 +396,7 @@
   .record-btn-label {
     font-size: 0.68rem;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--text-label);
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
@@ -440,20 +440,16 @@
     --audio-waveform-bar-color: #dc2626;
   }
 
-  /* Big waveform — overrides AudioWaveform's default 60 × 16 px
-     compact strip with a content-column-filling 88 px stage so
-     the bars become the visual anchor. While recording the bars
-     pick up the purple → cyan gradient from the spec; idle /
-     processing / error keep their muted treatments owned by
-     AudioWaveform itself. */
+  /* Big waveform — brand orange → blue gradient while recording,
+     muted warm at idle. */
   .record-waveform {
     width: 100%;
     --audio-waveform-width: 100%;
     --audio-waveform-height: 88px;
     --audio-waveform-bar-color: linear-gradient(
       to top,
-      #8b5cf6 0%,
-      #06b6d4 100%
+      #dc7932 0%,
+      #5ea1c3 100%
     );
   }
   /* Bars feel taller / chunkier in the centerpiece role. */
@@ -472,16 +468,18 @@
     width: 76px;
     height: 76px;
     border-radius: 50%;
-    border: 1px solid var(--border-input);
-    background: var(--bg-surface);
+    border: 2px solid var(--border-input);
+    background: var(--bg-elevated);
     color: var(--text-primary);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    /* Resting shadow gives the idle button presence per the
-       #468 spec ("Idle: Confident, filled. Not ghosted"). */
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    /* Subtle orange ambient glow so the button reads as the
+       primary interactive element on the dark canvas. */
+    box-shadow:
+      0 2px 10px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(220, 121, 50, 0.12);
     transition:
       transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
       border-color 150ms ease,
@@ -566,7 +564,7 @@
     margin: 0;
     min-height: 1.2em;
     font-size: 0.85rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     text-align: center;
     line-height: 1.35;
     max-width: 30rem;

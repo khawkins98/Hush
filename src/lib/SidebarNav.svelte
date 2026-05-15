@@ -339,12 +339,12 @@
     width: 100%;
     display: flex;
     align-items: center;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease;
   }
   .sidebar-nav-item:hover {
-    color: var(--text-primary);
+    color: #ffffff;
   }
   .sidebar-nav-item:focus-visible {
     outline: 2px solid var(--accent-blue);
