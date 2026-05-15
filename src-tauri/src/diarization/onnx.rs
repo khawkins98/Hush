@@ -106,10 +106,23 @@ const MIN_FRAMES_FOR_EMBEDDING: usize = 25;
 /// Memory: every embedding (256 f32 = 1 KB) lives until the
 /// session ends. A 100-utterance meeting holds ~100 KB of state —
 /// negligible.
+/// Online speaker-cluster state for one diarisation session.
+///
+/// Maintains one **centroid** (running mean embedding) per unique
+/// speaker cluster, matched via [`cosine_distance`]. Scanning
+/// O(K) centroids instead of O(N) per-utterance history drops the
+/// per-utterance cost from O(N) to O(K) where K ≪ N for any
+/// real-world meeting (#867).  Centroid updates are a weighted
+/// running mean so recent embeddings influence the centroid without
+/// requiring storage of individual utterances.
+///
+/// Privacy invariant: the centroid vectors are speaker biometrics
+/// and are zeroized in `Drop`, the same as the raw PCM audio.
 struct SessionClusterState {
-    /// Per-utterance `(embedding, cluster_id)`. Append-only over
-    /// the session.
-    history: Vec<(Vec<f32>, usize)>,
+    /// One `(centroid, assignment_count)` entry per cluster, in
+    /// first-appearance order. Index == cluster ID, so `clusters[n]`
+    /// belongs to the speaker labelled "Speaker N+1".
+    clusters: Vec<(Vec<f32>, usize)>,
     /// Next cluster ID to allocate when no existing centroid is
     /// within threshold. Equal to `unique cluster count` — IDs are
     /// dense and assigned in first-appearance order so labels read
@@ -123,47 +136,45 @@ struct SessionClusterState {
 impl SessionClusterState {
     fn new(distance_threshold: f32) -> Self {
         Self {
-            history: Vec::new(),
+            clusters: Vec::new(),
             next_id: 0,
             distance_threshold,
         }
     }
 
-    /// Assign a cluster ID to `embedding`. Appends to history;
-    /// returns the assigned ID (0-indexed).
+    /// Assign a cluster ID to `embedding`. Scans O(K) centroids where K is
+    /// the number of unique speakers seen so far; updates the matched
+    /// centroid with a weighted running mean. Returns the assigned ID
+    /// (0-indexed).
     ///
     /// Known limitation (1-NN single-link chaining): nearest-
-    /// neighbour matching against the full session history can
+    /// neighbour matching against per-cluster centroids can
     /// chain a slowly-drifting voice (microphone position change,
     /// vocal fatigue) into an adjacent speaker's cluster — each
-    /// new utterance latches onto the most-recent neighbour, and
-    /// after enough small drifts the chain crosses the threshold
+    /// new utterance latches onto the nearest centroid, and
+    /// after enough small drifts the centroid crosses the threshold
     /// into a different cluster while still being labeled the
     /// original one. Acceptable for v1: the pre-PR-G alternative
     /// (per-tick agglomerative re-clustering) was demonstrably
     /// worse because cluster IDs themselves were unstable across
-    /// ticks. A future iteration could match against per-cluster
-    /// centroids (medoids) instead of all past embeddings, or
-    /// re-run a global agglomerative pass periodically. Leaving
-    /// the chain risk documented here so a future contributor
+    /// ticks. A future iteration could match against medoids instead
+    /// of means, or re-run a global agglomerative pass periodically.
+    /// Leaving the chain risk documented here so a future contributor
     /// re-deriving the design choice doesn't have to from scratch.
     fn assign(&mut self, embedding: Vec<f32>) -> usize {
+        // O(K) scan over centroids — K is unique speaker count, not utterance count.
         let mut best: Option<(usize, f32)> = None;
-        for (e, id) in &self.history {
-            let d = cosine_distance(embedding.as_slice(), e.as_slice());
+        for (id, (centroid, _)) in self.clusters.iter().enumerate() {
+            let d = cosine_distance(embedding.as_slice(), centroid.as_slice());
             match best {
-                None => best = Some((*id, d)),
-                Some((_, current)) if d < current => best = Some((*id, d)),
+                None => best = Some((id, d)),
+                Some((_, current)) if d < current => best = Some((id, d)),
                 _ => {}
             }
         }
         let (assigned_id, was_new, best_distance) = match best {
             Some((id, d)) if d <= self.distance_threshold => (id, false, Some(d)),
             Some((_, d)) => {
-                // A nearest neighbour exists but it's beyond the
-                // threshold — record the distance so a debug session
-                // can see how close we came (helps tune the
-                // threshold via HUSH_DIARIZER_THRESHOLD).
                 let id = self.next_id;
                 self.next_id += 1;
                 (id, true, Some(d))
@@ -183,7 +194,7 @@ impl SessionClusterState {
                 speaker = assigned_id + 1,
                 best_distance = d,
                 threshold = self.distance_threshold,
-                history_len = self.history.len(),
+                cluster_count = self.clusters.len(),
                 "diarizer: NEW cluster (best match was beyond threshold)"
             ),
             Some(d) => tracing::info!(
@@ -197,7 +208,20 @@ impl SessionClusterState {
                 "diarizer: NEW cluster (first utterance)"
             ),
         }
-        self.history.push((embedding, assigned_id));
+        if was_new {
+            // The embedding becomes the initial centroid for this cluster.
+            self.clusters.push((embedding, 1));
+        } else {
+            // Update the running-mean centroid: new_mean = (old_mean * n + x) / (n+1).
+            // Cosine distance normalises by both norms, so the centroid magnitude
+            // doesn't need to stay at 1 — the direction is what matters.
+            let (centroid, count) = &mut self.clusters[assigned_id];
+            let new_count = *count + 1;
+            for (c, e) in centroid.iter_mut().zip(embedding.iter()) {
+                *c = (*c * *count as f32 + e) / new_count as f32;
+            }
+            *count = new_count;
+        }
         assigned_id
     }
 }
@@ -210,8 +234,8 @@ impl Drop for SessionClusterState {
         // the raw PCM buffers: they must not outlive the session in
         // readable heap memory.
         use zeroize::Zeroize;
-        for (embedding, _) in &mut self.history {
-            embedding.zeroize();
+        for (centroid, _) in &mut self.clusters {
+            centroid.zeroize();
         }
     }
 }
