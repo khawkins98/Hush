@@ -100,13 +100,6 @@ export const Events = {
   /// transcription gap, instead of the HUD vanishing before
   /// the clipboard is updated.
   HudState: "hud:state",
-  /// Frontend → all windows (broadcast): user picked an explicit
-  /// theme (or reverted to System) in Settings → General →
-  /// Appearance (#411 phase A). Payload is `"system" | "light"
-  /// | "dark"`. Every window's root layout listens and re-applies
-  /// the `data-theme` attribute on `<html>`. Canonical helpers
-  /// live in `lib/theme.ts`.
-  Theme: "hush:theme",
   /// Backend (profile auto-activate poller) → main window: a per-app
   /// audio profile (#427 Item 5) just activated because focus moved to
   /// an app with a populated profile. Fires only on transitions

@@ -241,18 +241,4 @@
     opacity: 0.55;
     cursor: not-allowed;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) button {
-      border-color: #3a3a3a;
-    }
-    :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
-      background-color: #353535;
-    }
-  }
-  :root[data-theme="dark"] button {
-    border-color: #3a3a3a;
-  }
-  :root[data-theme="dark"] button.ghost:hover:not(:disabled) {
-    background-color: #353535;
-  }
 </style>

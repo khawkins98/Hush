@@ -5,7 +5,7 @@
   nodes (mic, optional system audio) → Whisper engine → transcript
   output. Inline SVG so there's no asset to ship and the colours
   pick up the existing CSS tokens (`--accent` / `--text-muted`)
-  for free dark-mode parity.
+  for free palette consistency.
 
   Two consumers today:
   - `FirstRunModal.svelte` — informational header so a first-time
@@ -153,8 +153,8 @@
   width: 100%;
   height: auto;
   /* Source / engine / output text colour cascades from the SVG
-     element so dark-mode and theme-overrides reach inline text
-     elements without per-node overrides. */
+     element so inline text stays aligned with the shared app tokens
+     without per-node overrides. */
   color: var(--text-primary, #111);
 }
 
@@ -167,20 +167,20 @@
 .pipeline-diagram .source rect {
   /* Source nodes get a subtle accent tint so they read as inputs
      rather than blending with the engine. */
-  stroke: var(--accent, #7c6ff7);
+  stroke: var(--accent, #dc7932);
 }
 
 .pipeline-diagram .engine rect {
-  fill: var(--accent-subtle, rgba(124, 111, 247, 0.12));
-  stroke: var(--accent, #7c6ff7);
+  fill: var(--accent-subtle, rgba(220, 121, 50, 0.12));
+  stroke: var(--accent, #dc7932);
   stroke-width: 1.5;
 }
 
 .pipeline-diagram .output rect {
   /* Output node uses the brand accent fill as a deliberate "this
      is where it ends up" emphasis — the user's clipboard. */
-  fill: var(--accent, #7c6ff7);
-  stroke: var(--accent-hover, #5c4fd4);
+  fill: var(--accent, #dc7932);
+  stroke: var(--accent-hover, #ba5733);
 }
 
 .pipeline-diagram .node text {
@@ -210,8 +210,8 @@
   marker-end: url(#pipeline-arrowhead);
   fill: none;
   /* `currentColor` on the arrowhead path picks up this stroke
-     colour so light + dark themes inherit without per-theme
-     marker variants. */
+     colour so the marker inherits the shared muted token without a
+     separate variant. */
   color: var(--text-muted, #888);
 }
 

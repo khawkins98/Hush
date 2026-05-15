@@ -1,10 +1,9 @@
-// Dual-mode UI screenshot export — captures every significant screen
-// in both light and dark themes so designers can use them as reference
+// Fixed-theme UI screenshot export — captures every significant screen
+// using the single brand palette so designers can use them as reference
 // material without needing a running Tauri build.
 //
 // Run:    npm run test:screenshots
-// Output: tmp/uxwalk/light/*.png  and  tmp/uxwalk/dark/*.png
-//         (tmp/ is .gitignored)
+// Output: tmp/uxwalk/brand/*.png (tmp/ is .gitignored)
 //
 // Viewport matches the actual macOS window (800×600) unless overridden
 // per describe block (e.g. HUD is 290×60).
@@ -16,7 +15,7 @@ import { installMocks } from "./_mock";
 
 const OUT_DIR = path.join(process.cwd(), "tmp", "uxwalk");
 
-for (const theme of ["light", "dark"] as const) {
+for (const theme of ["brand"] as const) {
   const dir = path.join(OUT_DIR, theme);
 
   async function shot(page: import("@playwright/test").Page, name: string) {
@@ -26,13 +25,9 @@ for (const theme of ["light", "dark"] as const) {
     await page.screenshot({ path: path.join(dir, `${name}.png`), fullPage: false });
   }
 
-  // Inject the theme into localStorage before any page script runs.
-  // The root layout reads `hush.theme` on mount and sets data-theme on <html>.
-  async function forceTheme(page: import("@playwright/test").Page) {
-    await page.addInitScript((t) => {
-      localStorage.setItem("hush.theme", t);
-    }, theme);
-  }
+  // Fixed single-palette theme — retained as a no-op helper so the
+  // screenshot call sites stay linear.
+  async function forceTheme(_page: import("@playwright/test").Page) {}
 
   test.describe(`${theme} mode — main window`, () => {
     test.use({ viewport: { width: 800, height: 600 } });

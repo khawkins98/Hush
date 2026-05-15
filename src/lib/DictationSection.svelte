@@ -69,7 +69,6 @@
   // meeting-only mode is active; fall back to dictation errors otherwise.
   let effectiveError = $derived(dictation.meetingOnlyActive ? meeting.error : dictation.error);
 
-
 </script>
 
 <section id="dictation-section" class="page-section">
@@ -195,7 +194,6 @@
     flex-direction: column;
     gap: 1rem;
   }
-
 
   /* Section-header subtitle. Lifted from +page.svelte when the
      History tagline was removed and this became the only consumer

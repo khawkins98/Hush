@@ -127,12 +127,12 @@
   transition: background-color 0.12s, color 0.12s, border-color 0.12s;
 }
 .cue-preview-btn:hover {
-  background-color: var(--accent, #7c6ff7);
-  border-color: var(--accent, #7c6ff7);
+  background-color: var(--accent, #dc7932);
+  border-color: var(--accent, #dc7932);
   color: var(--text-on-accent, #fff);
 }
 .cue-preview-btn:focus-visible {
-  outline: 2px solid var(--accent, #7c6ff7);
+  outline: 2px solid var(--accent, #dc7932);
   outline-offset: 2px;
 }
 .sound-cue-subtoggles.is-disabled {
@@ -189,10 +189,9 @@
 }
 .slider-row input[type="range"] {
   width: 100%;
-  /* Defensive dark-mode contrast (#348) — pin color-scheme on
-     the input itself so WebKit picks the dark-mode form-control
-     palette directly. No-op on light mode. */
-  color-scheme: light dark;
+  /* Pin range controls to the app's fixed light palette so WebKit
+     doesn't auto-style them as dark widgets. */
+  color-scheme: light;
 }
 
 /* ── Plain rows + label/value/chord/note ────────────────── */
@@ -283,7 +282,7 @@ button.ghost {
   border: 1px solid #d1d1d8;
   border-radius: 6px;
   cursor: pointer;
-  color: #2c3e8f;
+  color: #1a4a63;
 }
 button.ghost:hover:not(:disabled) {
   background-color: #f4f5fa;
@@ -303,175 +302,4 @@ kbd {
   background-color: #fafafa;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   font-size: 0.85em;
-}
-
-/* ── Segmented control (radiogroup) ─────────────────────── */
-.segmented {
-  display: inline-flex;
-  align-items: stretch;
-  padding: 2px;
-  gap: 2px;
-  background-color: #ececef;
-  border: 1px solid #d8d8dd;
-  border-radius: 8px;
-}
-.segmented-option {
-  appearance: none;
-  border: none;
-  background: transparent;
-  padding: 0.32rem 0.85rem;
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: #444;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.12s, color 0.12s;
-}
-.segmented-option:hover:not(:disabled):not([aria-checked="true"]) {
-  background-color: rgba(0, 0, 0, 0.04);
-}
-.segmented-option[aria-checked="true"] {
-  background-color: white;
-  color: #111;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-}
-.segmented-option:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-/*
- * Dark mode (#411 phase A).
- *
- * Two delivery paths so the manual Appearance picker in
- * Settings → General can override the OS preference:
- *
- *   1. `@media (prefers-color-scheme: dark)`, gated by
- *      `:not([data-theme="light"])` — fires when the OS is dark
- *      AND the user hasn't explicitly picked Light.
- *   2. `:root[data-theme="dark"]` — fires when the user picked
- *      Dark, regardless of OS preference.
- *
- * The shared rule list is duplicated rather than aliased because
- * CSS has no mixin primitive; keep the two blocks in sync. The
- * block-comment in `app.css` has the same caveat for the token
- * layer, which handles the rest of the UI.
- */
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .group-heading { color: #888; }
-  :root:not([data-theme="light"]) .subgroup-heading { color: #d0d0d0; }
-  :root:not([data-theme="light"]) .toggle-row,
-  :root:not([data-theme="light"]) .select-row,
-  :root:not([data-theme="light"]) .slider-row,
-  :root:not([data-theme="light"]) .settings-row {
-    background-color: #2a2a2d;
-    border-color: #38383b;
-  }
-  :root:not([data-theme="light"]) .toggle-name,
-  :root:not([data-theme="light"]) .select-name { color: #e8e8e8; }
-  :root:not([data-theme="light"]) .toggle-desc,
-  :root:not([data-theme="light"]) .select-desc { color: #a8a8a8; }
-  :root:not([data-theme="light"]) .select-row select {
-    background-color: #1f1f22;
-    color: #e8e8e8;
-    border-color: #38383b;
-  }
-  :root:not([data-theme="light"]) .row-label { color: #d8d8d8; }
-  :root:not([data-theme="light"]) .row-value { color: #b0b0b0; }
-  :root:not([data-theme="light"]) .row-note { color: #888; }
-  :root:not([data-theme="light"]) .settings-warning-row {
-    background-color: #3d2f12;
-    border-color: #6c4e1a;
-    color: #f0c878;
-  }
-  :root:not([data-theme="light"]) .settings-row-name { color: #e8e8e8; }
-  :root:not([data-theme="light"]) .settings-row-desc { color: #a8a8a8; }
-  :root:not([data-theme="light"]) .settings-warning-row .settings-row-name { color: #ffd790; }
-  :root:not([data-theme="light"]) .settings-warning-row .settings-row-desc { color: #d8b46a; }
-  :root:not([data-theme="light"]) button.ghost {
-    background-color: #2a2a2d;
-    border-color: #38383b;
-    color: #b8c8ff;
-  }
-  :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
-    background-color: #38383b;
-    border-color: #4a4a4d;
-  }
-  :root:not([data-theme="light"]) kbd {
-    background-color: #2a2a2d;
-    border-color: #4a4a4d;
-    color: #d8d8d8;
-  }
-  :root:not([data-theme="light"]) .segmented {
-    background-color: #1f1f22;
-    border-color: #38383b;
-  }
-  :root:not([data-theme="light"]) .segmented-option { color: #b8b8bd; }
-  :root:not([data-theme="light"]) .segmented-option:hover:not(:disabled):not([aria-checked="true"]) {
-    background-color: rgba(255, 255, 255, 0.05);
-  }
-  :root:not([data-theme="light"]) .segmented-option[aria-checked="true"] {
-    background-color: #38383b;
-    color: #f0f0f0;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  }
-}
-
-:root[data-theme="dark"] .group-heading { color: #888; }
-:root[data-theme="dark"] .subgroup-heading { color: #d0d0d0; }
-:root[data-theme="dark"] .toggle-row,
-:root[data-theme="dark"] .select-row,
-:root[data-theme="dark"] .slider-row,
-:root[data-theme="dark"] .settings-row {
-  background-color: #2a2a2d;
-  border-color: #38383b;
-}
-:root[data-theme="dark"] .toggle-name,
-:root[data-theme="dark"] .select-name { color: #e8e8e8; }
-:root[data-theme="dark"] .toggle-desc,
-:root[data-theme="dark"] .select-desc { color: #a8a8a8; }
-:root[data-theme="dark"] .select-row select {
-  background-color: #1f1f22;
-  color: #e8e8e8;
-  border-color: #38383b;
-}
-:root[data-theme="dark"] .row-label { color: #d8d8d8; }
-:root[data-theme="dark"] .row-value { color: #b0b0b0; }
-:root[data-theme="dark"] .row-note { color: #888; }
-:root[data-theme="dark"] .settings-warning-row {
-  background-color: #3d2f12;
-  border-color: #6c4e1a;
-  color: #f0c878;
-}
-:root[data-theme="dark"] .settings-row-name { color: #e8e8e8; }
-:root[data-theme="dark"] .settings-row-desc { color: #a8a8a8; }
-:root[data-theme="dark"] .settings-warning-row .settings-row-name { color: #ffd790; }
-:root[data-theme="dark"] .settings-warning-row .settings-row-desc { color: #d8b46a; }
-:root[data-theme="dark"] button.ghost {
-  background-color: #2a2a2d;
-  border-color: #38383b;
-  color: #b8c8ff;
-}
-:root[data-theme="dark"] button.ghost:hover:not(:disabled) {
-  background-color: #38383b;
-  border-color: #4a4a4d;
-}
-:root[data-theme="dark"] kbd {
-  background-color: #2a2a2d;
-  border-color: #4a4a4d;
-  color: #d8d8d8;
-}
-:root[data-theme="dark"] .segmented {
-  background-color: #1f1f22;
-  border-color: #38383b;
-}
-:root[data-theme="dark"] .segmented-option { color: #b8b8bd; }
-:root[data-theme="dark"] .segmented-option:hover:not(:disabled):not([aria-checked="true"]) {
-  background-color: rgba(255, 255, 255, 0.05);
-}
-:root[data-theme="dark"] .segmented-option[aria-checked="true"] {
-  background-color: #38383b;
-  color: #f0f0f0;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }

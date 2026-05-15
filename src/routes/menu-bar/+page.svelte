@@ -141,7 +141,6 @@
     }
   }
 
-
   function formatError(e: unknown): string {
     if (e instanceof Error) return e.message;
     if (typeof e === "string") return e;
@@ -318,7 +317,7 @@
   .primary-action {
     appearance: none;
     border: none;
-    background-color: var(--accent, #7c6ff7);
+    background-color: var(--accent, #dc7932);
     color: white;
     font-family: inherit;
     font-size: 0.95rem;

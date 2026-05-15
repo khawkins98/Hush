@@ -7,8 +7,8 @@
  * loaded; first-time users would just be asking "what does that
  * mean?" Toggle lives in Settings → General → Advanced.
  *
- * Persistence is `localStorage`, mirroring `theme.ts`. Tauri
- * webviews on macOS share the data store across windows, so
+ * Persistence is `localStorage`. Tauri webviews on macOS
+ * share the data store across windows, so
  * boot-time reads are coherent. To propagate a *change* across
  * already-open windows (Settings on, main on) we emit a Tauri
  * event; the main window's ControlsSection listens.

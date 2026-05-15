@@ -460,11 +460,11 @@
   height: 0.55rem;
   border-radius: 50%;
   background-color: transparent;
-  border: 1.5px solid var(--accent, #7c6ff7);
+  border: 1.5px solid var(--accent, #dc7932);
   transition: background-color 0.15s;
 }
 .wizard-step-dot.active {
-  background-color: var(--accent, #7c6ff7);
+  background-color: var(--accent, #dc7932);
 }
 
 .welcome-body {
@@ -605,8 +605,8 @@ button.primary {
   border-color: var(--accent);
 }
 button.primary:hover:not(:disabled) {
-  background-color: var(--accent-hover, #5c4fd4);
-  border-color: var(--accent-hover, #5c4fd4);
+  background-color: var(--accent-hover, #ba5733);
+  border-color: var(--accent-hover, #ba5733);
 }
 
 /* Standard a11y idiom for screen-reader-only text. Used for the
@@ -624,95 +624,4 @@ button.primary:hover:not(:disabled) {
   border: 0;
 }
 
-/* Dark mode: mirror the two-context pattern used elsewhere in the
- * app (see `+page.svelte` banners) so the user's app-level theme
- * override (light / dark / auto) wins over the OS preference.
- *
- * - The `@media (prefers-color-scheme: dark)` block fires when the
- *   OS is dark AND the user hasn't forced light.
- * - The `:root[data-theme="dark"]` block fires when the user has
- *   forced dark regardless of OS.
- *
- * Rules duplicated rather than composed because one selector needs
- * a media query and the other doesn't — same trade-off as the
- * existing banner styles.  #617. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .first-run-backdrop {
-    background-color: rgba(0, 0, 0, 0.65);
-  }
-  :root:not([data-theme="light"]) .first-run-card {
-    background-color: #1f1f1f;
-    color: #f0f0f0;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  }
-  :root:not([data-theme="light"]) .first-run-tagline,
-  :root:not([data-theme="light"]) .welcome-body,
-  :root:not([data-theme="light"]) .first-run-meta {
-    color: #c0c0c0;
-  }
-  :root:not([data-theme="light"]) .wizard-perm-row {
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  :root:not([data-theme="light"]) .wizard-perm-row.granted {
-    background-color: #1f3a25;
-    border-color: #2c4a35;
-  }
-  :root:not([data-theme="light"]) .wizard-perm-title {
-    color: #f0f0f0;
-  }
-  :root:not([data-theme="light"]) .wizard-perm-why {
-    color: #b0b0b0;
-  }
-  :root:not([data-theme="light"]) button {
-    color: #f0f0f0;
-    background-color: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-  :root:not([data-theme="light"]) button.ghost {
-    background-color: transparent;
-  }
-  :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
-    background-color: #353535;
-  }
-}
-
-:root[data-theme="dark"] .first-run-backdrop {
-  background-color: rgba(0, 0, 0, 0.65);
-}
-:root[data-theme="dark"] .first-run-card {
-  background-color: #1f1f1f;
-  color: #f0f0f0;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-}
-:root[data-theme="dark"] .first-run-tagline,
-:root[data-theme="dark"] .welcome-body,
-:root[data-theme="dark"] .first-run-meta {
-  color: #c0c0c0;
-}
-:root[data-theme="dark"] .wizard-perm-row {
-  background-color: #2a2a2a;
-  border-color: #3a3a3a;
-}
-:root[data-theme="dark"] .wizard-perm-row.granted {
-  background-color: #1f3a25;
-  border-color: #2c4a35;
-}
-:root[data-theme="dark"] .wizard-perm-title {
-  color: #f0f0f0;
-}
-:root[data-theme="dark"] .wizard-perm-why {
-  color: #b0b0b0;
-}
-:root[data-theme="dark"] button {
-  color: #f0f0f0;
-  background-color: #2a2a2a;
-  border-color: #3a3a3a;
-}
-:root[data-theme="dark"] button.ghost {
-  background-color: transparent;
-}
-:root[data-theme="dark"] button.ghost:hover:not(:disabled) {
-  background-color: #353535;
-}
 </style>

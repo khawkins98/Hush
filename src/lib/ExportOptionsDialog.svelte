@@ -303,34 +303,4 @@
     border-color: #243370;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .dialog-body {
-      background-color: #1f1f22;
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-    }
-    :root:not([data-theme="light"]) button.ghost {
-      border-color: #38383b;
-    }
-    :root:not([data-theme="light"]) button.ghost:hover {
-      background-color: #2a2a2d;
-    }
-    :root:not([data-theme="light"]) button.primary:hover {
-      background-color: #3d4f9c;
-      border-color: #3d4f9c;
-    }
-  }
-  :root[data-theme="dark"] .dialog-body {
-    background-color: #1f1f22;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-  }
-  :root[data-theme="dark"] button.ghost {
-    border-color: #38383b;
-  }
-  :root[data-theme="dark"] button.ghost:hover {
-    background-color: #2a2a2d;
-  }
-  :root[data-theme="dark"] button.primary:hover {
-    background-color: #3d4f9c;
-    border-color: #3d4f9c;
-  }
 </style>

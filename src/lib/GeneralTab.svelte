@@ -2,9 +2,9 @@
   Settings → General tab (#332 phase 1, slice 4 — see also
   PermissionsTab #387, VocabularyTab #389, ReplacementsTab #390).
   Thin coordinator: IPC-backed state lives in state/general-runtime.svelte.ts
-  (#709); localStorage-backed state (theme, status-line, debug-console)
-  stays here since it uses lib/theme.ts, lib/status-line.ts, and
-  lib/debug-console.ts directly with no IPC seam.
+  (#709); localStorage-backed state (status-line, debug-console) stays
+  here since it uses lib/status-line.ts and lib/debug-console.ts
+  directly with no IPC seam.
 
   `isMacOS` is read from `@tauri-apps/plugin-os` on mount and
   passed to `PttHotkeyEditor` so the modifier-glyph copy ("Right
@@ -29,7 +29,6 @@
     readDebugConsoleEnabled,
     setDebugConsoleEnabled,
   } from "./debug-console";
-  import { readStoredTheme, setTheme, type ThemePref } from "./theme";
   import "./settings-tab.css";
   import { invoke } from "@tauri-apps/api/core";
   import type { ToggleHotkeyStatus } from "./types";
@@ -75,22 +74,6 @@
     onDebugConsoleChange?.(checked);
   }
 
-  // Appearance / theme override (#411 phase A). localStorage-backed
-  // via lib/theme.ts; Tauri event notifies other windows on change.
-  let themePref = $state<ThemePref>("system");
-  let themeBusy = $state(false);
-
-  async function onThemeChange(next: ThemePref) {
-    if (themeBusy || next === themePref) return;
-    themeBusy = true;
-    try {
-      await setTheme(next);
-      themePref = next;
-    } finally {
-      themeBusy = false;
-    }
-  }
-
   onMount(async () => {
     void gr.load();
     try {
@@ -98,7 +81,6 @@
     } catch (e) {
       console.warn("[hush] platform() failed in GeneralTab", e);
     }
-    themePref = readStoredTheme();
     statusLineEnabled = readStatusLineEnabled();
     debugConsoleEnabled = readDebugConsoleEnabled();
     try {
@@ -122,39 +104,6 @@
 <GeneralStartupSection />
 
 <GeneralInterfaceSection />
-
-<section class="settings-group" aria-labelledby="settings-appearance-heading">
-  <h2 id="settings-appearance-heading" class="group-heading">Appearance</h2>
-  <div
-    class="settings-row settings-row-stack"
-    data-testid="settings-theme-row"
-  >
-    <span class="row-label" id="settings-theme-label">Theme</span>
-    <div
-      class="segmented"
-      role="radiogroup"
-      aria-labelledby="settings-theme-label"
-    >
-      {#each [["system", "System"], ["light", "Light"], ["dark", "Dark"]] as [value, label] (value)}
-        <button
-          type="button"
-          class="segmented-option"
-          role="radio"
-          aria-checked={themePref === value}
-          data-testid={`settings-theme-${value}`}
-          disabled={themeBusy}
-          onclick={() => onThemeChange(value as ThemePref)}
-        >
-          {label}
-        </button>
-      {/each}
-    </div>
-    <span class="row-note">
-      System follows your macOS appearance setting. Light and Dark
-      override regardless of the OS preference.
-    </span>
-  </div>
-</section>
 
 <section class="settings-group" aria-labelledby="settings-hotkeys-heading">
   <h2 id="settings-hotkeys-heading" class="group-heading">Hotkeys</h2>

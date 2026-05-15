@@ -1229,27 +1229,13 @@ test.describe("settings panel — General tab: sound-cue previews", () => {
   });
 });
 
-test.describe("settings panel — General tab: theme row", () => {
-  // settings-theme-row wraps the System / Light / Dark segmented control.
-  // Pinning its visibility ensures the Appearance section of GeneralTab
-  // didn't accidentally get gated behind a feature flag.
-
-  test("theme row is visible with three options in General tab", async ({
-    page,
-  }) => {
+test.describe("settings panel — General tab: fixed theme", () => {
+  test("theme row is absent in General tab", async ({ page }) => {
     await installMocks(page);
     await page.goto("/");
     await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
 
-    const row = page.locator('[data-testid="settings-theme-row"]');
-    await expect(row).toBeVisible();
-
-    // All three theme options must be present.
-    for (const value of ["system", "light", "dark"]) {
-      await expect(
-        row.locator(`[data-testid="settings-theme-${value}"]`),
-      ).toBeVisible();
-    }
+    await expect(page.locator('[data-testid="settings-theme-row"]')).toHaveCount(0);
   });
 });
 

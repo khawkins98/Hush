@@ -116,18 +116,6 @@
   .meeting-copy-notice-dismiss:hover {
     opacity: 1;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .meeting-copy-notice[data-kind="success"] {
-      background-color: rgba(46, 170, 83, 0.15);
-      border-color: #2a6b3c;
-      color: #b6e5c5;
-    }
-  }
-  :root[data-theme="dark"] .meeting-copy-notice[data-kind="success"] {
-    background-color: rgba(46, 170, 83, 0.15);
-    border-color: #2a6b3c;
-    color: #b6e5c5;
-  }
 </style>
 
 {#if notice}

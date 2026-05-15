@@ -282,38 +282,4 @@
     margin: 0.2rem 0.25rem;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .export-menu {
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    }
-    :root:not([data-theme="light"]) .icon-btn { color: #6e6e73; }
-    :root:not([data-theme="light"]) .icon-btn:hover:not(:disabled) {
-      background-color: #2a2a2d;
-      color: #d8d8d8;
-    }
-    :root:not([data-theme="light"]) .icon-btn.danger { color: #f0a0a0; }
-    :root:not([data-theme="light"]) .icon-btn.danger:hover:not(:disabled) {
-      background-color: #3d1d1d;
-    }
-    :root:not([data-theme="light"]) .icon-btn.danger.confirming {
-      background-color: #3d1d1d;
-      color: #f0c0c0;
-    }
-  }
-  :root[data-theme="dark"] .export-menu {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  }
-  :root[data-theme="dark"] .icon-btn { color: #6e6e73; }
-  :root[data-theme="dark"] .icon-btn:hover:not(:disabled) {
-    background-color: #2a2a2d;
-    color: #d8d8d8;
-  }
-  :root[data-theme="dark"] .icon-btn.danger { color: #f0a0a0; }
-  :root[data-theme="dark"] .icon-btn.danger:hover:not(:disabled) {
-    background-color: #3d1d1d;
-  }
-  :root[data-theme="dark"] .icon-btn.danger.confirming {
-    background-color: #3d1d1d;
-    color: #f0c0c0;
-  }
 </style>

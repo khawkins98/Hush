@@ -746,12 +746,4 @@
     width: 11rem;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .meeting-detail-status { color: #9a9aa0; }
-    :root:not([data-theme="light"]) .meeting-detail-error { color: #f0a0a0; }
-    :root:not([data-theme="light"]) .speaker-rename-input { background-color: #1e1e24; }
-  }
-  :root[data-theme="dark"] .meeting-detail-status { color: #9a9aa0; }
-  :root[data-theme="dark"] .meeting-detail-error { color: #f0a0a0; }
-  :root[data-theme="dark"] .speaker-rename-input { background-color: #1e1e24; }
 </style>

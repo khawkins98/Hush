@@ -311,7 +311,7 @@ button.ghost.primary {
 
 button.ghost.primary:hover:not(:disabled) {
   background-color: var(--info-bg);
-  border-color: #4a6cd0;
+  border-color: var(--info-border);
 }
 
 .loading-skeleton {
@@ -524,96 +524,4 @@ button.ghost.primary:hover:not(:disabled) {
   font-size: 0.85rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) button:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-  :root:not([data-theme="light"]) button.ghost:hover:not(:disabled) {
-    background-color: #353535;
-  }
-  :root:not([data-theme="light"]) button.ghost.danger {
-    color: #ff9090;
-  }
-  :root:not([data-theme="light"]) button.ghost.danger:hover:not(:disabled) {
-    background-color: #3a1818;
-    border-color: var(--danger);
-  }
-  :root:not([data-theme="light"]) button.ghost.danger.confirming {
-    background-color: #3a1818;
-    border-color: var(--danger);
-    color: #ffb0b0;
-  }
-  :root:not([data-theme="light"]) .restart-notice {
-    background-color: #1a3a1a;
-    border-color: #2a5a2a;
-    color: #c8e8c8;
-  }
-  :root:not([data-theme="light"]) .notice-loaded {
-    background-color: #14532d;
-    border-color: #166534;
-    color: #bbf7d0;
-  }
-  :root:not([data-theme="light"]) .model-card.selected {
-    background-color: #2a3050;
-    border-color: var(--accent);
-  }
-  :root:not([data-theme="light"]) .bars span.on {
-    background-color: #8aa0ff;
-  }
-  :root:not([data-theme="light"]) .download-progress {
-    background-color: #3a3a3a;
-  }
-  :root:not([data-theme="light"]) .download-progress-bar {
-    background-color: #8aa0ff;
-  }
-  :root:not([data-theme="light"]) .model-failure {
-    background-color: #4a1a1a;
-    color: #ffd0d0;
-  }
-}
-:root[data-theme="dark"] button:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-:root[data-theme="dark"] button.ghost:hover:not(:disabled) {
-  background-color: #353535;
-}
-:root[data-theme="dark"] button.ghost.danger {
-  color: #ff9090;
-}
-:root[data-theme="dark"] button.ghost.danger:hover:not(:disabled) {
-  background-color: #3a1818;
-  border-color: var(--danger);
-}
-:root[data-theme="dark"] button.ghost.danger.confirming {
-  background-color: #3a1818;
-  border-color: var(--danger);
-  color: #ffb0b0;
-}
-:root[data-theme="dark"] .restart-notice {
-  background-color: #1a3a1a;
-  border-color: #2a5a2a;
-  color: #c8e8c8;
-}
-:root[data-theme="dark"] .notice-loaded {
-  background-color: #14532d;
-  border-color: #166534;
-  color: #bbf7d0;
-}
-:root[data-theme="dark"] .model-card.selected {
-  background-color: #2a3050;
-  border-color: var(--accent);
-}
-:root[data-theme="dark"] .bars span.on {
-  background-color: #8aa0ff;
-}
-:root[data-theme="dark"] .download-progress {
-  background-color: #3a3a3a;
-}
-:root[data-theme="dark"] .download-progress-bar {
-  background-color: #8aa0ff;
-}
-:root[data-theme="dark"] .model-failure {
-  background-color: #4a1a1a;
-  color: #ffd0d0;
-}
 </style>

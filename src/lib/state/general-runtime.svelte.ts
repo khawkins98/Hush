@@ -8,9 +8,9 @@
  *   get_mic_gain_db / set_mic_gain_db
  *   reset_first_run
  *
- * Theme, status-line, and debug-console are localStorage-backed and
- * stay in GeneralTab since they use lib/theme.ts, lib/status-line.ts,
- * and lib/debug-console.ts directly — no IPC seam to own here.
+ * Status-line and debug-console are localStorage-backed and stay in
+ * GeneralTab since they use lib/status-line.ts and
+ * lib/debug-console.ts directly — no IPC seam to own here.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { formatErrorMessage } from "$lib/errors";
