@@ -233,7 +233,15 @@ async fn load_enabled_slugs(state: &AppState) -> IpcResult<Vec<String>> {
         .get(crate::settings::keys::ENABLED_PACKS)
         .await
     {
-        Ok(Some(json)) => Ok(serde_json::from_str::<Vec<String>>(&json).unwrap_or_default()),
+        Ok(Some(json)) => Ok(
+            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "enabled-packs setting is not valid JSON array; treating as empty (#884)"
+                );
+                Vec::new()
+            }),
+        ),
         Ok(None) => Ok(Vec::new()),
         Err(e) => Err(IpcError::Replacements(e.to_string())),
     }

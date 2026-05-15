@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter as _, State};
 
+use zeroize::Zeroize;
+
 use crate::audio::{AudioSource, AudioSourceListing};
 use crate::dictionary::apply_replacements;
 use crate::history::NewHistoryEntry;
@@ -191,7 +193,7 @@ pub async fn stop_dictation(
     // succeeds. Audio-error path still hides immediately —
     // showing a stuck Processing pill on a failed capture is
     // worse than no pill.
-    let captured = stop_audio_capture(&state).map_err(|e| {
+    let mut captured = stop_audio_capture(&state).map_err(|e| {
         crate::hud::hide_async(&app);
         e
     })?;
@@ -300,6 +302,9 @@ pub async fn stop_dictation(
                 ignored: true,
             },
         );
+        // Zeroize the raw PCM before returning so mic audio doesn't
+        // linger in the allocator's free list (#879).
+        captured.samples.zeroize();
         return Ok(DictationResult {
             text: String::new(),
             foreground,
@@ -322,7 +327,14 @@ pub async fn stop_dictation(
             tracing::warn!(error = ?e, "emit transcription:progress failed");
         }
     })));
-    let utterances = match transcriber.transcribe_chunks(&[captured.samples], format, &prompt) {
+    // Move samples into a named buffer so we can zeroize the raw PCM
+    // after transcription on every return path (#879).
+    let mut chunks = [std::mem::take(&mut captured.samples)];
+    let transcribe_result = transcriber.transcribe_chunks(&chunks, format, &prompt);
+    for v in &mut chunks {
+        v.zeroize();
+    }
+    let utterances = match transcribe_result {
         Ok(u) => u,
         Err(e) => {
             transcriber.set_progress_hook(None);
