@@ -812,14 +812,11 @@ fn push_samples<T: Copy>(
 
 /// RMS from a pre-computed sum-of-squares plus the sample count.
 /// Pulled out as a free function so the level-meter math can be
-/// unit-tested without spinning up a real cpal stream — the callback
-/// itself stays a one-line call into this helper.
+/// Thin alias so the call-sites in this module keep the same name while
+/// the implementation lives in the shared `super::rms_from_sum_sq` helper
+/// (#822 — both audio paths now share one definition).
 fn rms_from_sum_sq(sum_sq: f32, n: usize) -> f32 {
-    if n == 0 {
-        0.0
-    } else {
-        (sum_sq / n as f32).sqrt()
-    }
+    super::rms_from_sum_sq(sum_sq, n)
 }
 
 /// cpal stream `error_callback` — runs on the audio thread when the

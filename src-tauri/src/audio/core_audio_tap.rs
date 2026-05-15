@@ -228,15 +228,24 @@ impl CoreAudioTapSession {
                         Ok(n) => {
                             let total = tail + n;
                             let samples = total / 4;
+                            let mut sum_sq = 0.0_f32;
                             for i in 0..samples {
                                 let s = i * 4;
                                 let sample =
                                     f32::from_le_bytes(chunk_buf[s..s + 4].try_into().unwrap());
-                                level_writer.store(sample.abs().to_bits(), Ordering::Relaxed);
+                                sum_sq += sample * sample;
                                 if producer.push(sample).is_err() {
                                     overflow_writer.store(true, Ordering::Relaxed);
                                 }
                             }
+                            // Store RMS for this chunk so the level meter matches
+                            // the cpal mic path (which also computes RMS per
+                            // callback). Storing peak-abs (the old approach) read
+                            // ~40% higher than mic at the same loudness (#822).
+                            level_writer.store(
+                                crate::audio::rms_from_sum_sq(sum_sq, samples).to_bits(),
+                                Ordering::Relaxed,
+                            );
                             tail = total - samples * 4;
                             if tail > 0 {
                                 let carried = samples * 4;
