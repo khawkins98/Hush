@@ -188,12 +188,15 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
     }
 
     async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()> {
-        sqlx::query("UPDATE meeting_sessions SET notes = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE meeting_sessions SET notes = ? WHERE id = ?")
             .bind(&notes)
             .bind(id)
             .execute(self.db.pool())
             .await
             .context("set meeting session notes")?;
+        if result.rows_affected() == 0 {
+            anyhow::bail!("meeting session {id} not found");
+        }
         Ok(())
     }
 
