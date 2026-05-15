@@ -463,7 +463,8 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
     );
     assert_eq!(
         state
-            .inference.transcribe
+            .inference
+            .transcribe
             .lock()
             .unwrap()
             .as_ref()
@@ -473,7 +474,8 @@ fn swap_transcriber_replaces_the_inner_arc_and_returns_previous() {
     );
     assert_eq!(
         state
-            .inference.transcribe_meeting
+            .inference
+            .transcribe_meeting
             .lock()
             .unwrap()
             .as_ref()

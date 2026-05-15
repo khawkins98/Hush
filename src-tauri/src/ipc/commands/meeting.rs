@@ -400,7 +400,11 @@ pub async fn meeting_start_manual(
     // same error variant. Runs before opening any audio handles so the user
     // sees the error before any recording is started.
     {
-        let guard = state.inference.transcribe_meeting.lock().map_err(poisoned)?;
+        let guard = state
+            .inference
+            .transcribe_meeting
+            .lock()
+            .map_err(poisoned)?;
         if guard.is_none() {
             return Err(IpcError::TranscriptionUnavailable);
         }
@@ -656,7 +660,8 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
         // counter; we compare on commit and discard the stale result so
         // the user-chosen model is never overwritten by the old rebuild.
         let gen_snapshot = state
-            .inference.transcriber_generation
+            .inference
+            .transcriber_generation
             .load(std::sync::atomic::Ordering::Acquire);
         let generation_bg = Arc::clone(&state.inference.transcriber_generation);
         #[cfg(feature = "diarization-onnx")]

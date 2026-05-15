@@ -120,7 +120,8 @@ pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> 
     // generated future fails to satisfy `Send`.
     {
         let mut slot = state
-            .inference.diarize_slot
+            .inference
+            .diarize_slot
             .write()
             .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
         *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
@@ -475,7 +476,8 @@ mod tests {
         }
         {
             let mut slot = state
-                .inference.diarize_slot
+                .inference
+                .diarize_slot
                 .write()
                 .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
             *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
