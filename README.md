@@ -126,7 +126,7 @@ This isn't Electron-with-a-mic-icon. Four native windows (main, HUD overlay, men
 |---|---|
 | **Discovering Hush** — what it does | This README + the live app (install it, open Settings → menus describe what each thing does) |
 | **What's shipped right now** | [STATUS.md](./STATUS.md) (rolling snapshot), [CHANGELOG.md](./CHANGELOG.md) (release-by-release record) |
-| **What it's meant to be** | [hush-prd.md](./hush-prd.md) — product spec, scope, non-goals, milestone plan |
+| **Attribution + legal posture** | [hush-prd.md](./hush-prd.md) — black-box reimplementation discipline (§13.8), product non-goals, and VoiceInk attribution rationale. The original full product spec is historical; see STATUS.md and CHANGELOG.md for current state |
 | **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, four-window topology, trait seams, meeting pump, module map |
 | **Installing + using** | [Releases](https://github.com/khawkins98/Hush/releases), [`docs/macos-permissions.md`](./docs/macos-permissions.md) for macOS TCC troubleshooting |
 | **Running it locally / dev commands** | [docs/developing.md](./docs/developing.md) — setup, command reference, macOS quirks, test layers |
