@@ -558,3 +558,17 @@ pub(super) fn log_overflow_if_set(flag: &AtomicBool) {
         );
     }
 }
+
+/// Compute the RMS level for one audio callback buffer.
+///
+/// Both the cpal microphone path and the CoreAudio tap reader path
+/// use this helper so the level meter values are on the same scale
+/// and the HUD waveform doesn't show divergent amplitudes between
+/// sources (#822).
+pub(super) fn rms_from_sum_sq(sum_sq: f32, n: usize) -> f32 {
+    if n == 0 {
+        0.0
+    } else {
+        (sum_sq / n as f32).sqrt()
+    }
+}
