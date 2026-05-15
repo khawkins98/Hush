@@ -442,6 +442,9 @@ pub(crate) fn parse_inference_threads_setting(raw: Option<String>) -> i32 {
 pub(crate) fn parse_mic_gain_db_setting(raw: Option<String>) -> f32 {
     raw.as_deref()
         .and_then(|s| s.trim().parse::<f32>().ok())
+        // Reject NaN/±Inf: f32::clamp on a NaN receiver returns NaN
+        // (neither bound fires), poisoning every captured sample (#841).
+        .filter(|v| v.is_finite())
         .unwrap_or(0.0)
         .clamp(0.0, 20.0)
 }
