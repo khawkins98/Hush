@@ -237,6 +237,10 @@ impl SlidingWindowState {
         let max_samples = ms_to_samples(self.config.window_max_ms, self.sample_rate);
         if self.window.len() > max_samples {
             let drop_count = self.window.len() - max_samples;
+            // Zeroize the head before draining so the PCM bytes are
+            // scrubbed before the backing allocation compacts.
+            use zeroize::Zeroize;
+            self.window[..drop_count].zeroize();
             self.window.drain(..drop_count);
             let drop_ms = samples_to_ms(drop_count, self.sample_rate);
             self.window_start_offset_ms = self.window_start_offset_ms.saturating_add(drop_ms);
@@ -413,6 +417,10 @@ impl SlidingWindowState {
         if let Some(commit_end_rel_ms) = last_committed_rel_end_ms {
             let drop_samples =
                 ms_to_samples(commit_end_rel_ms, self.sample_rate).min(self.window.len());
+            // Zeroize before draining: Vec::drain drops the head without
+            // clearing the bytes that used to occupy those indices.
+            use zeroize::Zeroize;
+            self.window[..drop_samples].zeroize();
             self.window.drain(..drop_samples);
             self.window_start_offset_ms = self
                 .window_start_offset_ms
