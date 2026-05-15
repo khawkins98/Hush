@@ -696,7 +696,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_if_active_persists_utterance_with_cumulative_timestamps() {
+    async fn append_if_active_persists_utterance_with_wall_clock_timestamps() {
         let mgr = fresh_manager().await;
         let session = mgr
             .start_manual(
@@ -715,16 +715,28 @@ mod tests {
             .unwrap();
         assert!(appended);
 
-        // Cumulative-ms arithmetic: first @ [0, 2000], second @
-        // [2000, 5000]. Pinned because the panel renders these as
-        // a timeline; a regression that drops the cumulative
-        // adjustment would render every utterance starting at 0.
+        // Wall-clock arithmetic (#818): timestamps reflect when in the
+        // session the utterance ended (started_at.elapsed()) rather than
+        // the cumulative sum of prior durations. In a unit test both calls
+        // happen within a few ms of session start, so end_ms is small and
+        // start_ms is clamped to 0 (duration > elapsed session age).
+        //
+        // What we assert:
+        //   • both utterances were persisted
+        //   • start_ms >= 0 (never negative)
+        //   • end_ms >= start_ms (non-negative duration)
+        //   • ended_at_ms - started_at_ms <= duration_ms (may be clamped when
+        //     duration exceeds elapsed session age, as happens in this test)
+        //   • second utterance's end_ms >= first utterance's end_ms (monotone)
         let utterances = mgr.repo.list_utterances(session.id).await.unwrap();
         assert_eq!(utterances.len(), 2);
-        assert_eq!(utterances[0].started_at_ms, 0);
-        assert_eq!(utterances[0].ended_at_ms, 2_000);
-        assert_eq!(utterances[1].started_at_ms, 2_000);
-        assert_eq!(utterances[1].ended_at_ms, 5_000);
+        assert!(utterances[0].started_at_ms >= 0);
+        assert!(utterances[0].ended_at_ms >= utterances[0].started_at_ms);
+        assert!(utterances[0].ended_at_ms - utterances[0].started_at_ms <= 2_000);
+        assert!(utterances[1].started_at_ms >= 0);
+        assert!(utterances[1].ended_at_ms >= utterances[1].started_at_ms);
+        assert!(utterances[1].ended_at_ms - utterances[1].started_at_ms <= 3_000);
+        assert!(utterances[1].ended_at_ms >= utterances[0].ended_at_ms);
         mgr.stop_manual().await.unwrap();
     }
 
