@@ -80,9 +80,9 @@
     border: 1px solid;
   }
   .meeting-copy-notice[data-kind="success"] {
-    background-color: #e7f8ec;
-    border-color: #b6e5c5;
-    color: #2a6b3c;
+    background-color: var(--success-bg);
+    border-color: var(--success-border);
+    color: var(--success-text);
   }
   .meeting-copy-notice[data-kind="failure"] {
     background-color: var(--warning-bg);

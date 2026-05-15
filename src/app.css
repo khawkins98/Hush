@@ -8,55 +8,58 @@ body {
   overflow: hidden;
 }
 
-/* Global brand tokens for Hush's fixed five-color palette.
- *
- * Single warm-white theme only: orange is the primary accent, blue is
- * secondary/info, and crimson is reserved for danger states.
- */
+/* Global brand tokens for Hush's fixed five-color palette. */
 
 :root {
-  /* ── Brand palette ────────────────────────────────────────── */
+  /* ── Brand palette: vibrant dark ────────────────────────── */
+  /* Source colors: #5ea1c3 (blue), #528eaf (blue-dark),       */
+  /* #dc7932 (orange), #ba5733 (orange-dark), #6e1715 (crimson) */
   --accent:        #dc7932;
-  --accent-hover:  #ba5733;
-  --accent-subtle: rgba(220, 121, 50, 0.12);
+  --accent-hover:  #e8923f;
+  --accent-subtle: rgba(220, 121, 50, 0.20);
 
-  /* ── Surfaces ─────────────────────────────────────────────── */
-  --bg-app:      #f8f3ee;
-  --bg-sidebar:  #f0e8df;
-  --bg-surface:  #ffffff;
-  --bg-elevated: #ffffff;
-  --bg-input:    #ffffff;
+  /* ── Surfaces (deep tinted navy) ────────────────────────── */
+  --bg-app:      #111c26;
+  --bg-sidebar:  #0d1720;
+  --bg-surface:  #182535;
+  --bg-elevated: #1e2f40;
+  --bg-input:    #162030;
 
-  /* ── Text ─────────────────────────────────────────────────── */
-  --text-primary:   #1a0e0d;
-  --text-secondary: #4a3028;
-  --text-muted:     #8a6a58;
+  /* ── Text ───────────────────────────────────────────────── */
+  --text-primary:   #eef4f8;
+  --text-secondary: #9ab8cc;
+  --text-muted:     #5a7a8a;
   --text-on-accent: #ffffff;
 
-  /* ── Borders ──────────────────────────────────────────────── */
-  --border:        #ddd0c4;
-  --border-subtle: #ece6df;
-  --border-input:  #c8b8ac;
+  /* ── Borders ────────────────────────────────────────────── */
+  --border:        #1e3248;
+  --border-subtle: #162a3c;
+  --border-input:  #254060;
   --border-focus:  var(--accent);
 
-  /* ── Semantic ─────────────────────────────────────────────── */
-  --danger:         #6e1715;
-  --danger-bg:      #fef2f0;
-  --danger-border:  #e0a09e;
-  --warning-bg:     #fef6ec;
+  /* ── Semantic ───────────────────────────────────────────── */
+  --danger:         #e85050;
+  --danger-bg:      #2a1018;
+  --danger-border:  #6e1715;
+  --warning-bg:     #2a1c0a;
   --warning-border: #dc7932;
-  --warning-text:   #7a3010;
-  --info-bg:        #eef6fb;
+  --warning-text:   #f0a060;
+  --info-bg:        #0d2030;
   --info-border:    #5ea1c3;
-  --info-text:      #1a4a63;
+  --info-text:      #9ac8e0;
 
-  /* ── Shape (unchanged) ────────────────────────────────────── */
+  /* ── Success (for green status indicators) ──────────────── */
+  --success-text:   #6ed09a;
+  --success-border: #2a6b3c;
+  --success-bg:     #0d2518;
+
+  /* ── Shape ──────────────────────────────────────────────── */
   --radius-sm:   4px;
   --radius-md:   8px;
   --radius-lg:   12px;
   --radius-pill: 999px;
 
-  /* ── Controls (unchanged) ─────────────────────────────────── */
+  /* ── Controls ───────────────────────────────────────────── */
   --control-height: 2.6rem;
   --control-padding-x: 0.85rem;
 }

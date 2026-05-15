@@ -224,7 +224,8 @@
   }
   .dialog-body {
     width: min(28rem, 92vw);
-    background-color: white;
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
     border-radius: 10px;
     padding: 1.4rem 1.5rem 1.2rem;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
@@ -287,20 +288,20 @@
   button.ghost {
     color: var(--text-primary);
     background-color: transparent;
-    border: 1px solid #d1d1d1;
+    border: 1px solid var(--border-input);
   }
   button.ghost:hover {
     background-color: var(--bg-app);
   }
   button.primary {
-    color: white;
+    color: var(--text-on-accent);
     background-color: var(--accent);
     border: 1px solid var(--accent);
     font-weight: 600;
   }
   button.primary:hover {
-    background-color: #243370;
-    border-color: #243370;
+    background-color: var(--accent-hover);
+    border-color: var(--accent-hover);
   }
 
 </style>

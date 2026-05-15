@@ -352,10 +352,10 @@ button.ghost.primary:hover:not(:disabled) {
 .restart-notice {
   margin: 0.5rem 0 1rem;
   padding: 0.6rem 0.85rem;
-  background-color: #e8f5e8;
-  border: 1px solid #b8d8b8;
+  background-color: var(--success-bg);
+  border: 1px solid var(--success-border);
   border-radius: 6px;
-  color: #1f5a1f;
+  color: var(--success-text);
   font-size: 0.9rem;
 }
 
@@ -364,9 +364,9 @@ button.ghost.primary:hover:not(:disabled) {
    path — saturated green to read as success. `notice-warn` is amber
    — selection persisted but user has work left (Download). */
 .notice-loaded {
-  background-color: #d1f0d1;
-  border-color: #8fc88f;
-  color: #1a4a1a;
+  background-color: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success-text);
 }
 
 .notice-warn {
@@ -393,7 +393,7 @@ button.ghost.primary:hover:not(:disabled) {
 
 .model-card.selected {
   border-color: var(--accent);
-  background-color: #f5f8ff;
+  background-color: var(--bg-elevated);
   box-shadow: 0 0 0 1px var(--accent);
 }
 

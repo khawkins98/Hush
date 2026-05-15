@@ -569,23 +569,23 @@
     line-height: 1.4;
   }
   .about-update-ok {
-    background-color: #e7f8ec;
-    border: 1px solid #b6e5c5;
-    color: #2a6b3c;
+    background-color: var(--success-bg);
+    border: 1px solid var(--success-border);
+    color: var(--success-text);
   }
   .about-update-available {
     background-color: var(--info-bg);
-    border: 1px solid #5ea1c3;
+    border: 1px solid var(--info-border);
     color: var(--info-text);
   }
   .about-update-failed {
     background-color: var(--warning-bg);
-    border: 1px solid #ffd591;
+    border: 1px solid var(--warning-border);
     color: var(--warning-text);
   }
   .about-update-installing {
     background-color: var(--info-bg);
-    border: 1px solid #5ea1c3;
+    border: 1px solid var(--info-border);
     color: var(--info-text);
     font-variant-numeric: tabular-nums;
   }

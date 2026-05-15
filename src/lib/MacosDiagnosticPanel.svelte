@@ -182,10 +182,10 @@
 }
 
 .macos-diagnostic details {
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.5rem 1rem;
-  background-color: rgba(0, 0, 0, 0.02);
+  background-color: var(--bg-elevated);
 }
 
 .macos-diagnostic summary {
@@ -209,7 +209,7 @@
 }
 
 .macos-diag-bundle code {
-  background-color: rgba(0, 0, 0, 0.06);
+  background-color: var(--bg-input);
   padding: 0.1em 0.4em;
   border-radius: 4px;
   font-size: 0.9em;
@@ -227,7 +227,7 @@
 }
 
 .macos-diag-bundle-list code {
-  background-color: rgba(0, 0, 0, 0.06);
+  background-color: var(--bg-input);
   padding: 0.05em 0.3em;
   border-radius: 3px;
   font-size: 0.9em;
@@ -250,8 +250,8 @@
 
 .macos-reset-guide {
   padding: 0.75rem 0.9rem;
-  background-color: #fdf6e3;
-  border: 1px solid #e0a020;
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 6px;
   display: flex;
   flex-direction: column;
@@ -262,7 +262,7 @@
   margin: 0;
   font-size: 0.9rem;
   font-weight: 600;
-  color: #5a3e00;
+  color: var(--warning-text);
 }
 
 .macos-reset-guide-steps {
@@ -270,7 +270,7 @@
   padding-left: 1.3rem;
   font-size: 0.88rem;
   line-height: 1.6;
-  color: #5a3e00;
+  color: var(--warning-text);
 }
 
 .macos-reset-guide-steps li {
@@ -287,26 +287,26 @@
   padding: 0.3em 0.75em;
   font-size: 0.82rem;
   font-weight: 500;
-  border: 1px solid #c08000;
-  background-color: #fff8e6;
+  border: 1px solid var(--warning-border);
+  background-color: var(--bg-surface);
   border-radius: 5px;
   cursor: pointer;
-  color: #5a3e00;
+  color: var(--warning-text);
   transition: background-color 0.1s, border-color 0.1s;
   font-family: inherit;
 }
 
 .guide-pane-btn:hover {
-  background-color: #ffedc0;
-  border-color: #a06000;
+  background-color: var(--accent-subtle);
+  border-color: var(--accent);
 }
 
 .macos-diag-why {
   margin-top: 0.25rem;
   padding: 0.4rem 0.65rem;
-  border: 1px solid #e1e1e1;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background-color: rgba(0, 0, 0, 0.015);
+  background-color: var(--bg-input);
 }
 .macos-diag-why summary {
   cursor: pointer;
@@ -326,7 +326,7 @@
 
 button {
   border-radius: 8px;
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border-input);
   padding: 0.7em 1.2em;
   font-size: 1em;
   font-family: inherit;

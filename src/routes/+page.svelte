@@ -370,8 +370,8 @@
   gap: 0.6rem;
   padding: 0.55rem 0.8rem;
   margin: 0.75rem 0 0;
-  background-color: #fdf6e3;
-  border: 1px solid #e0a020;
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 7px;
   font-size: 0.85rem;
   flex-wrap: wrap;
@@ -386,8 +386,8 @@
   gap: 0.6rem;
   padding: 0.55rem 0.8rem;
   margin: 0.75rem 0 0;
-  background-color: #fdf6e3;
-  border: 1px solid #e0a020;
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 7px;
   font-size: 0.85rem;
   flex-wrap: wrap;
@@ -400,7 +400,7 @@
 .source-failed-banner-text {
   flex: 1;
   min-width: 0;
-  color: #5a3e00;
+  color: var(--warning-text);
   line-height: 1.4;
 }
 
@@ -410,20 +410,20 @@
   border: none;
   background: transparent;
   cursor: pointer;
-  color: #7a5500;
+  color: var(--warning-text);
   border-radius: 4px;
   font-family: inherit;
   transition: background-color 0.1s;
 }
 
 .source-failed-banner-dismiss:hover {
-  background-color: rgba(0, 0, 0, 0.07);
+  background-color: var(--accent-subtle);
 }
 
 .stale-perm-banner-text {
   flex: 1;
   min-width: 0;
-  color: #5a3e00;
+  color: var(--warning-text);
   line-height: 1.4;
 }
 
@@ -431,18 +431,18 @@
   padding: 0.25em 0.7em;
   font-size: 0.82rem;
   font-weight: 600;
-  border: 1px solid #c08000;
-  background-color: #fff8e6;
+  border: 1px solid var(--warning-border);
+  background-color: var(--bg-surface);
   border-radius: 5px;
   cursor: pointer;
-  color: #5a3e00;
+  color: var(--warning-text);
   white-space: nowrap;
   font-family: inherit;
   transition: background-color 0.1s;
 }
 
 .stale-perm-banner-btn:hover {
-  background-color: #ffedc0;
+  background-color: var(--accent-subtle);
 }
 
 .stale-perm-banner-dismiss {
@@ -451,14 +451,14 @@
   border: none;
   background: transparent;
   cursor: pointer;
-  color: #7a5500;
+  color: var(--warning-text);
   border-radius: 4px;
   font-family: inherit;
   transition: background-color 0.1s;
 }
 
 .stale-perm-banner-dismiss:hover {
-  background-color: rgba(0, 0, 0, 0.07);
+  background-color: var(--accent-subtle);
 }
 
 /* About as a standalone sidebar section. AboutTab's own
