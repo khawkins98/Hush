@@ -555,9 +555,7 @@ impl SessionManager {
                                 close_attempted: true,
                             });
                         }
-                        SessionState::Idle
-                        | SessionState::Opening
-                        | SessionState::Active(_) => {
+                        SessionState::Idle | SessionState::Opening | SessionState::Active(_) => {
                             // Should not happen — start_manual blocks on
                             // Stopping, so no concurrent start can have
                             // claimed the slot. Log and drop the recovery;
