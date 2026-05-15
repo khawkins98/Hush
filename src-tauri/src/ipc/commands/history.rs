@@ -90,10 +90,7 @@ pub async fn history_export_row_csv(
         .ok_or_else(|| IpcError::History(format!("history row {id} not found")))?;
     let body = history_csv_for_entries(std::slice::from_ref(&entry))
         .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;
-    tokio::fs::write(&path, body)
-        .await
-        .map_err(|e| IpcError::Internal(format!("write {path}: {e}")))?;
-    Ok(())
+    super::atomic_write(std::path::Path::new(&path), body.as_bytes()).await
 }
 
 /// Pure CSV-emit helper. Held outside the IPC entry point so unit

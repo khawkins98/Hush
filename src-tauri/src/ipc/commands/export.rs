@@ -126,9 +126,7 @@ pub async fn history_export_bundle(
             let body = history_csv_for_entries(std::slice::from_ref(entry))
                 .map_err(|e| IpcError::Internal(format!("CSV write: {e:#}")))?;
             let path = bundle_path(&dir, &format!("dictation-{}.csv", entry.id))?;
-            tokio::fs::write(&path, body)
-                .await
-                .map_err(|e| IpcError::Internal(format!("write {}: {e}", path.display())))?;
+            super::atomic_write(&path, body.as_bytes()).await?;
             written += 1;
         }
     }
@@ -170,9 +168,7 @@ pub async fn history_export_bundle(
                     .map_err(|e| IpcError::Internal(format!("JSON write: {e:#}")))?,
             };
             let path = bundle_path(&dir, &format!("meeting-{}.{}", session.id, ext))?;
-            tokio::fs::write(&path, body)
-                .await
-                .map_err(|e| IpcError::Internal(format!("write {}: {e}", path.display())))?;
+            super::atomic_write(&path, body.as_bytes()).await?;
             written += 1;
         }
     }

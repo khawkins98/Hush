@@ -202,10 +202,7 @@ pub async fn meeting_session_export(
             .map_err(|e| IpcError::Internal(format!("JSON write: {e:#}")))?,
     };
 
-    tokio::fs::write(&path, body)
-        .await
-        .map_err(|e| IpcError::Internal(format!("write {path}: {e}")))?;
-    Ok(())
+    super::atomic_write(std::path::Path::new(&path), body.as_bytes()).await
 }
 
 /// Update a session's freeform notes. The panel calls this on blur
