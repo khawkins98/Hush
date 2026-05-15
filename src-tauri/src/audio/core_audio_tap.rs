@@ -23,6 +23,7 @@
 //! 1 s for a clean exit before falling back to `kill()`.  The reader thread
 //! detects `UnexpectedEof` when the child exits and shuts itself down.
 
+use std::collections::VecDeque;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -32,10 +33,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use rtrb::{Consumer, RingBuffer};
 
 use super::{
-    drain_consumer, log_overflow_if_set, AudioSession, AudioSource, CaptureFormat, CapturedAudio,
+    drain_buffer, push_samples_circular, AudioSession, AudioSource, CaptureFormat, CapturedAudio,
     MAX_BUFFER_FRAMES,
 };
 
@@ -57,10 +57,12 @@ pub struct CoreAudioTapSession {
 pub(super) struct TapInner {
     pub(super) format: CaptureFormat,
     child: Mutex<Option<Child>>,
-    consumer: Mutex<Consumer<f32>>,
-    overflow_flag: Arc<AtomicBool>,
+    /// Shared circular capture buffer (#827). The reader thread (writer) and
+    /// the drain/stop paths (reader) share this Arc. The VecDeque evicts
+    /// oldest samples when at capacity, preserving the most-recent audio.
+    buffer: Arc<Mutex<VecDeque<f32>>>,
     /// Set to `true` by the reader thread when the helper process exits or
-    /// errors — lets `drain_into` surface an error once the ring is exhausted
+    /// errors — lets `drain_into` surface an error once the buffer is exhausted
     /// so the pump emits `meeting:source-failed` instead of recording silence.
     reader_exited: Arc<AtomicBool>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
@@ -184,21 +186,20 @@ impl CoreAudioTapSession {
         // Do NOT multiply by `channels` here: the constant is already in samples
         // (not frames), so multiplying again would double-allocate for stereo (#929).
         let capacity = MAX_BUFFER_FRAMES;
-        // #612 candidate-2 diagnostic: log the channel count and ring
-        // size so we can rule out an over-allocated ring when the tap
+        // #612 candidate-2 diagnostic: log the channel count and buffer
+        // size so we can rule out an over-allocated buffer when the tap
         // reports >2 channels (e.g. an aggregate device). Downstream
         // code mixes to mono before forwarding, so this is purely an
         // init-time footprint check.
         tracing::info!(
-            "core-audio tap init: sr={} ch={} ring_capacity_samples={} (~{:.1} MB)",
+            "core-audio tap init: sr={} ch={} buffer_capacity_samples={} (~{:.1} MB)",
             sample_rate,
             channels,
             capacity,
             (capacity * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0),
         );
-        let (mut producer, consumer) = RingBuffer::new(capacity);
-        let overflow_flag = Arc::new(AtomicBool::new(false));
-        let overflow_writer = Arc::clone(&overflow_flag);
+        let buffer = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(capacity)));
+        let reader_buffer = Arc::clone(&buffer);
         let reader_exited = Arc::new(AtomicBool::new(false));
         let reader_exited_writer = Arc::clone(&reader_exited);
         let level_writer = Arc::clone(&level);
@@ -221,7 +222,7 @@ impl CoreAudioTapSession {
                     match reader.read(&mut chunk_buf[tail..]) {
                         Ok(0) => {
                             // EOF — child exited. Signal drain_into so it can
-                            // surface an error once the ring is exhausted (#910).
+                            // surface an error once the buffer is exhausted (#910).
                             reader_exited_writer.store(true, Ordering::Release);
                             break;
                         }
@@ -229,15 +230,15 @@ impl CoreAudioTapSession {
                             let total = tail + n;
                             let samples = total / 4;
                             let mut sum_sq = 0.0_f32;
+                            let mut converted = Vec::with_capacity(samples);
                             for i in 0..samples {
                                 let s = i * 4;
                                 let sample =
                                     f32::from_le_bytes(chunk_buf[s..s + 4].try_into().unwrap());
                                 sum_sq += sample * sample;
-                                if producer.push(sample).is_err() {
-                                    overflow_writer.store(true, Ordering::Relaxed);
-                                }
+                                converted.push(sample);
                             }
+                            push_samples_circular(&reader_buffer, &converted, MAX_BUFFER_FRAMES);
                             // Store RMS for this chunk so the level meter matches
                             // the cpal mic path (which also computes RMS per
                             // callback). Storing peak-abs (the old approach) read
@@ -279,8 +280,7 @@ impl CoreAudioTapSession {
             inner: Some(TapInner {
                 format,
                 child: Mutex::new(Some(child)),
-                consumer: Mutex::new(consumer),
-                overflow_flag,
+                buffer,
                 reader_exited,
                 reader_thread: Mutex::new(Some(reader_thread)),
                 reader_done_rx: Mutex::new(Some(reader_done_rx)),
@@ -306,19 +306,14 @@ impl AudioSession for CoreAudioTapSession {
         let inner = self.inner.as_ref().ok_or_else(|| {
             anyhow!("CoreAudio tap session already stopped; drain_into unavailable")
         })?;
-        let mut consumer = inner
-            .consumer
-            .lock()
-            .map_err(|_| anyhow!("CoreAudio tap consumer lock poisoned"))?;
-        let mut samples = drain_consumer(&mut consumer);
-        log_overflow_if_set(&inner.overflow_flag);
+        let mut samples = drain_buffer(&inner.buffer);
         sink.extend_from_slice(&samples);
         // Zeroize before drop: same discipline as the cpal drain_into path.
         {
             use zeroize::Zeroize;
             samples.zeroize();
         }
-        // Surface a helper-exit error once the ring is fully drained so the
+        // Surface a helper-exit error once the buffer is fully drained so the
         // pump can emit meeting:source-failed instead of recording silence (#910).
         if sink.is_empty() && inner.reader_exited.load(Ordering::Acquire) {
             return Err(anyhow!(
@@ -400,7 +395,7 @@ fn stop_inner(inner: TapInner) -> Result<Vec<f32>> {
             if rx.recv_timeout(Duration::from_secs(3)).is_err() {
                 tracing::warn!(
                     "CoreAudio tap reader thread did not exit within 3 s; \
-                     detaching — samples already drained from ring"
+                     detaching — samples already drained from buffer"
                 );
             }
         }
@@ -410,13 +405,8 @@ fn stop_inner(inner: TapInner) -> Result<Vec<f32>> {
         let _ = guard.take();
     }
 
-    // 3. Drain remaining samples from the ring.
-    let samples = if let Ok(mut consumer) = inner.consumer.lock() {
-        drain_consumer(&mut consumer)
-    } else {
-        Vec::new()
-    };
-    log_overflow_if_set(&inner.overflow_flag);
+    // 3. Drain remaining samples from the buffer.
+    let samples = drain_buffer(&inner.buffer);
 
     Ok(samples)
 }

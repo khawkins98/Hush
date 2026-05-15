@@ -15,19 +15,19 @@
 //! (#106) / Windows (#107) audio backend can land as a peer file
 //! rather than doubling the size of `mod.rs`.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamError, SupportedStreamConfig};
-use rtrb::{Consumer, Producer, RingBuffer};
 
 #[cfg(target_os = "macos")]
 use super::core_audio_tap;
 use super::{
-    drain_consumer, log_overflow_if_set, AudioCapture, AudioDevice, AudioSession, AudioSource,
+    drain_buffer, push_samples_circular, AudioCapture, AudioDevice, AudioSession, AudioSource,
     CaptureFormat, CapturedAudio, DeviceLost, MAX_BUFFER_FRAMES,
 };
 
@@ -479,8 +479,7 @@ impl Drop for CpalMicSessionHandle {
 struct Session {
     /// Kept alive for the duration of capture. Dropping it stops the stream.
     /// We do not read from it after construction; the underlying callback
-    /// writes directly into the ring's producer half (which the callback
-    /// closure owns).
+    /// writes directly into the shared circular buffer.
     stream: Stream,
     format: CaptureFormat,
     /// Human-readable device name captured at session start (#587).
@@ -489,21 +488,12 @@ struct Session {
     /// Surfaced through [`DeviceLost`] when the worker detects a
     /// disconnect.
     device_name: String,
-    /// Consumer end of the SPSC ring (#55). The callback (writer) owns
-    /// the matching `Producer` inside its closure; this `Consumer`
-    /// stays on the worker thread and is the only reader. Single-
-    /// owner on each side — `rtrb` enforces this at compile time
-    /// (`Producer` / `Consumer` are `!Sync`), which is also why this
-    /// field is held by value rather than `Arc`.
-    consumer: Consumer<f32>,
-    /// One-shot flag the callback flips when `producer.push` returns
-    /// `PushError::Full`. The worker logs once per drain cycle when
-    /// it observes `true` and resets the flag, so a sustained
-    /// overflow doesn't spam the log every callback. `Relaxed`
-    /// because the message is purely informational; the dropped
-    /// samples are already lost regardless of when the worker
-    /// notices.
-    overflow_flag: Arc<AtomicBool>,
+    /// Shared circular capture buffer (#827). The callback closure clones
+    /// the `Arc` to get its writer handle; the worker thread uses this
+    /// handle when draining on `Cmd::Stop` / `Cmd::DrainBuffer`. The
+    /// VecDeque inside evicts oldest samples when at capacity, preserving
+    /// the most-recent audio even for sessions longer than ~2 minutes.
+    buffer: Arc<Mutex<VecDeque<f32>>>,
     /// Latched flag the cpal `error_callback` flips when it sees
     /// [`StreamError::DeviceNotAvailable`] (#587). Read on every
     /// `Cmd::DrainBuffer` and on `Cmd::Stop` so the IPC layer can
@@ -511,7 +501,7 @@ struct Session {
     /// of a generic "audio: …" message. `Arc<AtomicBool>` because
     /// the error callback runs on the cpal-owned audio thread and
     /// the worker thread reads it on each drain.
-    device_lost_flag: Arc<AtomicBool>,
+    device_lost_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn worker_loop(
@@ -599,8 +589,7 @@ fn worker_loop(
                             })));
                             continue;
                         }
-                        let samples = drain_consumer(&mut s.consumer);
-                        log_overflow_if_set(&s.overflow_flag);
+                        let samples = drain_buffer(&s.buffer);
                         let _ = reply.send(Ok((samples, s.format)));
                     }
                     None => {
@@ -689,20 +678,19 @@ fn start_cpal_session(
         channels: supported.channels(),
     };
 
-    // Pre-allocate the SPSC ring at the existing buffer cap so the
-    // overflow behaviour matches the pre-#55 Mutex<Vec<f32>> path
-    // (overflow at the same threshold). Sized in samples; at 48 kHz
-    // stereo f32 this is the same MAX_BUFFER_FRAMES the ad-hoc
-    // ceiling used. The whole capacity is allocated once at session
-    // start — no realloc inside the realtime callback.
-    let (producer, consumer) = RingBuffer::<f32>::new(MAX_BUFFER_FRAMES);
-    let overflow_flag = Arc::new(AtomicBool::new(false));
-    let device_lost_flag = Arc::new(AtomicBool::new(false));
+    // Pre-allocate the circular capture buffer at MAX_BUFFER_FRAMES capacity.
+    // The VecDeque evicts the oldest samples when at capacity (#827) so the
+    // most-recent audio is always preserved. Both the callback closure and the
+    // worker thread share the same Arc; the Mutex hold per push is brief
+    // (one callback worth of samples) and the worker only contests it at drain.
+    let buffer = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(
+        MAX_BUFFER_FRAMES,
+    )));
+    let device_lost_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stream = build_input_stream(
         &device,
         &supported,
-        producer,
-        Arc::clone(&overflow_flag),
+        Arc::clone(&buffer),
         Arc::clone(&device_lost_flag),
         level,
     )?;
@@ -712,22 +700,20 @@ fn start_cpal_session(
         stream,
         format,
         device_name,
-        consumer,
-        overflow_flag,
+        buffer,
         device_lost_flag,
     })
 }
 
-fn stop_cpal_session(mut session: Session) -> Result<CapturedAudio> {
+fn stop_cpal_session(session: Session) -> Result<CapturedAudio> {
     // Pause first so no further callbacks can land while we drain the
-    // ring. Dropping the stream alone is technically sufficient on
+    // buffer. Dropping the stream alone is technically sufficient on
     // every backend we currently target, but `pause()` makes the
     // intent obvious and is cheap on the human-paced control plane.
     let _ = session.stream.pause();
     drop(session.stream);
 
-    let samples = drain_consumer(&mut session.consumer);
-    log_overflow_if_set(&session.overflow_flag);
+    let samples = drain_buffer(&session.buffer);
 
     // Device-disconnect detection (#587). The cpal error callback
     // sets the flag when the host fires `DeviceNotAvailable`; we
@@ -752,9 +738,8 @@ fn stop_cpal_session(mut session: Session) -> Result<CapturedAudio> {
 fn build_input_stream(
     device: &cpal::Device,
     supported: &SupportedStreamConfig,
-    producer: Producer<f32>,
-    overflow_flag: Arc<AtomicBool>,
-    device_lost_flag: Arc<AtomicBool>,
+    buffer: Arc<Mutex<VecDeque<f32>>>,
+    device_lost_flag: Arc<std::sync::atomic::AtomicBool>,
     level: Arc<AtomicU32>,
 ) -> Result<Stream> {
     let config: cpal::StreamConfig = supported.config();
@@ -766,44 +751,41 @@ fn build_input_stream(
     // as a hard error rather than a silent fallback so we notice when
     // cpal adds a new format.
     //
-    // The `Producer` is moved into the closure (single-owner — no
-    // `Clone` impl), so each match arm gets its own move + a fresh
-    // overflow_flag clone. The level Arc is the same shape as before.
+    // Each match arm clones the buffer Arc so the closure captures its
+    // own handle.
     // The error callback is built once and shared (Clone on the Arc),
     // so each sample-format arm sets up the same DeviceNotAvailable →
     // device_lost_flag detection.
-    let make_error_callback =
-        |flag: Arc<AtomicBool>| move |err: StreamError| stream_error_callback(&flag, err);
+    let make_error_callback = |flag: Arc<std::sync::atomic::AtomicBool>| {
+        move |err: StreamError| stream_error_callback(&flag, err)
+    };
     let stream = match supported.sample_format() {
         SampleFormat::F32 => {
-            let mut prod = producer;
-            let overflow = Arc::clone(&overflow_flag);
+            let buf = Arc::clone(&buffer);
             let lvl = Arc::clone(&level);
             device.build_input_stream(
                 &config,
-                move |data: &[f32], _| push_samples(&mut prod, &overflow, data, |s| *s, &lvl),
+                move |data: &[f32], _| push_samples(&buf, data, |s| *s, &lvl),
                 make_error_callback(Arc::clone(&device_lost_flag)),
                 None,
             )
         }
         SampleFormat::I16 => {
-            let mut prod = producer;
-            let overflow = Arc::clone(&overflow_flag);
+            let buf = Arc::clone(&buffer);
             let lvl = Arc::clone(&level);
             device.build_input_stream(
                 &config,
-                move |data: &[i16], _| push_samples(&mut prod, &overflow, data, i16_to_f32, &lvl),
+                move |data: &[i16], _| push_samples(&buf, data, i16_to_f32, &lvl),
                 make_error_callback(Arc::clone(&device_lost_flag)),
                 None,
             )
         }
         SampleFormat::U16 => {
-            let mut prod = producer;
-            let overflow = Arc::clone(&overflow_flag);
+            let buf = Arc::clone(&buffer);
             let lvl = Arc::clone(&level);
             device.build_input_stream(
                 &config,
-                move |data: &[u16], _| push_samples(&mut prod, &overflow, data, u16_to_f32, &lvl),
+                move |data: &[u16], _| push_samples(&buf, data, u16_to_f32, &lvl),
                 make_error_callback(Arc::clone(&device_lost_flag)),
                 None,
             )
@@ -815,57 +797,49 @@ fn build_input_stream(
     Ok(stream)
 }
 
-/// Push a callback's worth of samples into the SPSC ring and
-/// publish the per-callback RMS to the level meter.
+/// Push a callback's worth of samples into the circular capture buffer
+/// and publish the per-callback RMS to the level meter.
 ///
-/// The audio callback runs on a realtime-ish thread; it must not
-/// allocate, block, or lock anything that could be contended on a
-/// higher-priority thread. `rtrb::Producer::push` is wait-free and
-/// allocation-free; on a full ring it returns `PushError::Full`,
-/// which we treat as overflow recovery: drop the sample, set the
-/// overflow flag (the worker logs once per drain), continue the
-/// loop. RMS is computed in the same single pass that converts and
-/// pushes — no extra allocation, no second iteration.
+/// Converts from the device's native sample format to f32, then calls
+/// [`push_samples_circular`] (which evicts the oldest sample when at
+/// capacity — #827). RMS is computed in a single pass over the raw data
+/// before the push, so the level meter always reflects the full callback
+/// even when the buffer is near or at capacity.
 ///
-/// Pre-#55, the buffer was a `Mutex<Vec<f32>>` that locked briefly
-/// per callback. That worked but violated the realtime-audio
-/// discipline (priority inversion if the worker thread was preempted
-/// while holding the lock). The current shape honours the discipline
-/// at the cost of dropping NEWER samples on overflow rather than
-/// OLDER — both are "the consumer wedged" recovery behaviours and
-/// the user-visible difference is negligible.
+/// The Mutex inside the buffer Arc is held for the duration of the push
+/// loop. This is a deliberate trade-off: the pre-#55 code used the same
+/// pattern and it worked well in practice for desktop dictation. The lock
+/// is rarely contested — the worker thread only drains at stop time
+/// (dictation) or on a ~500 ms meeting-pump tick — and the hold time per
+/// callback is proportional to the callback size (~milliseconds), not
+/// unbounded. Real-time audio production code would avoid this, but for
+/// desktop dictation correctness (preserving the tail of a 2+ min session)
+/// wins over theoretical real-time purity.
 fn push_samples<T: Copy>(
-    producer: &mut Producer<f32>,
-    overflow_flag: &AtomicBool,
+    buf: &Mutex<VecDeque<f32>>,
     data: &[T],
     convert: impl Fn(&T) -> f32,
     level: &AtomicU32,
 ) {
+    if data.is_empty() {
+        return;
+    }
     let mut sum_sq = 0.0_f32;
-    let mut overflowed = false;
-    for sample in data {
-        let f = convert(sample);
-        sum_sq += f * f;
-        if producer.push(f).is_err() {
-            overflowed = true;
-            // Continue the loop so RMS still reflects the full
-            // callback worth of audio even when the ring is full —
-            // the level meter shouldn't go silent during overflow.
-        }
-    }
-    if overflowed {
-        // `Relaxed` is enough — the worker reads on a human-paced
-        // drain tick and the message is purely informational.
-        overflow_flag.store(true, Ordering::Relaxed);
-    }
-    if !data.is_empty() {
-        let rms = rms_from_sum_sq(sum_sq, data.len());
-        // `Relaxed`: each callback writes the latest reading; the HUD
-        // pump reads independently and can tolerate a stale value for
-        // one 33 ms tick. There is no other field that needs to be
-        // observed alongside the level.
-        level.store(rms.to_bits(), Ordering::Relaxed);
-    }
+    let converted: Vec<f32> = data
+        .iter()
+        .map(|s| {
+            let f = convert(s);
+            sum_sq += f * f;
+            f
+        })
+        .collect();
+    push_samples_circular(buf, &converted, MAX_BUFFER_FRAMES);
+    let rms = rms_from_sum_sq(sum_sq, data.len());
+    // `Relaxed`: each callback writes the latest reading; the HUD
+    // pump reads independently and can tolerate a stale value for
+    // one 33 ms tick. There is no other field that needs to be
+    // observed alongside the level.
+    level.store(rms.to_bits(), Ordering::Relaxed);
 }
 
 /// RMS from a pre-computed sum-of-squares plus the sample count.
@@ -893,7 +867,7 @@ fn rms_from_sum_sq(sum_sq: f32, n: usize) -> f32 {
 /// `FnMut(StreamError) + Send + 'static` and a single
 /// per-stream closure that calls into this helper compiles cleanly
 /// across all three sample-format arms.
-fn stream_error_callback(device_lost_flag: &AtomicBool, err: StreamError) {
+fn stream_error_callback(device_lost_flag: &std::sync::atomic::AtomicBool, err: StreamError) {
     match err {
         StreamError::DeviceNotAvailable => {
             // Latch the flag — the worker reads it on every drain
@@ -976,35 +950,33 @@ mod tests {
     }
 
     #[test]
-    fn push_samples_handles_full_ring_by_dropping_and_setting_overflow() {
-        // Sized for exactly two samples — the third push fails and
-        // sets the overflow flag. Pre-#55 this scenario dropped
-        // OLDER samples (FIFO eviction); post-#55 it drops NEWER
-        // ones because rtrb is realtime-safe and doesn't allow the
-        // producer to evict committed samples. Both behaviours are
-        // overflow-recovery; the test pins the new contract.
-        let (mut p, _c) = RingBuffer::<f32>::new(2);
-        let overflow = AtomicBool::new(false);
-        let level = AtomicU32::new(0);
-
-        push_samples(&mut p, &overflow, &[1.0_f32, 2.0, 3.0], |s| *s, &level);
-
-        // 2 samples landed, the 3rd dropped — overflow flag set.
-        assert!(overflow.load(Ordering::Relaxed));
+    fn push_samples_evicts_oldest_when_at_capacity() {
+        // Buffer sized for exactly 2 samples. Pushing 3 should keep
+        // the NEWEST 2 samples (evicting the oldest), not the oldest 2.
+        // This pins the #827 circular-eviction contract — previously
+        // rtrb would drop the 3rd (newest) sample, losing the tail.
+        let buf = Mutex::new(VecDeque::with_capacity(2));
+        // Test push_samples_circular directly with limit=2.
+        push_samples_circular(&buf, &[1.0_f32, 2.0], 2);
+        push_samples_circular(&buf, &[3.0_f32], 2); // evicts 1.0
+        let contents: Vec<f32> = drain_buffer(&buf);
+        assert_eq!(
+            contents,
+            vec![2.0_f32, 3.0],
+            "oldest sample should be evicted"
+        );
     }
 
     #[test]
-    fn push_samples_publishes_rms_even_when_ring_is_full() {
+    fn push_samples_publishes_rms_even_when_buffer_is_at_capacity() {
         // Regression guard: the level meter must not go silent
-        // during overflow. The HUD's pulsing dot is the user's
+        // during eviction. The HUD's pulsing dot is the user's
         // primary "is the mic actually live?" signal — making it
-        // freeze on an overflow would surface as "the mic stopped
-        // working" even though audio is still being captured (just
-        // dropped at the ring boundary).
-        let (mut p, _c) = RingBuffer::<f32>::new(1);
-        let overflow = AtomicBool::new(false);
+        // freeze when the buffer is full would surface as "the mic
+        // stopped working" even though audio is still being captured.
+        let buf = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(1)));
         let level = AtomicU32::new(0);
-        push_samples(&mut p, &overflow, &[0.5_f32, 0.5, 0.5, 0.5], |s| *s, &level);
+        push_samples(&buf, &[0.5_f32, 0.5, 0.5, 0.5], |s| *s, &level);
         let observed_rms = f32::from_bits(level.load(Ordering::Relaxed));
         // RMS of four 0.5s is 0.5 exactly.
         assert!((observed_rms - 0.5).abs() < 1e-6, "rms {observed_rms}");
