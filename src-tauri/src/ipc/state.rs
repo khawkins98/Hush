@@ -492,6 +492,23 @@ fn build_diarizer_inner(_models_dir: &Path) -> Arc<dyn crate::diarization::Diari
     Arc::new(crate::diarization::NoopDiarizer)
 }
 impl AppState {
+    /// Helper used by `build_default` to read a settings key at startup.
+    /// Returns `None` on a DB error and logs a warning so the failure is
+    /// visible in logs without aborting startup (#842).
+    async fn startup_setting(
+        settings: &dyn crate::settings::SettingsRepository,
+        key: &'static str,
+    ) -> Option<String> {
+        settings.get(key).await.unwrap_or_else(|e| {
+            tracing::warn!(
+                key,
+                error = %e,
+                "startup: settings read failed; using default"
+            );
+            None
+        })
+    }
+
     /// Build the state used in production: the cpal audio backend, the
     /// SQLite-backed history repository at `db_path`, plus (when the
     /// `whisper` feature is enabled and `HUSH_MODEL_PATH` points at a
@@ -570,11 +587,8 @@ impl AppState {
         // `build_transcriber` so the loaded model points at this
         // exact Arc, not a fresh one.
         let inference_threads_initial = parse_inference_threads_setting(
-            settings
-                .get(crate::settings::keys::INFERENCE_THREADS)
-                .await
-                .ok()
-                .flatten(),
+            Self::startup_setting(settings.as_ref(), crate::settings::keys::INFERENCE_THREADS)
+                .await,
         );
         let inference_threads_arc =
             Arc::new(std::sync::atomic::AtomicI32::new(inference_threads_initial));
@@ -583,11 +597,7 @@ impl AppState {
         // built before `build_transcriber` so the loaded models and the
         // meeting pump all point at this exact Arc. Default 0.0 dB (unity).
         let mic_gain_db_initial = parse_mic_gain_db_setting(
-            settings
-                .get(crate::settings::keys::MIC_GAIN_DB)
-                .await
-                .ok()
-                .flatten(),
+            Self::startup_setting(settings.as_ref(), crate::settings::keys::MIC_GAIN_DB).await,
         );
         let mic_gain_db_arc = Arc::new(std::sync::atomic::AtomicU32::new(
             mic_gain_db_initial.to_bits(),
@@ -660,11 +670,11 @@ impl AppState {
         // a user who hasn't downloaded the model yet still gets
         // a working app (just with source-only labels).
         let diarization_enabled_initial = parse_diarization_enabled_setting(
-            settings
-                .get(crate::settings::keys::DIARIZATION_ENABLED)
-                .await
-                .ok()
-                .flatten(),
+            Self::startup_setting(
+                settings.as_ref(),
+                crate::settings::keys::DIARIZATION_ENABLED,
+            )
+            .await,
         );
         let diarization_enabled_arc = Arc::new(std::sync::atomic::AtomicBool::new(
             diarization_enabled_initial,
@@ -710,7 +720,11 @@ impl AppState {
                 tracing::warn!(error = %e, raw = %raw, "stored PTT combo failed to parse; using default");
                 crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY)
             }),
-            _ => crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
+            Ok(None) => crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
+            Err(e) => {
+                tracing::warn!(error = %e, "startup: PTT_COMBO read failed; using default");
+                crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY)
+            }
         };
 
         // Persisted PTT-enabled flag. Env vars take precedence so
@@ -731,7 +745,11 @@ impl AppState {
         //     longer applies.
         let ptt_active = match settings.get(crate::settings::keys::PTT_ENABLED).await {
             Ok(Some(raw)) => raw == "true",
-            _ => true,
+            Ok(None) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "startup: PTT_ENABLED read failed; defaulting to enabled");
+                true
+            }
         };
 
         // HUD on by default. Absent / unparseable settings rows fall
@@ -739,38 +757,31 @@ impl AppState {
         // HUD off — first-time users benefit from the visual cue
         // that the mic is hot.
         let hud_enabled = parse_hud_enabled_setting(
-            settings
-                .get(crate::settings::keys::HUD_ENABLED)
-                .await
-                .ok()
-                .flatten(),
+            Self::startup_setting(settings.as_ref(), crate::settings::keys::HUD_ENABLED).await,
         );
 
         // Audio cues — off by default (#292). Reads the same
         // settings table the IPC commands write through.
         let sound_cues_enabled = parse_sound_cues_setting(
-            settings
-                .get(crate::settings::keys::SOUND_CUES_ENABLED)
-                .await
-                .ok()
-                .flatten(),
+            Self::startup_setting(settings.as_ref(), crate::settings::keys::SOUND_CUES_ENABLED)
+                .await,
         );
 
         // Per-event sub-toggles (#463). Default true — see
         // `parse_sound_cue_sub_setting` for the reasoning.
         let sound_cue_start_enabled = parse_sound_cue_sub_setting(
-            settings
-                .get(crate::settings::keys::SOUND_CUE_START_ENABLED)
-                .await
-                .ok()
-                .flatten(),
+            Self::startup_setting(
+                settings.as_ref(),
+                crate::settings::keys::SOUND_CUE_START_ENABLED,
+            )
+            .await,
         );
         let sound_cue_complete_enabled = parse_sound_cue_sub_setting(
-            settings
-                .get(crate::settings::keys::SOUND_CUE_COMPLETE_ENABLED)
-                .await
-                .ok()
-                .flatten(),
+            Self::startup_setting(
+                settings.as_ref(),
+                crate::settings::keys::SOUND_CUE_COMPLETE_ENABLED,
+            )
+            .await,
         );
 
         // Meeting auto-start mode. Off by default; absent or
@@ -778,12 +789,12 @@ impl AppState {
         // a corrupted row should not silently make the mic
         // spontaneously turn on).
         let meeting_autostart_mode = crate::meeting::MeetingAutostartMode::from_setting(
-            settings
-                .get(crate::settings::keys::MEETING_AUTOSTART_MODE)
-                .await
-                .ok()
-                .flatten()
-                .as_deref(),
+            Self::startup_setting(
+                settings.as_ref(),
+                crate::settings::keys::MEETING_AUTOSTART_MODE,
+            )
+            .await
+            .as_deref(),
         );
 
         // Final phase covers everything between the diarizer init and

@@ -514,6 +514,18 @@ impl Drop for SlidingWindowState {
         // window sits live until Drop.
         use zeroize::Zeroize;
         self.window.zeroize();
+        // `Vec::zeroize()` covers [0..len] only. `drain()` calls in
+        // feed_mono()'s slide-forward path leave old PCM bytes in the
+        // spare capacity (the allocation beyond `len`). Scrub them
+        // too with volatile writes so the optimizer cannot elide the
+        // clear the way it can for plain `ptr::write` (#851).
+        for slot in self.window.spare_capacity_mut() {
+            // SAFETY: `spare_capacity_mut` returns valid, aligned,
+            // writable memory in the Vec's allocation. We do not
+            // advance `len`; the bytes remain logically uninitialised.
+            unsafe { slot.as_mut_ptr().write_volatile(0.0_f32) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         // Drop the last-partial text too — it's not raw audio, but
         // it's the most recent transcript fragment for this
         // session, and a future change adding partial-PII handling
