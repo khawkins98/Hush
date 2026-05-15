@@ -68,6 +68,14 @@ export const Events = {
   /// `meeting.activeId` even when no explicit `stopSession()` call was
   /// made from the UI (#799).
   MeetingSessionEnded: "meeting:session-ended",
+  /// Backend → frontend (main): one or more streaming-session tail flushes
+  /// failed or timed out at meeting stop. The last few seconds of audio from
+  /// that source were lost and won't appear in the transcript. Payload is
+  /// `{ sessionId: number; sourceKind: string }`. The meeting panel shows a
+  /// persistent warning banner so the user knows their transcript may be
+  /// incomplete. Not cleared on session-ended (the notice is *caused* by the
+  /// session ending) — only dismissed manually.
+  MeetingTailDropped: "meeting:tail-dropped",
   /// Backend → frontend (main): a mic source was lost mid-session
   /// and the pump has either fallen back to the system default or
   /// has no fallback. Payload: `{ sessionId, sourceKind, lostDevice,

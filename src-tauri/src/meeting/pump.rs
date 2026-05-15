@@ -52,7 +52,7 @@ use crate::transcription::{StreamingTranscribeSession, Transcribe, Utterance};
 
 use super::events::{
     emit_audio_device_lost, emit_audio_device_restored, emit_meeting_source_failed,
-    emit_utterance_append_failed,
+    emit_meeting_tail_dropped, emit_utterance_append_failed,
 };
 use super::recovery::SourceRecoveryState;
 use super::{MeetingSessionRepository, NewPersistedUtterance};
@@ -927,6 +927,7 @@ async fn flush_sessions(
                     timeout_secs = STREAMING_FINISH_TIMEOUT.as_secs(),
                     "meeting pump: streaming finish timed out; tail dropped (blocking task still running)"
                 );
+                emit_meeting_tail_dropped(ctx.event_emitter.as_ref(), session_id, &source_label);
                 continue;
             }
             Ok(Err(join_err)) => {
@@ -935,6 +936,7 @@ async fn flush_sessions(
                     session_id,
                     "meeting pump: streaming finish task panicked"
                 );
+                emit_meeting_tail_dropped(ctx.event_emitter.as_ref(), session_id, &source_label);
                 continue;
             }
             Ok(Ok(Err(e))) => {
@@ -944,6 +946,7 @@ async fn flush_sessions(
                     source_kind = source_label,
                     "meeting pump: streaming finish failed; tail dropped"
                 );
+                emit_meeting_tail_dropped(ctx.event_emitter.as_ref(), session_id, &source_label);
                 continue;
             }
             Ok(Ok(Ok(u))) => u,
