@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-15
+
+v0.8.0 ships two headline features: persistent speaker identity across meeting sessions, and a redesigned settings navigation. Speaker identity lets Hush learn who is speaking — assign real names to speaker labels, and those names carry over to every future session. On the UX side, the settings panel has moved from an embedded two-column layout into a smooth accordion that folds out beneath the gear icon in the main sidebar, keeping the interface compact and focused. A Svelte 5 reactivity warning introduced with the history name-label feature is also cleaned up in this release.
+
+### Added
+
+- **Meetings: persistent cross-session speaker identity (#667).** Hush now learns who is speaking across sessions. Enable the feature in Settings → Meeting; speaker labels in the live transcript and history are linked to a persistent identity store so names assigned in one session carry over to the next. The feature uses a 1-NN cosine-distance matcher (threshold 0.4) against stored embeddings — the same diarization engine already powering the live speaker labels.
+- **History: speaker name-assignment affordance (#667).** Any speaker label in a meeting transcript can be clicked to open a rename field. Saving the name persists it to the identity store and back-fills all earlier uses of that speaker label in the same session.
+
+### Changed
+
+- **Settings navigation: accordion in the main sidebar.** The settings tabs have moved from an inner sidebar column (only visible when Settings was open) to an accordion that expands beneath the gear button in the primary sidebar. Clicking Settings or a sub-tab auto-expands the sidebar for the session without overwriting the user's collapsed-sidebar preference.
+
+### Fixed
+
+- **Svelte 5 `state_referenced_locally` warning in inline name-edit fields.** `nameInputValue` in `HistoryDictationRow` and `HistoryMeetingRow` was initialised directly from a reactive prop, firing a Svelte 5 compiler warning. Switched to `$state("")` + a `$effect` that syncs from the prop only when the field is not actively being edited.
+
 ## [0.7.0] - 2026-05-15
 
 v0.7.0 adds two user-facing features — dictionary preset packs and name labels on history entries — then spends the bulk of its commit count making the meeting and audio pipelines substantially more reliable. The meeting pump gained a proper `Stopping` lifecycle state, graceful fallback when system audio isn't available, vocabulary and text-replacement support, and a raft of async-safety and race-condition fixes accumulated from real-world call recordings. On the audio side, the ring buffer, RMS metering, CoreAudio HAL listener, and diarizer centroid computation all received correctness and performance fixes. The updater and export paths were hardened with in-flight guards, atomic writes, and path validation. Internally, `AppState` was reorganised into domain sub-structs and the frontend state layer was extracted into focused modules — groundwork that makes the codebase easier to navigate as it grows.
