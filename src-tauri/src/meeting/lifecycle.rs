@@ -228,6 +228,12 @@ impl SessionManager {
         let transcriber_snapshot = self.transcribe.lock().ok().and_then(|g| g.clone());
         let mut streaming_sessions: Vec<Option<Box<dyn StreamingTranscribeSession>>> =
             Vec::with_capacity(sources.len());
+        // Collect source-failure events to emit AFTER session-started (#881).
+        // The frontend ignores source-failed events that arrive before
+        // session-started (activeId is null until that event fires), so we
+        // defer them here and drain the vec after emit_meeting_session_started.
+        let mut deferred_source_failures: Vec<(String, String, bool)> =
+            Vec::with_capacity(sources.len());
         if let Some(transcriber) = &transcriber_snapshot {
             // Source ordering matches `handles` and `sources`. The
             // pump's per-tick loop iterates by index into all three.
@@ -270,22 +276,18 @@ impl SessionManager {
                         } else {
                             "audio capture pre-warm failed at session start"
                         };
-                        // Surface the failure to the frontend (#533). A
-                        // pre-warm failure at startup means this source will
-                        // produce 0 utterances for the entire session — not
-                        // a transient blip like the mid-session path. Emit
-                        // so the panel can show a warning banner rather than
-                        // silently logging nothing.
-                        emit_meeting_source_failed(
-                            self.event_emitter.as_ref(),
-                            session.id,
+                        // Surface the failure to the frontend (#533, #881). Deferred
+                        // until after session-started so the frontend's activeId is
+                        // set before the event arrives; it would silently drop
+                        // source-failed events received while activeId is null.
+                        deferred_source_failures.push((
                             // Use speaker_tag() ("mic"/"system") to match the
                             // mid-session pump path and the frontend's "mic"
                             // branch in the MeetingSourceFailed listener (#810).
-                            source.speaker_tag(),
-                            reason,
+                            source.speaker_tag().to_owned(),
+                            reason.to_owned(),
                             device_lost,
-                        );
+                        ));
                         streaming_sessions.push(None);
                         continue;
                     }
@@ -299,15 +301,14 @@ impl SessionManager {
                             "meeting pump: start_stream failed; streaming disabled for this source"
                         );
                         // Same surface-to-frontend pattern as the pre-warm
-                        // failure arm above (#533): a start_stream failure
-                        // means this source will produce 0 utterances.
-                        emit_meeting_source_failed(
-                            self.event_emitter.as_ref(),
-                            session.id,
-                            source.speaker_tag(),
-                            "streaming session creation failed at session start",
+                        // failure arm above (#533, #881): a start_stream failure
+                        // means this source will produce 0 utterances. Deferred
+                        // until after session-started (see comment above).
+                        deferred_source_failures.push((
+                            source.speaker_tag().to_owned(),
+                            "streaming session creation failed at session start".to_owned(),
                             false,
-                        );
+                        ));
                         streaming_sessions.push(None);
                     }
                 }
@@ -390,6 +391,19 @@ impl SessionManager {
         // auto-start path — the frontend listener only needs to call
         // `meeting.refresh()` once regardless of which path fired.
         emit_meeting_session_started(self.event_emitter.as_ref(), session.id);
+
+        // Emit deferred source-failure events now that the frontend has a
+        // non-null activeId — events emitted before session-started are
+        // silently dropped by the listener (#881).
+        for (source_kind, reason, device_lost) in &deferred_source_failures {
+            emit_meeting_source_failed(
+                self.event_emitter.as_ref(),
+                session.id,
+                source_kind,
+                reason,
+                *device_lost,
+            );
+        }
 
         Ok(session)
     }
