@@ -66,7 +66,7 @@ pub struct DiarizeModelStatus {
 #[tauri::command]
 pub fn get_diarizer_model_status(state: State<'_, AppState>) -> IpcResult<DiarizeModelStatus> {
     let model = crate::diarization::catalog::default_diarizer_model();
-    let path = state.models_dir.join(&model.filename);
+    let path = state.models.models_dir.join(&model.filename);
     let downloaded = path
         .metadata()
         .map(|m| m.is_file() && m.len() > 0)
@@ -96,7 +96,7 @@ pub fn get_diarizer_model_status(state: State<'_, AppState>) -> IpcResult<Diariz
 #[tauri::command]
 pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> {
     let model = crate::diarization::catalog::default_diarizer_model();
-    let path = state.models_dir.join(&model.filename);
+    let path = state.models.models_dir.join(&model.filename);
 
     // Best-effort delete: a missing file is fine (idempotent), but
     // any other error (permission, IO failure) surfaces so the
@@ -120,9 +120,9 @@ pub async fn remove_diarizer_model(state: State<'_, AppState>) -> IpcResult<()> 
     // generated future fails to satisfy `Send`.
     {
         let mut slot = state
-            .diarize_slot
+            .inference.diarize_slot
             .write()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
         *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
     }
 
@@ -172,10 +172,10 @@ pub async fn download_diarizer_model(
     download_diarizer_model_inner(
         DiarizerDownloadDeps {
             emitter,
-            downloads: std::sync::Arc::clone(&state.downloads),
+            downloads: std::sync::Arc::clone(&state.models.downloads),
             http: state.http.clone(),
-            diarize_slot: std::sync::Arc::clone(&state.diarize_slot),
-            models_dir: state.models_dir.clone(),
+            diarize_slot: std::sync::Arc::clone(&state.inference.diarize_slot),
+            models_dir: state.models.models_dir.clone(),
         },
         model,
     )
@@ -462,7 +462,7 @@ mod tests {
     /// needing a `tauri::State<'_, AppState>` constructor.
     async fn remove_diarizer_model_test(state: &AppState) -> IpcResult<()> {
         let model = crate::diarization::catalog::default_diarizer_model();
-        let path = state.models_dir.join(&model.filename);
+        let path = state.models.models_dir.join(&model.filename);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -475,9 +475,9 @@ mod tests {
         }
         {
             let mut slot = state
-                .diarize_slot
+                .inference.diarize_slot
                 .write()
-                .unwrap_or_else(|e| e.into_inner());
+                .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
             *slot = std::sync::Arc::new(crate::diarization::NoopDiarizer);
         }
         state

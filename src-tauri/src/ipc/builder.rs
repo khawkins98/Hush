@@ -26,8 +26,8 @@ use crate::transcription::Transcribe;
 
 use super::pipeline::{redirect_decision, RedirectDecision};
 use super::state::{
-    encode_autostart_mode, AppState, DataServices, PttState, RuntimeFlags, TranscribeSlot,
-    UpdateCheckCache,
+    encode_autostart_mode, AppState, DataServices, InferenceState, ModelStore, PttState,
+    RuntimeFlags, TranscribeSlot, UpdateCheckCache,
 };
 
 /// Builder for [`AppState`].
@@ -310,15 +310,24 @@ impl AppStateBuilder {
             audio: self
                 .audio
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: audio not set"))?,
-            transcribe: self
-                .transcribe_arc
-                .unwrap_or_else(|| Arc::new(Mutex::new(self.transcribe))),
-            transcribe_meeting: self
-                .transcribe_meeting_arc
-                .unwrap_or_else(|| Arc::new(Mutex::new(None))),
-            diarize: self
-                .diarize
-                .unwrap_or_else(|| Arc::new(crate::diarization::NoopDiarizer)),
+            inference: InferenceState {
+                transcribe: self
+                    .transcribe_arc
+                    .unwrap_or_else(|| Arc::new(Mutex::new(self.transcribe))),
+                transcribe_meeting: self
+                    .transcribe_meeting_arc
+                    .unwrap_or_else(|| Arc::new(Mutex::new(None))),
+                diarize: self
+                    .diarize
+                    .unwrap_or_else(|| Arc::new(crate::diarization::NoopDiarizer)),
+                transcriber_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                diarize_slot: self.diarize_slot.unwrap_or_else(|| {
+                    Arc::new(std::sync::RwLock::new(
+                        Arc::new(crate::diarization::NoopDiarizer)
+                            as Arc<dyn crate::diarization::Diarize>,
+                    ))
+                }),
+            },
             data: DataServices {
                 history: self
                     .history
@@ -342,9 +351,12 @@ impl AppStateBuilder {
             meeting_manager: self
                 .meeting_manager
                 .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: meeting_manager not set"))?,
-            models_dir: self
-                .models_dir
-                .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: models_dir not set"))?,
+            models: ModelStore {
+                models_dir: self
+                    .models_dir
+                    .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: models_dir not set"))?,
+                downloads: Arc::new(Mutex::new(HashMap::new())),
+            },
             http: reqwest::Client::builder()
                 // Whisper-large-v3 is ~3 GB; ten-minute timeout is on
                 // the optimistic side of "any reasonable home
@@ -390,7 +402,6 @@ impl AppStateBuilder {
                 .map_err(|e| {
                     anyhow::anyhow!("AppStateBuilder: reqwest client build failed: {e}")
                 })?,
-            downloads: Arc::new(Mutex::new(HashMap::new())),
             pending_foreground: Mutex::new(None),
             update_check: UpdateCheckCache {
                 last: Mutex::new(None),
@@ -405,12 +416,6 @@ impl AppStateBuilder {
                 )),
                 listener_spawned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
-            diarize_slot: self.diarize_slot.unwrap_or_else(|| {
-                Arc::new(std::sync::RwLock::new(
-                    Arc::new(crate::diarization::NoopDiarizer)
-                        as Arc<dyn crate::diarization::Diarize>,
-                ))
-            }),
             debug_log: self.debug_log.unwrap_or_default(),
             runtime_flags: RuntimeFlags {
                 hud_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
@@ -446,7 +451,6 @@ impl AppStateBuilder {
             },
             startup_timings: self.startup_timings.unwrap_or_default(),
             hotkey_toggle_error: Mutex::new(None),
-            transcriber_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 }

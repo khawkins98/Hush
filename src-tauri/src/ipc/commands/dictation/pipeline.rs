@@ -49,7 +49,7 @@ pub(super) fn start_dictation_inner(state: &AppState, source: AudioSource) -> Ip
     // Start button visually; this is the structural backstop for the
     // hotkey path that bypasses button gating.
     {
-        let guard = state.transcribe.lock().map_err(poisoned)?;
+        let guard = state.inference.transcribe.lock().map_err(poisoned)?;
         if guard.is_none() {
             return Err(IpcError::TranscriptionUnavailable);
         }
