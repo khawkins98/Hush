@@ -28,6 +28,7 @@
     void Promise.all([
       diarizer.loadDiarizationEnabled(),
       diarizer.loadDiarizerModelStatus(),
+      diarizer.loadSpeakerIdentityEnabled(),
     ]);
 
     // Diarizer download lifecycle listeners (#301). Backend reuses
@@ -250,6 +251,33 @@
   {#if diarizer.diarizationError}
     <p class="settings-error">{diarizer.diarizationError}</p>
   {/if}
+
+  <!--
+    Speaker identity toggle (#667). Only meaningful when diarization
+    is on — we need speaker labels before we can build cross-session
+    profiles. Disabled (not hidden) when diarization is off so the
+    user can see it exists and understand the dependency.
+  -->
+  <label class="toggle-row speaker-identity-toggle-row">
+    <input
+      type="checkbox"
+      data-testid="settings-speaker-identity-toggle"
+      disabled={diarizer.speakerIdentityBusy || !diarizer.diarizationEnabled}
+      checked={diarizer.speakerIdentityEnabled}
+      onchange={diarizer.onSpeakerIdentityToggle}
+    />
+    <span class="toggle-label">
+      <span class="toggle-name">Remember speakers across meetings</span>
+      <span class="toggle-desc">
+        Stores voice fingerprints locally to recognise recurring speakers
+        across sessions. You can name them and delete the data anytime.
+        Requires speaker labelling to be on.
+      </span>
+    </span>
+  </label>
+  {#if diarizer.speakerIdentityError}
+    <p class="settings-error">{diarizer.speakerIdentityError}</p>
+  {/if}
 </section>
 
 <style>
@@ -390,6 +418,21 @@
     gap: 0.5rem;
   }
 
+  /* Speaker identity toggle — visually subordinate to the diarization
+     toggle above it: slight left indent + smaller description text to
+     read as "depends on the toggle above". Dimmed when diarization is
+     off (the disabled state already applies via :has, but adding the
+     indent makes the hierarchy legible at a glance). */
+  .speaker-identity-toggle-row {
+    margin-left: 1.25rem;
+    border-left: 2px solid var(--border-subtle, #e1e1e6);
+    padding-left: 0.75rem;
+    margin-top: 0.1rem;
+  }
+  .speaker-identity-toggle-row .toggle-desc {
+    font-size: 0.8rem;
+  }
+
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) .diarizer-model-status {
       background-color: #2a2a2d;
@@ -404,6 +447,9 @@
     :root:not([data-theme="light"]) .path-code {
       background-color: rgba(255, 255, 255, 0.08);
     }
+    :root:not([data-theme="light"]) .speaker-identity-toggle-row {
+      border-left-color: #38383b;
+    }
   }
   :root[data-theme="dark"] .diarizer-model-status {
     background-color: #2a2a2d;
@@ -417,5 +463,8 @@
   }
   :root[data-theme="dark"] .path-code {
     background-color: rgba(255, 255, 255, 0.08);
+  }
+  :root[data-theme="dark"] .speaker-identity-toggle-row {
+    border-left-color: #38383b;
   }
 </style>

@@ -1,6 +1,7 @@
 /// Diarizer settings state module (#710). Owns the diarization toggle,
-/// wespeaker model lifecycle state, and the SettingsPanel auto-bundle
-/// helper. Event listeners stay in DiarizerModelSection.svelte.
+/// wespeaker model lifecycle state, the speaker-identity toggle (#667),
+/// and the SettingsPanel auto-bundle helper. Event listeners stay in
+/// DiarizerModelSection.svelte.
 import { invoke } from "@tauri-apps/api/core";
 
 import { formatErrorMessage } from "$lib/errors";
@@ -20,6 +21,11 @@ let diarizerDownloadError = $state<string | null>(null);
 let diarizerRemoveConfirming = $state(false);
 let diarizerRemoveBusy = $state(false);
 let diarizerRemoveError = $state<string | null>(null);
+
+// Speaker identity (#667).
+let speakerIdentityEnabled = $state(false);
+let speakerIdentityBusy = $state(false);
+let speakerIdentityError = $state<string | null>(null);
 
 export const diarizer = {
   get diarizationEnabled() {
@@ -63,6 +69,43 @@ export const diarizer = {
   },
   get diarizerRemoveError() {
     return diarizerRemoveError;
+  },
+
+  // Speaker identity (#667).
+  get speakerIdentityEnabled() {
+    return speakerIdentityEnabled;
+  },
+  get speakerIdentityBusy() {
+    return speakerIdentityBusy;
+  },
+  get speakerIdentityError() {
+    return speakerIdentityError;
+  },
+
+  async loadSpeakerIdentityEnabled(): Promise<void> {
+    try {
+      speakerIdentityEnabled = await invoke<boolean>(
+        "get_speaker_identity_enabled",
+      );
+    } catch (e) {
+      speakerIdentityError = "Couldn't read speaker identity setting.";
+      console.warn("[hush] get_speaker_identity_enabled failed", e);
+    }
+  },
+
+  async onSpeakerIdentityToggle(e: Event): Promise<void> {
+    const checked = (e.target as HTMLInputElement).checked;
+    speakerIdentityBusy = true;
+    speakerIdentityError = null;
+    try {
+      await invoke("set_speaker_identity_enabled", { enabled: checked });
+      speakerIdentityEnabled = checked;
+    } catch (err) {
+      speakerIdentityError = formatErrorMessage(err);
+      await diarizer.loadSpeakerIdentityEnabled();
+    } finally {
+      speakerIdentityBusy = false;
+    }
   },
 
   async loadDiarizationEnabled(): Promise<void> {
