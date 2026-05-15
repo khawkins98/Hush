@@ -282,6 +282,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         // doesn't currently expose. Escapes embedded double quotes
         // by doubling them, same as SQLite's identifier quoting.
         let phrase = format!("\"{}\"", query.replace('"', "\"\""));
+        let like_pat = format!("%{}%", query);
 
         sqlx::query_as::<_, MeetingSession>(
             "SELECT s.id, s.app_name, s.app_kind, s.started_at, s.ended_at, \
@@ -292,10 +293,11 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
                 FROM utterances u \
                 INNER JOIN utterances_fts fts ON fts.rowid = u.id \
                 WHERE utterances_fts MATCH ? \
-             ) \
+             ) OR s.name LIKE ? \
              ORDER BY s.started_at DESC, s.id DESC",
         )
         .bind(phrase)
+        .bind(like_pat)
         .fetch_all(self.db.pool())
         .await
         .context("search meeting sessions")
