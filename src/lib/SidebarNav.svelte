@@ -250,16 +250,18 @@
 <style>
   .sidebar-nav {
     flex-shrink: 0;
-    background: var(--bg-sidebar);
-    border-right: 1px solid var(--bg-sidebar-border);
+    /* Fade right edge from sidebar navy into main orange — removes
+       the hard dog-leg where the two surfaces meet. */
+    background: linear-gradient(
+      to right,
+      var(--bg-sidebar) 75%,
+      var(--bg-app) 100%
+    );
+    border-right: none;
     padding: 0.6rem 0;
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-    /* Animate width changes so the open/collapsed transition
-       reads as a smooth state flip rather than a jarring jump.
-       Reduced-motion users get the instant transition via the
-       media query at the bottom. */
     transition: width 160ms ease;
   }
   .sidebar-nav.open {
