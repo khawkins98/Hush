@@ -295,11 +295,10 @@ export const meeting = {
       );
       const label =
         e.payload.sourceKind === "mic" ? "Microphone" : "System audio";
-      // Mirrors the multi-source detection in startSession().
-      const wasMultiSource =
-        audio.meetingMicId !== null &&
-        audio.meetingIncludeSystemAudio &&
-        audio.findSystemAudio()?.isSupported === true;
+      // Derive multi-source from the session's persisted sources rather
+      // than current picker state, which may have changed since session start.
+      const activeSources = meeting.activeDetail?.session.sources ?? [];
+      const wasMultiSource = activeSources.length > 1;
       const otherSourceLabel =
         e.payload.sourceKind === "mic" ? "system audio" : "microphone";
 

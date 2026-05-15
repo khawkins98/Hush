@@ -96,10 +96,10 @@ export const models = {
   async cancelDownload(card: ModelCard): Promise<void> {
     try {
       await invoke("model_cancel_download", { id: card.id });
+      modelFetchState.downloading.delete(card.id);
     } catch (e) {
       console.warn("[hush] cancel download failed", e);
     }
-    modelFetchState.downloading.delete(card.id);
   },
 
   async removeModel(card: ModelCard): Promise<void> {
