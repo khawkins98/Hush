@@ -390,6 +390,7 @@ impl AppStateBuilder {
             downloads: Arc::new(Mutex::new(HashMap::new())),
             pending_foreground: Mutex::new(None),
             last_update_check: Mutex::new(None),
+            update_check_inflight: Arc::new(tokio::sync::Mutex::new(())),
             ptt_combo: Arc::new(std::sync::RwLock::new(self.ptt_combo.unwrap_or_else(
                 || crate::hotkey::ptt::PttCombo::single(crate::hotkey::ptt::DEFAULT_PTT_KEY),
             ))),
