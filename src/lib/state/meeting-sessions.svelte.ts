@@ -217,6 +217,8 @@ export const meeting = {
     meetingCopyNotice = notice;
   },
   async startSession() {
+    // Guard against same-tick double-calls from hotkey, palette, or UI button.
+    if (meetingBusy || meetingActiveId !== null) return;
     meetingBusy = true;
     try {
       const sources: AudioSource[] = [];
@@ -243,6 +245,8 @@ export const meeting = {
     }
   },
   async stopSession() {
+    // Guard against same-tick double-calls from hotkey, palette, or UI button.
+    if (meetingBusy || meetingActiveId === null) return;
     meetingBusy = true;
     try {
       await invoke("meeting_stop_manual");
