@@ -127,6 +127,13 @@
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }
 
+  // Transcript expand state — long entries are clamped to 3 lines by default.
+  let transcriptExpanded = $state(false);
+  let isLong = $derived(
+    !entry.ignored &&
+    (entry.transcript.length > 300 || entry.transcript.split(/\r?\n/).length > 4),
+  );
+
   // Inline name editing.
   let editingName = $state(false);
   let nameInputValue = $state("");
@@ -172,25 +179,41 @@
           />
         {:else}
           <button
-            class="name-badge"
-            class:name-badge--set={entry.name !== null}
+            class="card-title"
+            class:card-title--set={entry.name !== null}
             onclick={startNameEdit}
             title={entry.name ? "Edit label" : "Add a label"}
             aria-label={entry.name ? `Label: ${entry.name} — click to edit` : "Add a label"}
           >{entry.name ?? "Add label…"}</button>
         {/if}
       {/if}
+      <div class="row-meta">
+        <span class="meta-item">
+          <!-- calendar icon -->
+          <svg class="meta-icon" aria-hidden="true" focusable="false" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          {formatTimestamp(entry.createdAt)}
+        </span>
+        {#if formatDuration(entry.durationMs)}
+          <span class="meta-item">
+            <!-- clock icon -->
+            <svg class="meta-icon" aria-hidden="true" focusable="false" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            {formatDuration(entry.durationMs)}
+          </span>
+        {/if}
+        {#if entry.model}
+          <span class="meta-chip">{displayModelName(entry.model)}</span>
+        {/if}
+      </div>
       {#if isIgnored}
         <p class="history-text ignored-note">Recording too short — not transcribed</p>
       {:else}
-        <p class="history-text">{entry.transcript}</p>
+        <p class="history-text" class:clamped={!transcriptExpanded && isLong}>{entry.transcript}</p>
+        {#if isLong}
+          <button class="show-more-btn" onclick={() => (transcriptExpanded = !transcriptExpanded)}>
+            {transcriptExpanded ? "Show less" : "Show more"}
+          </button>
+        {/if}
       {/if}
-      <p class="history-meta">
-        {formatTimestamp(entry.createdAt)}
-        {#if formatDuration(entry.durationMs)}· {formatDuration(entry.durationMs)}{/if}
-        {#if entry.appName}· {entry.appName}{/if}
-        {#if entry.model}· {displayModelName(entry.model)}{/if}
-      </p>
     </div>
     <HistoryActionRow
       onCopy={!isIgnored ? () => onCopy(entry) : undefined}
@@ -230,26 +253,7 @@
     min-width: 0;
   }
 
-  .history-text {
-    margin: 0 0 0.25rem;
-    font-size: 0.95rem;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .ignored-note {
-    color: var(--text-muted);
-    font-style: italic;
-  }
-
-  .history-meta {
-    margin: 0;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-  }
-
-  .name-badge {
+  .card-title {
     display: inline-block;
     margin: 0 0 0.3rem;
     padding: 0.1rem 0.45rem;
@@ -261,17 +265,91 @@
     color: var(--text-muted);
     cursor: pointer;
     line-height: 1.6;
+    font-family: inherit;
   }
-  .name-badge--set {
+  .card-title--set {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
     border-style: solid;
     border-color: var(--accent, #5a7fff);
-    color: var(--text-primary);
     background-color: color-mix(in srgb, var(--accent, #5a7fff) 12%, transparent);
   }
-  .name-badge:hover {
+  .card-title:hover {
     border-color: var(--accent, #5a7fff);
     color: var(--text-primary);
   }
+
+  .row-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.25rem 0 0.4rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  .meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .meta-icon {
+    flex-shrink: 0;
+    opacity: 0.7;
+  }
+
+  .meta-chip {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background-color: var(--bg-app);
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .history-text {
+    margin: 0 0 0.25rem;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .history-text.clamped {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .show-more-btn {
+    display: inline;
+    margin: 0 0 0.25rem;
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: 0.8rem;
+    color: var(--accent, #5a7fff);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .show-more-btn:hover {
+    text-decoration: underline;
+  }
+
+  .ignored-note {
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
   .name-input {
     display: block;
     width: 100%;
@@ -285,9 +363,4 @@
     outline: none;
     box-sizing: border-box;
   }
-
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .history-meta { color: #9a9aa0; }
-  }
-  :root[data-theme="dark"] .history-meta { color: #9a9aa0; }
 </style>
