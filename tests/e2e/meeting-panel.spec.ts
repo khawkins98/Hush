@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSection, installMocks } from "./_mock";
+import { fireEvent, gotoSection, installMocks } from "./_mock";
 
 // Meeting row e2e specs — unified History feed (#357 phase 2).
 //
@@ -364,5 +364,402 @@ test.describe("meeting rows in unified History feed", () => {
 
     await expect(page.locator('[data-kind="dictation"]')).toHaveCount(0);
     await expect(page.locator('[data-kind="meeting"]')).toBeVisible();
+  });
+});
+
+// Active-session flow (#782): start → active → live transcript → stop.
+//
+// These specs exercise the dictation panel (not the history feed). They
+// verify that clicking the record button in meeting mode starts a
+// session, the stop button appears, and the live-transcript pane shows
+// partial text. They also verify the source-failed and session-ended
+// event paths.
+//
+// System audio must be marked `isSupported: true` so `willRecordMeeting`
+// is true and the record button shows in meeting mode. The `__hush_active_id`
+// window variable is used to control what `meeting_active_session` returns
+// before vs. after the session starts — `meeting_start_manual` sets it
+// as a side effect so the subsequent `meeting.refresh()` sees the new id.
+test.describe("active meeting session flow", () => {
+  test("clicking record button in meeting mode starts an active session", async ({
+    page,
+  }) => {
+    // Seed the window variable the mocks read — must exist before the
+    // init script runs, so use addInitScript rather than page.evaluate.
+    await page.addInitScript(() => {
+      (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+        null;
+    });
+
+    await installMocks(page, {
+      // Enable system audio so `willRecordMeeting` is true.
+      audio_list_sources: () => [
+        {
+          kind: "microphone",
+          id: "Built-in Microphone",
+          name: "Built-in Microphone",
+          isDefault: true,
+          isSupported: true,
+        },
+        {
+          kind: "system-audio",
+          id: "system",
+          name: "System audio",
+          isDefault: false,
+          isSupported: true,
+        },
+      ],
+      // meeting_start_manual sets the shared window variable as a side
+      // effect so the next meeting_active_session call (in refresh())
+      // returns the active id rather than null.
+      meeting_start_manual: () => {
+        (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+          1;
+        return {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        };
+      },
+      meeting_active_session: () => ({
+        active: (window as unknown as { __hush_active_id: number | null })
+          .__hush_active_id,
+      }),
+      // refreshActiveDetail calls meeting_session_get once activeId is set.
+      meeting_session_get: () => ({
+        session: {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        },
+        utterances: [],
+        currentPartials: [],
+      }),
+    });
+
+    await page.goto("/");
+    await gotoSection(page, "dictation");
+
+    // Before clicking: start button in meeting mode.
+    const startBtn = page.locator(
+      '[data-testid="record-start-btn"][data-record-mode="meeting"]',
+    );
+    await expect(startBtn).toBeVisible();
+
+    await startBtn.click();
+
+    // After start: stop button replaces the start button.
+    // Note: button-click path sets `recording=true` (dictation phase),
+    // not `meetingOnlyActive=true`, so the aria-label is "Stop recording and transcribe".
+    const stopBtn = page.locator("button.record-btn.recording");
+    await expect(stopBtn).toBeVisible();
+    // Start button is gone.
+    await expect(
+      page.locator('[data-testid="record-start-btn"]'),
+    ).toHaveCount(0);
+  });
+
+  test("active meeting session shows live transcript with partial text", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+        null;
+    });
+
+    await installMocks(page, {
+      audio_list_sources: () => [
+        {
+          kind: "microphone",
+          id: "Built-in Microphone",
+          name: "Built-in Microphone",
+          isDefault: true,
+          isSupported: true,
+        },
+        {
+          kind: "system-audio",
+          id: "system",
+          name: "System audio",
+          isDefault: false,
+          isSupported: true,
+        },
+      ],
+      meeting_start_manual: () => {
+        (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+          1;
+        return {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        };
+      },
+      meeting_active_session: () => ({
+        active: (window as unknown as { __hush_active_id: number | null })
+          .__hush_active_id,
+      }),
+      // Return a partial utterance so the live-transcript pane is visible.
+      meeting_session_get: () => ({
+        session: {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        },
+        utterances: [],
+        currentPartials: [
+          {
+            id: -1,
+            sessionId: 1,
+            startedAtMs: 0,
+            endedAtMs: null,
+            speakerLabel: "mic",
+            text: "Testing one two three.",
+            isFinal: false,
+          },
+        ],
+      }),
+    });
+
+    await page.goto("/");
+    await gotoSection(page, "dictation");
+
+    await page.locator('[data-testid="record-start-btn"]').click();
+
+    // Live transcript section appears and shows the partial text.
+    await expect(
+      page.locator('[data-testid="live-transcript"]'),
+    ).toBeVisible();
+    await expect(page.locator('[data-testid="live-transcript"]')).toContainText(
+      "Testing one two three.",
+    );
+  });
+
+  test("stopping an active session clears active state", async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+        null;
+    });
+
+    await installMocks(page, {
+      audio_list_sources: () => [
+        {
+          kind: "microphone",
+          id: "Built-in Microphone",
+          name: "Built-in Microphone",
+          isDefault: true,
+          isSupported: true,
+        },
+        {
+          kind: "system-audio",
+          id: "system",
+          name: "System audio",
+          isDefault: false,
+          isSupported: true,
+        },
+      ],
+      meeting_start_manual: () => {
+        (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+          1;
+        return {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        };
+      },
+      // meeting_stop_manual clears the active id so the subsequent
+      // refresh() call returns null and the UI returns to idle.
+      meeting_stop_manual: () => {
+        (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+          null;
+      },
+      meeting_active_session: () => ({
+        active: (window as unknown as { __hush_active_id: number | null })
+          .__hush_active_id,
+      }),
+      meeting_session_get: () => ({
+        session: {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        },
+        utterances: [],
+        currentPartials: [],
+      }),
+    });
+
+    await page.goto("/");
+    await gotoSection(page, "dictation");
+
+    // Start the session.
+    await page.locator('[data-testid="record-start-btn"]').click();
+    // Button-click path: recording=true, meetingOnlyActive=false.
+    const stopBtn = page.locator("button.record-btn.recording");
+    await expect(stopBtn).toBeVisible();
+
+    // Stop the session.
+    await stopBtn.click();
+
+    // UI returns to idle: start button in meeting mode is back.
+    await expect(
+      page.locator('[data-testid="record-start-btn"][data-record-mode="meeting"]'),
+    ).toBeVisible();
+  });
+
+  test("meeting:source-failed event shows source-failed banner", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      // The session-started event sets activeId; the active session mock
+      // must confirm it so refresh() doesn't immediately clear it.
+      meeting_active_session: () => ({ active: 1 }),
+      meeting_session_get: () => ({
+        session: {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        },
+        utterances: [],
+        currentPartials: [],
+      }),
+    });
+
+    await page.goto("/");
+    await gotoSection(page, "dictation");
+
+    // Fire session-started to put the UI into active mode.
+    await fireEvent(page, "meeting:session-started", { sessionId: 1 });
+
+    // Stop button should appear.
+    await expect(
+      page.locator('button[aria-label="Stop meeting recording"]'),
+    ).toBeVisible();
+
+    // Fire source-failed for the mic source (multi-source session → "still recording" message).
+    await fireEvent(page, "meeting:source-failed", {
+      sessionId: 1,
+      sourceKind: "mic",
+      reason: "device lost",
+      deviceLost: true,
+    });
+
+    const banner = page.locator('[data-testid="source-failed-banner"]');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("Microphone");
+  });
+
+  test("meeting:session-ended event clears active session state", async ({
+    page,
+  }) => {
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: null }),
+      meeting_session_get: () => ({
+        session: {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: "2026-05-01T15:05:00Z",
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic"],
+          appTitle: null,
+        },
+        utterances: [],
+        currentPartials: [],
+      }),
+    });
+
+    await page.goto("/");
+    await gotoSection(page, "dictation");
+
+    // Put the UI into active mode via the event.
+    // We need meeting_active_session to return active: 1 while the session
+    // is live so refresh() doesn't immediately clear it. Patch via evaluate
+    // after the first page load (which uses the null default).
+    await page.evaluate(() => {
+      const stub = (
+        window as unknown as {
+          __hush_e2e?: {
+            invoke: Record<string, (args?: unknown) => Promise<unknown>>;
+          };
+        }
+      ).__hush_e2e;
+      if (stub) {
+        stub.invoke["meeting_active_session"] = async () => ({ active: 1 });
+      }
+    });
+    await fireEvent(page, "meeting:session-started", { sessionId: 1 });
+
+    const stopBtn = page.locator('button[aria-label="Stop meeting recording"]');
+    await expect(stopBtn).toBeVisible();
+
+    // Patch back to null so refresh() after session-ended sees no active session.
+    await page.evaluate(() => {
+      const stub = (
+        window as unknown as {
+          __hush_e2e?: {
+            invoke: Record<string, (args?: unknown) => Promise<unknown>>;
+          };
+        }
+      ).__hush_e2e;
+      if (stub) {
+        stub.invoke["meeting_active_session"] = async () => ({ active: null });
+      }
+    });
+
+    // Fire session-ended — should clear active state.
+    await fireEvent(page, "meeting:session-ended", { sessionId: 1 });
+
+    // Stop button is gone; UI is idle again (start button visible).
+    await expect(stopBtn).toHaveCount(0);
   });
 });
