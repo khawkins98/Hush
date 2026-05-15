@@ -77,7 +77,17 @@ A workflow page for knowledge workers in privacy-sensitive roles is on the roadm
 
 ## Install
 
-Pre-built binaries: **[GitHub Releases](https://github.com/khawkins98/Hush/releases)** → pick the latest `v*` tag.
+### Option A — Homebrew (recommended, no Gatekeeper dialog)
+
+```bash
+brew install --cask --no-quarantine khawkins98/tap/hush
+```
+
+The `--no-quarantine` flag skips the macOS "unidentified developer" warning entirely. Equivalent to `xattr -rd com.apple.quarantine` but done at install time. Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project).
+
+### Option B — Direct download
+
+**[GitHub Releases](https://github.com/khawkins98/Hush/releases)** → pick the latest `v*` tag.
 
 | Platform | File | Notes |
 |---|---|---|
@@ -85,7 +95,7 @@ Pre-built binaries: **[GitHub Releases](https://github.com/khawkins98/Hush/relea
 | **Linux** | `.AppImage` or `.deb` | Any distro / Debian + Ubuntu; CI-built, not hands-on tested |
 | **Windows** | `.msi` (recommended) or `.exe` | CI-built, not hands-on tested |
 
-Early releases are not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project and the membership fee doesn't make sense yet). On macOS, right-click `Hush.app` → **Open** on first launch to bypass the Gatekeeper warning; subsequent launches are silent. If macOS 26 blocks the right-click method entirely ("quarantine jail"), open Terminal and run:
+On macOS, right-click `Hush.app` → **Open** on first launch to bypass the Gatekeeper warning; subsequent launches are silent. The DMG includes a "Read Me First.txt" with full instructions. If macOS 26 blocks the right-click method entirely, open Terminal and run:
 
 ```bash
 xattr -rd com.apple.quarantine /Applications/Hush.app

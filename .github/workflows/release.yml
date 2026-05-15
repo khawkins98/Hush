@@ -249,3 +249,38 @@ jobs:
 
           TAG="${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref_name }}"
           gh release upload "$TAG" "$DMG_PATH" --clobber
+
+      # Update the Homebrew tap cask with the new version + SHA256 so
+      # `brew upgrade --cask hush` works after each release.
+      # Skipped on workflow_dispatch dry-runs (no real version tag).
+      - name: Update Homebrew tap
+        if: matrix.platform == 'macos-latest' && github.event_name == 'push'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"   # strip leading 'v'
+
+          DMG_PATH=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg \
+            -name "*_aarch64.dmg" -not -name "rw.*" | head -1)
+
+          SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+
+          # Clone the tap, patch the cask, and push.
+          git clone --depth 1 \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/khawkins98/homebrew-tap.git" \
+            /tmp/homebrew-tap
+
+          sed -i '' \
+            -e "s/version \".*\"/version \"${VERSION}\"/" \
+            -e "s/sha256 \".*\"/sha256 \"${SHA256}\"/" \
+            /tmp/homebrew-tap/Casks/hush.rb
+
+          cd /tmp/homebrew-tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/hush.rb
+          git diff --cached --quiet || \
+            git commit -m "chore: update hush cask to v${VERSION}" && \
+            git push
