@@ -101,6 +101,8 @@ On macOS, right-click `Hush.app` → **Open** on first launch to bypass the Gate
 xattr -rd com.apple.quarantine /Applications/Hush.app
 ```
 
+**New to Hush?** [`docs/getting-started.md`](./docs/getting-started.md) walks through the full flow: install → Gatekeeper → permissions → first recording → meeting capture.
+
 After an update, one or more permissions (Microphone, Input Monitoring) may show "Was granted — now revoked" in Settings → Permissions — this is a macOS TCC side-effect of ad-hoc signing. Re-grant each one in System Settings or use the Reset button in Settings → Permissions. Full troubleshooting steps are in [`docs/macos-permissions.md`](./docs/macos-permissions.md). Code-signing would eliminate this entirely; if you'd like to sponsor it, GitHub Sponsors is at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
 
 Windows shows a SmartScreen warning — click **More info** → **Run anyway**. A Windows EV cert is also on the roadmap.
@@ -141,6 +143,7 @@ This isn't Electron-with-a-mic-icon. Four native windows (main, HUD overlay, men
 | For | Read |
 |---|---|
 | **Discovering Hush** — what it does | This README + the live app (install it, open Settings → menus describe what each thing does) |
+| **Installing + first recording** | [docs/getting-started.md](./docs/getting-started.md) — install options, Gatekeeper walkthrough, permissions, dictation, meeting capture |
 | **What's shipped right now** | [STATUS.md](./STATUS.md) (rolling snapshot), [CHANGELOG.md](./CHANGELOG.md) (release-by-release record) |
 | **Attribution + legal posture** | [hush-prd.md](./hush-prd.md) — black-box reimplementation discipline (§13.8), product non-goals, and VoiceInk attribution rationale. The original full product spec is historical; see STATUS.md and CHANGELOG.md for current state |
 | **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, four-window topology, trait seams, meeting pump, module map |
