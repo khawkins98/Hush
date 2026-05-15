@@ -247,7 +247,9 @@ export const dictation = {
     const sources =
       sourceShape === null
         ? []
-        : sourceShape.kind === "microphone" && screenRecordingLive
+        : sourceShape.kind === "microphone"
+            && screenRecordingLive
+            && audio.meetingIncludeSystemAudio
           ? [
               { kind: "microphone", deviceId: sourceShape.deviceId },
               { kind: "system-audio" },
