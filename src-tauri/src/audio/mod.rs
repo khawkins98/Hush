@@ -65,26 +65,28 @@ pub use cpal::CpalAudioCapture;
 pub use format::{apply_mic_gain, downmix_to_mono};
 
 /// Defensive ceiling on the number of `f32` samples a single capture
-/// buffer may hold. Beyond this, the callback drops the oldest
-/// samples so an unbounded growth path (pump task wedged, audio
-/// callback still firing) can't OOM the process.
+/// buffer may hold. When this limit is reached the **oldest** samples
+/// are evicted so the capture buffer acts as a circular window into
+/// the most-recent audio (#827). An unbounded growth path (pump task
+/// wedged, audio callback still firing) therefore can't OOM the
+/// process, and the tail of a long dictation is preserved rather than
+/// the head.
 ///
 /// Sized for ~2 minutes of 48 kHz stereo audio = `48_000 * 2 * 120`
 /// = 11.5M samples ≈ 46 MB. The meeting pump's normal-case window is
 /// 10 s (drained then), so this cap is purely defensive — under the
 /// typical drain-then-transcribe cycle it's never hit. A long-form
 /// dictation session up to 2 minutes is also fine; anything past that
-/// is exotic enough that dropping the head of the buffer (rather than
-/// failing the whole capture) is the right trade-off.
+/// keeps the most-recent 2 minutes and discards older audio.
 ///
 /// The cap is the same for both the cpal mic path and the macOS
-/// CoreAudio tap path; both back into ring buffers callbacks push into.
+/// CoreAudio tap path; both back into circular deques the callbacks push into.
 pub(super) const MAX_BUFFER_FRAMES: usize = 48_000 * 2 * 120;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Result};
-use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
 
 /// Sentinel attached to an `anyhow::Error` chain when the cpal
@@ -519,44 +521,45 @@ pub trait AudioCapture: Send + Sync {
 //
 // Used by both the cpal worker (`audio/cpal.rs`) and the macOS
 // CoreAudio tap (`audio/core_audio_tap.rs`). Kept here rather than
-// duplicated so any future ring-overflow policy change happens once.
+// duplicated so any future circular-eviction policy change happens once.
 
-/// Drain the ring's consumer half into a fresh `Vec<f32>`. Called
-/// from `Cmd::Stop` (one-shot, full drain) and `Cmd::DrainBuffer`
-/// (per-tick drain on the meeting pump). `read_chunk` is wait-free
-/// on the consumer side; the only "lock" cost is the atomic counter
-/// rtrb uses to coordinate the head/tail pointers.
+/// Push `samples` into a circular capture buffer, evicting the oldest
+/// samples from the front when the buffer is at capacity. Batches the
+/// entire slice under one lock acquisition so the callback (cpal) or
+/// reader thread (CoreAudio tap) holds the lock for the minimum
+/// possible time.
 ///
-/// Returns an empty `Vec` when the ring is empty — the "user
-/// pressed Stop almost immediately" path. Never errors: rtrb's
-/// `Consumer` cannot be poisoned the way a `Mutex` could.
-pub(super) fn drain_consumer(consumer: &mut Consumer<f32>) -> Vec<f32> {
-    let n = consumer.slots();
-    if n == 0 {
-        return Vec::new();
+/// Pre-#827: the buffer was an `rtrb` SPSC ring whose `Producer` would
+/// silently drop new samples when full, losing the tail of long
+/// dictation sessions. The circular-deque approach keeps the most-recent
+/// audio — the semantics the module-level `MAX_BUFFER_FRAMES` comment
+/// always claimed ("drops the oldest") but `rtrb` couldn't deliver.
+pub(super) fn push_samples_circular(
+    buf: &Mutex<VecDeque<f32>>,
+    samples: &[f32],
+    max_frames: usize,
+) {
+    let mut guard = buf.lock().unwrap_or_else(|p| p.into_inner());
+    for &s in samples {
+        if guard.len() >= max_frames {
+            guard.pop_front(); // evict oldest to make room for newest
+        }
+        guard.push_back(s);
     }
-    let mut out = Vec::with_capacity(n);
-    if let Ok(chunk) = consumer.read_chunk(n) {
-        // `ReadChunk` itself is an `IntoIterator` — `extend`
-        // consumes it and commits the read on Drop. Pre-sized Vec
-        // avoids the per-element capacity grow.
-        out.extend(chunk);
-    }
-    out
 }
 
-/// Log a once-per-drain warning when the callback set the overflow
-/// flag. Pulled out so both the `Stop` and `DrainBuffer` paths share
-/// the same rate-limiting policy. Resets the flag on read so a
-/// future overflow logs again on its next drain — chronic overflow
-/// surfaces but a single transient blip doesn't shout.
-pub(super) fn log_overflow_if_set(flag: &AtomicBool) {
-    if flag.swap(false, Ordering::Relaxed) {
-        tracing::warn!(
-            buffer_cap_frames = MAX_BUFFER_FRAMES,
-            "audio ring overflow; capture callback dropped samples — drainer wedged?"
-        );
-    }
+/// Drain the entire contents of the capture buffer into a fresh `Vec<f32>`.
+/// Called from `Cmd::Stop` (one-shot, full drain) and `Cmd::DrainBuffer`
+/// (per-tick drain on the meeting pump). Lock contention is negligible —
+/// the audio callback holds the same lock only for the duration of pushing
+/// a single callback's worth of samples (~milliseconds at most).
+///
+/// Returns an empty `Vec` when the buffer is empty — the "user pressed
+/// Stop almost immediately" path. Never errors: `Mutex` poisoning is
+/// treated as a recoverable state by calling `into_inner()`.
+pub(super) fn drain_buffer(buf: &Mutex<VecDeque<f32>>) -> Vec<f32> {
+    let mut guard = buf.lock().unwrap_or_else(|p| p.into_inner());
+    guard.drain(..).collect()
 }
 
 /// Compute the RMS level for one audio callback buffer.
