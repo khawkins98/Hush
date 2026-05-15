@@ -554,18 +554,22 @@ impl WhisperStreamingSession {
     /// Convert one chunk of capture-format samples to mono 16 kHz
     /// before feeding into the policy buffer. The same downmix +
     /// resample chain the one-shot path uses, applied per `feed` chunk.
-    fn convert_chunk(&self, samples: &[f32]) -> Vec<f32> {
+    fn convert_chunk(&self, samples: &[f32]) -> Result<Vec<f32>> {
         if self.capture_format.sample_rate == 0 {
-            return Vec::new();
+            return Err(anyhow::anyhow!("captured audio has zero sample rate"));
         }
         let mono = downmix_to_mono(samples, self.capture_format.channels);
-        resample_to_mono(&mono, self.capture_format.sample_rate, WHISPER_SAMPLE_RATE)
+        Ok(resample_to_mono(
+            &mono,
+            self.capture_format.sample_rate,
+            WHISPER_SAMPLE_RATE,
+        ))
     }
 }
 
 impl StreamingTranscribeSession for WhisperStreamingSession {
     fn feed(&mut self, captured: &[f32]) -> Result<()> {
-        let mono_16k = self.convert_chunk(captured);
+        let mono_16k = self.convert_chunk(captured)?;
         if !mono_16k.is_empty() {
             self.state.feed_mono(&mono_16k);
         }
