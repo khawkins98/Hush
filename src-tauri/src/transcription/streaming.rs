@@ -437,7 +437,51 @@ impl SlidingWindowState {
         if self.window.is_empty() {
             return Ok(Vec::new());
         }
-        let segments = inferer.infer(&self.window)?;
+        let segments = match inferer.infer(&self.window) {
+            Ok(segs) => segs,
+            Err(e) => {
+                // Inference failed on the tail flush. Best-effort recovery: promote
+                // the last partial the user already saw as a synthetic final covering
+                // the uncommitted window, then clean up as usual.
+                let window_end_ms = self
+                    .window_start_offset_ms
+                    .saturating_add(samples_to_ms(self.window.len(), self.sample_rate));
+                let fallback: Vec<Utterance> = if let Some(text) = self.last_partial_text.as_ref() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() && self.committed_until_ms < window_end_ms {
+                        tracing::warn!(
+                            error = ?e,
+                            window_ms = samples_to_ms(self.window.len(), self.sample_rate),
+                            "streaming finish: inference failed; promoting last partial as synthetic final"
+                        );
+                        vec![Utterance {
+                            text: trimmed.to_owned(),
+                            started_at_ms: self.committed_until_ms,
+                            ended_at_ms: window_end_ms,
+                            is_final: true,
+                            speaker_label: None,
+                        }]
+                    } else {
+                        tracing::warn!(
+                            error = ?e,
+                            "streaming finish: inference failed; no usable partial to promote"
+                        );
+                        Vec::new()
+                    }
+                } else {
+                    tracing::warn!(
+                        error = ?e,
+                        "streaming finish: inference failed; no partial available"
+                    );
+                    Vec::new()
+                };
+                use zeroize::Zeroize;
+                self.window.zeroize();
+                self.window.clear();
+                self.last_partial_text = None;
+                return Ok(fallback);
+            }
+        };
         let raw_segments = segments.len();
         let non_empty_segments = segments
             .iter()
