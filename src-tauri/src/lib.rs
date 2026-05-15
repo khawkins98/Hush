@@ -55,14 +55,98 @@ use tauri::{Emitter, Manager};
 /// coordination, no locking, deterministic memory model.
 static USER_QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Maximum time the graceful-quit coordinator waits for an active
+/// dictation recording to stop before exiting anyway (#798).
+const GRACEFUL_QUIT_DICTATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Maximum time the graceful-quit coordinator waits for an active
+/// meeting session to flush its tail and close before exiting anyway
+/// (#798, #846). Sized to cover the streaming-finish timeout
+/// (`STREAMING_FINISH_TIMEOUT` = 5 s × N sources) plus DB close overhead.
+const GRACEFUL_QUIT_MEETING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Public helper called from the tray + app-menu Quit handlers.
-/// Sets the flag synchronously, then calls `app_handle.exit(0)`.
-/// The synchronous-before-exit ordering matters: the
-/// `RunEvent::ExitRequested` handler reads the flag, and `exit`
-/// dispatches the event later in the runtime. By the time the
-/// event fires the flag is already set.
+/// Sets the flag synchronously, then spawns an async shutdown
+/// coordinator that gracefully stops any active dictation recording
+/// and/or meeting session before calling `app_handle.exit(0)` (#798,
+/// #846).
+///
+/// The coordinator runs with bounded timeouts so a stuck session can
+/// never block the quit indefinitely. The synchronous flag-set still
+/// happens before the coordinator calls `exit`, so the
+/// `RunEvent::ExitRequested` handler will find the flag set and allow
+/// the exit to proceed exactly as before.
 pub fn request_user_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     USER_QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        graceful_quit_coordinator(app_handle).await;
+    });
+}
+
+/// Async coordinator for graceful quit. Stops active recordings with
+/// bounded timeouts, then exits. Called only from `request_user_quit`.
+async fn graceful_quit_coordinator<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    let state = match app.try_state::<ipc::AppState>() {
+        Some(s) => s,
+        None => {
+            // AppState not yet registered — nothing to clean up.
+            app.exit(0);
+            return;
+        }
+    };
+
+    // Stop active dictation audio capture (best-effort). We discard
+    // the captured audio — the user is quitting, not submitting text.
+    if state.audio.is_recording() {
+        let audio = std::sync::Arc::clone(&state.audio);
+        match tokio::time::timeout(
+            GRACEFUL_QUIT_DICTATION_TIMEOUT,
+            tokio::task::spawn_blocking(move || audio.stop()),
+        )
+        .await
+        {
+            Ok(Ok(Ok(_captured))) => {
+                tracing::info!("graceful quit: dictation audio stopped");
+            }
+            Ok(Ok(Err(e))) => {
+                tracing::warn!(error = ?e, "graceful quit: dictation audio stop error");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = ?e,
+                    "graceful quit: dictation audio stop task panicked"
+                );
+            }
+            Err(_elapsed) => {
+                tracing::warn!("graceful quit: dictation audio stop timed out");
+            }
+        }
+    }
+
+    // Stop active meeting session (flush tail, close DB row). This is
+    // the core of #846 — without a graceful stop the pump task is
+    // aborted by Drop, the tail flush is skipped, and the DB row's
+    // `ended_at` is never set.
+    if state.meeting_manager.active_session_id().is_some() {
+        match tokio::time::timeout(
+            GRACEFUL_QUIT_MEETING_TIMEOUT,
+            state.meeting_manager.stop_manual(),
+        )
+        .await
+        {
+            Ok(Ok(())) => {
+                tracing::info!("graceful quit: meeting session stopped");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = ?e, "graceful quit: meeting stop error");
+            }
+            Err(_elapsed) => {
+                tracing::warn!("graceful quit: meeting stop timed out");
+            }
+        }
+    }
+
     app.exit(0);
 }
 
