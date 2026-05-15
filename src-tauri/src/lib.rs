@@ -1169,15 +1169,6 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
     use meeting::mic_camera_monitor::{evaluate_mic_state, MicCameraMonitor, MicStateOutcome};
     use tauri::Manager;
 
-    // Classifier table is constant for the process lifetime.
-    // TODO(#112): Once user-classification overrides are implemented, reload
-    // from the override repository on each evaluation (or invalidate the cache
-    // on settings-panel writes) so the auto-start gate respects overrides, not
-    // just the built-in defaults. Today the override table is always empty so
-    // default_table() and with_overrides([]) are behaviourally identical.
-    static CLASSIFIER: std::sync::OnceLock<meeting::AppClassifier> = std::sync::OnceLock::new();
-    let classifier = CLASSIFIER.get_or_init(meeting::AppClassifier::default_table);
-
     let mut monitor = MicCameraMonitor::new();
 
     let mut session_emitted = false;
@@ -1217,6 +1208,21 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
         );
         let session_active = state.meeting_manager.active_session_id().is_some();
 
+        // Rebuild classifier each tick from user overrides so that settings
+        // changes take effect on the next HAL event without a restart (#812).
+        let classifier = {
+            let overrides = state
+                .data
+                .meeting_app_overrides
+                .list()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|o: crate::meeting::MeetingAppOverride| (o.app_name, o.kind))
+                .collect::<Vec<_>>();
+            meeting::AppClassifier::with_overrides(overrides)
+        };
+
         let frontmost_app = active_win_pos_rs::get_active_window()
             .ok()
             .map(|w| w.app_name);
@@ -1251,7 +1257,12 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                 session_emitted = true;
 
                 let mic_source = audio::AudioSource::default_microphone();
-                let sources = vec![mic_source, audio::AudioSource::SystemAudio];
+                // Try mic + system-audio first. If system-audio tap fails
+                // (permission denied, CoreAudio already in use, SCK helper
+                // not running) degrade to mic-only so the user at least
+                // gets partial transcription rather than a silent failure
+                // (#807).
+                let full_sources = vec![mic_source, audio::AudioSource::SystemAudio];
 
                 // Snapshot the window title for the persisted session row.
                 let app_title = active_win_pos_rs::get_active_window()
@@ -1273,11 +1284,30 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                     replacement_rules,
                 };
 
-                if let Err(e) = state
+                let start_result = state
                     .meeting_manager
-                    .start_manual(sources, Some(app_name.clone()), app_title, dict_opts)
-                    .await
-                {
+                    .start_manual(
+                        full_sources,
+                        Some(app_name.clone()),
+                        app_title.clone(),
+                        dict_opts.clone(),
+                    )
+                    .await;
+                let start_result = if start_result.is_err() {
+                    tracing::warn!(
+                        app_name,
+                        "auto-start with system-audio failed, retrying mic-only"
+                    );
+                    let mic_only = vec![audio::AudioSource::default_microphone()];
+                    state
+                        .meeting_manager
+                        .start_manual(mic_only, Some(app_name.clone()), app_title, dict_opts)
+                        .await
+                } else {
+                    start_result
+                };
+
+                if let Err(e) = start_result {
                     tracing::warn!(
                         app_name,
                         error = ?e,
