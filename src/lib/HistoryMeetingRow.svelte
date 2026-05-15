@@ -297,7 +297,8 @@
 
   // Inline name editing.
   let editingName = $state(false);
-  let nameInputValue = $state(session.name ?? "");
+  let nameInputValue = $state("");
+  $effect(() => { if (!editingName) nameInputValue = session.name ?? ""; });
 
   function startNameEdit(e: Event) {
     e.stopPropagation();
