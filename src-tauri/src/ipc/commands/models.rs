@@ -84,7 +84,7 @@ pub async fn model_list(state: State<'_, AppState>) -> IpcResult<Vec<ModelCard>>
     let cards = catalog::whisper_models()
         .into_iter()
         .map(|metadata| {
-            let path = state.models_dir.join(&metadata.filename);
+            let path = state.models.models_dir.join(&metadata.filename);
             let is_downloaded = path.exists();
             let is_selected = metadata.id == effective_selection;
             ModelCard {
@@ -133,7 +133,7 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
     // Loaded twice — once for the dictation slot, once for the
     // meeting-pump slot (#248). Both share the mmap'd weights on
     // disk, so the marginal cost of the second load is small.
-    let models_dir = state.models_dir.clone();
+    let models_dir = state.models.models_dir.clone();
     let id_for_load = id.clone();
     let inference_threads = std::sync::Arc::clone(&state.runtime_flags.inference_threads);
     let mic_gain_db = std::sync::Arc::clone(&state.runtime_flags.mic_gain_db);
@@ -265,9 +265,9 @@ pub async fn model_download(
     model_download_inner(
         ModelDownloadDeps {
             emitter,
-            downloads: std::sync::Arc::clone(&state.downloads),
+            downloads: std::sync::Arc::clone(&state.models.downloads),
             http: state.http.clone(),
-            models_dir: state.models_dir.clone(),
+            models_dir: state.models.models_dir.clone(),
         },
         model,
     )
@@ -419,7 +419,7 @@ pub(crate) async fn model_download_inner(
 /// No-op if no download for `id` is in flight.
 #[tauri::command]
 pub fn model_cancel_download(state: State<'_, AppState>, id: String) -> IpcResult<()> {
-    let guard = state.downloads.lock().map_err(poisoned)?;
+    let guard = state.models.downloads.lock().map_err(poisoned)?;
     if let Some(cancel) = guard.get(&id) {
         cancel.cancel();
     }
@@ -438,7 +438,7 @@ pub async fn model_remove(state: State<'_, AppState>, id: String) -> IpcResult<(
         ))
     })?;
 
-    let path = state.models_dir.join(&model.filename);
+    let path = state.models.models_dir.join(&model.filename);
     if !path.exists() {
         // Same no-op-on-missing pattern as the repository delete
         // contracts — caller's intent is satisfied either way.

@@ -400,7 +400,11 @@ pub async fn meeting_start_manual(
     // same error variant. Runs before opening any audio handles so the user
     // sees the error before any recording is started.
     {
-        let guard = state.transcribe_meeting.lock().map_err(poisoned)?;
+        let guard = state
+            .inference
+            .transcribe_meeting
+            .lock()
+            .map_err(poisoned)?;
         if guard.is_none() {
             return Err(IpcError::TranscriptionUnavailable);
         }
@@ -646,21 +650,22 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
         // scratch) are freed when the new Arcs replace the old ones and
         // their refcounts hit zero (#636).
         let settings_bg = Arc::clone(&state.settings);
-        let models_dir_bg = state.models_dir.clone();
+        let models_dir_bg = state.models.models_dir.clone();
         let inference_threads_bg = Arc::clone(&state.runtime_flags.inference_threads);
         let mic_gain_db_bg = Arc::clone(&state.runtime_flags.mic_gain_db);
-        let transcribe_slot = Arc::clone(&state.transcribe);
-        let transcribe_meeting_slot = Arc::clone(&state.transcribe_meeting);
+        let transcribe_slot = Arc::clone(&state.inference.transcribe);
+        let transcribe_meeting_slot = Arc::clone(&state.inference.transcribe_meeting);
         // Snapshot the generation counter before spawning (#801). If a
         // model_select completes during the rebuild window it bumps this
         // counter; we compare on commit and discard the stale result so
         // the user-chosen model is never overwritten by the old rebuild.
         let gen_snapshot = state
+            .inference
             .transcriber_generation
             .load(std::sync::atomic::Ordering::Acquire);
-        let generation_bg = Arc::clone(&state.transcriber_generation);
+        let generation_bg = Arc::clone(&state.inference.transcriber_generation);
         #[cfg(feature = "diarization-onnx")]
-        let diarize_slot_bg = Arc::clone(&state.diarize_slot);
+        let diarize_slot_bg = Arc::clone(&state.inference.diarize_slot);
 
         tauri::async_runtime::spawn(async move {
             let (dictation, meeting) = tokio::join!(

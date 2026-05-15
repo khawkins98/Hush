@@ -123,46 +123,10 @@ pub struct DataServices {
 ///   serial.
 pub struct AppState {
     pub audio: Arc<dyn AudioCapture>,
-    /// Wrapped in a `Mutex` so `model_select` can hot-swap the loaded
-    /// transcriber at runtime without restarting the app. The lock is
-    /// held for the duration of one of two operations only: a clone
-    /// of the inner `Arc` (microseconds, on the dictation hot path) or
-    /// a wholesale replacement (only when the user picks a new model
-    /// in the picker). No async work happens inside the lock — the
-    /// model file load is done on a `spawn_blocking` task and only
-    /// the resulting `Arc` is moved into the lock. See
-    /// `swap_transcriber` for the swap path; `stop_dictation` for the
-    /// read path.
-    ///
-    /// Wrapped in `Arc` so a hot-swap from `model_select` writes
-    /// through to the dictation hot path (`stop_dictation`) on the
-    /// next call without needing to rebuild `AppState`.
-    ///
-    /// Split from [`Self::transcribe_meeting`] under #248 so the
-    /// dictation one-shot inference and the meeting pump's
-    /// streaming inference don't contend on a single
-    /// `Mutex<WhisperContext>`. Both slots load the same GGUF; the
-    /// underlying weights are mmap'd, so the marginal RAM cost of
-    /// the second context is near zero (just two `WhisperContext`
-    /// structs on the heap).
-    pub transcribe: TranscribeSlot,
-    /// Meeting-pump transcribe slot. Owns its own
-    /// `WhisperTranscription` instance distinct from
-    /// [`Self::transcribe`] so a chunk-tick inference and a
-    /// concurrent dictation `stop` don't queue up behind one
-    /// `Mutex<WhisperContext>` (#248). Cloned into
-    /// `SessionManager` at startup; `model_select` writes both
-    /// slots in lockstep so the user-visible model stays
-    /// consistent across the two paths.
-    pub transcribe_meeting: TranscribeSlot,
-    /// Speaker diarization seam (#111). Tags meeting utterances
-    /// with per-speaker labels. Production wires
-    /// [`crate::diarization::FlagGatedDiarizer`] which routes to
-    /// [`crate::diarization::onnx::OnnxDiarizer`] when the
-    /// Speakers toggle is on and the wespeaker model is loaded,
-    /// else [`crate::diarization::NoopDiarizer`]. The builder
-    /// default falls back to plain `NoopDiarizer` for tests.
-    pub diarize: Arc<dyn crate::diarization::Diarize>,
+    /// AI inference pipeline: transcriber slots, generation counter,
+    /// diarizer service, and hot-swap slot. See [`InferenceState`]
+    /// for the per-field rationale.
+    pub inference: InferenceState,
     /// Persistent user-data repositories bundled together. See
     /// [`DataServices`] for why these four group naturally and why
     /// `settings` stays separate.
@@ -175,43 +139,24 @@ pub struct AppState {
     /// outlives any single command call and is shared across the
     /// `meeting_*` handlers and `stop_dictation`.
     pub meeting_manager: Arc<crate::meeting::SessionManager>,
-    /// Directory the model picker scans for downloaded GGUF files
-    /// (`<app_data>/models/`). Stored on AppState rather than
-    /// re-resolving it on every IPC call so the picker has a single
-    /// source of truth and tests can override it.
-    pub models_dir: PathBuf,
-    /// HTTP client shared across all model downloads. Cheap to clone;
-    /// holds connection-pool state internally. One per app keeps
-    /// keep-alive working across consecutive downloads (e.g. Tiny
-    /// then Base on first launch).
+    /// Local AI model assets: models directory + in-flight download
+    /// registry for Whisper and diarizer files. See [`ModelStore`].
+    pub models: ModelStore,
+    /// HTTP client shared across model downloads and the update-check
+    /// probe. Cheap to clone; holds connection-pool state internally.
+    /// Kept flat (not inside [`ModelStore`]) because the update-check
+    /// path in `commands/system.rs` is not a model-asset concern.
     pub http: reqwest::Client,
     /// Update-check result cache and in-flight serialisation lock.
     /// Grouped here so `system.rs` commands have a single handle
     /// to pass around; see [`UpdateCheckCache`] for the per-field
     /// rationale.
     pub update_check: UpdateCheckCache,
-    /// Cancel handles for in-flight downloads, keyed by model id.
-    /// Inserted by `model_download` when it spawns a task; the cancel
-    /// command flips the handle's flag; the spawned task removes its
-    /// own entry on completion. Wrapped in `Arc` so the spawned task
-    /// can hold a clone independently of the live `AppState` —
-    /// previously the cleanup code reached back through
-    /// `AppHandle::try_state` which forced the cancel-handle cleanup
-    /// onto a code path that requires a real Tauri runtime
-    /// (untestable, per #315).
-    pub downloads: Arc<Mutex<HashMap<String, CancelHandle>>>,
     pub pending_foreground: Mutex<Option<ForegroundApp>>,
     /// Push-to-talk key combo, active flag, and listener-spawned
     /// latch grouped as a single handle. See [`PttState`] for the
     /// per-field rationale.
     pub ptt: PttState,
-    /// Hot-swappable diarizer slot (#301). The `FlagGatedDiarizer`
-    /// constructed in `build_default` holds an `Arc::clone` of
-    /// this slot; the IPC `download_diarizer_model` path replaces
-    /// the inner Arc after a successful wespeaker download so the
-    /// new `OnnxDiarizer` takes effect on the next meeting tick
-    /// — no app restart required.
-    pub diarize_slot: crate::diarization::DiarizeSlot,
     /// In-app debug log console (#532). Holds the ring buffer of
     /// the last 200 backend `tracing` events. The tracing layer
     /// is registered before the Tauri builder in `run()` and
@@ -236,15 +181,6 @@ pub struct AppState {
     /// Monitoring, dismiss a conflicting app). Written once at boot by
     /// `register_hotkeys`; the IPC `get_toggle_hotkey_status` reads it.
     pub hotkey_toggle_error: Mutex<Option<String>>,
-    /// Monotonic generation counter that increments every time
-    /// [`Self::swap_transcriber`] installs a new model (#801). The
-    /// background rebuild task in `stop_meeting_and_rebuild_transcriber`
-    /// snapshots this before spawning; if the counter has advanced when
-    /// the task tries to commit its result, a concurrent `model_select`
-    /// ran during the rebuild window and its choice takes priority —
-    /// the stale rebuild result is discarded without overwriting the
-    /// user-selected model.
-    pub transcriber_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Push-to-talk state grouped as a single substruct (#737).
@@ -303,6 +239,76 @@ pub struct UpdateCheckCache {
     /// re-check `last` and return the cached result without issuing a
     /// duplicate request.
     pub inflight: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// AI inference pipeline slots grouped as a single sub-struct (#737).
+///
+/// All five fields relate to the hot-swappable inference pipeline:
+/// two mutex-wrapped transcriber slots (dictation + meeting pump,
+/// split under #248 to avoid contention), a generation counter
+/// the meeting pump uses to detect mid-rebuild model swaps (#801),
+/// the composed diarizer service injected into `SessionManager`,
+/// and the hot-swappable inner diarizer slot updated after a
+/// wespeaker model download (#301).
+///
+/// Grouped here so [`AppState::swap_transcriber`] has a single
+/// named owner, and so model-picker / diarizer-download handlers
+/// can pattern-match on one field rather than three independent ones.
+pub struct InferenceState {
+    /// Dictation-path transcriber. See [`AppState`]'s doc comment
+    /// for the split-slot rationale (mutex contention, #248) and the
+    /// lazy-init / periodic-recreate lifecycle (#612).
+    pub transcribe: TranscribeSlot,
+    /// Meeting-pump transcriber slot. Distinct from [`Self::transcribe`]
+    /// so a chunk-tick inference and a concurrent dictation `stop` don't
+    /// queue up behind one `Mutex<WhisperContext>` (#248). Hot-swapped
+    /// in lockstep with `transcribe` by `model_select`.
+    pub transcribe_meeting: TranscribeSlot,
+    /// Monotonically-increasing generation counter. Bumped by
+    /// [`AppState::swap_transcriber`] on every model swap so the
+    /// background `stop_meeting_and_rebuild_transcriber` task can detect
+    /// that a `model_select` completed during the rebuild window and
+    /// skip installing the about-to-be-stale rebuilt context (#801).
+    pub transcriber_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Composed diarizer service handle passed to [`crate::meeting::SessionManager`]
+    /// at construction. `FlagGatedDiarizer` wraps this, routing to
+    /// `OnnxDiarizer` (wespeaker) when the Speakers toggle and model are
+    /// present, else `NoopDiarizer`. Kept on `InferenceState` even though
+    /// command handlers don't access it directly, because it is tightly
+    /// coupled to `diarize_slot` and `runtime_flags.diarization_enabled`.
+    pub diarize: Arc<dyn crate::diarization::Diarize>,
+    /// Hot-swappable inner diarizer slot (#301). After a successful
+    /// wespeaker download, `download_diarizer_model` installs a new
+    /// `OnnxDiarizer` here; the `FlagGatedDiarizer` cloned the `Arc` at
+    /// startup and observes the swap on the next meeting pump tick —
+    /// no app restart required.
+    pub diarize_slot: crate::diarization::DiarizeSlot,
+}
+
+/// Local AI model assets: shared models directory and in-flight
+/// download registry for Whisper and diarizer model files (#737).
+///
+/// `models_dir` and `downloads` are always accessed together when
+/// spawning or cancelling a download task in `commands/models.rs`
+/// and `commands/diarizer.rs`. Grouping them makes the "things
+/// a download task needs from AppState" explicit.
+///
+/// The shared HTTP client lives on [`AppState`] directly rather
+/// than here because it is also used by the update-check path
+/// (`commands/system.rs`), which is not a model-asset concern.
+pub struct ModelStore {
+    /// Directory scanned by the model picker (`<app_data>/models/`).
+    /// Stored once rather than re-resolved on every IPC call so tests
+    /// can substitute a temp dir and all download / list / verify paths
+    /// use the same root.
+    pub models_dir: PathBuf,
+    /// Registry of in-flight download tasks, keyed by model id.
+    /// Inserted by `model_download` when a task is spawned; the cancel
+    /// command flips the handle's atomic flag; the spawned task removes
+    /// its own entry on completion. `Arc` so the task holds an
+    /// independent clone and the cleanup code doesn't need to reach
+    /// back through `AppHandle::try_state` (#315).
+    pub downloads: Arc<Mutex<HashMap<String, CancelHandle>>>,
 }
 
 /// User-facing runtime flags that mirror Settings rows (#431).
@@ -907,12 +913,14 @@ impl AppState {
         new_meeting: Option<Arc<dyn Transcribe>>,
     ) -> Result<Option<Arc<dyn Transcribe>>> {
         let mut dictation_guard = self
+            .inference
             .transcribe
             .lock()
             .map_err(|_| anyhow::anyhow!("transcribe mutex poisoned"))?;
         let prev = std::mem::replace(&mut *dictation_guard, new_dictation);
         drop(dictation_guard);
         let mut meeting_guard = self
+            .inference
             .transcribe_meeting
             .lock()
             .map_err(|_| anyhow::anyhow!("transcribe_meeting mutex poisoned"))?;
@@ -920,7 +928,8 @@ impl AppState {
         // Bump generation so the background rebuild in
         // stop_meeting_and_rebuild_transcriber can detect that a
         // model_select completed during the rebuild window (#801).
-        self.transcriber_generation
+        self.inference
+            .transcriber_generation
             .fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok(prev)
     }
