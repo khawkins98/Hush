@@ -29,27 +29,17 @@
   import PermissionsTab from "./PermissionsTab.svelte";
   import ReplacementsTab from "./ReplacementsTab.svelte";
   import VocabularyTab from "./VocabularyTab.svelte";
-  import {
-    formatErrorDisplay,
-  } from "./errors";
+  import { formatErrorDisplay } from "./errors";
   import { Events } from "./events";
   import { formatMb } from "./format";
-  import { readDebugConsoleEnabled } from "./debug-console";
+  import { nav } from "$lib/state/nav.svelte";
   import { diarizer } from "$lib/state/diarizer.svelte";
   import { models } from "$lib/state/models.svelte";
-  import type {
-    IpcError,
-    ModelCard,
-  } from "./types";
+  import type { SettingsTab } from "$lib/settings-tabs";
+  import type { IpcError, ModelCard } from "./types";
 
-  export type SettingsTab =
-    | "general"
-    | "model"
-    | "vocabulary"
-    | "replacements"
-    | "meeting"
-    | "permissions"
-    | "debug";
+  // Re-export so callers that import the type from here still compile.
+  export type { SettingsTab };
 
   type Props = {
     /// Which tab is showing. Bindable so the parent can deep-link
@@ -66,34 +56,9 @@
 
   let { activeTab = $bindable("general"), onModelLoaded }: Props = $props();
 
-  // Debug tab is conditionally shown: only when the developer
-  // console toggle (Settings → General → Advanced → Developer
-  // console) is on. Read localStorage on mount so the tab
-  // persists across Settings opens within the same session.
-  let debugConsoleEnabled = $state(false);
-
   function onDebugConsoleChange(enabled: boolean) {
-    debugConsoleEnabled = enabled;
-    if (!enabled && activeTab === "debug") {
-      activeTab = "general";
-    }
+    nav.setDebugConsoleEnabled(enabled);
   }
-
-  // Compute visible tabs reactively so the Debug tab appears /
-  // disappears without a page reload.
-  const baseTabs: Array<{ key: SettingsTab; label: string; testId: string }> = [
-    { key: "general", label: "General", testId: "settings-tab-general" },
-    { key: "model", label: "Model", testId: "settings-tab-model" },
-    { key: "vocabulary", label: "Vocabulary", testId: "settings-tab-vocabulary" },
-    { key: "replacements", label: "Replacements", testId: "settings-tab-replacements" },
-    { key: "meeting", label: "Meeting", testId: "settings-tab-meeting" },
-    { key: "permissions", label: "Permissions", testId: "settings-tab-permissions" },
-    { key: "debug", label: "Debug", testId: "settings-tab-debug" },
-  ];
-
-  let tabs = $derived(
-    debugConsoleEnabled ? baseTabs : baseTabs.filter((t) => t.key !== "debug"),
-  );
 
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenDownloadDone: UnlistenFn | null = null;
@@ -172,13 +137,12 @@
         target === "replacements" ||
         target === "meeting" ||
         target === "permissions" ||
-        (target === "debug" && debugConsoleEnabled)
+        (target === "debug" && nav.debugConsoleEnabled)
       ) {
         activeTab = target;
       }
     });
 
-    debugConsoleEnabled = readDebugConsoleEnabled();
     await models.loadModels();
   });
 
@@ -191,22 +155,6 @@
 </script>
 
 <div class="settings-panel">
-  <nav class="settings-sidebar" aria-label="Settings categories">
-    <span class="settings-sidebar-title">Settings</span>
-    {#each tabs as tab (tab.key)}
-      <button
-        type="button"
-        class="settings-sidebar-btn"
-        class:active={activeTab === tab.key}
-        aria-current={activeTab === tab.key ? "page" : undefined}
-        data-testid={tab.testId}
-        onclick={() => (activeTab = tab.key)}
-      >
-        {tab.label}
-      </button>
-    {/each}
-  </nav>
-
   <section class="settings-content" aria-live="polite">
     {#if activeTab === "general"}
       <GeneralTab {onDebugConsoleChange} />
@@ -241,66 +189,11 @@
 <style>
   .settings-panel {
     display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-  }
-
-  /* Left sidebar nav — sticks in place while content scrolls in the
-     outer `.app-main` scroll container. Same left-chrome accent
-     indicator style as the main SidebarNav. */
-  .settings-sidebar {
-    width: 140px;
-    flex-shrink: 0;
-    position: sticky;
-    top: 0;
-    max-height: 100vh;
-    background-color: var(--bg-sidebar);
-    border-right: 1px solid var(--border);
-    padding: 0.85rem 0 2rem;
-    display: flex;
     flex-direction: column;
-  }
-
-  .settings-sidebar-title {
-    display: block;
-    padding: 0 1.1rem 0.75rem;
-    font-size: 1.4rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    letter-spacing: -0.015em;
-  }
-
-  .settings-sidebar-btn {
-    appearance: none;
-    background: transparent;
-    border: none;
-    border-left: 3px solid transparent;
-    padding: 0.5rem 1rem;
     width: 100%;
-    text-align: left;
-    font-size: 0.875rem;
-    font-family: inherit;
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: color 120ms ease, border-color 120ms ease;
-  }
-  .settings-sidebar-btn:hover {
-    color: var(--text-primary);
-  }
-  .settings-sidebar-btn.active {
-    color: var(--accent);
-    border-left-color: var(--accent);
-    font-weight: 600;
-  }
-  .settings-sidebar-btn:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -3px;
   }
 
   .settings-content {
-    flex: 1;
     padding: 2rem 2.5rem;
     width: 100%;
     box-sizing: border-box;

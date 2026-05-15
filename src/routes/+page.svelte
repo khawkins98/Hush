@@ -7,7 +7,6 @@
   import CommandPalette from "$lib/CommandPalette.svelte";
   import DictationSection from "$lib/DictationSection.svelte";
   import SettingsPanel from "$lib/SettingsPanel.svelte";
-  import type { SettingsTab } from "$lib/SettingsPanel.svelte";
   import SidebarNav from "$lib/SidebarNav.svelte";
   import HistoryPanel from "$lib/HistoryPanel.svelte";
   import AboutTab from "$lib/AboutTab.svelte";
@@ -118,8 +117,11 @@
     bind:active={nav.activeSection}
     recording={dictation.anyRecordingActive}
     open={nav.sidebarOpen}
+    settingsTab={nav.settingsActiveTab}
+    showDebugTab={nav.debugConsoleEnabled}
     onSelect={nav.onSidebarSelect}
     onToggle={nav.onSidebarToggle}
+    onSettingsTabSelect={(t) => { nav.settingsActiveTab = t; }}
   />
 
 <main class="app-main" data-active-section={nav.activeSection}>
