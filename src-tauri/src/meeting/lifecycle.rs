@@ -596,37 +596,43 @@ impl SessionManager {
     /// Returns `Ok(false)` if no session is active, `Ok(true)` if
     /// the utterance was persisted.
     pub async fn append_if_active(&self, text: &str, duration_ms: i64) -> Result<bool> {
-        let id = {
+        let id_and_start = {
             let guard = self
                 .state
                 .lock()
                 .map_err(|_| anyhow!("session manager mutex poisoned"))?;
             match &*guard {
-                SessionState::Active(a) => Some(a.id),
+                SessionState::Active(a) => Some((a.id, a.started_at)),
                 SessionState::Idle | SessionState::Opening | SessionState::Stopping => None,
             }
         };
 
-        let id = match id {
-            Some(id) => id,
+        let (id, session_started_at) = match id_and_start {
+            Some(pair) => pair,
             None => return Ok(false),
         };
 
-        // Cumulative-end-of-last-utterance scheme (the original
-        // legacy behavior). The streaming pump uses offsets
-        // produced by each session's internal clock; this
-        // hotkey-dictation path doesn't have access to a
-        // comparable per-session wall-clock so it anchors at the
-        // previous utterance's end.
-        let utterances = self.repo.list_utterances(id).await?;
-        let next_start = utterances.last().map(|u| u.ended_at_ms).unwrap_or(0);
+        // Anchor the hotkey-dictation utterance at the wall-clock position
+        // within this session rather than at "end of last DB utterance".
+        //
+        // The pump timestamps utterances relative to the same `started_at`
+        // Instant. Using elapsed() here places hotkey-dictation in the same
+        // timeline without a DB list read, eliminating the read-then-write
+        // race where a pump append between the list query and the insert
+        // would produce an overlapping or out-of-order timestamp (#818).
+        //
+        // `start_ms` is clamped to 0 in the pathological case where
+        // `duration_ms` exceeds the session age (e.g. dictation started
+        // before the meeting session opened).
+        let end_ms = session_started_at.elapsed().as_millis() as i64;
+        let start_ms = end_ms.saturating_sub(duration_ms).max(0);
 
         match self
             .repo
             .append_utterance(NewPersistedUtterance {
                 session_id: id,
-                started_at_ms: next_start,
-                ended_at_ms: next_start + duration_ms,
+                started_at_ms: start_ms,
+                ended_at_ms: end_ms,
                 speaker_label: None,
                 text: text.to_owned(),
             })

@@ -621,17 +621,20 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
         // Old WhisperContext compute buffers (KV cache, mel scratch, beam
         // scratch) are freed when the new Arcs replace the old ones and
         // their refcounts hit zero (#636).
-        //
-        // TODO(#636): a concurrent model_select that completes *during*
-        // this reload can be overwritten when the reload task finishes.
-        // Low-risk today (user rarely changes model right after a meeting
-        // stop); address with a generation counter if it surfaces.
         let settings_bg = Arc::clone(&state.settings);
         let models_dir_bg = state.models_dir.clone();
         let inference_threads_bg = Arc::clone(&state.runtime_flags.inference_threads);
         let mic_gain_db_bg = Arc::clone(&state.runtime_flags.mic_gain_db);
         let transcribe_slot = Arc::clone(&state.transcribe);
         let transcribe_meeting_slot = Arc::clone(&state.transcribe_meeting);
+        // Snapshot the generation counter before spawning (#801). If a
+        // model_select completes during the rebuild window it bumps this
+        // counter; we compare on commit and discard the stale result so
+        // the user-chosen model is never overwritten by the old rebuild.
+        let gen_snapshot = state
+            .transcriber_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        let generation_bg = Arc::clone(&state.transcriber_generation);
         #[cfg(feature = "diarization-onnx")]
         let diarize_slot_bg = Arc::clone(&state.diarize_slot);
 
@@ -650,10 +653,20 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
                     &mic_gain_db_bg,
                 ),
             );
-            // Only install a new context when the rebuild succeeded.
-            // Writing None would leave dictation broken until the next
-            // model selection; keeping the high-watermarked context live
-            // is preferable to a silent outage.
+            // Only install a new context when the rebuild succeeded AND
+            // no model_select ran during the rebuild window. If the
+            // generation advanced, the user already chose a new model —
+            // installing the stale rebuild result would overwrite it (#801).
+            let current_gen = generation_bg.load(std::sync::atomic::Ordering::Acquire);
+            if current_gen != gen_snapshot {
+                tracing::info!(
+                    gen_snapshot,
+                    current_gen,
+                    "meeting stop: model_select ran during rebuild; discarding stale rebuild result"
+                );
+                return;
+            }
+            // Generation unchanged — safe to install rebuild results.
             if dictation.is_none() {
                 tracing::error!(
                     "meeting stop: dictation transcriber rebuild returned None; \
