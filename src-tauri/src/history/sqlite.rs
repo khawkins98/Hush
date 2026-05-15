@@ -95,17 +95,19 @@ impl HistoryRepository for SqliteHistoryRepository {
         // `OR` operator — which we may want to expose later, but right
         // now the UI just wants a literal-substring "find this" feel.
         let phrase = format!("\"{}\"", query.replace('"', "\"\""));
+        let like_pat = format!("%{}%", query);
 
         sqlx::query_as::<_, HistoryEntry>(
             "SELECT h.id, h.transcript, h.app_name, h.window_title, h.model, \
                     h.duration_ms, h.created_at, h.ignored, h.name \
              FROM history h \
-             INNER JOIN history_fts fts ON fts.rowid = h.id \
-             WHERE history_fts MATCH ? \
+             WHERE h.id IN (SELECT rowid FROM history_fts WHERE history_fts MATCH ?) \
+                OR h.name LIKE ? \
              ORDER BY h.id DESC \
              LIMIT ? OFFSET ?",
         )
         .bind(phrase)
+        .bind(like_pat)
         .bind(limit)
         .bind(offset)
         .fetch_all(self.db.pool())
