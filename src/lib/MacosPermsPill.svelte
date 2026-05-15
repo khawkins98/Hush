@@ -144,10 +144,10 @@
 .permissions-pill {
   margin: 1.25rem auto 0;
   padding: 0.5rem 0.85rem;
-  background-color: #e7f8ec;
-  border: 1px solid #b6e5c5;
+  background-color: var(--success-bg);
+  border: 1px solid var(--success-border);
   border-radius: 999px;
-  color: #2a6b3c;
+  color: var(--success-text);
   font-size: 0.8rem;
   line-height: 1.4;
   display: inline-flex;
@@ -163,7 +163,7 @@
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 50%;
-  background-color: #2eaa53;
+  background-color: var(--success-text);
   box-shadow: 0 0 0 2px rgba(46, 170, 83, 0.18);
   display: inline-block;
 }

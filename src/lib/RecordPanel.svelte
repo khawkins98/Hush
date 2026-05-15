@@ -539,7 +539,7 @@
     width: 14px;
     height: 14px;
     border-radius: 2px;
-    background: white;
+    background: var(--bg-surface);
     display: inline-block;
   }
 

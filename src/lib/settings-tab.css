@@ -40,14 +40,14 @@
   margin: 0 0 0.6rem;
   font-size: 0.78rem;
   font-weight: 600;
-  color: #666;
+  color: var(--text-secondary);
   letter-spacing: 0.02em;
 }
 .subgroup-heading {
   margin: 1rem 0 0.5rem;
   font-size: 0.85rem;
   font-weight: 600;
-  color: #444;
+  color: var(--text-secondary);
 }
 
 /* ── Toggle (checkbox) row ──────────────────────────────── */
@@ -56,8 +56,8 @@
   align-items: flex-start;
   gap: 0.75rem;
   padding: 0.65rem 0.85rem;
-  background-color: white;
-  border: 1px solid #e1e1e6;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
 }
@@ -72,11 +72,11 @@
 }
 .toggle-name {
   font-weight: 600;
-  color: #222;
+  color: var(--text-primary);
 }
 .toggle-desc {
   font-size: 0.82rem;
-  color: #666;
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 
@@ -148,8 +148,8 @@
   flex-wrap: wrap;
   gap: 0.75rem;
   padding: 0.65rem 0.85rem;
-  background-color: white;
-  border: 1px solid #e1e1e6;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 .select-label {
@@ -161,11 +161,11 @@
 }
 .select-name {
   font-weight: 600;
-  color: #222;
+  color: var(--text-primary);
 }
 .select-desc {
   font-size: 0.82rem;
-  color: #666;
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 .select-row select {
@@ -174,6 +174,9 @@
   padding: 0.35rem 0.55rem;
   font-size: 0.85rem;
   font-family: inherit;
+  color: var(--text-primary);
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-input);
 }
 
 /* ── Slider row ─────────────────────────────────────────── */
@@ -182,16 +185,15 @@
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.65rem 0.85rem;
-  background-color: white;
-  border: 1px solid #e1e1e6;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
 }
 .slider-row input[type="range"] {
   width: 100%;
-  /* Pin range controls to the app's fixed light palette so WebKit
-     doesn't auto-style them as dark widgets. */
-  color-scheme: light;
+  /* Keep WebKit sliders aligned with Hush's dark controls. */
+  color-scheme: dark;
 }
 
 /* ── Plain rows + label/value/chord/note ────────────────── */
@@ -202,8 +204,8 @@
   gap: 1rem;
   margin: 0 0 0.5rem;
   padding: 0.55rem 0.85rem;
-  background-color: white;
-  border: 1px solid #e1e1e6;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 .settings-row-stack {
@@ -213,14 +215,14 @@
 }
 .row-label {
   font-weight: 500;
-  color: #333;
+  color: var(--text-primary);
 }
 .row-value {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 0.2rem;
-  color: #555;
+  color: var(--text-secondary);
 }
 .chord {
   display: inline-flex;
@@ -232,7 +234,7 @@
 .row-note {
   display: block;
   font-size: 0.75rem;
-  color: #888;
+  color: var(--text-muted);
   text-align: right;
 }
 .settings-row-stack .row-note {
@@ -242,35 +244,35 @@
 /* ── Errors + warnings ──────────────────────────────────── */
 .settings-error {
   margin: 0.4rem 0 0;
-  color: #8a1f1f;
+  color: var(--danger);
   font-size: 0.85rem;
 }
 .settings-warning-row {
   margin-top: 0.6rem;
   padding: 0.65rem 0.85rem;
-  background-color: #fdf6e3;
-  border: 1px solid #e7c887;
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 8px;
-  color: #7a4e00;
+  color: var(--warning-text);
 }
 .settings-row-name {
   margin: 0;
   font-weight: 600;
-  color: #222;
+  color: var(--text-primary);
 }
 .settings-row-desc {
   margin: 0.25rem 0 0.55rem;
   font-size: 0.85rem;
-  color: #555;
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 /* Inside the warning row, the name + desc inherit the amber
    palette so the whole card reads as one cohesive warning. */
 .settings-warning-row .settings-row-name {
-  color: #5a3700;
+  color: var(--warning-text);
 }
 .settings-warning-row .settings-row-desc {
-  color: #6a4500;
+  color: var(--warning-text);
 }
 
 /* ── Ghost button (consistent across every tab) ─────────── */
@@ -278,15 +280,15 @@ button.ghost {
   padding: 0.4em 0.85em;
   font-size: 0.85rem;
   font-weight: 500;
-  background-color: white;
-  border: 1px solid #d1d1d8;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-input);
   border-radius: 6px;
   cursor: pointer;
-  color: #1a4a63;
+  color: var(--info-text);
 }
 button.ghost:hover:not(:disabled) {
-  background-color: #f4f5fa;
-  border-color: #b8c1d8;
+  background-color: var(--info-bg);
+  border-color: var(--info-border);
 }
 button.ghost:disabled {
   opacity: 0.6;
@@ -297,9 +299,9 @@ button.ghost:disabled {
 kbd {
   display: inline-block;
   padding: 0.05em 0.35em;
-  border: 1px solid #d1d1d8;
+  border: 1px solid var(--border-input);
   border-radius: 4px;
-  background-color: #fafafa;
+  background-color: var(--bg-input);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   font-size: 0.85em;
 }

@@ -212,7 +212,8 @@
     padding: 1.5rem;
   }
   .perm-dialog-card {
-    background-color: #ffffff;
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
     border-radius: 12px;
     padding: 1.5rem 1.75rem;
     max-width: 36rem;
@@ -237,20 +238,21 @@
   .perm-dialog-intro {
     margin: 0 0 1rem;
     font-size: 0.88rem;
-    color: #555;
+    color: var(--text-secondary);
     line-height: 1.5;
   }
   .perm-dialog-error {
     margin: 0.5rem 0;
     padding: 0.5rem 0.75rem;
     border-radius: 6px;
-    background: #fbe3e3;
-    color: #8a1f1f;
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    color: var(--danger);
     font-size: 0.85rem;
   }
   .perm-dialog-loading {
     margin: 0.5rem 0;
-    color: #666;
+    color: var(--text-muted);
     font-size: 0.9rem;
   }
   .perm-dialog-footer {
@@ -264,12 +266,12 @@
      pattern FirstRunModal already uses. */
   button {
     border-radius: 8px;
-    border: 1px solid #d1d1d1;
+    border: 1px solid var(--border-input);
     padding: 0.55em 1.1em;
     font-size: 0.95em;
     font-family: inherit;
-    color: #0f0f0f;
-    background-color: #ffffff;
+    color: var(--text-primary);
+    background-color: var(--bg-surface);
     cursor: pointer;
     font-weight: 600;
     transition: border-color 0.15s, background-color 0.15s;
@@ -284,11 +286,11 @@
     background-color: transparent;
   }
   button.ghost:hover:not(:disabled) {
-    background-color: #f0f0f0;
+    background-color: var(--bg-elevated);
   }
   button.primary {
     background-color: var(--accent);
-    color: white;
+    color: var(--text-on-accent);
     border-color: var(--accent);
   }
   button.primary:hover:not(:disabled) {

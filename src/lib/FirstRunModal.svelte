@@ -442,7 +442,7 @@
 
 .first-run-tagline {
   margin: 0 0 1rem;
-  color: #555;
+  color: var(--text-secondary);
   font-size: 0.95rem;
 }
 
@@ -469,7 +469,7 @@
 
 .welcome-body {
   margin: 0 0 1rem;
-  color: #444;
+  color: var(--text-secondary);
   font-size: 0.92rem;
   line-height: 1.5;
 }
@@ -494,15 +494,15 @@
   align-items: center;
   gap: 0.85rem;
   padding: 0.7rem 0.9rem;
-  background-color: #f7f7f8;
-  border: 1px solid #e1e1e6;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: 10px;
   transition: opacity 0.15s, background-color 0.15s;
 }
 .wizard-perm-row.granted {
   opacity: 0.7;
-  background-color: #f0f7f1;
-  border-color: #cfe5d3;
+  background-color: var(--success-bg);
+  border-color: var(--success-border);
 }
 .wizard-perm-row.dimmed {
   opacity: 0.55;
@@ -511,7 +511,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #555;
+  color: var(--text-secondary);
   user-select: none;
 }
 .wizard-perm-text {
@@ -523,11 +523,11 @@
 .wizard-perm-title {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--text-primary);
 }
 .wizard-perm-why {
   font-size: 0.82rem;
-  color: #5a5a5a;
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 .wizard-perm-badge {
@@ -537,8 +537,8 @@
   width: 1.75rem;
   height: 1.75rem;
   border-radius: 50%;
-  background-color: #2a6b3c;
-  color: white;
+  background-color: var(--success-border);
+  color: var(--text-on-accent);
   font-size: 0.95rem;
   font-weight: 600;
 }
@@ -558,7 +558,7 @@
   flex: 1;
   margin: 0;
   font-size: 0.8rem;
-  color: #6a6a6a;
+  color: var(--text-muted);
   line-height: 1.45;
 }
 .footer-actions {
@@ -568,12 +568,12 @@
 
 button {
   border-radius: 8px;
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border-input);
   padding: 0.6em 1.1em;
   font-size: 0.9rem;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
   cursor: pointer;
   font-weight: 600;
   display: inline-flex;
@@ -594,14 +594,14 @@ button.ghost {
   font-size: 0.85rem;
   font-weight: 500;
   background-color: transparent;
-  border: 1px solid #d1d1d1;
+  border: 1px solid var(--border-input);
 }
 button.ghost:hover:not(:disabled) {
-  background-color: #f0f0f0;
+  background-color: var(--bg-elevated);
 }
 button.primary {
   background-color: var(--accent);
-  color: white;
+  color: var(--text-on-accent);
   border-color: var(--accent);
 }
 button.primary:hover:not(:disabled) {

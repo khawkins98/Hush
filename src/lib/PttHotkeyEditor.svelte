@@ -351,8 +351,8 @@
     align-items: center;
     gap: 1rem;
     padding: 0.55rem 0.85rem;
-    background-color: white;
-    border: 1px solid #e1e1e6;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
   }
   /* PttHotkeyEditor's `.row-label` adds a min-width to keep the
@@ -386,7 +386,7 @@
   .settings-hint.warn {
     color: var(--warning-text);
     background-color: var(--warning-bg);
-    border: 1px solid #ffd591;
+    border: 1px solid var(--warning-border);
     border-radius: 6px;
     padding: 0.55rem 0.75rem;
   }

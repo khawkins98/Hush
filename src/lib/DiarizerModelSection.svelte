@@ -288,8 +288,8 @@
      same card treatment as .toggle-row so the section reads as a
      cohesive block before the toggle appears beneath it. */
   .diarizer-model-status {
-    background-color: white;
-    border: 1px solid #e1e1e6;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 0.65rem 0.85rem;
     margin-bottom: 0.75rem;
@@ -318,7 +318,7 @@
     cursor: pointer;
     font-size: 0.78rem;
     font-weight: 600;
-    color: #666;
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     padding: 0.25rem 0;
@@ -333,13 +333,13 @@
     font-size: 0.85rem;
     width: 0.9rem;
     text-align: center;
-    color: #888;
+    color: var(--text-muted);
   }
   .diarizer-manual-install[open] > summary::before {
     content: "▾";
   }
   .diarizer-manual-install > summary:hover {
-    color: #333;
+    color: var(--text-primary);
   }
   .diarizer-manual-install > .settings-row-desc {
     margin-top: 0.4rem;
@@ -363,7 +363,7 @@
   .diarizer-installed-details summary {
     cursor: pointer;
     font-size: 0.85rem;
-    color: #1a4a63;
+    color: var(--info-text);
     user-select: none;
   }
   .diarizer-details {
@@ -387,7 +387,7 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
     font-size: 0.78rem;
     color: var(--text-secondary);
-    background-color: rgba(0, 0, 0, 0.05);
+    background-color: var(--bg-input);
     padding: 0.1em 0.3em;
     border-radius: 4px;
   }
