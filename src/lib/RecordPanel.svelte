@@ -94,6 +94,14 @@
   let transcriptionProgress = $state<number | null>(null);
   let unlistenProgress: UnlistenFn | null = null;
 
+  // "Copied!" confirmation flash (#928). Mirrors the HUD's done state
+  // by subscribing to the same `hud:state` events. Reverts to null
+  // after ~1.5 s so the label doesn't get stuck on "Copied!" for the
+  // next idle/ready state.
+  let hudDone = $state(false);
+  let doneTimer: ReturnType<typeof setTimeout> | null = null;
+  let unlistenHudState: UnlistenFn | null = null;
+
   // Recording-duration timer. Mirrors the HUD's pattern (#360):
   // wall-clock start stamp when `recording` flips true, rAF
   // refresh of the label, reset to `0:00` on stop. Lets the user
@@ -118,6 +126,12 @@
       recordingStartedAt = Date.now();
       elapsedLabel = "00:00";
       transcriptionProgress = null;
+      // Reset the "Copied!" flash when a new recording starts.
+      if (doneTimer !== null) {
+        clearTimeout(doneTimer);
+        doneTimer = null;
+      }
+      hudDone = false;
     } else {
       recordingStartedAt = null;
       elapsedLabel = "00:00";
@@ -131,6 +145,19 @@
     });
     unlistenProgress = await listen<number>(Events.TranscriptionProgress, (event) => {
       transcriptionProgress = event.payload;
+    });
+    // Mirror the HUD's "done" state (#928): subscribe to the same
+    // `hud:state` backend events so we can flash "Copied!" when the
+    // clipboard write completes, then self-dismiss after ~1.5 s.
+    unlistenHudState = await listen<{ state: string }>("hud:state", (event) => {
+      if (event.payload.state === "done") {
+        hudDone = true;
+        if (doneTimer !== null) clearTimeout(doneTimer);
+        doneTimer = setTimeout(() => {
+          hudDone = false;
+          doneTimer = null;
+        }, 1500);
+      }
     });
     const tick = () => {
       if (recordingStartedAt !== null) {
@@ -146,6 +173,12 @@
     unlistenStatusLine = null;
     unlistenProgress?.();
     unlistenProgress = null;
+    unlistenHudState?.();
+    unlistenHudState = null;
+    if (doneTimer !== null) {
+      clearTimeout(doneTimer);
+      doneTimer = null;
+    }
     if (raf !== undefined) {
       cancelAnimationFrame(raf);
       raf = undefined;
@@ -153,14 +186,16 @@
   });
 
   // Waveform mood priority: error > recording > processing > idle.
+  // `busy` covers starting/stopping/transcribing so the waveform stays
+  // in processing mode throughout the entire post-stop pipeline (#928).
   // Error wins so a stop-time failure flashes the bars even while
-  // `transcribing` is still true on its way down.
+  // `busy` is still true on its way down.
   let waveformMode = $derived<"idle" | "recording" | "processing" | "error">(
     error !== null
       ? "error"
       : recording
         ? "recording"
-        : transcribing
+        : busy
           ? "processing"
           : "idle",
   );
@@ -293,8 +328,10 @@
         >
       {/if}
       {meetingOnlyActive ? "— press Stop" : "— release hotkey or press Stop"}
-    {:else if transcribing}
-      Transcribing…
+    {:else if busy}
+      Processing…
+    {:else if hudDone}
+      Copied!
     {:else if willRecordMeeting}
       Record meeting <span class="record-mode-hint">mic + system audio</span>
     {:else if !noModelInstalled && hasUsableSource}
