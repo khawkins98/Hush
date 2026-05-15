@@ -214,6 +214,9 @@ impl WhisperTranscription {
         if format.sample_rate == 0 {
             return Err(anyhow!("captured audio has zero sample rate"));
         }
+        if format.channels == 0 {
+            return Err(anyhow!("captured audio has zero channels"));
+        }
 
         // Step 1: collapse to mono. The audio module hands us
         // channel-interleaved samples; whisper expects a single channel.
@@ -558,6 +561,9 @@ impl WhisperStreamingSession {
         if self.capture_format.sample_rate == 0 {
             return Err(anyhow::anyhow!("captured audio has zero sample rate"));
         }
+        if self.capture_format.channels == 0 {
+            return Err(anyhow::anyhow!("captured audio has zero channels"));
+        }
         let mono = downmix_to_mono(samples, self.capture_format.channels);
         Ok(resample_to_mono(
             &mono,
@@ -870,6 +876,21 @@ mod tests {
             format: CaptureFormat {
                 sample_rate: 0,
                 channels: 1,
+            },
+        };
+        assert!(WhisperTranscription::prepare_audio(&audio).is_err());
+    }
+
+    #[test]
+    fn prepare_audio_rejects_zero_channels() {
+        // Defence-in-depth: downmix_to_mono with channels==0 produces a
+        // degenerate empty mono buffer; catch it at the format-validation
+        // boundary instead (#922).
+        let audio = CapturedAudio {
+            samples: vec![0.0],
+            format: CaptureFormat {
+                sample_rate: 16_000,
+                channels: 0,
             },
         };
         assert!(WhisperTranscription::prepare_audio(&audio).is_err());

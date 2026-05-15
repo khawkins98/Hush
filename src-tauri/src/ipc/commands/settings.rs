@@ -327,10 +327,9 @@ pub async fn set_meeting_autostart_mode(
     state: State<'_, AppState>,
     mode: crate::meeting::MeetingAutostartMode,
 ) -> IpcResult<()> {
-    state.runtime_flags.meeting_autostart_mode.store(
-        crate::ipc::encode_autostart_mode(mode),
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    // Persist first; only update the runtime atomic on success so
+    // a DB write failure doesn't leave runtime and persisted state
+    // diverged until next launch (#925).
     state
         .settings
         .set(
@@ -338,5 +337,10 @@ pub async fn set_meeting_autostart_mode(
             mode.as_setting(),
         )
         .await
-        .map_err(|e| IpcError::Settings(format!("{e:#}")))
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))?;
+    state.runtime_flags.meeting_autostart_mode.store(
+        crate::ipc::encode_autostart_mode(mode),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    Ok(())
 }

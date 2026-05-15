@@ -200,6 +200,9 @@ export const meetingSettings = {
       );
       appOverridesError = null;
     } catch (e) {
+      // Reload to revert the UI's optimistic select value back to persisted
+      // state — native <select> changes immediately on interaction (#926).
+      await meetingSettings.loadAppOverrides();
       appOverridesError = formatErrorDisplay(e);
     }
   },
@@ -235,6 +238,9 @@ export const meetingSettings = {
       );
       appOverridesError = null;
     } catch (e) {
+      // Reload to revert the UI's optimistic select value back to persisted
+      // state — native <select> changes immediately on interaction (#926).
+      await meetingSettings.loadAppOverrides();
       appOverridesError = formatErrorDisplay(e);
     }
   },

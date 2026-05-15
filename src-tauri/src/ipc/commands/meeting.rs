@@ -403,7 +403,14 @@ pub async fn meeting_start_manual(
     // work without metadata, they just render as "manual / Other"
     // until the user adds notes.
     let (probed_app_name, app_title) = capture_foreground_app();
-    let resolved_app_name = app_name.or(probed_app_name);
+    // Normalize blank/whitespace-only strings so they don't win over the
+    // probed foreground app name — frontend could pass stale empty state (#921).
+    let resolved_app_name = app_name
+        .and_then(|s| {
+            let t = s.trim();
+            (!t.is_empty()).then(|| t.to_owned())
+        })
+        .or(probed_app_name);
 
     let session = state
         .meeting_manager
