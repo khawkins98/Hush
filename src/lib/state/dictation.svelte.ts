@@ -187,10 +187,25 @@ export const dictation = {
       const def = stillPresent ?? mics.find((s) => s.isDefault) ?? mics[0];
       if (def) {
         audio.selected = def.id;
-        audio.meetingMicId = def.id;
+        // Preserve the user's previously-chosen meeting mic if it's still
+        // present; only fall back to the default when the device disappeared
+        // or on first load (#844).
+        const prevMeetingMic = audio.meetingMicId;
+        const meetingMicDevice =
+          prevMeetingMic !== null
+            ? mics.find((s) => s.id === prevMeetingMic)
+            : undefined;
+        if (!meetingMicDevice) audio.meetingMicId = def.id;
       }
       const sys = sources.find((s) => s.kind === "system-audio");
-      audio.meetingIncludeSystemAudio = sys?.isSupported ?? false;
+      const sysSupported = sys?.isSupported ?? false;
+      if (!audio.sourcesLoaded) {
+        // First load: initialize to platform capability.
+        audio.meetingIncludeSystemAudio = sysSupported;
+      } else if (audio.meetingIncludeSystemAudio && !sysSupported) {
+        // System audio disappeared or lost permission — must disable (#844).
+        audio.meetingIncludeSystemAudio = false;
+      }
     } catch (e) {
       error = formatErrorDisplay(e);
     } finally {
