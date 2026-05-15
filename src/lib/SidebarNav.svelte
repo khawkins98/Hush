@@ -251,7 +251,7 @@
   .sidebar-nav {
     flex-shrink: 0;
     background: var(--bg-sidebar);
-    border-right: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--bg-sidebar-border);
     padding: 0.6rem 0;
     display: flex;
     flex-direction: column;
@@ -289,10 +289,10 @@
   }
   .sidebar-nav-toggle:hover {
     color: var(--text-primary);
-    background-color: var(--bg-surface);
+    background-color: var(--accent-blue-subtle);
   }
   .sidebar-nav-toggle:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-blue);
     outline-offset: 1px;
   }
   /* When collapsed, the toggle sits centred below the items
@@ -347,12 +347,12 @@
     color: var(--text-primary);
   }
   .sidebar-nav-item:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-blue);
     outline-offset: -3px;
   }
   .sidebar-nav-item.active {
-    color: var(--accent);
-    border-left-color: var(--accent);
+    color: var(--accent-blue);
+    border-left-color: var(--accent-blue);
   }
   /* Layout per state. Collapsed: icon centred. Open: icon +
      label horizontally, icon left-aligned with consistent
