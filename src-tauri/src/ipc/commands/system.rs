@@ -292,7 +292,7 @@ pub(crate) async fn check_for_updates_inner(
 ) -> IpcResult<crate::updater::UpdateCheckResult> {
     // Phase 1: fast cache read (no await, no in-flight mutex overhead).
     {
-        let cached = state.last_update_check.lock().map_err(poisoned)?;
+        let cached = state.update_check.last.lock().map_err(poisoned)?;
         if let Some((at, result)) = cached.as_ref() {
             if now.duration_since(*at) < UPDATE_CHECK_TTL {
                 return Ok(result.clone());
@@ -300,11 +300,11 @@ pub(crate) async fn check_for_updates_inner(
         }
     }
     // Phase 2: serialise the probe so only one network call runs at a time.
-    let _guard = state.update_check_inflight.lock().await;
+    let _guard = state.update_check.inflight.lock().await;
     // Re-check after acquiring the guard — another caller may have already
     // refreshed the cache while we were waiting.
     {
-        let cached = state.last_update_check.lock().map_err(poisoned)?;
+        let cached = state.update_check.last.lock().map_err(poisoned)?;
         if let Some((at, result)) = cached.as_ref() {
             if now.duration_since(*at) < UPDATE_CHECK_TTL {
                 return Ok(result.clone());
@@ -316,7 +316,7 @@ pub(crate) async fn check_for_updates_inner(
     // (network error, GitHub 5xx, rate-limit) — caching it for the full TTL
     // would suppress retries until the window expires (#873).
     if !matches!(fresh, crate::updater::UpdateCheckResult::CheckFailed { .. }) {
-        *state.last_update_check.lock().map_err(poisoned)? = Some((now, fresh.clone()));
+        *state.update_check.last.lock().map_err(poisoned)? = Some((now, fresh.clone()));
     }
     Ok(fresh)
 }
