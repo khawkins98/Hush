@@ -22,11 +22,11 @@ The actual deployment target the binary is built against is `MACOSX_DEPLOYMENT_T
 
 | Platform | v1 (today) | Roadmap |
 |---|---|---|
-| macOS | Ad-hoc signed only. Gatekeeper warning on first launch; right-click → Open clears it. Homebrew users can skip it entirely: `brew install --cask --no-quarantine khawkins98/tap/hush`. | Developer ID + notarisation. Needs an `APPLE_*` secrets bundle on the repo. |
+| macOS | Ad-hoc signed only. Gatekeeper warning on first launch; right-click → Open clears it (one-time). Homebrew is still the recommended install path (`brew install --cask khawkins98/tap/hush`) for easy future updates. | Developer ID + notarisation. Needs an `APPLE_*` secrets bundle on the repo. |
 | Windows | Unsigned. SmartScreen warning. Click "More info" → "Run anyway". | EV certificate + signtool integration. |
 | Linux | AppImage / .deb shipped as-is. | n/a — Linux distros don't sign artefacts the same way. |
 
-The first wave of releases will surface those warnings to users. The README's install section sets the expectation up front; once code-signing lands, both the warnings and the Homebrew `--no-quarantine` caveat can go away.
+The first wave of releases will surface those warnings to users. The README's install section sets the expectation up front; once code-signing lands, the warnings and caveats can go away.
 
 ## Release-cutting steps
 

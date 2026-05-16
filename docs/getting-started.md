@@ -6,13 +6,13 @@ End-to-end walkthrough: install → first recording → meeting capture.
 
 ## 1. Install
 
-### Option A — Homebrew (macOS, no security warning)
+### Option A — Homebrew (macOS, recommended)
 
 ```bash
-brew install --cask --no-quarantine khawkins98/tap/hush
+brew install --cask khawkins98/tap/hush
 ```
 
-The `--no-quarantine` flag means Hush opens straight away — no Gatekeeper dialog. Skip to [step 2](#2-first-launch-and-permissions).
+Homebrew handles the install and lets you update later with `brew upgrade --cask hush`. You will still see a Gatekeeper warning on first launch — follow the steps in Option B below to clear it (one-time only).
 
 ### Option B — Download the DMG (macOS)
 
