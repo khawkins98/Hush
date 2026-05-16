@@ -4,6 +4,34 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## Key Learnings (Curated Essentials)
+
+High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app:
+
+**macOS distribution & permissions:**
+- [Quarantine xattr + TCC mismatch (2026-05-13)](#2026-05-13--quarantine-xattr-causes-tcc-grantcheck-identity-mismatch-on-macos-26-dmg-installs) — DMG installs get `com.apple.quarantine` set by Finder; TCC keyed permissions to quarantine-context identity. After Gatekeeper clears it, grants become invisible. Fix: `xattr -dr` on startup before any permission check, restart via `exec()` to inherit the clean state.
+- [Linker-signed vs re-signed TCC identity (2026-05-14)](#2026-05-14--linker-signed-vs-re-signed-tcc-identity-old-applications-install-poisons-dev-iteration) — Ad-hoc signed (`codesign --force --deep -`; what `tauri:bundle` does) vs hash-valued (`cargo tauri build --debug`) creates two identities in TCC. DMG + old linker-signed `~/.Hush.app` can poison dev iteration indefinitely.
+- [`tauri dev` parent-attribution vs Screen Recording (2026-04-27)](#2026-04-27--macos-tcc-and-the-tauri-dev-binary-parent-attribution-quirk) — Bare unsigned dev binary attributes TCC requests to parent terminal. Screen Recording rejects this. Use `npm run tauri:bundle` for TCC testing, not bare `cargo tauri dev`.
+
+**Audio capture & inference:**
+- [`isExclusive = true` for system audio tap (2026-05-06)](#2026-05-06--isexclusive--true-is-required-for-catapversion-to-capture-any-audio-593-594) — `CATapDescription` with `isExclusive = false` produces silence. Needs `true` to capture the system mix. Only well-documented in third-party implementations (Korus, OpenWhispr); not in Apple docs.
+- [`tract-onnx` not ORT for ONNX inference (2026-05-08)](#2026-05-08--641-root-cause-fix-ort--tract-onnx) — ORT silently uses Metal Performance Shaders even with `CPU::default()` EP, causing unbounded `IOAccelerator` growth. Pure-Rust `tract-onnx` avoids this; `TypedRunnableModel<TypedModel>` is `Send+Sync`, no mutex needed.
+- [Whisper streaming session lifecycle (2026-05-07 + #612)](#2026-05-07--612-not-actually-closed-macos-compression-was-hiding-the-leak) — `WhisperState` must be lazily created on first inference, dropped on decode error, and periodically recreated every ~30 inferences to bound C-heap accumulation. Missing any of these causes memory leak.
+
+**Tauri & cross-module architecture:**
+- [`generate_handler!` re-export trap (2026-04-25)](#2026-04-25--tauri-generate_handler-does-not-see-commands-through-re-exports) — `pub use` re-exports don't carry the macro's hidden `__cmd__<name>` symbol. Must register with full module path: `ipc::commands::meeting::meeting_start_manual` not `ipc::meeting_start_manual`.
+- [CI blind spot: startup panics (2026-04-26)](#2026-04-26--cis-blind-spot-startup-time-panics-and-the-npm-run-tauri-dev-smoke) — `cargo test --lib` + Playwright never instantiate a real `tauri::Builder`. Plugin config failures, handler misreferences, managed-state collisions are invisible to automation. Required smoke: `npm run tauri dev` launches cleanly before committing.
+- [HUD transparent-window style block (2026-05-16)](#2026-05-16--hudpage-svelte-transparent-window-style-block-is-load-bearing) — Transparent borderless window can't pass `style` prop to the underlying Tauri window (deadlock in macOS GPU thread). Instead, inline CSS variables into the app's root `<style>` at window creation time.
+
+**Hotkeys & event listeners:**
+- [rdev macOS 26+ fork required (2026-04-26)](#2026-04-26--rdev-05-crashes-on-macos-26-via-tsm-dispatch-queue-assertion) — rdev 0.5 calls `TSMGetInputSourceProperty` from CGEventTap listener thread, which fails `dispatch_assert_queue` on macOS 26+. Requires fufesou's fork (same as RustDesk) until upstream PR #147 lands. PTT listener is `HUSH_PTT_ENABLE=1` opt-in; toggle hotkey unaffected.
+
+**Testing & CI/CD:**
+- [Playwright mocked Tauri IPC via Vite alias (2026-04-25)](#2026-04-25--playwright-with-mocked-tauri-ipc-vite-alias-not-deep-stub) — Mock `@tauri-apps/api/*` via Vite alias in `vite.config.ts` and rebuild mocks in-browser. Avoid closure captures in mocks — they're serialized via `toString()` and lose outer scope.
+- [Stacked PRs + squash-merge auto-close (2026-05-07)](#2026-05-07--stacked-prs--squash-merge-auto-close-the-dependent-pr-irrecoverably) — GitHub auto-closes merged PRs without prompt. Stacking PRs (A → B → C) means C's merge auto-closes B irrecoverably even if B isn't ready. Rebase-interactive to flatten before merging.
+
+---
+
 ## 2026-05-16 — Homebrew tap + Gatekeeper workaround as primary install path
 
 ### Background: two layers of Gatekeeper protection
