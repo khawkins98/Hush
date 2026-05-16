@@ -69,9 +69,11 @@ gh pr create
 
 ### 4. Tag and push
 
+After the PR is squash-merged, `git pull` will fail with "divergent branches" because the squash commit has a different SHA than your local branch tip. Use `reset --hard` instead:
+
 ```bash
 git checkout main
-git pull
+git reset --hard origin/main
 git tag vx.y.z
 git push origin vx.y.z
 ```
@@ -80,11 +82,21 @@ The workflow fires on the tag push. Watch progress at the [Actions](https://gith
 
 ### 5. Review and publish
 
-- Open the [Releases](https://github.com/khawkins98/Hush/releases) page; the new release is in draft.
+The workflow auto-generates the release body with Homebrew-first install instructions. You only need to prepend the CHANGELOG narrative paragraph. Use the `gh` CLI:
+
+```bash
+NARRATIVE=$(awk '/^## \[x\.y\.z\]/{found=1; next} found && /^###/{exit} found && NF{print}' CHANGELOG.md)
+EXISTING=$(gh release view vx.y.z --json body -q .body)
+printf '%s\n\n%s' "$NARRATIVE" "$EXISTING" | gh release edit vx.y.z --notes-file -
+```
+
+Or paste it manually in the GitHub UI (pencil icon on the draft release, above the `### Install` section).
+
+Then:
+
 - Confirm all three platform artefacts are present (apple-silicon `.dmg`, `.AppImage` + `.deb`, `.msi` + `.exe`).
-- Paste the CHANGELOG entry into the release body (replacing the placeholder install copy).
-- Click **Publish**.
-- Confirm the Homebrew tap was updated: [khawkins98/homebrew-tap/Casks/hush.rb](https://github.com/khawkins98/homebrew-tap/blob/main/Casks/hush.rb) should show the new version and the correct SHA256. If the workflow step failed (e.g. `GITHUB_TOKEN` lacked write access to the tap repo), update it manually — see the "Homebrew tap" section below.
+- Publish: `gh release edit vx.y.z --draft=false`
+- Confirm the Homebrew tap was updated: [khawkins98/homebrew-tap/Casks/hush.rb](https://github.com/khawkins98/homebrew-tap/blob/main/Casks/hush.rb) should show the new version and correct SHA256. If the step failed (missing `TAP_GITHUB_TOKEN` secret), update manually — see the "Homebrew tap" section below.
 
 Optionally, post-publish: download one artefact per platform and smoke-test the install path on a clean machine. Record any platform-specific install failures in `learnings.md` so the next release-cutter can avoid them.
 
