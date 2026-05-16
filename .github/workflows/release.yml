@@ -202,15 +202,23 @@ jobs:
 
             ### Install
 
-            - **macOS**: download the `.dmg`, open it, drag Hush.app
-              to Applications. First launch will show a Gatekeeper
-              warning — right-click Hush.app → Open to bypass.
-              (Notarisation is on the roadmap.)
-            - **Windows**: download the `.msi` or `.exe`. SmartScreen
-              will warn on first run; click "More info" → "Run
-              anyway." (Code signing is on the roadmap.)
-            - **Linux**: `.AppImage` (any distro) or `.deb`
-              (Debian/Ubuntu).
+            #### macOS (recommended — no Gatekeeper warning)
+            ```sh
+            brew install --cask --no-quarantine khawkins98/tap/hush
+            ```
+            Requires [Homebrew](https://brew.sh). The `--no-quarantine` flag removes the quarantine attribute at install time so the Gatekeeper dialog never appears.
+
+            #### macOS (DMG — manual install)
+            Download the `.dmg` below, open it, and drag Hush.app to Applications.
+            First launch will show a Gatekeeper warning because Hush is not yet notarised —
+            right-click Hush.app → **Open** to bypass it.
+
+            #### Windows
+            Download the `.msi` or `.exe` below. SmartScreen will warn on first run;
+            click **More info** → **Run anyway**. (Code signing is on the roadmap.)
+
+            #### Linux
+            `.AppImage` (any distro) or `.deb` (Debian/Ubuntu).
           # Ship as draft so a maintainer can review the attached
           # artefacts before publishing — first-time release plumbing
           # is the kind of thing that benefits from a manual gate.
