@@ -7,15 +7,16 @@ what to do about it.
 
 
 ──────────────────────────────────────────────────────────────────────────
-QUICKEST FIX: HOMEBREW
+QUICKEST INSTALL: HOMEBREW
 ──────────────────────────────────────────────────────────────────────────
 
-If you have Homebrew installed, uninstall this copy and use Homebrew
-instead — it skips the warning entirely:
+If you have Homebrew installed, you can install Hush from the tap:
 
-    brew install --cask --no-quarantine khawkins98/tap/hush
+    brew install --cask khawkins98/tap/hush
 
-Otherwise, follow one of the options below.
+You will still see a Gatekeeper warning on first launch — follow the
+steps below to clear it (one-time).  The advantage of Homebrew is that
+future updates are just `brew upgrade --cask hush`.
 
 
 ──────────────────────────────────────────────────────────────────────────

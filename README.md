@@ -77,15 +77,15 @@ A workflow page for knowledge workers in privacy-sensitive roles is on the roadm
 
 ## Install
 
-### Option A — Homebrew (recommended, no Gatekeeper dialog)
+### Option A — Homebrew (recommended)
 
 ```bash
-brew install --cask --no-quarantine khawkins98/tap/hush
+brew install --cask khawkins98/tap/hush
 ```
 
-The `--no-quarantine` flag skips the macOS "unidentified developer" warning entirely. Equivalent to `xattr -rd com.apple.quarantine` but done at install time. Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project).
-
 Tap source: [`khawkins98/homebrew-tap`](https://github.com/khawkins98/homebrew-tap)
+
+Homebrew handles the install and lets you update later with `brew upgrade --cask hush`. You'll still see a Gatekeeper warning on first launch (Hush is not notarised — see Option B below for how to bypass it). Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project).
 
 ### Option B — Direct download
 

@@ -4,7 +4,7 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
-## 2026-05-16 — Homebrew tap + `--no-quarantine` as primary install path
+## 2026-05-16 — Homebrew tap + Gatekeeper workaround as primary install path
 
 ### Background: two layers of Gatekeeper protection
 
@@ -13,20 +13,15 @@ macOS applies two independent quarantine checks when a user downloads and runs a
 1. **Launch-time Gatekeeper dialog** — shown when a file with `com.apple.quarantine` is first opened. The "cannot be opened" sheet fires; without a developer account there is no notarisation to satisfy it.
 2. **TCC identity mismatch** — documented 2026-05-13 below. Even if the user dismisses Gatekeeper with right-click → Open, the quarantine xattr causes TCC to key permissions to a different identity than the codesign bundle ID, so Screen Recording / Microphone grants vanish after the quarantine strip (see `lib.rs:472–506`, `permissions/macos.rs:254–310`).
 
-Hush already handles case 2 at runtime: `handle_quarantine_strip()` detects the xattr, strips it, and `exec()`s itself (not `spawn()` — macOS 26's quarantine events daemon re-adds the xattr before a spawned child starts). But case 1 still fires before the runtime strip can run, which means first-time DMG users see the scary blocking dialog.
+Hush already handles case 2 at runtime: `handle_quarantine_strip()` detects the xattr, strips it, and `exec()`s itself (not `spawn()` — macOS 26's quarantine events daemon re-adds the xattr before a spawned child starts). Case 1 requires a one-time user action (right-click → Open, or System Settings → Open Anyway, or the `xattr` Terminal command).
 
-### Solution chosen: Homebrew tap with `--no-quarantine`
+### Solution chosen: Homebrew tap (primary) + documented Gatekeeper workaround
 
-`brew install --cask --no-quarantine khawkins98/tap/hush` calls Homebrew's `Quarantine.release!()` at install time — before the app is ever launched. The app is placed in `/Applications` without the `com.apple.quarantine` xattr attached, so:
+Homebrew tap (`brew install --cask khawkins98/tap/hush`) is the recommended install path for the clean one-liner and `brew upgrade --cask hush` update path. Both Homebrew and DMG users see a Gatekeeper dialog on first launch; both use the same documented workarounds in `docs/getting-started.md` and `docs/dmg-readme.txt`.
 
-- No Gatekeeper launch dialog ever fires
-- TCC sees the correct codesign identity from first launch
-- The runtime quarantine strip is still present as a safety net for DMG users who didn't use Homebrew
+**Note (2026-05-16):** `--no-quarantine` was disabled in Homebrew 5.1.0 (PR #21629, merged Feb 2026). There is no replacement CLI flag. The `HOMEBREW_CASK_OPTS` env var is similarly disabled. The primary benefit of Homebrew over DMG is now the update path, not quarantine bypass.
 
-This was chosen over alternatives:
-- **Right-click → Open workaround**: works but is obscure; we document it but it's not a good primary path
-- **Apple Developer account + notarisation**: would solve everything but costs $99/yr and requires a stable signing identity; deferred
-- **Runtime strip only**: handles the TCC mismatch but not the blocking launch dialog
+Prior documentation that mentioned `brew install --cask --no-quarantine ...` has been corrected to omit the flag.
 
 ### Homebrew tap CI mechanics
 

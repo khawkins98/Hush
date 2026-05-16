@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0] - 2026-05-16
 
-v0.9.0 is a visual overhaul release. The entire UI has been re-keyed to the Hush brand palette — deep navy surfaces, warm orange as the primary accent, and a blue accent family replacing the previous green success states. The history panel received a Stitch-inspired redesign, the app icon and tray icon were updated to match the new look, and the sidebar gained a gradient fade into the main canvas. On the distribution side, a Homebrew tap is now the recommended install path: `brew install --cask --no-quarantine khawkins98/tap/hush` bypasses the Gatekeeper dialog entirely for users without an Apple Developer account. The release workflow auto-patches the tap on every tag push. A handful of small UI fixes and a documentation pass round out the release.
+v0.9.0 is a visual overhaul release. The entire UI has been re-keyed to the Hush brand palette — deep navy surfaces, warm orange as the primary accent, and a blue accent family replacing the previous green success states. The history panel received a Stitch-inspired redesign, the app icon and tray icon were updated to match the new look, and the sidebar gained a gradient fade into the main canvas. On the distribution side, a Homebrew tap is now the recommended install path for easy install and `brew upgrade` updates. The release workflow auto-patches the tap on every tag push. A handful of small UI fixes and a documentation pass round out the release.
 
 ### Added
 
-- **Distribution: Homebrew tap as primary install path.** `brew install --cask --no-quarantine khawkins98/tap/hush` installs Hush without the macOS Gatekeeper "cannot be opened" dialog. The tap at `khawkins98/homebrew-tap` is auto-patched by the release workflow on every `v*` tag push.
+- **Distribution: Homebrew tap as primary install path.** `brew install --cask khawkins98/tap/hush` is the recommended install method — clean one-liner, easy updates via `brew upgrade --cask hush`. The tap at `khawkins98/homebrew-tap` is auto-patched by the release workflow on every `v*` tag push. Gatekeeper still prompts on first launch (right-click → Open to clear it); see `docs/getting-started.md`.
 - **Docs: getting-started guide.** `docs/getting-started.md` is a new end-to-end guide covering install (Homebrew, DMG, Linux, Windows), Gatekeeper workarounds, permission setup, first dictation, meetings, and history.
 
 ### Changed
