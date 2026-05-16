@@ -77,37 +77,44 @@ A workflow page for knowledge workers in privacy-sensitive roles is on the roadm
 
 ## Install
 
-### Option A — Homebrew (recommended)
+### macOS
+
+Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project), so macOS will show a security warning on **first launch** regardless of how you install. The bypass is a one-time, 30-second step.
+
+**Homebrew (recommended — easy updates):**
 
 ```bash
 brew install --cask khawkins98/tap/hush
 ```
 
-Tap source: [`khawkins98/homebrew-tap`](https://github.com/khawkins98/homebrew-tap)
+Future updates: `brew upgrade --cask hush`. Tap source: [`khawkins98/homebrew-tap`](https://github.com/khawkins98/homebrew-tap)
 
-Homebrew handles the install and lets you update later with `brew upgrade --cask hush`. You'll still see a Gatekeeper warning on first launch (Hush is not notarised — see Option B below for how to bypass it). Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project).
+**Or download the DMG** from **[GitHub Releases](https://github.com/khawkins98/Hush/releases)**, open it, and drag Hush.app to Applications.
 
-### Option B — Direct download
+**First launch — bypass Gatekeeper (one-time):**
 
-**[GitHub Releases](https://github.com/khawkins98/Hush/releases)** → pick the latest `v*` tag.
-
-| Platform | File | Notes |
-|---|---|---|
-| **macOS** | `.dmg` | Apple Silicon only; macOS 26 is the supported target |
-| **Linux** | `.AppImage` or `.deb` | Any distro / Debian + Ubuntu; CI-built, not hands-on tested |
-| **Windows** | `.msi` (recommended) or `.exe` | CI-built, not hands-on tested |
-
-On macOS, right-click `Hush.app` → **Open** on first launch to bypass the Gatekeeper warning; subsequent launches are silent. The DMG includes a "Read Me First.txt" with full instructions. If macOS 26 blocks the right-click method entirely, open Terminal and run:
+Right-click `Hush.app` in Applications → **Open** → **Open** again in the dialog. If that option is greyed out on macOS 26, run this in Terminal instead:
 
 ```bash
 xattr -rd com.apple.quarantine /Applications/Hush.app
 ```
 
+After the first successful open, all future launches are silent. The DMG includes a "Read Me First.txt" with the same instructions offline.
+
 **New to Hush?** [`docs/getting-started.md`](./docs/getting-started.md) walks through the full flow: install → Gatekeeper → permissions → first recording → meeting capture.
+
+### Linux / Windows
+
+**[GitHub Releases](https://github.com/khawkins98/Hush/releases)** → pick the latest `v*` tag.
+
+| Platform | File | Notes |
+|---|---|---|
+| **Linux** | `.AppImage` or `.deb` | Any distro / Debian + Ubuntu; CI-built, not hands-on tested |
+| **Windows** | `.msi` (recommended) or `.exe` | CI-built, not hands-on tested |
 
 After an update, one or more permissions (Microphone, Input Monitoring) may show "Was granted — now revoked" in Settings → Permissions — this is a macOS TCC side-effect of ad-hoc signing. Re-grant each one in System Settings or use the Reset button in Settings → Permissions. Full troubleshooting steps are in [`docs/macos-permissions.md`](./docs/macos-permissions.md). Code-signing would eliminate this entirely; if you'd like to sponsor it, GitHub Sponsors is at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
 
-Windows shows a SmartScreen warning — click **More info** → **Run anyway**. A Windows EV cert is also on the roadmap.
+Windows shows a SmartScreen warning on first run — click **More info** → **Run anyway**. A Windows EV cert is also on the roadmap.
 
 Hush does **not** check for updates automatically. To check manually: **Settings → About → Check for updates**, or on macOS the **Hush** menu.
 
