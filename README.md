@@ -85,6 +85,8 @@ brew install --cask --no-quarantine khawkins98/tap/hush
 
 The `--no-quarantine` flag skips the macOS "unidentified developer" warning entirely. Equivalent to `xattr -rd com.apple.quarantine` but done at install time. Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project).
 
+Tap source: [`khawkins98/homebrew-tap`](https://github.com/khawkins98/homebrew-tap)
+
 ### Option B — Direct download
 
 **[GitHub Releases](https://github.com/khawkins98/Hush/releases)** → pick the latest `v*` tag.
