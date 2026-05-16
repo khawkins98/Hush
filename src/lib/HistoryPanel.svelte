@@ -180,7 +180,7 @@
         <!-- search icon -->
         <svg class="search-icon" aria-hidden="true" focusable="false" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input
-          type="search"
+          type="text"
           placeholder="Search history…"
           value={history.historyQuery}
           oninput={onSearchInput}
@@ -350,7 +350,7 @@
   margin-bottom: 1rem;
 }
 
-.history-header input[type="search"] {
+.history-header input[type="text"] {
   flex: 1;
   max-width: 18rem;
   padding: 0.5em 0.85em 0.5em 2.2rem;
