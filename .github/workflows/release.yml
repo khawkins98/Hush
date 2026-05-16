@@ -202,18 +202,17 @@ jobs:
 
             ### Install
 
-            #### macOS (Homebrew — recommended)
+            #### macOS
+
+            Hush is not notarised, so macOS will show a Gatekeeper warning on **first launch** regardless of install method. Bypass it once with right-click → **Open** → **Open**, or run `xattr -rd com.apple.quarantine /Applications/Hush.app` in Terminal. Full instructions in the [getting-started guide](https://github.com/khawkins98/Hush/blob/main/docs/getting-started.md).
+
+            **Homebrew (recommended — easy future updates):**
             ```sh
             brew install --cask khawkins98/tap/hush
             ```
-            Requires [Homebrew](https://brew.sh). Handles install and future updates (`brew upgrade --cask hush`).
-            Hush is not notarised, so the first launch will show a Gatekeeper warning —
-            right-click Hush.app → **Open** to bypass it (one-time). See the [getting-started guide](https://github.com/khawkins98/Hush/blob/main/docs/getting-started.md) for all workaround options.
+            Update later: `brew upgrade --cask hush`. Requires [Homebrew](https://brew.sh).
 
-            #### macOS (DMG — manual install)
-            Download the `.dmg` below, open it, and drag Hush.app to Applications.
-            First launch will show a Gatekeeper warning because Hush is not yet notarised —
-            right-click Hush.app → **Open** to bypass it.
+            **DMG (no Homebrew needed):** download the `.dmg` below, open it, drag Hush.app to Applications.
 
             #### Windows
             Download the `.msi` or `.exe` below. SmartScreen will warn on first run;

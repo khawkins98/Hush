@@ -3,20 +3,7 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 macOS will block Hush on first launch. Here is what to expect and
-what to do about it.
-
-
-──────────────────────────────────────────────────────────────────────────
-QUICKEST INSTALL: HOMEBREW
-──────────────────────────────────────────────────────────────────────────
-
-If you have Homebrew installed, you can install Hush from the tap:
-
-    brew install --cask khawkins98/tap/hush
-
-You will still see a Gatekeeper warning on first launch — follow the
-steps below to clear it (one-time).  The advantage of Homebrew is that
-future updates are just `brew upgrade --cask hush`.
+what to do about it (one-time, about 30 seconds).
 
 
 ──────────────────────────────────────────────────────────────────────────
@@ -109,5 +96,18 @@ Report a problem:
 If you would like to help fund code signing (which would make this
 warning go away for everyone), GitHub Sponsors is at:
   https://github.com/sponsors/khawkins98
+
+
+──────────────────────────────────────────────────────────────────────────
+PREFER HOMEBREW FOR FUTURE UPDATES?
+──────────────────────────────────────────────────────────────────────────
+
+If you have Homebrew, you can switch to the tap for easier updates:
+
+    brew install --cask khawkins98/tap/hush
+
+Then future updates are just:  brew upgrade --cask hush
+
+You still need to do the Gatekeeper bypass above on first launch.
 
 ──────────────────────────────────────────────────────────────────────────

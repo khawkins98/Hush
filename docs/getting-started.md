@@ -6,28 +6,22 @@ End-to-end walkthrough: install → first recording → meeting capture.
 
 ## 1. Install
 
-### Option A — Homebrew (macOS, recommended)
+Hush is not signed with an Apple Developer ID, so macOS will show a security warning on first launch regardless of how you install. The bypass is a one-time step covered in [section 1b](#1b-bypass-the-gatekeeper-warning-macos-one-time) below.
+
+### Option A — Homebrew (macOS, recommended for easy updates)
 
 ```bash
 brew install --cask khawkins98/tap/hush
 ```
 
-Homebrew handles the install and lets you update later with `brew upgrade --cask hush`. You will still see a Gatekeeper warning on first launch — follow the steps in Option B below to clear it (one-time only).
+Future updates: `brew upgrade --cask hush`. Skip to [section 1b](#1b-bypass-the-gatekeeper-warning-macos-one-time).
 
-### Option B — Download the DMG (macOS)
+### Option B — Download the DMG (macOS, no Homebrew needed)
 
 1. Go to [github.com/khawkins98/Hush/releases](https://github.com/khawkins98/Hush/releases) and download the latest `.dmg`.
 2. Open the DMG and drag **Hush.app** into your Applications folder.
-3. macOS will block the first launch with a security warning because Hush is not signed with an Apple Developer ID. To get past it:
-   - **Right-click** Hush.app in Applications → **Open** → click **Open** again in the dialog.
-   - If that's greyed out (macOS 26 with Gatekeeper fully locked down), open Terminal and run:
-     ```bash
-     xattr -rd com.apple.quarantine /Applications/Hush.app
-     ```
-     Then open Hush normally.
-4. After the first successful open, all future launches are silent.
 
-The DMG also includes a **Read Me First.txt** with the same instructions if you need them offline.
+The DMG also includes a **Read Me First.txt** with offline instructions.
 
 ### Option C — Linux / Windows
 
@@ -35,6 +29,32 @@ Download the `.AppImage` / `.deb` (Linux) or `.msi` (Windows) from [Releases](ht
 
 - **Linux:** run `chmod +x Hush_*.AppImage && ./Hush_*.AppImage`, or `sudo dpkg -i hush_*.deb`.
 - **Windows:** run the `.msi`; click **More info** → **Run anyway** past the SmartScreen warning.
+
+---
+
+## 1b. Bypass the Gatekeeper warning (macOS, one-time)
+
+macOS blocks unsigned apps on first launch. This applies whether you used Homebrew or the DMG. You only need to do this once — all future launches are silent.
+
+**Method 1 — right-click (quickest):**
+
+1. Open your Applications folder.
+2. Right-click (or Control-click) **Hush.app** → choose **Open**.
+3. Click **Open** again in the dialog to confirm.
+
+**Method 2 — System Settings (if Method 1 is greyed out):**
+
+1. Try to open Hush normally — macOS shows a warning. Click OK to dismiss it.
+2. Open **System Settings → Privacy & Security**.
+3. Scroll down to find *"Hush.app was blocked…"* → click **Open Anyway**, then confirm.
+
+**Method 3 — Terminal (works when both above are blocked):**
+
+```bash
+xattr -rd com.apple.quarantine /Applications/Hush.app
+```
+
+Then open Hush normally.
 
 ---
 
