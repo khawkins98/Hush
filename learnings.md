@@ -4,6 +4,46 @@ Engineering decision log for Hush. Append-only, dated entries. Captures dependen
 
 ---
 
+## 2026-05-16 — Homebrew tap + `--no-quarantine` as primary install path
+
+### Background: two layers of Gatekeeper protection
+
+macOS applies two independent quarantine checks when a user downloads and runs an unsigned app:
+
+1. **Launch-time Gatekeeper dialog** — shown when a file with `com.apple.quarantine` is first opened. The "cannot be opened" sheet fires; without a developer account there is no notarisation to satisfy it.
+2. **TCC identity mismatch** — documented 2026-05-13 below. Even if the user dismisses Gatekeeper with right-click → Open, the quarantine xattr causes TCC to key permissions to a different identity than the codesign bundle ID, so Screen Recording / Microphone grants vanish after the quarantine strip (see `lib.rs:472–506`, `permissions/macos.rs:254–310`).
+
+Hush already handles case 2 at runtime: `handle_quarantine_strip()` detects the xattr, strips it, and `exec()`s itself (not `spawn()` — macOS 26's quarantine events daemon re-adds the xattr before a spawned child starts). But case 1 still fires before the runtime strip can run, which means first-time DMG users see the scary blocking dialog.
+
+### Solution chosen: Homebrew tap with `--no-quarantine`
+
+`brew install --cask --no-quarantine khawkins98/tap/hush` calls Homebrew's `Quarantine.release!()` at install time — before the app is ever launched. The app is placed in `/Applications` without the `com.apple.quarantine` xattr attached, so:
+
+- No Gatekeeper launch dialog ever fires
+- TCC sees the correct codesign identity from first launch
+- The runtime quarantine strip is still present as a safety net for DMG users who didn't use Homebrew
+
+This was chosen over alternatives:
+- **Right-click → Open workaround**: works but is obscure; we document it but it's not a good primary path
+- **Apple Developer account + notarisation**: would solve everything but costs $99/yr and requires a stable signing identity; deferred
+- **Runtime strip only**: handles the TCC mismatch but not the blocking launch dialog
+
+### Homebrew tap CI mechanics
+
+The release workflow (`.github/workflows/release.yml`) auto-patches `khawkins98/homebrew-tap/Casks/hush.rb` on every tag push — computes SHA256 of the new DMG and replaces both the `version` and `sha256` fields. **Important:** the default `GITHUB_TOKEN` in Actions is scoped to the workflow-owner repo only. The tap step requires a PAT with `repo` scope on `khawkins98/homebrew-tap`, stored as the `TAP_GITHUB_TOKEN` Actions secret. Without this the step silently 403s on first real release.
+
+---
+
+## 2026-05-16 — `hud/+page.svelte` transparent-window style block is load-bearing
+
+The HUD window is configured with `transparent: true` + `decorations: false` in `tauri.conf.json`. The WebView therefore starts with a **completely transparent body** — there is no browser default background. Every visible element of the HUD (the dark pill, the dismiss button, the recording dot, the done shimmer) is defined entirely in the `<style>` block of `src/routes/hud/+page.svelte`.
+
+The style block was silently stripped in commit `f8c18c3` during a mass dark-mode refactor that touched every Svelte file. The result was a white rectangle occupying the HUD window frame — the WebView's opaque compositing fallback. The regression was invisible in normal CI because Playwright mocks the Tauri IPC and never renders the HUD window.
+
+**Rule for future refactors:** do not empty or strip the `<style>` block in `hud/+page.svelte`. The minimum required rule is `body { background-color: transparent !important; }`. The full block also carries the pill container background, pulsing recording dot, orange processing shimmer, and blue (`#7ab8d4`) done state. None of these are recoverable from global CSS because the HUD window has no shared stylesheet with the main window.
+
+---
+
 ## 2026-05-15 — `AppState` decomposition complete (#737)
 
 `AppState` was incrementally split into six domain sub-structs over a series of PRs (#937, #938, #941–#944, #959, #961, #963), closing issue #737:

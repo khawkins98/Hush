@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-16
+
+v0.9.0 is a visual overhaul release. The entire UI has been re-keyed to the Hush brand palette — deep navy surfaces, warm orange as the primary accent, and a blue accent family replacing the previous green success states. The history panel received a Stitch-inspired redesign, the app icon and tray icon were updated to match the new look, and the sidebar gained a gradient fade into the main canvas. On the distribution side, a Homebrew tap is now the recommended install path: `brew install --cask --no-quarantine khawkins98/tap/hush` bypasses the Gatekeeper dialog entirely for users without an Apple Developer account. The release workflow auto-patches the tap on every tag push. A handful of small UI fixes and a documentation pass round out the release.
+
+### Added
+
+- **Distribution: Homebrew tap as primary install path.** `brew install --cask --no-quarantine khawkins98/tap/hush` installs Hush without the macOS Gatekeeper "cannot be opened" dialog. The tap at `khawkins98/homebrew-tap` is auto-patched by the release workflow on every `v*` tag push.
+- **Docs: getting-started guide.** `docs/getting-started.md` is a new end-to-end guide covering install (Homebrew, DMG, Linux, Windows), Gatekeeper workarounds, permission setup, first dictation, meetings, and history.
+
+### Changed
+
+- **UI: new dark brand theme.** Deep navy (`#0d1624`) surfaces with warm orange (`#e05a00`) as the primary accent replace the previous light/muted palette. Applied across the main window, sidebar, settings panel, and all modal surfaces.
+- **UI: blue accent family replaces green for success states.** Copy-success, done indicators, and the HUD "Copied!" state now use `#5ea1c3` / `#7ab8d4` blue tones instead of green.
+- **UI: Stitch-inspired history panel redesign.** History rows use a card layout with stronger typographic hierarchy and cleaner action affordances.
+- **UI: sidebar gradient fade.** The sidebar right edge fades orange-to-navy from top over 56 px, smoothing the transition between sidebar and main canvas.
+- **Icons: new app icon and tray icon.** Both updated to the new brand mark. The tray icon remains a monochrome alpha-extracted silhouette for macOS light/dark menu bar adaptation.
+
+### Fixed
+
+- **UI: duplicate search icon in history search box.** `type="search"` on the input caused WebKit to render a native magnifier on top of the explicit SVG icon. Changed to `type="text"`.
+- **UI: duplicate header in history panel.** A redundant panel title element was rendered twice.
+- **UI: HUD pill styles restored.** The `<style>` block in `src/routes/hud/+page.svelte` was silently wiped in a mass dark-mode refactor commit, leaving the HUD as a plain white rectangle. Full pill styles, pulsing recording dot, and done state restored.
+
 ## [0.8.0] - 2026-05-15
 
 v0.8.0 ships two headline features: persistent speaker identity across meeting sessions, and a redesigned settings navigation. Speaker identity lets Hush learn who is speaking — assign real names to speaker labels, and those names carry over to every future session. On the UX side, the settings panel has moved from an embedded two-column layout into a smooth accordion that folds out beneath the gear icon in the main sidebar, keeping the interface compact and focused. A Svelte 5 reactivity warning introduced with the history name-label feature is also cleaned up in this release.
