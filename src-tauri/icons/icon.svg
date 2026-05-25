@@ -1,18 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Generator: Adobe Illustrator 30.3.0, SVG Export Plug-In . SVG Version: 9.03 Build 0)  -->
-<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
-	 viewBox="0 0 1024 1024" style="enable-background:new 0 0 1024 1024;" xml:space="preserve">
-<style type="text/css">
-	.st0{fill:none;stroke:#1877F2;stroke-width:64;stroke-linejoin:round;}
-	.st1{fill:none;stroke:#1877F2;stroke-width:50;stroke-linecap:round;stroke-linejoin:round;}
-</style>
-<path class="st0" d="M214.4,84.5h595.2c78.2,0,117.2,39.1,117.2,117.2v286.3c0,209.7-270.5,437.4-414.8,437.4S97.2,697.8,97.2,488.1
-	V201.8C97.2,123.6,136.2,84.5,214.4,84.5z"/>
-<g>
-	<path class="st1" d="M577.5,400.3c0,23.2-18.8,42.1-42.1,42.1H384.5c-11.2,0-21.9,4.4-29.8,12.3l-46.3,46.3
-		c-5.8,5.8-15.3,5.8-21.1,0c-2.8-2.8-4.4-6.6-4.4-10.6V274.1c0-23.2,18.8-42.1,42.1-42.1h210.5c23.2,0,42.1,18.8,42.1,42.1V400.3z"
-		/>
-	<path class="st1" d="M661.7,379.3c23.2,0,42.1,18.8,42.1,42.1v216.5c0,8.3-6.7,14.9-14.9,14.9c-4,0-7.8-1.6-10.6-4.4L632,602.1
-		c-7.9-7.9-18.6-12.3-29.8-12.3H451.3c-23.2,0-42.1-18.8-42.1-42.1v-21"/>
-</g>
+<!-- Hush app icon master. Dark warm tile + brand golden-yellow "H"
+     mark whose lower-right edge fragments into text "tokens" — the
+     speech → transcription motif. Brand colour #ffb81c (allaboutken.com
+     hero yellow). Regenerate the full icon set with:
+       npx tauri icon src-tauri/icons/icon-source.svg            -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024"
+     xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#241608"/>
+      <stop offset="1" stop-color="#160b05"/>
+    </linearGradient>
+    <linearGradient id="hgrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc94d"/>
+      <stop offset="1" stop-color="#ffb81c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded tile (macOS-style squircle margin ~7%) -->
+  <rect x="72" y="72" width="880" height="880" rx="196" fill="url(#tile)"/>
+
+  <!-- Bold "H": two legs + crossbar, thickness 86 -->
+  <g fill="url(#hgrad)">
+    <rect x="300" y="300" width="86" height="424" rx="6"/>
+    <rect x="560" y="300" width="86" height="424" rx="6"/>
+    <rect x="300" y="469" width="346" height="86" rx="6"/>
+  </g>
+
+  <!-- Dissolve: the H's lower-right sheds into descending tokens.
+       Bright (#ffb81c) near the mark, cooling to orange (#f5a623,
+       #c8801e) as they scatter toward the corner. -->
+  <g>
+    <rect x="664" y="560" width="78" height="26" rx="5" fill="#ffb81c"/>
+    <rect x="756" y="560" width="36" height="26" rx="5" fill="#f5a623"/>
+    <rect x="664" y="602" width="52" height="26" rx="5" fill="#ffb81c"/>
+    <rect x="730" y="602" width="78" height="26" rx="5" fill="#f5a623"/>
+    <rect x="664" y="644" width="40" height="26" rx="5" fill="#f5a623"/>
+    <rect x="718" y="644" width="52" height="26" rx="5" fill="#c8801e"/>
+    <rect x="612" y="726" width="70" height="26" rx="5" fill="#f5a623"/>
+    <rect x="696" y="726" width="40" height="26" rx="5" fill="#c8801e"/>
+    <rect x="750" y="726" width="28" height="26" rx="5" fill="#c8801e"/>
+    <rect x="612" y="768" width="40" height="26" rx="5" fill="#c8801e"/>
+  </g>
 </svg>
