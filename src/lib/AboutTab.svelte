@@ -668,6 +668,6 @@
     font-size: 0.85rem;
   }
   .about-tab a {
-    color: var(--accent-hover);
+    color: var(--accent-blue);
   }
 </style>

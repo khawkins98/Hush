@@ -127,12 +127,12 @@
   transition: background-color 0.12s, color 0.12s, border-color 0.12s;
 }
 .cue-preview-btn:hover {
-  background-color: var(--accent, #dc7932);
-  border-color: var(--accent, #dc7932);
+  background-color: var(--accent, #ffb81c);
+  border-color: var(--accent, #ffb81c);
   color: var(--text-on-accent, #fff);
 }
 .cue-preview-btn:focus-visible {
-  outline: 2px solid var(--accent, #dc7932);
+  outline: 2px solid var(--accent, #ffb81c);
   outline-offset: 2px;
 }
 .sound-cue-subtoggles.is-disabled {

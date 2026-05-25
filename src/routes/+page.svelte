@@ -311,16 +311,15 @@
     Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif,
     "Apple Color Emoji", "Segoe UI Emoji";
 
-  /* Layer 1 of "feel native". Two CSS primitives, no per-OS code:
-     - `color-scheme: light` keeps native form controls and scrollbars
-       aligned with the app's fixed warm-white palette.
-     - `accent-color: auto` makes checkboxes / radios / range
-       sliders / progress bars pick up the user's OS accent (the
-       Mac highlight blue, the Windows accent, the GNOME accent)
-       instead of the browser default cobalt. One line, real
-       impact on perceived nativeness. */
+  /* Layer 1 of "feel native":
+     - `color-scheme: light` aligns native form controls and
+       scrollbars with the app's light cream palette.
+     - `accent-color` tints checkboxes / radios / range sliders /
+       progress bars. We pin it to the brand deep-amber (not the OS
+       highlight blue) so native controls stay on-brand; amber keeps
+       the browser's white checkmark legible where yellow wouldn't. */
   color-scheme: light;
-  accent-color: auto;
+  accent-color: var(--accent-blue);
 
   font-size: 16px;
   line-height: 24px;
@@ -511,9 +510,9 @@
   border-radius: 8px;
   font-size: 0.88rem;
   line-height: 1.4;
-  border: 1px solid var(--accent-subtle, rgba(220, 121, 50, 0.18));
-  background-color: var(--accent-subtle, rgba(220, 121, 50, 0.12));
-  color: var(--accent-hover, #ba5733);
+  border: 1px solid var(--accent-subtle, rgba(255, 184, 28, 0.18));
+  background-color: var(--accent-subtle, rgba(255, 184, 28, 0.12));
+  color: var(--accent-blue, #ba5733);
 }
 .app-profile-notice-icon {
   font-weight: 700;

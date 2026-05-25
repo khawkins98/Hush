@@ -440,7 +440,7 @@
     --audio-waveform-bar-color: #dc2626;
   }
 
-  /* Big waveform — brand orange → blue gradient while recording,
+  /* Big waveform — brand yellow → amber gradient while recording,
      muted warm at idle. */
   .record-waveform {
     width: 100%;
@@ -448,8 +448,8 @@
     --audio-waveform-height: 88px;
     --audio-waveform-bar-color: linear-gradient(
       to top,
-      #dc7932 0%,
-      #5ea1c3 100%
+      #ffb81c 0%,
+      #f5a623 100%
     );
   }
   /* Bars feel taller / chunkier in the centerpiece role. */
@@ -479,7 +479,7 @@
        primary interactive element on the dark canvas. */
     box-shadow:
       0 2px 10px rgba(0, 0, 0, 0.4),
-      0 0 0 1px rgba(220, 121, 50, 0.12);
+      0 0 0 1px rgba(255, 184, 28, 0.12);
     transition:
       transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
       border-color 150ms ease,
@@ -600,7 +600,7 @@
     padding: 0.1rem 0.5rem;
     margin-left: 0.35rem;
     background-color: var(--accent-subtle);
-    color: var(--accent);
+    color: var(--accent-blue);
     border-radius: 999px;
     white-space: nowrap;
   }
@@ -610,7 +610,7 @@
     color: var(--text-secondary);
   }
   .status-mode[data-record-mode="meeting"] {
-    color: var(--accent);
+    color: var(--accent-blue);
     font-weight: 600;
   }
 

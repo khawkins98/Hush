@@ -317,7 +317,7 @@
   .primary-action {
     appearance: none;
     border: none;
-    background-color: var(--accent, #dc7932);
+    background-color: var(--accent, #ffb81c);
     color: white;
     font-family: inherit;
     font-size: 0.95rem;

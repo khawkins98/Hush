@@ -107,7 +107,7 @@
   color: var(--text-primary);
 }
 .advanced-toggle:focus-visible {
-  outline: 2px solid var(--accent, #dc7932);
+  outline: 2px solid var(--accent, #ffb81c);
   outline-offset: 2px;
 }
 .chevron {

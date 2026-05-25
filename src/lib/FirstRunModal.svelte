@@ -460,11 +460,11 @@
   height: 0.55rem;
   border-radius: 50%;
   background-color: transparent;
-  border: 1.5px solid var(--accent, #dc7932);
+  border: 1.5px solid var(--accent, #ffb81c);
   transition: background-color 0.15s;
 }
 .wizard-step-dot.active {
-  background-color: var(--accent, #dc7932);
+  background-color: var(--accent, #ffb81c);
 }
 
 .welcome-body {

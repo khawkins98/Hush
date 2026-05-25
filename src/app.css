@@ -6,60 +6,72 @@ html,
 body {
   height: 100%;
   overflow: hidden;
+  /* Reset the browser's default 8px body margin — otherwise the
+     html canvas shows through as a gap above/left of the sidebar
+     (invisible on the old dark theme, obvious on the light one). */
+  margin: 0;
 }
 
 /* Global brand tokens for Hush's fixed five-color palette. */
 
 :root {
-  /* ── Brand palette: vibrant dark ────────────────────────── */
-  /* Main: warm orange/rust (#dc7932, #6e1715)                  */
-  /* Sidebar: cool blue-navy (#5ea1c3, #528eaf)                 */
-  --accent:           #dc7932;
-  --accent-hover:     #e8923f;
-  --accent-subtle:    rgba(220, 121, 50, 0.20);
-  --accent-blue:      #5ea1c3;
-  --accent-blue-hover:#7ab8d4;
-  --accent-blue-subtle: rgba(94, 161, 195, 0.18);
+  /* ── Brand palette: light, gold-on-cream ────────────────── */
+  /* Emulates allaboutken.com: cream canvas, yellow accent bands,
+     near-black text. Light theme for the MAIN window only — the
+     HUD / menu-bar / debug windows hardcode their own dark colours
+     and don't read these tokens, so they stay dark. */
+  --accent:           #ffb81c;  /* golden-yellow — fills, focus, the sidebar band */
+  --accent-hover:     #f0a800;  /* darker on hover (light-theme convention) */
+  --accent-subtle:    rgba(255, 184, 28, 0.28);
+  /* Secondary accent. Legacy var name (was cool blue). On a light
+     canvas, yellow text is invisible, so this is a deep amber used
+     wherever the accent appears as TEXT / icon rather than a fill. */
+  --accent-blue:      #b06a00;
+  --accent-blue-hover:#8a5300;
+  --accent-blue-subtle: rgba(176, 106, 0, 0.12);
 
   /* ── Surfaces ────────────────────────────────────────────── */
-  /* Sidebar: deep blue-navy — visually distinct from warm main */
-  --bg-sidebar:  #0d1720;
-  --bg-sidebar-border: #1a2e40;
-  /* Main canvas + panels: warm orange-brown */
-  --bg-app:      #1a0d07;
-  --bg-surface:  #231508;
-  --bg-elevated: #2c1c0e;
-  --bg-input:    #1e1108;
+  /* Sidebar: the brand orange band — deeper than the #ffb81c hero
+     yellow so WHITE nav text reads on it (the site pairs white with
+     its deep-orange tags, black with the lighter yellow). */
+  --bg-sidebar:  #d9820e;
+  --bg-sidebar-border: #b8700a;
+  /* Main canvas + panels: cream → near-white, per the site body. */
+  --bg-app:      #f7f2e6;
+  --bg-surface:  #fffdf7;
+  --bg-elevated: #ffffff;
+  --bg-input:    #fffdf7;
 
   /* ── Text ───────────────────────────────────────────────── */
-  --text-primary:   #f5efe8;
-  --text-secondary: #d4be9a;
-  --text-muted:     #a07850;
-  --text-on-accent: #ffffff;
-  /* Uppercase tracking labels (field captions, section labels) */
-  --text-label:     #7ab8d4;
+  --text-primary:   #1c1408;  /* near-black warm */
+  --text-secondary: #5a5142;  /* warm grey-brown */
+  --text-muted:     #8a8170;  /* lighter warm grey */
+  /* Dark text on the golden-yellow accent (buttons, sidebar). */
+  --text-on-accent: #1c1408;
+  /* Uppercase tracking labels (field captions, section labels). */
+  --text-label:     #8a6a14;
 
   /* ── Borders ────────────────────────────────────────────── */
-  --border:        #4a3018;
-  --border-subtle: #3a2010;
-  --border-input:  #5a3a1e;
+  --border:        #e3dcc9;
+  --border-subtle: #ece6d6;
+  --border-input:  #d8cdb0;
   --border-focus:  var(--accent);
 
-  /* ── Semantic ───────────────────────────────────────────── */
-  --danger:         #e85050;
-  --danger-bg:      #2a1018;
-  --danger-border:  #6e1715;
-  --warning-bg:     #2a1c0a;
-  --warning-border: #dc7932;
-  --warning-text:   #f0a060;
-  --info-bg:        #0d2030;
-  --info-border:    #5ea1c3;
-  --info-text:      #9ac8e0;
+  /* ── Semantic — light tints (text dark enough to read on light) ── */
+  --danger:         #c0392b;
+  --danger-bg:      #fbeae8;
+  --danger-border:  #e3a59c;
+  --warning-bg:     #fdf3da;
+  --warning-border: #e8c270;
+  --warning-text:   #8a5a00;
+  --info-bg:        #efe9db;
+  --info-border:    #d8cdb0;
+  --info-text:      #5a5142;
 
-  /* ── Success — blue-tinted (consistent with brand blue accent) */
-  --success-text:   #7ab8d4;
-  --success-border: #2a5a7a;
-  --success-bg:     #0d1f2e;
+  /* ── Success — green, darkened for contrast on the light canvas. */
+  --success-text:   #2f7a35;
+  --success-border: #b8d8b0;
+  --success-bg:     #eaf5e8;
 
   /* ── Shape ──────────────────────────────────────────────── */
   --radius-sm:   4px;

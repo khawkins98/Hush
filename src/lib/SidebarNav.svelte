@@ -250,13 +250,13 @@
 <style>
   .sidebar-nav {
     flex-shrink: 0;
-    /* Fade top edge from main orange into sidebar blue — smooth
-       junction at the window chrome rather than a hard dog-leg. */
-    background: linear-gradient(
-      to bottom,
-      var(--bg-app) 0%,
-      var(--bg-sidebar) 56px
-    );
+    /* The sidebar is the brand orange band. Text on it is white
+       (matching the white-on-orange tags on allaboutken.com), so
+       all nav text uses these two inks rather than the app's dark
+       text tokens. */
+    --sidebar-ink: #ffffff;
+    --sidebar-ink-dim: rgba(255, 255, 255, 0.78);
+    background: var(--bg-sidebar);
     border-right: none;
     padding: 0.6rem 0;
     display: flex;
@@ -281,7 +281,7 @@
     border: none;
     margin: 0 0.25rem 0.4rem auto;
     padding: 0.35rem 0.5rem;
-    color: var(--text-muted);
+    color: var(--sidebar-ink-dim);
     cursor: pointer;
     border-radius: 6px;
     display: inline-flex;
@@ -290,11 +290,11 @@
     transition: color 120ms ease, background-color 120ms ease;
   }
   .sidebar-nav-toggle:hover {
-    color: var(--text-primary);
-    background-color: var(--accent-blue-subtle);
+    color: var(--sidebar-ink);
+    background-color: rgba(255, 255, 255, 0.16);
   }
   .sidebar-nav-toggle:focus-visible {
-    outline: 2px solid var(--accent-blue);
+    outline: 2px solid var(--sidebar-ink);
     outline-offset: 1px;
   }
   /* When collapsed, the toggle sits centred below the items
@@ -341,20 +341,22 @@
     width: 100%;
     display: flex;
     align-items: center;
-    color: var(--text-secondary);
+    color: var(--sidebar-ink-dim);
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease;
   }
+  /* White-on-orange band: active state is full white + a white
+     leading-edge indicator; inactive items are dimmed white. */
   .sidebar-nav-item:hover {
-    color: #ffffff;
+    color: var(--sidebar-ink);
   }
   .sidebar-nav-item:focus-visible {
-    outline: 2px solid var(--accent-blue);
+    outline: 2px solid var(--sidebar-ink);
     outline-offset: -3px;
   }
   .sidebar-nav-item.active {
-    color: var(--accent-blue);
-    border-left-color: var(--accent-blue);
+    color: var(--sidebar-ink);
+    border-left-color: var(--sidebar-ink);
   }
   /* Layout per state. Collapsed: icon centred. Open: icon +
      label horizontally, icon left-aligned with consistent
@@ -428,21 +430,21 @@
     font-size: 0.8rem;
     font-family: inherit;
     font-weight: 400;
-    color: var(--text-muted);
+    color: var(--sidebar-ink-dim);
     cursor: pointer;
     white-space: nowrap;
     transition: color 120ms ease, border-color 120ms ease;
   }
   .sidebar-settings-tab-btn:hover {
-    color: var(--text-primary);
+    color: var(--sidebar-ink);
   }
   .sidebar-settings-tab-btn.active {
-    color: var(--accent);
-    border-left-color: var(--accent);
+    color: var(--sidebar-ink);
+    border-left-color: var(--sidebar-ink);
     font-weight: 500;
   }
   .sidebar-settings-tab-btn:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--sidebar-ink);
     outline-offset: -3px;
   }
 

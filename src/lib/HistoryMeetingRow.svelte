@@ -577,7 +577,7 @@
 
   .meta-chip--meeting {
     border-color: color-mix(in srgb, var(--accent, #5a7fff) 40%, transparent);
-    color: var(--accent, #5a7fff);
+    color: var(--accent-blue, #5a7fff);
     background-color: color-mix(in srgb, var(--accent, #5a7fff) 10%, transparent);
   }
 
@@ -593,7 +593,7 @@
     font-family: inherit;
   }
   .add-name-btn:hover {
-    color: var(--accent, #5a7fff);
+    color: var(--accent-blue, #5a7fff);
   }
 
   .card-title {

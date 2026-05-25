@@ -337,7 +337,7 @@
     background: none;
     border: none;
     font-size: 0.8rem;
-    color: var(--accent, #5a7fff);
+    color: var(--accent-blue, #5a7fff);
     cursor: pointer;
     font-family: inherit;
   }
