@@ -433,47 +433,94 @@ async function _stopDictation(): Promise<void> {
   );
 }
 
+// How long (ms) to poll for session finalization before giving up and
+// hydrating from whatever the DB has. Set well above the backend's
+// STREAMING_FINISH_TIMEOUT (60 s × N sources) so even a slow tail
+// completes before we bail; if we hit this limit we proceed rather
+// than hang forever.
+const FINALIZATION_POLL_TIMEOUT_MS = 90_000;
+// Polling interval for checking session.endedAt after stop.
+const FINALIZATION_POLL_INTERVAL_MS = 200;
+
 // Handles the meeting_start_manual / meeting_stop_manual lifecycle.
-// Transitions through transcribing while fetching the completed session
-// detail — one fetch serves both clipboard copy and the result block.
+// Transitions through transcribing while waiting for background
+// finalization to complete, then builds the clipboard/result block
+// from the fully-persisted transcript.
 async function _stopMeeting(snapshot: {
   mode: RecordMode;
   meetingId: number;
   startedAtMs: number;
 }): Promise<void> {
   await invoke("meeting_stop_manual");
-  // meeting_stop_manual awaits pump drain before returning, so the session
-  // is fully finalised at this point — no setTimeout delay is needed.
+  // meeting_stop_manual now returns sub-second — before the background
+  // tail finish() has persisted the last in-flight utterance(s). We
+  // stay in `transcribing` and poll meeting_session_get until
+  // session.endedAt is non-null, which the backend stamps immediately
+  // after close_session() persists the final utterances. The mic is
+  // already released, so waiting here does NOT re-introduce the
+  // "Stop hangs / mic stuck" problem.
   phase = { tag: "transcribing" };
   meeting.activeId = null;
   try {
-    const detail = await invoke<MeetingSessionDetail>("meeting_session_get", {
-      id: snapshot.meetingId,
-    });
-    const finals = (detail.utterances ?? []).filter((u) => u.isFinal);
-    if (finals.length > 0) {
-      const text = joinUtterances(finals, "\n\n");
-      // Clipboard — one fetch serves both clipboard text and the result block.
+    // Poll until endedAt is set (finalization complete) or timeout.
+    let detail: MeetingSessionDetail | null = null;
+    const deadline = Date.now() + FINALIZATION_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
       try {
-        await navigator.clipboard.writeText(text);
-        meeting.setNotice({
-          kind: "success",
-          message: "Copied to clipboard — full transcript also saved to History below.",
+        detail = await invoke<MeetingSessionDetail>("meeting_session_get", {
+          id: snapshot.meetingId,
         });
-      } catch {
-        meeting.setNotice({
-          kind: "failure",
-          message:
-            "Transcript saved to History — use the 'Copy transcript' button on the meeting row below.",
-        });
+      } catch (e) {
+        console.warn("[hush] meeting_session_get poll failed", e);
+        break;
       }
-      // Result block for single-source dictation via the meeting path.
-      if (snapshot.mode === "dictation") {
-        result = {
-          text,
-          foreground: null,
-          durationMs: Date.now() - snapshot.startedAtMs,
-        };
+      if (detail.session.endedAt !== null) {
+        // Session is fully finalized — all trailing utterances are persisted.
+        break;
+      }
+      // Not finalized yet; wait before next poll.
+      await new Promise<void>((r) => setTimeout(r, FINALIZATION_POLL_INTERVAL_MS));
+      detail = null; // will be re-fetched
+    }
+    if (detail === null) {
+      // Timeout or fetch failure: do a final best-effort fetch.
+      console.warn(
+        "[hush] finalization poll timed out or errored — hydrating from partial session",
+      );
+      try {
+        detail = await invoke<MeetingSessionDetail>("meeting_session_get", {
+          id: snapshot.meetingId,
+        });
+      } catch (e) {
+        console.warn("[hush] final meeting_session_get fetch failed", e);
+      }
+    }
+    if (detail !== null) {
+      const finals = (detail.utterances ?? []).filter((u) => u.isFinal);
+      if (finals.length > 0) {
+        const text = joinUtterances(finals, "\n\n");
+        // Clipboard — the finalized detail serves both clipboard text and result block.
+        try {
+          await navigator.clipboard.writeText(text);
+          meeting.setNotice({
+            kind: "success",
+            message: "Copied to clipboard — full transcript also saved to History below.",
+          });
+        } catch {
+          meeting.setNotice({
+            kind: "failure",
+            message:
+              "Transcript saved to History — use the 'Copy transcript' button on the meeting row below.",
+          });
+        }
+        // Result block for single-source dictation via the meeting path.
+        if (snapshot.mode === "dictation") {
+          result = {
+            text,
+            foreground: null,
+            durationMs: Date.now() - snapshot.startedAtMs,
+          };
+        }
       }
     }
   } catch (e) {
