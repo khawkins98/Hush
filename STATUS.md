@@ -1,9 +1,9 @@
 # Hush — Status Report
 
-**Snapshot:** 2026-05-15, current v0.6.x state
-**Latest release:** v0.6.3
+**Snapshot:** 2026-05-26, post-v0.9.0 (unreleased brand refresh + dev tooling on `main`)
+**Latest release:** v0.9.0
 
-A working handoff doc, not the canonical changelog or PRD. The goal is still: *what's the project state right now, what changed recently, and what should the next contributor verify or pick up?* This file is meant to **rot fast** — rewrite it on the next pickup instead of trying to preserve every old bullet forever.
+A working handoff doc, not the canonical changelog or PRD. The goal is still: *what's the project state right now, what changed recently, and what should the next contributor verify or pick up?* This file is meant to **rot fast** — rewrite it on the next pickup instead of trying to preserve every old bullet forever. The feature notes below are a v0.6.x-era snapshot and still broadly hold; for the freshest changes, read CHANGELOG **[Unreleased]**.
 
 ---
 
@@ -16,6 +16,7 @@ Hush is now in a solid **v0.6.x** shape on macOS 26+:
 - **History** is a merged dictation + meeting feed with search, always-visible icon actions, multi-format export (plain text, Markdown, CSV, SRT, VTT, JSON), and expand-in-place meeting transcripts.
 - **Settings** are inline in the main window; the old standalone settings window is gone.
 - **About / debug / menu-bar surfaces** are all live and useful rather than placeholder chrome.
+- **Brand + UI (post-v0.9.0, unreleased):** the UI was re-keyed to the light allaboutken.com palette (cream / orange / purple, Recursive typeface) with the real vector-traced "H" icon, and `npm run dev` is now a mocked-backend browser playground for UI work. See CHANGELOG **[Unreleased]**.
 
 The biggest product-level change since the old v0.4.0 snapshot: **Meeting Mode no longer needs Screen Recording.** System audio now uses the CoreAudio process-tap backend, so the macOS permission story is down to **Microphone + Input Monitoring**.
 
