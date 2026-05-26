@@ -701,6 +701,87 @@ test.describe("active meeting session flow", () => {
     await expect(banner).toContainText("Microphone");
   });
 
+  test("meeting:finalizing shows finishing indicator; meeting:session-ended clears it", async ({
+    page,
+  }) => {
+    // The finalizing event fires AFTER meeting:session-started has set
+    // activeId to 1.  We patch meeting_active_session inline so each
+    // refresh() call sees the right state at the right time.
+    await installMocks(page, {
+      meeting_active_session: () => ({ active: null }),
+      meeting_session_get: () => ({
+        session: {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: "2026-05-01T15:05:00Z",
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic"],
+          appTitle: null,
+        },
+        utterances: [],
+        currentPartials: [],
+      }),
+    });
+
+    await page.goto("/");
+    await gotoSection(page, "dictation");
+
+    // Patch to active:1 so refresh() during session-started sees an active session.
+    await page.evaluate(() => {
+      const stub = (
+        window as unknown as {
+          __hush_e2e?: {
+            invoke: Record<string, (args?: unknown) => Promise<unknown>>;
+          };
+        }
+      ).__hush_e2e;
+      if (stub) {
+        stub.invoke["meeting_active_session"] = async () => ({ active: 1 });
+      }
+    });
+    await fireEvent(page, "meeting:session-started", { sessionId: 1 });
+
+    // Stop button should appear (activeId = 1).
+    const stopBtn = page.locator('button[aria-label="Stop meeting recording"]');
+    await expect(stopBtn).toBeVisible();
+
+    // Patch meeting_active_session back to null — once finalization fires,
+    // refresh() should see no active session.
+    await page.evaluate(() => {
+      const stub = (
+        window as unknown as {
+          __hush_e2e?: {
+            invoke: Record<string, (args?: unknown) => Promise<unknown>>;
+          };
+        }
+      ).__hush_e2e;
+      if (stub) {
+        stub.invoke["meeting_active_session"] = async () => ({ active: null });
+      }
+    });
+
+    // Fire meeting:finalizing — mic released, transcription in background.
+    await fireEvent(page, "meeting:finalizing", { sessionId: 1 });
+
+    // Stop button must be gone (activeId cleared → meetingOnlyActive = false).
+    await expect(stopBtn).toHaveCount(0);
+
+    // Finishing-transcription indicator must appear.
+    const hint = page.locator('[data-testid="finalizing-hint"]');
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText("Finishing transcription");
+
+    // Fire meeting:session-ended — background transcription done.
+    await fireEvent(page, "meeting:session-ended", { sessionId: 1 });
+
+    // Indicator must clear.
+    await expect(hint).toHaveCount(0);
+  });
+
   test("meeting:session-ended event clears active session state", async ({
     page,
   }) => {

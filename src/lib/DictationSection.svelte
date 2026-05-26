@@ -134,6 +134,19 @@
   </RecordPanel>
 
   <!--
+    Background-finalisation indicator. Shown when the mic has been
+    released but Whisper is still transcribing the tail of the session.
+    Kept deliberately quiet — muted secondary-text weight so it reads
+    as a status label, not an error or an action prompt.
+    Hidden during active recording (the Stop button owns that moment).
+  -->
+  {#if dictation.finalizing && !dictation.anyRecordingActive}
+    <p class="finalizing-hint" aria-live="polite" data-testid="finalizing-hint">
+      Finishing transcription…
+    </p>
+  {/if}
+
+  <!--
     Keyboard-shortcut hint sits under the recording area as a
     contextual reminder. Hidden during meeting-only mode since the
     shortcuts refer to dictation hotkeys, not meeting controls.
@@ -231,6 +244,20 @@
   .setup-banner button {
     flex-shrink: 0;
     white-space: nowrap;
+  }
+
+  /* Background-finalisation status label. Deliberately muted so it
+     reads as informational and doesn't compete with the record area
+     or the result block. Same type scale as .shortcut-hint; centred
+     to align with the waveform above. */
+  .finalizing-hint {
+    margin: 0;
+    text-align: center;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    opacity: 0.75;
+    font-style: italic;
   }
 
   /* Inline keyboard-shortcut hint, contextually placed below the

@@ -103,6 +103,10 @@ let screenRecordingLive = $derived(
   audio.findSystemAudio()?.isSupported ?? false,
 );
 let anyRecordingActive = $derived(recording || meetingOnlyActive);
+// True while background finalization is running (mic already released,
+// transcription still in progress). NOT part of anyRecordingActive —
+// the mic is gone, so this must NOT block PTT or re-arm recording guards.
+let finalizing = $derived(meeting.finalizingId !== null);
 
 export const dictation = {
   // ---- read-only derived state ----
@@ -174,6 +178,9 @@ export const dictation = {
   },
   get anyRecordingActive() {
     return anyRecordingActive;
+  },
+  get finalizing() {
+    return finalizing;
   },
   async loadSources() {
     try {
