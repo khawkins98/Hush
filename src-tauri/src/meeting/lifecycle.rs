@@ -479,15 +479,18 @@ impl SessionManager {
     }
 
     /// Returns `true` when a session is in the `Active` state — i.e. a
-    /// pump is running or was running and needs a DB-close retry. Returns
-    /// `false` for `Idle`, `Opening`, or a poisoned state mutex.
+    /// pump is (or was) running for a live meeting. Returns `false` for
+    /// `Idle`, `Opening`, `Releasing`, or a poisoned state mutex.
     ///
     /// Called by [`crate::ipc::commands::meeting::meeting_stop_manual`] to
-    /// decide whether the WhisperContext + ORT Session cleanup should run:
-    /// the cleanup must fire even when `stop_manual` returns a DB-close
-    /// error (pump already joined), but must NOT fire for the "no meeting
-    /// session active" early-return case (pump was never involved, so the
-    /// transcribe slots are still in use for dictation).
+    /// decide whether to rebuild the meeting/dictation WhisperContexts after
+    /// the stop. The rebuild must fire whenever a meeting pump was involved
+    /// (to bound whisper's #612 C-heap growth), but must NOT fire for the
+    /// "no meeting session active" early-return case (no pump ran, so the
+    /// transcribe slots are still in use for dictation and rebuilding them
+    /// would be pointless churn). The DB close now runs in the background
+    /// finalization, not here, so there is no longer a DB-close-error /
+    /// retry path keyed off this flag.
     pub fn has_active_session(&self) -> bool {
         self.state
             .lock()
