@@ -295,6 +295,100 @@ pub(super) fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> Sess
     )
 }
 
+/// Streaming session whose `finish()` blocks until a shared flag is set,
+/// used to keep a meeting's background finalization in flight long enough
+/// for a concurrency assertion. `feed`/`drain` are no-ops. `finish` flips
+/// `started` (so the test can observe it began) then spins on `release`,
+/// sleeping briefly between polls — this runs inside `spawn_blocking`, so
+/// blocking the thread is safe and intended.
+struct SlowFinishStreamingSession {
+    release: Arc<std::sync::atomic::AtomicBool>,
+    started: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StreamingTranscribeSession for SlowFinishStreamingSession {
+    fn feed(&mut self, _captured: &[f32]) -> Result<()> {
+        Ok(())
+    }
+
+    fn drain(&mut self) -> Result<Vec<Utterance>> {
+        Ok(vec![])
+    }
+
+    fn finish(self: Box<Self>) -> Result<Vec<Utterance>> {
+        self.started
+            .store(true, std::sync::atomic::Ordering::Release);
+        // Bounded spin so a test bug can't hang CI forever (~5 s cap).
+        for _ in 0..1_000 {
+            if self.release.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Ok(vec![])
+    }
+}
+
+struct SlowFinishTranscribe {
+    release: Arc<std::sync::atomic::AtomicBool>,
+    started: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Transcribe for SlowFinishTranscribe {
+    fn transcribe(&self, _audio: &CapturedAudio) -> Result<String> {
+        Ok(String::new())
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn start_stream(
+        &self,
+        _format: CaptureFormat,
+        _prompt: &str,
+    ) -> Result<Box<dyn StreamingTranscribeSession>> {
+        Ok(Box::new(SlowFinishStreamingSession {
+            release: Arc::clone(&self.release),
+            started: Arc::clone(&self.started),
+        }))
+    }
+}
+
+/// A manager whose streaming `finish()` blocks on `release` — keeps the
+/// background finalization in flight so the "new meeting awaits
+/// finalization" gate can be observed deterministically. `started` flips
+/// when `finish()` begins (unused by the current test but handy for
+/// finer-grained ordering assertions).
+pub(super) async fn manager_with_slow_finish(
+    release: Arc<std::sync::atomic::AtomicBool>,
+    started: Arc<std::sync::atomic::AtomicBool>,
+) -> SessionManager {
+    let db = SqliteDatabase::open_in_memory().await.unwrap();
+    let repo: Arc<dyn MeetingSessionRepository> =
+        Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+    let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
+    let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> =
+        Arc::new(Mutex::new(Some(Arc::new(SlowFinishTranscribe {
+            release,
+            started,
+        }))));
+    let emitter: Arc<dyn crate::events::EventEmitter> = Arc::new(crate::events::NoopEventEmitter);
+    let diarize: Arc<dyn crate::diarization::Diarize> = Arc::new(crate::diarization::NoopDiarizer);
+    let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
+    SessionManager::new(
+        repo,
+        audio,
+        transcribe,
+        emitter,
+        diarize,
+        app_overrides,
+        Arc::new(AtomicU32::new(0f32.to_bits())),
+        Arc::new(crate::speakers::MemSpeakerStore),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+}
+
 pub(super) fn make_partial(text: &str, started: u64, ended: u64, label: &str) -> Utterance {
     Utterance {
         text: text.to_owned(),
