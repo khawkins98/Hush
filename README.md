@@ -15,19 +15,27 @@ Dictate anywhere with a hotkey. Capture meetings with mic + system audio in para
 
 ---
 
+## Why I made it
+
+This started as a hobby project. I wanted transcripts of my work calls, but I never liked recording my colleagues just to get them — I needed the words, not a sound file of everyone that outlives the meeting. I'd also gotten hooked on a push-to-talk dictation hotkey and didn't want to give it up. What nagged at me was keeping two separate tools for that: one for dictation, one for meetings. I wanted a single app that did both, kept everything on my machine, and left no recording behind.
+
+So I wanted to see how far I could get building it myself. Hush is what I came up with.
+
+---
+
 ## What it is
 
 - **A push-to-talk dictation tool.** Hold your hotkey (default `Right ⌘` on macOS, `Right Ctrl` on Linux + Windows), speak, release. The transcript is on your clipboard, ready to paste, before you've moved your hands. No browser tab, no web service, no upload.
-- **A meeting transcription tool.** Click Record while you're in a call — or let Hush start automatically when a supported meeting app activates your mic (on by default; toggle in Settings → Meeting → Auto-start). Current macOS auto-detection covers Zoom, Teams, Google Meet, Discord, Slack, Webex, FaceTime, Skype, GoToMeeting, BlueJeans, Loom, Tuple, and Around. Auto-started sessions stop automatically when the meeting app releases the mic. Hush captures your mic and the call's system audio in parallel, runs both through whisper.cpp locally, and gives you a searchable transcript with **You / Remote** labels — or **Speaker 1, Speaker 2…** if you turn on the (optional, local) wespeaker diarisation model. *(Parallel system-audio capture currently ships on macOS via a CoreAudio process tap — no Screen Recording permission required. Auto-detection is macOS-only via the CoreAudio HAL. Linux + Windows system-audio support is tracked in [#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107) — meeting mode runs mic-only there for now.)*
-- **Both, in one app, sharing one history.** Most tools pick one lane. Hush is dictation **and** meetings, with the same model loaded once and the same on-disk history.
+- **A meeting transcription tool.** Click Record in a call — or let Hush auto-start when a meeting app takes your mic (Zoom, Teams, Meet, Slack, and a dozen others; on by default, toggle in Settings). It captures your mic and the call's system audio in parallel, transcribes both locally with whisper.cpp, and labels them **You / Remote** — or **Speaker 1, 2…** with the optional local diarisation model. Parallel system audio and auto-detection are macOS-only for now ([#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107)); Linux and Windows run meeting mode mic-only.
+- **Both, in one app, sharing one history.** Most tools pick one lane. Hush does dictation and meetings, with one model load and one searchable history.
 
-The audio never leaves your machine. The audio never lands on disk either — it's processed in RAM (a 30-second rolling ring during meetings; for dictation, drained directly through the transcriber and dropped when the call returns) and is gone as soon as the transcript is on your clipboard.
+The audio never leaves your machine, and never lands on disk — it's processed in RAM and gone the moment the transcript is on your clipboard.
 
 ---
 
 ## How it compares
 
-The table splits "Free?" (no-cost tier exists) from "Open source?" (source published under an OSI license) — they're often conflated, and the user's exposure is different. A free tier on a closed-source SaaS is the vendor's choice to revisit; an OSS license is yours to fork.
+"Free?" and "Open source?" are split on purpose — they're often conflated, but a free tier on closed-source SaaS is the vendor's to revoke, while an OSS license is yours to fork.
 
 |  | Local? | Dictation? | Meetings? | Free? | Open source? | Platforms |
 |---|---|---|---|---|---|---|
@@ -42,15 +50,13 @@ The table splits "Free?" (no-cost tier exists) from "Open source?" (source publi
 | [Granola](https://www.granola.ai) | cloud LLM | — | ✅ | freemium | — | macOS · Windows |
 | [Otter](https://otter.ai) / [Fireflies](https://fireflies.ai) / [Fathom](https://fathom.video) | — | — | ✅ (cloud bot or web) | freemium | — | web |
 
-The cross-platform OSS rows are the closest competitors. Within them the niches differ: **Whispering** is dictation-only with a similar Tauri+Svelte stack; **Buzz** does live-mic + post-hoc file imports without a global push-to-talk hotkey; **Meetily** is meeting-only without dictation. **OpenWhispr** is the most direct overlap — local dictation + meetings, same three OSes, MIT-licensed; if Hush isn't to your taste it's worth a look. Note that their distributed builds include a cloud service (fastest transcription, no model download) with a freemium cap — **local processing is always unlimited**, but cloud transcription tops out at 2,000 words/week on the free tier ($8/month for unlimited). All features work fully offline with a downloaded model, no account required.
-
-Hush's wedge: dictation **and** parallel-source meeting capture in one app, sharing one whisper.cpp model load and one searchable history, with a verifiable privacy posture (see below). The closest macOS comparable, [VoiceInk](https://github.com/Beingpax/VoiceInk), is the project that inspired Hush — see [Acknowledgements](#acknowledgements) for the relationship.
+The cross-platform OSS rows are the real competition. [OpenWhispr](https://github.com/OpenWhispr/openwhispr) is the closest — local dictation + meetings on the same three OSes — though its builds bundle an optional cloud tier (local stays unlimited; cloud caps at 2k words/week free). What sets Hush apart: dictation and parallel-source meeting capture in one app, one whisper.cpp load, one searchable history, with a privacy posture you can verify (below). The closest macOS app, [VoiceInk](https://github.com/Beingpax/VoiceInk), is what inspired Hush — see [Acknowledgements](#acknowledgements).
 
 ---
 
 ## Privacy: grep the source
 
-Hush's privacy posture is the differentiator, so it's verifiable rather than promised.
+Privacy is the point of Hush, so it's built to be verified rather than promised.
 
 - **Two outbound `reqwest` callers exist in the entire codebase.** Both are user-initiated. Grep `src-tauri/src` for `reqwest::Client` if you don't believe it:
   - **Whisper / speaker model downloads** when you click Download in the model picker. HTTPS-only, host-pinned to `huggingface.co` / `*.hf.co` (one signed-CDN hop allowed for HF's storage backend), redirect-cap of 4, **SHA-256 verified on every download**. Once the model is cached, transcription is fully offline.
@@ -60,90 +66,45 @@ Hush's privacy posture is the differentiator, so it's verifiable rather than pro
 
 If telemetry or auto-update ever ships, it'll be opt-in with a separate privacy review.
 
----
-
-## For people in regulated work
-
-If you handle audio you can't upload — therapy sessions, legal calls, journalist interviews, qualitative research — Hush is the option that doesn't make you think about compliance:
-
-- The audio never travels off your laptop.
-- There's no account, so there's no vendor with your call history.
-- Model files are SHA-256 verified before they run.
-- Source is Apache 2.0; you can audit, fork, and run your own build.
-
-A workflow page for knowledge workers in privacy-sensitive roles is on the roadmap. In the meantime: install, set your push-to-talk hotkey, and start a meeting from the panel — Hush stays out of the way.
+That's the posture that matters if you handle audio you can't upload — therapy, legal, journalism, research: nothing leaves your laptop, no account holds your call history, and you can audit or fork the source yourself.
 
 ---
 
 ## Install
 
-### macOS
+Hush isn't signed with an Apple Developer ID — the $99/year certificate isn't worth it for a solo hobby project — so macOS (and Windows) show a security warning on first launch. Clearing it is a one-time, ~30-second step.
 
-Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project), so macOS will show a security warning on **first launch** regardless of how you install. The bypass is a one-time, 30-second step.
-
-**Homebrew (recommended — easy updates):**
+**macOS — Homebrew (recommended):**
 
 ```bash
 brew install --cask khawkins98/tap/hush
 ```
 
-Future updates: `brew upgrade --cask hush`. Tap source: [`khawkins98/homebrew-tap`](https://github.com/khawkins98/homebrew-tap)
+Updates: `brew upgrade --cask hush`. Or download the `.dmg` from [Releases](https://github.com/khawkins98/Hush/releases) and drag Hush.app to Applications.
 
-**Or download the DMG** from **[GitHub Releases](https://github.com/khawkins98/Hush/releases)**, open it, and drag Hush.app to Applications.
+**Linux / Windows:** [Releases](https://github.com/khawkins98/Hush/releases) → latest `v*` tag (`.AppImage` / `.deb`, or `.msi` / `.exe`). CI-built, not hands-on tested.
 
-**First launch — bypass Gatekeeper (one-time):**
+**New to Hush?** [`docs/getting-started.md`](./docs/getting-started.md) is the full walkthrough — install, the one-time Gatekeeper / SmartScreen bypass, permissions, your first recording, and meeting capture. macOS permission troubleshooting (including the "was granted — now revoked" prompt after updates) lives in [`docs/macos-permissions.md`](./docs/macos-permissions.md).
 
-Right-click `Hush.app` in Applications → **Open** → **Open** again in the dialog. If that option is greyed out on macOS 26, run this in Terminal instead:
-
-```bash
-xattr -rd com.apple.quarantine /Applications/Hush.app
-```
-
-After the first successful open, all future launches are silent. The DMG includes a "Read Me First.txt" with the same instructions offline.
-
-**New to Hush?** [`docs/getting-started.md`](./docs/getting-started.md) walks through the full flow: install → Gatekeeper → permissions → first recording → meeting capture.
-
-### Linux / Windows
-
-**[GitHub Releases](https://github.com/khawkins98/Hush/releases)** → pick the latest `v*` tag.
-
-| Platform | File | Notes |
-|---|---|---|
-| **Linux** | `.AppImage` or `.deb` | Any distro / Debian + Ubuntu; CI-built, not hands-on tested |
-| **Windows** | `.msi` (recommended) or `.exe` | CI-built, not hands-on tested |
-
-After an update, one or more permissions (Microphone, Input Monitoring) may show "Was granted — now revoked" in Settings → Permissions — this is a macOS TCC side-effect of ad-hoc signing. Re-grant each one in System Settings or use the Reset button in Settings → Permissions. Full troubleshooting steps are in [`docs/macos-permissions.md`](./docs/macos-permissions.md). Code-signing would eliminate this entirely; if you'd like to sponsor it, GitHub Sponsors is at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
-
-Windows shows a SmartScreen warning on first run — click **More info** → **Run anyway**. A Windows EV cert is also on the roadmap.
-
-Hush does **not** check for updates automatically. To check manually: **Settings → About → Check for updates**, or on macOS the **Hush** menu.
+Hush does not auto-update — check manually via **Settings → About → Check for updates** (or the **Hush** menu on macOS). Code-signing would remove the warnings; it's sponsorable at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
 
 ---
 
 ## Platform support
 
-| Platform | Status | Hands-on tested |
-|---|---|---|
-| **macOS 26** | Primary target. Daily-driven by the maintainer. | ✅ Yes |
-| **Linux (X11)** | Theoretically supported; CI builds + tests on `ubuntu-latest`. | ⚠️ Not hands-on tested |
-| **Linux (Wayland)** | Toggle hotkey works through the desktop portal; PTT degrades gracefully (rdev requires X11). | ⚠️ Not hands-on tested |
-| **Windows** | Built and published in the release pipeline. | ⚠️ Not hands-on tested |
-
-**Linux and Windows hands-on contributions are very welcome.** If you run Hush on either and something is broken, [open an issue](https://github.com/khawkins98/Hush/issues/new) with steps to reproduce + your platform version. PRs that fix platform-specific gaps are exactly the right contribution shape.
+**macOS 26** is the primary target — I daily-drive it, and it's the only hands-on-tested platform. **Linux and Windows** build and test in CI but aren't hands-on tested (meeting mode is mic-only there; on Wayland, push-to-talk degrades to the toggle hotkey). Hands-on reports and platform fixes are very welcome — [open an issue](https://github.com/khawkins98/Hush/issues/new) with repro steps and your version, or send a PR.
 
 ---
 
 ## Engineering
 
-For people who care about how it's built before they trust it:
+For people who want to know how it's built before trusting it:
 
-- **Trait-seam pattern at every OS-touching boundary.** `AudioCapture`, `Transcribe`, `Diarize`, `HistoryRepository`, `EventEmitter`, etc. — every one is a trait with a hand-rolled mock, so the IPC layer's tests run without a real audio device, real SQLite, or a real Tauri runtime. See [`ARCHITECTURE.md`](./ARCHITECTURE.md).
-- **Event-driven meeting auto-detection (macOS).** Rather than polling the foreground app every 3 s, Hush registers CoreAudio HAL listeners on `kAudioDevicePropertyDeviceIsRunningSomewhere` for all input devices. When any mic activates, it checks the frontmost app against a classifier and starts a session automatically if the user has opted in; when the meeting app releases the mic, the session stops automatically. The full decision matrix — all seven guarded conditions in the state machine — is in [`ARCHITECTURE.md → Detection logic matrix`](./ARCHITECTURE.md#detection-logic-matrix).
-- **Four-place IPC sync rule.** A `#[tauri::command]` lives in four places (Rust handler, `generate_handler!`, TS type, Playwright mock). CI lints the mock-completeness mismatch as of #437.
-- **Supply-chain pin policy.** `tract-onnx` uses a standard caret pin (`ort` was replaced in #641 to eliminate Metal-routed `IOAccelerator` growth), `rdev` is a git fork pin. Both decisions are documented in [`learnings.md`](./learnings.md). CI's `supply-chain-pins` job blocks new RC pins / git deps that aren't on the explicit allowlist.
-- **Decision log.** [`learnings.md`](./learnings.md) is append-only, dated, and captures the *why* behind every non-obvious architectural call — including the parts that didn't work and got reverted.
+- **A trait seam at every OS boundary** — `AudioCapture`, `Transcribe`, `Diarize`, `HistoryRepository`, and friends are traits with hand-rolled mocks, so the IPC tests run with no real audio device, SQLite, or Tauri runtime.
+- **Event-driven meeting auto-detection** — CoreAudio HAL listeners catch a mic going live, classify the frontmost app, and start or stop a session. No foreground polling.
+- **An append-only decision log** — [`learnings.md`](./learnings.md) is dated and captures the *why* behind every non-obvious call, including the parts that got reverted.
 
-This isn't Electron-with-a-mic-icon. Four native windows (main, HUD overlay, menu-bar popover, developer debug), each with its own capability file. Settings is inline in the main window — no separate window. Native menu bar with `⌘1/⌘2` section nav. Tray icon as template so dark/light menu bars adapt cleanly. Autostart with Accessory activation policy (no Dock icon for background launches). Traffic-light permission health that distinguishes "stale" from "revoked" for the macOS TCC store.
+This isn't Electron with a mic icon: four native windows, each with its own capability file; a native menu bar; tray-icon templating that adapts to light/dark menu bars; and traffic-light permission health that tells "stale" from "revoked" in the macOS TCC store. Full stack, window topology, trait seams, and module map are in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
 
@@ -152,11 +113,10 @@ This isn't Electron-with-a-mic-icon. Four native windows (main, HUD overlay, men
 | For | Read |
 |---|---|
 | **Discovering Hush** — what it does | This README + the live app (install it, open Settings → menus describe what each thing does) |
-| **Installing + first recording** | [docs/getting-started.md](./docs/getting-started.md) — install options, Gatekeeper walkthrough, permissions, dictation, meeting capture |
+| **Install + first recording** | [docs/getting-started.md](./docs/getting-started.md) — install, Gatekeeper / SmartScreen bypass, permissions, dictation, meetings. macOS TCC troubleshooting: [`docs/macos-permissions.md`](./docs/macos-permissions.md) |
 | **What's shipped right now** | [STATUS.md](./STATUS.md) (rolling snapshot), [CHANGELOG.md](./CHANGELOG.md) (release-by-release record) |
-| **Attribution + legal posture** | [hush-prd.md](./hush-prd.md) — black-box reimplementation discipline (§13.8), product non-goals, and VoiceInk attribution rationale. The original full product spec is historical; see STATUS.md and CHANGELOG.md for current state |
+| **Attribution + legal posture** | [hush-prd.md](./hush-prd.md) §13.8 — black-box reimplementation discipline and VoiceInk attribution rationale (the rest of that spec is historical) |
 | **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, four-window topology, trait seams, meeting pump, module map |
-| **Installing + using** | [Releases](https://github.com/khawkins98/Hush/releases), [`docs/macos-permissions.md`](./docs/macos-permissions.md) for macOS TCC troubleshooting |
 | **Running it locally / dev commands** | [docs/developing.md](./docs/developing.md) — setup, command reference, macOS quirks, test layers |
 | **Building + contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md), [CLAUDE.md](./CLAUDE.md) for the Claude-assisted contributor workflow |
 | **Why decisions were made** | [learnings.md](./learnings.md) — append-only engineering decision log |

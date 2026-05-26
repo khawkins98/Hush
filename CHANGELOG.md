@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+v0.9.0's dark navy theme was short-lived. This re-keys the entire UI to the maintainer's allaboutken.com brand: a light theme — cream canvas, brand orange accent, purple links — set in the Recursive typeface. The app icon is now the real "H" mark, vector-traced from the logo. Under the hood, `npm run dev` became a backend-free browser playground for fast UI work.
+
+### Added
+
+- **Dev: mocked-backend `npm run dev` playground.** `npm run dev` now runs a plain browser with a seeded mock IPC bus — populated history, granted permissions, an installed model — so UI/layout work needs no Tauri build. An on-screen "MOCK DATA" badge marks it; `npm run dev:tauri` runs the real backend. (#971)
+
+### Changed
+
+- **UI: re-keyed to the allaboutken.com light brand palette.** Replaces v0.9.0's dark navy theme — cream canvas, brand orange (`#f49e17`) accent and sidebar band, near-black text, purple links. The main window is light; the HUD, menu-bar, and debug windows stay dark. (#971)
+- **Typography: self-hosted Recursive.** The site's variable typeface, bundled locally (no CDN, works offline). Headings use a heavy "casual" weight; meta and data — the recording timer, keycaps, history timestamps — use Recursive Mono, a deliberate human/machine type split. (#971)
+- **Components: hard-shadow buttons and note-box callouts** ported from the site's style guide — `.kh-button` for primary actions, orange-bordered callouts with a vertical mono label tab for the alert banners. (#971)
+- **Icon: the real "H" mark.** App icon, favicon, and tray regenerated from the vector-traced brand H (speech fragmenting into text tokens) on a dark tile, replacing the previous hand-drawn approximation. (#971)
+- **Docs: README opens with a personal "Why I made it" note**, and the install section is trimmed — the full Gatekeeper / SmartScreen / permissions walkthrough lives in [`docs/getting-started.md`](./docs/getting-started.md). (#972)
+
+### Fixed
+
+- **Accessibility: brand-palette contrast.** Sidebar nav text and the history filter chips now clear WCAG AA on the orange band; orange used as a border or focus ring uses a darker shade for 3:1; the hard-shadow button respects `prefers-reduced-motion` and no longer renders "pressed" when programmatically focused. (#971)
+
 ## [0.9.0] - 2026-05-16
 
 v0.9.0 is a visual overhaul release. The entire UI has been re-keyed to the Hush brand palette — deep navy surfaces, warm orange as the primary accent, and a blue accent family replacing the previous green success states. The history panel received a Stitch-inspired redesign, the app icon and tray icon were updated to match the new look, and the sidebar gained a gradient fade into the main canvas. On the distribution side, a Homebrew tap is now the recommended install path for easy install and `brew upgrade` updates. The release workflow auto-patches the tap on every tag push. A handful of small UI fixes and a documentation pass round out the release.
