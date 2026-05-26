@@ -330,7 +330,7 @@
                   openExternal(e.currentTarget.href);
                 }}
                 rel="noopener noreferrer"
-                class="primary about-release-notes-btn"
+                class="about-release-notes-btn"
               >Open release notes</a>
               <button
                 type="button"
@@ -398,7 +398,7 @@
               <div class="about-install-actions">
                 <button
                   type="button"
-                  class="primary"
+                  class="kh-button kh-button--sm"
                   onclick={onInstallUpdate}
                 >
                   Try again

@@ -470,7 +470,8 @@
     .hud-shimmer-fill { animation: none; background-position: 50% 0; }
   }
 
-  /* Done: green dot + check (matches app's --success-text: #74b06c) */
+  /* Done: green dot + check. HUD-local green, tuned for the dark pill —
+     the light-theme --success-text (#2f7a35) would be too dark here. */
   .hud-done .hud-dot {
     animation: none;
     background-color: #74b06c;

@@ -18,7 +18,7 @@
 // `window.__hush_e2e` already exists, so under Playwright (which sets
 // it first via addInitScript) this seed is skipped entirely.
 
-import type { ModelCard } from "../../../src/lib/types";
+import type { HistoryEntry, ModelCard } from "../../../src/lib/types";
 
 type Handler = (args?: Record<string, unknown>) => unknown;
 
@@ -43,10 +43,10 @@ export function seedMockBus(): void {
     speakerIdentity: false,
   };
 
-  // Shape matches `HistoryEntry` in src/lib/types.ts (appName/windowTitle/
-  // name, no `source`) so the History UI renders faithfully — incl. the
-  // app-name attribution and editable label.
-  let history: Array<Record<string, unknown>> = [
+  // Typed as HistoryEntry[] so `npm run check` catches any drift from
+  // the real contract (src/lib/types.ts) — the actual source of truth,
+  // which is why this beats mirroring the Playwright _mock.ts seed.
+  let history: HistoryEntry[] = [
     { id: 5, transcript: "Let's ship the brand refresh and circle back on the icon export.", appName: "Slack", windowTitle: "design — Slack", model: "ggml-base.bin", durationMs: 5200, createdAt: isoMinutesAgo(4), ignored: false, name: null },
     { id: 4, transcript: "Remember to self-host the Recursive font so it works offline.", appName: "Notes", windowTitle: "Brand — Notes", model: "ggml-base.bin", durationMs: 3400, createdAt: isoMinutesAgo(38), ignored: false, name: "Font notes" },
     { id: 3, transcript: "Quick note: the duotone needs higher contrast on the sidebar.", appName: "VS Code", windowTitle: "app.css — Hush", model: "ggml-small.bin", durationMs: 2750, createdAt: isoMinutesAgo(95), ignored: false, name: null },

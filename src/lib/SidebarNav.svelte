@@ -348,8 +348,8 @@
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease;
   }
-  /* White-on-orange band: active state is full white + a white
-     leading-edge indicator; inactive items are dimmed white. */
+  /* Dark-on-orange band: active is the darker ink + bold weight + a
+     leading-edge indicator; inactive is the lighter ink (still AA). */
   .sidebar-nav-item:hover {
     color: var(--sidebar-ink);
   }

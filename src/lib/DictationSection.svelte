@@ -83,7 +83,7 @@
         <strong>Set up your first model</strong>
         <span>Hush needs a Whisper model to transcribe.</span>
       </div>
-      <button class="primary" onclick={onScrollToModelPicker}>
+      <button class="kh-button" onclick={onScrollToModelPicker}>
         Choose a model
       </button>
     </aside>
@@ -231,25 +231,6 @@
   .setup-banner button {
     flex-shrink: 0;
     white-space: nowrap;
-  }
-
-  /* Setup banner's primary button — colocated here because it's
-     the only consumer left after slice B trimmed ControlsSection. */
-  button.primary {
-    background-color: var(--accent);
-    color: var(--text-on-accent);
-    border: 1px solid var(--accent);
-    border-radius: var(--radius-md);
-    padding: 0.45rem 1rem;
-    font-size: 0.88rem;
-    font-family: inherit;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background-color 0.12s;
-  }
-  button.primary:hover:not(:disabled) {
-    background-color: var(--accent-hover);
-    border-color: var(--accent-hover);
   }
 
   /* Inline keyboard-shortcut hint, contextually placed below the
