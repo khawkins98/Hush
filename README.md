@@ -27,7 +27,7 @@ So I wanted to see how far I could get building it myself. Hush is what I came u
 
 - **A push-to-talk dictation tool.** Hold your hotkey (default `Right ⌘` on macOS, `Right Ctrl` on Linux + Windows), speak, release. The transcript is on your clipboard, ready to paste, before you've moved your hands. No browser tab, no web service, no upload.
 - **A meeting transcription tool.** Click Record in a call — or let Hush auto-start when a meeting app takes your mic (Zoom, Teams, Meet, Slack, and a dozen others; on by default, toggle in Settings). It captures your mic and the call's system audio in parallel, transcribes both locally with whisper.cpp, and labels them **You / Remote** — or **Speaker 1, 2…** with the optional local diarisation model. Parallel system audio and auto-detection are macOS-only for now ([#106](https://github.com/khawkins98/Hush/issues/106) / [#107](https://github.com/khawkins98/Hush/issues/107)); Linux and Windows run meeting mode mic-only.
-- **Both, in one app, sharing one history.** Most tools pick one lane. Hush does dictation **and** meetings, with one model load and one searchable history.
+- **Both, in one app, sharing one history.** Most tools pick one lane. Hush does dictation and meetings, with one model load and one searchable history.
 
 The audio never leaves your machine, and never lands on disk — it's processed in RAM and gone the moment the transcript is on your clipboard.
 
@@ -50,13 +50,13 @@ The audio never leaves your machine, and never lands on disk — it's processed 
 | [Granola](https://www.granola.ai) | cloud LLM | — | ✅ | freemium | — | macOS · Windows |
 | [Otter](https://otter.ai) / [Fireflies](https://fireflies.ai) / [Fathom](https://fathom.video) | — | — | ✅ (cloud bot or web) | freemium | — | web |
 
-The cross-platform OSS rows are the real competition. [OpenWhispr](https://github.com/OpenWhispr/openwhispr) is the closest — local dictation + meetings on the same three OSes — though its builds bundle an optional cloud tier (local stays unlimited; cloud caps at 2k words/week free). Hush's wedge: dictation **and** parallel-source meeting capture in one app, one whisper.cpp load, one searchable history, with a privacy posture you can verify (below). The closest macOS app, [VoiceInk](https://github.com/Beingpax/VoiceInk), is what inspired Hush — see [Acknowledgements](#acknowledgements).
+The cross-platform OSS rows are the real competition. [OpenWhispr](https://github.com/OpenWhispr/openwhispr) is the closest — local dictation + meetings on the same three OSes — though its builds bundle an optional cloud tier (local stays unlimited; cloud caps at 2k words/week free). What sets Hush apart: dictation and parallel-source meeting capture in one app, one whisper.cpp load, one searchable history, with a privacy posture you can verify (below). The closest macOS app, [VoiceInk](https://github.com/Beingpax/VoiceInk), is what inspired Hush — see [Acknowledgements](#acknowledgements).
 
 ---
 
 ## Privacy: grep the source
 
-Hush's privacy posture is the differentiator, so it's verifiable rather than promised.
+Privacy is the point of Hush, so it's built to be verified rather than promised.
 
 - **Two outbound `reqwest` callers exist in the entire codebase.** Both are user-initiated. Grep `src-tauri/src` for `reqwest::Client` if you don't believe it:
   - **Whisper / speaker model downloads** when you click Download in the model picker. HTTPS-only, host-pinned to `huggingface.co` / `*.hf.co` (one signed-CDN hop allowed for HF's storage backend), redirect-cap of 4, **SHA-256 verified on every download**. Once the model is cached, transcription is fully offline.
@@ -86,7 +86,7 @@ Updates: `brew upgrade --cask hush`. Or download the `.dmg` from [Releases](http
 
 **New to Hush?** [`docs/getting-started.md`](./docs/getting-started.md) is the full walkthrough — install, the one-time Gatekeeper / SmartScreen bypass, permissions, your first recording, and meeting capture. macOS permission troubleshooting (including the "was granted — now revoked" prompt after updates) lives in [`docs/macos-permissions.md`](./docs/macos-permissions.md).
 
-Hush does **not** auto-update — check manually via **Settings → About → Check for updates** (or the **Hush** menu on macOS). Code-signing would remove the warnings; it's sponsorable at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
+Hush does not auto-update — check manually via **Settings → About → Check for updates** (or the **Hush** menu on macOS). Code-signing would remove the warnings; it's sponsorable at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
 
 ---
 
