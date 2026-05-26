@@ -56,7 +56,8 @@ Subsequent runs are incremental.
 
 | What you're trying to do | Command |
 |---|---|
-| Iterate on UI or Rust logic — the normal dev loop | `npm run tauri dev` |
+| Fast UI / layout / design iteration — browser, mock data, no backend | `npm run dev` → http://localhost:1420 |
+| Iterate on UI or Rust logic with the real backend — the normal dev loop | `npm run tauri dev` |
 | Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
 | Diarizer only (no whisper compile cost) | `cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx` |
 | Test Microphone / Input Monitoring TCC permission prompts | `npm run tauri:bundle` (macOS only) |
@@ -73,6 +74,22 @@ Subsequent runs are incremental.
 ## Full annotated command reference
 
 ```bash
+# Browser playground with a MOCKED backend. Runs `HUSH_MOCK=1 vite dev`
+# and opens at http://localhost:1420. There's no Tauri runtime, so a
+# seeded in-memory IPC bus (tests/e2e/setup/mock-defaults.ts) stands in
+# for the real backend: populated history, granted permissions, an
+# installed model, in-session-stateful settings toggles. Fastest loop
+# for UI / layout / design work (HMR + browser devtools + many tabs),
+# but it's FAKE DATA — for real transcription/audio/permissions use
+# `npm run tauri dev`. Backend events (audio levels, download progress)
+# don't fire. If you edit the mock seed and changes don't show, clear
+# the stale Vite cache: `rm -rf node_modules/.vite`.
+npm run dev
+
+# The real (mock-free) Vite dev server. This is what `tauri dev` runs
+# via its beforeDevCommand — you rarely run it directly.
+npm run dev:tauri
+
 # Run the full app. Default features are `whisper` (needs cmake on macOS) +
 # `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
 # no vendored binaries — compiles from source, no network needed).
@@ -262,7 +279,9 @@ When adding an integration test that needs an external resource, prefer `#[ignor
 
 ### Frontend e2e — Path A (`npm run test:e2e`)
 
-Playwright + Chromium drives the SvelteKit dev server in `HUSH_E2E=1` mode, which swaps `@tauri-apps/api/{core,event}` for in-tree stubs. Tests configure per-spec `invoke` handlers and fire backend-emitted events. See `tests/e2e/README.md`.
+Playwright + Chromium drives the SvelteKit dev server in `HUSH_E2E=1` mode, which swaps `@tauri-apps/api/{core,event,app}` + `plugin-shell` for in-tree stubs (`tests/e2e/setup/*-stub.ts`). Tests configure per-spec `invoke` handlers and fire backend-emitted events. See `tests/e2e/README.md`.
+
+The browser playground (`npm run dev`, `HUSH_MOCK=1`) reuses the **same stubs** — the only difference is the seed: Playwright sets a minimal, deterministic, throw-on-unmocked set per test; `npm run dev` falls back to `tests/e2e/setup/mock-defaults.ts`, a populated, forgiving seed (unknown commands return `[]`/`undefined` instead of throwing). `mock-defaults.ts` no-ops under Playwright, which sets `window.__hush_e2e` first.
 
 **Catches:** UI regressions, modal a11y, error-copy drift, retry-race UX, aria-attribute bugs.  
 **Doesn't catch:** real IPC, HUD lifecycle, hotkey registration, real audio, real model download. Those are Path B.

@@ -11,6 +11,16 @@ Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scop
 ## Common commands
 
 ```bash
+# Browser playground with a MOCKED backend (HUSH_MOCK=1 vite dev) at
+# http://localhost:1420. No Tauri runtime — a seeded in-memory IPC bus
+# (tests/e2e/setup/mock-defaults.ts) stands in: populated history,
+# granted perms, installed model, stateful settings. Fastest loop for
+# UI / layout / design, but FAKE DATA — backend events don't fire and
+# real transcription/audio/permissions need `npm run tauri dev`. Edited
+# the mock seed and nothing changed? `rm -rf node_modules/.vite`.
+# (`npm run dev:tauri` is the real, mock-free Vite that `tauri dev` runs.)
+npm run dev
+
 # Run the full app. Default features are `whisper` (needs cmake on
 # macOS) + `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
 # no vendored binaries — compiles from source, no network needed).
