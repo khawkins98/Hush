@@ -38,9 +38,7 @@ use crate::audio::{AudioSession, AudioSource};
 use crate::transcription::StreamingTranscribeSession;
 
 use super::classifier::AppClassifier;
-use super::events::{
-    emit_meeting_session_ended, emit_meeting_session_started, emit_meeting_source_failed,
-};
+use super::events::{emit_meeting_session_started, emit_meeting_source_failed};
 use super::manager::{ActiveSession, SessionManager, SessionState};
 use super::pump;
 use super::{MeetingSession, NewMeetingSession, NewPersistedUtterance, SessionDictOpts};
@@ -76,6 +74,23 @@ impl SessionManager {
         app_title: Option<String>,
         dict_opts: SessionDictOpts,
     ) -> Result<MeetingSession> {
+        // A new meeting must wait for any in-flight background finalization
+        // to complete before claiming the slot — it would otherwise share
+        // the diarizer cluster state and the meeting `WhisperContext` with
+        // the finalizing session (background finalization; see
+        // `docs/meeting-background-finalization-proposal.md` "Deferred" for
+        // why concurrent meetings are out of scope). Normally sub-second.
+        //
+        // `take()` the handle out from under the lock, drop the guard, THEN
+        // `.await` — never hold the `finalizing` mutex across an await
+        // (locking discipline, see module docs + learnings.md 2026-05-02).
+        // Dictation does NOT come through here: it uses a separate transcribe
+        // slot and no diarizer, so it proceeds as soon as the slot is `Idle`.
+        let pending_finalization = self.finalizing.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(handle) = pending_finalization {
+            let _ = handle.await;
+        }
+
         // Claim the slot via the Opening sentinel. A concurrent
         // start sees Opening and rejects rather than racing past
         // the precondition check. The lock is released before the
@@ -101,7 +116,7 @@ impl SessionManager {
                         "meeting session already active; stop the current one first"
                     ));
                 }
-                SessionState::Stopping => {
+                SessionState::Releasing => {
                     return Err(anyhow!(
                         "a meeting session is finishing; wait before starting a new one"
                     ));
@@ -393,6 +408,11 @@ impl SessionManager {
         // `PumpContext` — that one was unused; this one is
         // load-bearing.
         let started_at = Instant::now();
+        // Audio-released checkpoint: the pump fires `tx` the moment it has
+        // explicitly stopped every audio handle (device freed), and
+        // `stop_manual` awaits `rx` so it returns promptly while the slow
+        // tail flush continues in the background.
+        let (audio_released_tx, audio_released_rx) = tokio::sync::oneshot::channel();
         let pump_handle = tokio::spawn(pump::run_pump(pump::PumpContext {
             session_id: session.id,
             repo: Arc::clone(&self.repo),
@@ -412,6 +432,9 @@ impl SessionManager {
             session_start: started_at,
             vocab_prompt: dict_opts.vocab_prompt,
             replacement_rules: dict_opts.replacement_rules,
+            audio_released_tx: Some(audio_released_tx),
+            speaker_store: Arc::clone(&self.speaker_store),
+            speaker_identity_enabled: Arc::clone(&self.speaker_identity_enabled),
         }));
 
         // Commit Active. The slot has been Opening since the start
@@ -426,7 +449,7 @@ impl SessionManager {
             started_at,
             cancel,
             pump_handle: Mutex::new(Some(pump_handle)),
-            close_attempted: false,
+            audio_released_rx: Mutex::new(Some(audio_released_rx)),
         });
         drop(guard);
 
@@ -472,26 +495,34 @@ impl SessionManager {
             .unwrap_or(false)
     }
 
-    /// Close the active session.
+    /// Stop the active session and return promptly once the audio device
+    /// is released — the slow tail finalization runs in the background.
     ///
-    /// Signals the pump to cancel, awaits its completion (the pump
-    /// drains + transcribes one final chunk before exiting), then
-    /// writes `ended_at = NOW` on the session row. No-op-with-error
-    /// if no session is active — the panel disables the Stop button
-    /// when nothing's running, but a stale double-click shouldn't
-    /// crash anything either.
+    /// Signals the pump to cancel, awaits *only* the audio-released
+    /// checkpoint (the pump fires it the moment every handle is explicitly
+    /// stopped, so the capture singleton is actually free), flips
+    /// `Releasing → Idle`, parks the pump's continuation in the single
+    /// `finalizing` lane, and returns `Ok`. The background continuation
+    /// finishes the tail flush, resolves speaker identities (#667), closes
+    /// the DB row, and emits `MeetingSessionEnded` — all moved out of this
+    /// method (background finalization; see the proposal).
+    ///
+    /// No-op-with-error if no session is active — the panel disables the
+    /// Stop button when nothing's running, but a stale double-click
+    /// shouldn't crash anything.
     pub async fn stop_manual(&self) -> Result<()> {
         // Take the active record out so a concurrent append_utterance
         // can't race past us writing into a session we're about to
-        // close. The dropped-on-error case below restores it.
+        // close. Flip to Releasing — that brief window blocks a
+        // concurrent meeting start (the device isn't free yet).
         let active = {
             let mut guard = self
                 .state
                 .lock()
                 .map_err(|_| anyhow!("session manager mutex poisoned"))?;
-            match std::mem::replace(&mut *guard, SessionState::Stopping) {
+            match std::mem::replace(&mut *guard, SessionState::Releasing) {
                 SessionState::Active(a) => Some(a),
-                state @ (SessionState::Opening | SessionState::Idle | SessionState::Stopping) => {
+                state @ (SessionState::Opening | SessionState::Idle | SessionState::Releasing) => {
                     // Restore the original state — we didn't have an
                     // Active to take.
                     *guard = state;
@@ -505,140 +536,67 @@ impl SessionManager {
             None => return Err(anyhow!("no meeting session active")),
         };
 
-        // First-try path: signal the pump and join it. Subsequent
-        // retries (`close_attempted == true`) skip this — the pump
-        // is already gone, having drained on the original call —
-        // and go straight to retrying the DB close (#249).
-        if !active.close_attempted {
-            // Tell the pump to wind down, then wait for it to drain
-            // its final chunk + append the resulting utterance.
-            // Awaiting the join here matters: if we close the
-            // session row before the pump's last append, the panel
-            // briefly shows "ended" with a missing
-            // tail-of-conversation utterance.
-            active.cancel.store(true, Ordering::Release);
-            let pump_handle = active
-                .pump_handle
-                .lock()
-                .map_err(|_| anyhow!("active session pump_handle mutex poisoned"))?
-                .take();
-            if let Some(handle) = pump_handle {
-                // Best-effort: a panicked pump task shouldn't block
-                // session cleanup. Log and continue.
-                if let Err(e) = handle.await {
-                    tracing::error!(error = ?e, "meeting pump task panicked or was cancelled");
-                }
-            }
+        // Tell the pump to wind down. It will do a final drain + inference,
+        // explicitly stop every audio handle (capturing the tail), fire the
+        // audio-released checkpoint, and only THEN start the slow tail flush.
+        active.cancel.store(true, Ordering::Release);
 
-            // The pump's finish() path already flushed any tail
-            // finals to the database and cleared the per-source
-            // partials. Belt-and-braces: clear our partials map
-            // for this session id so a stale partial can't leak
-            // into a subsequent IPC poll between this point and
-            // the pump's last write.
-            if let Ok(mut guard) = self.partials.write() {
-                guard.remove(&active.id);
-            }
-        } else {
-            tracing::info!(
-                session_id = active.id,
-                "meeting stop: retrying close_session after prior DB failure"
-            );
+        // Await only the audio-released checkpoint — not the whole tail
+        // flush. Take the receiver out from under the lock; never hold a
+        // session-internal mutex across the await. The 10 s bound is a
+        // generous fallback: the pump fires this immediately after the
+        // ack-waited `handle.stop()`, so in practice it resolves in
+        // milliseconds. If it ever times out (pump wedged before release),
+        // we proceed anyway — the slot returns to Idle and the parked
+        // handle is aborted by the next start or by Drop.
+        let rx = active
+            .audio_released_rx
+            .lock()
+            .ok()
+            .and_then(|mut g| g.take());
+        if let Some(rx) = rx {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), rx).await;
         }
 
-        let session_id = active.id;
-        let close_result = match self.repo.close_session(active.id).await {
-            Ok(()) => {
-                // Transition Stopping → Idle now that the pump has joined
-                // and the DB row is committed (#839).
-                if let Ok(mut guard) = self.state.lock() {
-                    if matches!(&*guard, SessionState::Stopping) {
-                        *guard = SessionState::Idle;
-                    }
-                }
-                Ok(())
-            }
-            Err(e) => {
-                // Restore the active record with `close_attempted`
-                // set so a retry skips the (already-completed)
-                // pump cancellation work and goes straight to
-                // re-attempting the DB write. The fresh AtomicBool
-                // and empty pump_handle reflect that reality —
-                // the original cancel/handle have already done
-                // their job and aren't reusable.
-                //
-                // **Race-aware restore (#492).** While we awaited
-                // `close_session`, a concurrent `start_manual` may
-                // have claimed the slot (Idle → Opening → Active for
-                // a new session). The pre-#492 code unconditionally
-                // wrote `Active(<old id>)` here, silently clobbering
-                // the new session — orphaning its pump task and
-                // leaving its DB row stuck open. Now we only restore
-                // when the slot is still Idle; if it's been claimed,
-                // we log + drop the recovery and surface the close
-                // error to the user. The orphan row from the failed
-                // close gets cleaned up by `reconcile_orphan_sessions`
-                // on next launch (#249).
-                if let Ok(mut guard) = self.state.lock() {
-                    match &*guard {
-                        SessionState::Stopping => {
-                            // We own the Stopping slot — restore to Active so
-                            // the caller can retry the DB close (#839).
-                            *guard = SessionState::Active(ActiveSession {
-                                id: active.id,
-                                started_at: active.started_at,
-                                cancel: Arc::new(AtomicBool::new(false)),
-                                pump_handle: Mutex::new(None),
-                                close_attempted: true,
-                            });
-                        }
-                        SessionState::Idle | SessionState::Opening | SessionState::Active(_) => {
-                            // Should not happen — start_manual blocks on
-                            // Stopping, so no concurrent start can have
-                            // claimed the slot. Log and drop the recovery;
-                            // the orphan row is handled by
-                            // reconcile_orphan_sessions on next launch.
-                            tracing::warn!(
-                                session_id = active.id,
-                                "stop_manual close_session failed and slot is \
-                                 unexpectedly not Stopping — orphan row will be \
-                                 closed by next-launch reconcile_orphan_sessions"
-                            );
-                        }
-                    }
-                }
-                Err(e)
-            }
-        };
-        // Notify the frontend only after close_session has been attempted
-        // so a `meeting_session_get` or `meeting_sessions_list` called
-        // immediately from the frontend event handler sees `ended_at` already
-        // set in the database (#809). Emitted on both success and failure
-        // paths: the pump is already gone either way, and the UI should clear
-        // regardless of whether the DB write succeeded (a failed close will be
-        // retried; the orphan row gets reconciled at next launch if needed).
-        emit_meeting_session_ended(self.event_emitter.as_ref(), session_id);
+        // Belt-and-braces: clear our partials map for this session id so a
+        // stale partial can't leak into a subsequent IPC poll. (The pump
+        // also clears its own partials in its finalization path.)
+        if let Ok(mut guard) = self.partials.write() {
+            guard.remove(&active.id);
+        }
 
-        // Cross-session speaker identity resolution (#667).
-        // Non-fatal: identity errors must not block session close or
-        // cause stop_manual to return Err.
-        if close_result.is_ok()
-            && self
-                .speaker_identity_enabled
-                .load(std::sync::atomic::Ordering::Relaxed)
+        // Flip Releasing → Idle. Dictation can now start (active_session_id
+        // is None); a new *meeting* start will await the parked finalization
+        // handle below before claiming the slot.
         {
-            // Snapshot centroids BEFORE reset (reset clears them).
-            // Called after pump join so all utterances are in the DB.
-            let centroids = self.diarize.session_centroids();
-            if !centroids.is_empty() {
-                let store = Arc::clone(&self.speaker_store);
-                tokio::spawn(async move {
-                    resolve_speaker_identities(store, session_id, centroids).await;
-                });
+            let mut guard = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("session manager mutex poisoned"))?;
+            if matches!(&*guard, SessionState::Releasing) {
+                *guard = SessionState::Idle;
             }
         }
 
-        close_result
+        // Park the pump's continuation as the single background finalization
+        // lane. The pump task is still running its tail flush + #667 + close
+        // + emit-ended; a new meeting start awaits this handle. If a stale
+        // handle is somehow still parked, abort it defensively (the
+        // await-finalization gate normally guarantees it has already drained).
+        let pump_handle = active
+            .pump_handle
+            .lock()
+            .map_err(|_| anyhow!("active session pump_handle mutex poisoned"))?
+            .take();
+        if let Some(handle) = pump_handle {
+            if let Ok(mut slot) = self.finalizing.lock() {
+                if let Some(old) = slot.replace(handle) {
+                    old.abort();
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Append a final utterance to the active session, if any.
@@ -660,7 +618,7 @@ impl SessionManager {
                 .map_err(|_| anyhow!("session manager mutex poisoned"))?;
             match &*guard {
                 SessionState::Active(a) => Some((a.id, a.started_at)),
-                SessionState::Idle | SessionState::Opening | SessionState::Stopping => None,
+                SessionState::Idle | SessionState::Opening | SessionState::Releasing => None,
             }
         };
 
@@ -715,7 +673,11 @@ impl SessionManager {
 /// in the session to their resolved `speaker_identity_id`.
 ///
 /// Non-fatal: each step logs errors and continues rather than aborting.
-async fn resolve_speaker_identities(
+///
+/// `pub(super)` so the meeting pump's background finalization tail
+/// ([`super::pump::run_pump`]) can call it directly — the #667 resolution
+/// moved out of `stop_manual` into the background finalization phase.
+pub(super) async fn resolve_speaker_identities(
     store: Arc<dyn crate::speakers::SpeakerStore>,
     session_id: i64,
     centroids: Vec<(usize, Vec<f32>, usize)>,
@@ -869,7 +831,7 @@ mod tests {
                 started_at: std::time::Instant::now(),
                 cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 pump_handle: Mutex::new(None),
-                close_attempted: false,
+                audio_released_rx: Mutex::new(None),
             });
         }
         assert!(manager.has_active_session());
