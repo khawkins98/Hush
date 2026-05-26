@@ -6,60 +6,100 @@ html,
 body {
   height: 100%;
   overflow: hidden;
+  /* Reset the browser's default 8px body margin — otherwise the
+     html canvas shows through as a gap above/left of the sidebar
+     (invisible on the old dark theme, obvious on the light one). */
+  margin: 0;
+}
+
+/* Recursive — the typeface from allaboutken.com. Self-hosted (not
+   the Google CDN) so Hush keeps working offline and leaks no font
+   requests, in keeping with its local-only/no-telemetry promise.
+   One variable file carries every weight + the MONO/CASL/slnt axes;
+   we drive the "casual sans" look via font-variation-settings below.
+   Latin + Latin-ext subsets cover the UI and accented names. */
+@font-face {
+  font-family: "Recursive";
+  font-style: oblique 0deg 15deg;
+  font-weight: 300 1000;
+  font-display: swap;
+  src: url("/fonts/recursive-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Recursive";
+  font-style: oblique 0deg 15deg;
+  font-weight: 300 1000;
+  font-display: swap;
+  src: url("/fonts/recursive-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
 }
 
 /* Global brand tokens for Hush's fixed five-color palette. */
 
 :root {
-  /* ── Brand palette: vibrant dark ────────────────────────── */
-  /* Main: warm orange/rust (#dc7932, #6e1715)                  */
-  /* Sidebar: cool blue-navy (#5ea1c3, #528eaf)                 */
-  --accent:           #dc7932;
-  --accent-hover:     #e8923f;
-  --accent-subtle:    rgba(220, 121, 50, 0.20);
-  --accent-blue:      #5ea1c3;
-  --accent-blue-hover:#7ab8d4;
-  --accent-blue-subtle: rgba(94, 161, 195, 0.18);
+  /* Recursive first, system stack as the swap fallback. */
+  --font-sans: "Recursive", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
+  /* Recursive's mono axis — for the timer / keycaps. */
+  --font-mono: "Recursive", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* ── Brand palette: pulled from allaboutken.com ─────────── */
+  /* The site's actual layout colours: warm off-white body, an orange
+     hero band (→ Hush's sidebar) with dark text, near-black warm-grey
+     text, purple links, grey secondary, pale-cream callouts. Exact
+     hexes lifted from the site's stylesheet. MAIN window only —
+     HUD/menu-bar/debug hardcode their own dark colours, stay dark. */
+  --accent:           #f49e17;  /* brand orange — fills + the sidebar band (--kh-color--orange) */
+  --accent-hover:     #d9890d;
+  --accent-subtle:    rgba(244, 158, 23, 0.16);
+  /* Darker orange for accent used as a 1px line / border / focus ring
+     on the light canvas — #f49e17 is only ~2.1:1 there (fails WCAG
+     1.4.11); this clears 3:1. Use for borders/focus, not fills. */
+  --accent-border:    #b06d00;
+  /* Links / accent-as-text = the site's purple (legacy var name). */
+  --accent-blue:      #563d82;
+  --accent-blue-hover:#734595;
+  --accent-blue-subtle: rgba(86, 61, 130, 0.10);
 
-  /* ── Surfaces ────────────────────────────────────────────── */
-  /* Sidebar: deep blue-navy — visually distinct from warm main */
-  --bg-sidebar:  #0d1720;
-  --bg-sidebar-border: #1a2e40;
-  /* Main canvas + panels: warm orange-brown */
-  --bg-app:      #1a0d07;
-  --bg-surface:  #231508;
-  --bg-elevated: #2c1c0e;
-  --bg-input:    #1e1108;
+  /* ── Surfaces ───────────────────────────────────────────── */
+  --bg-sidebar:  #f49e17;  /* orange hero band — dark text (see SidebarNav) */
+  --bg-sidebar-border: #d9890d;
+  --bg-app:      #fbfaf6;  /* warm off-white body */
+  --bg-surface:  #ffffff;  /* white cards */
+  --bg-elevated: #ffffff;
+  --bg-input:    #ffffff;
 
-  /* ── Text ───────────────────────────────────────────────── */
-  --text-primary:   #f5efe8;
-  --text-secondary: #d4be9a;
-  --text-muted:     #a07850;
-  --text-on-accent: #ffffff;
-  /* Uppercase tracking labels (field captions, section labels) */
-  --text-label:     #7ab8d4;
+  /* ── Text — the site's warm greys ───────────────────────── */
+  --text-primary:   #373a36;  /* --kh-color--grey--darkest */
+  --text-secondary: #54585a;
+  --text-muted:     #707372;  /* --kh-color--grey */
+  --text-on-accent: #373a36;  /* dark text on the orange (like the hero) */
+  --text-label:     #707372;
 
-  /* ── Borders ────────────────────────────────────────────── */
-  --border:        #4a3018;
-  --border-subtle: #3a2010;
-  --border-input:  #5a3a1e;
-  --border-focus:  var(--accent);
+  /* ── Borders — the site's light warm greys ──────────────── */
+  --border:        #e0ddd8;
+  --border-subtle: #ececea;
+  --border-input:  #d0d0ce;
+  --border-focus:  var(--accent-border);
 
-  /* ── Semantic ───────────────────────────────────────────── */
-  --danger:         #e85050;
-  --danger-bg:      #2a1018;
-  --danger-border:  #6e1715;
-  --warning-bg:     #2a1c0a;
-  --warning-border: #dc7932;
-  --warning-text:   #f0a060;
-  --info-bg:        #0d2030;
-  --info-border:    #5ea1c3;
-  --info-text:      #9ac8e0;
-
-  /* ── Success — blue-tinted (consistent with brand blue accent) */
-  --success-text:   #7ab8d4;
-  --success-border: #2a5a7a;
-  --success-bg:     #0d1f2e;
+  /* ── Semantic — light tints; callouts reuse the site cream ── */
+  --danger:         #b4231a;
+  --danger-bg:      #fbeae8;
+  --danger-border:  #e8b8b2;
+  --warning-bg:     #fbf6ef;  /* the site's note-box cream */
+  --warning-border: #f0d6a8;
+  --warning-text:   #8a5a00;
+  --info-bg:        #fbf6ef;
+  --info-border:    #e0ddd8;
+  --info-text:      #54585a;
+  --success-text:   #2f7a35;
+  --success-border: #bcdcb4;
+  --success-bg:     #ecf6ea;
 
   /* ── Shape ──────────────────────────────────────────────── */
   --radius-sm:   4px;
@@ -70,4 +110,164 @@ body {
   /* ── Controls ───────────────────────────────────────────── */
   --control-height: 2.6rem;
   --control-padding-x: 0.85rem;
+}
+
+/* allaboutken.com's signature button, ported with the same class
+   names (.kh-button / __label / __icon / --sm): a flat face with a
+   hard offset "shadow" that presses into place on click. Recoloured
+   to the duotone — light-yellow face, black border + shadow, black
+   label. The site uses a 4px border / 8px shadow; trimmed slightly
+   for Hush's denser UI. */
+.kh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.55rem 1.1rem;
+  color: var(--text-primary);
+  background-color: var(--bg-elevated);
+  border: 3px solid var(--text-primary);
+  border-radius: var(--radius-md);
+  box-shadow: 5px 5px 0 var(--text-primary);
+  transition: box-shadow 90ms ease, transform 90ms ease;
+}
+/* Hover lifts toward the shadow; only :active presses fully. Focus
+   must NOT translate — programmatic/auto-focus would otherwise leave a
+   button looking pressed at rest (the first-run modal autofocuses its
+   first Allow button). Focus only draws the outline. */
+.kh-button:hover {
+  box-shadow: 3px 3px 0 var(--text-primary);
+  transform: translate(2px, 2px);
+}
+.kh-button:active {
+  box-shadow: 0 0 0 var(--text-primary);
+  transform: translate(5px, 5px);
+}
+.kh-button:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 3px;
+}
+.kh-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: 5px 5px 0 var(--text-primary);
+  transform: none;
+}
+.kh-button--sm {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  box-shadow: 4px 4px 0 var(--text-primary);
+}
+.kh-button--sm:active {
+  transform: translate(4px, 4px);
+}
+/* Honour reduced-motion: keep the shadow state-change (the affordance)
+   but drop the press-translate animation. */
+@media (prefers-reduced-motion: reduce) {
+  .kh-button,
+  .kh-button:hover,
+  .kh-button:focus-visible,
+  .kh-button:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ── Type system, inspired by allaboutken.com ──────────────────
+   The site's personality lives in how Recursive's axes are used by
+   role. Two we adopt here:
+   1. Display screen titles — heavy, casual, tight-tracked (the
+      "I am Ken Hawkins" treatment). Global so every screen title
+      (.section-header h1, in any component) reads the same.
+   2. The "machine" voice — Recursive MONO, uppercase, tracked — for
+      meta/data (timer, keycaps, timestamps, captions). It mirrors
+      what Hush does: human speech in casual sans, the resulting
+      data in mono. Applied per-element via the .kh-mono helper. */
+.section-header h1 {
+  font-family: var(--font-sans);
+  font-size: 2.15rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+}
+
+/* The machine/data voice. font-variation-settings doesn't merge, so
+   this restates all axes (MONO 1 = monospace, CASL 0 = linear). */
+.kh-mono {
+  font-family: var(--font-mono);
+  font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
+  font-feature-settings: "tnum" 1; /* tabular figures */
+}
+/* Uppercase tracked caption variant (AUDIO SOURCE, section labels). */
+.kh-mono--caption {
+  font-family: var(--font-mono);
+  font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0, "wght" 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* The "Hello." grace note — Recursive's expressive low end (light,
+   casual, slanted, a touch cursive). For quiet/empty states, where a
+   warm human line fits the moment the app has nothing to show. */
+.kh-flourish {
+  font-variation-settings: "MONO" 0, "CASL" 1, "slnt" -8, "CRSV" 0.5, "wght" 380;
+  letter-spacing: 0;
+}
+
+/* allaboutken.com's note-box callout: a panel with a thick orange
+   border and a vertical, slanted, bold-mono label tab down its left
+   edge. Same class names as the site. Drop --kh-note-label on the
+   element to set the tab text. */
+.kh-note-box {
+  position: relative;
+  background: var(--bg-surface);
+  border: 3px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.9rem 0.7rem 2.1rem;
+}
+.kh-note-box__label,
+.kh-note-box::before {
+  content: var(--kh-note-label, "NOTE");
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-family: var(--font-mono);
+  font-variation-settings: "MONO" 1, "CASL" 1, "slnt" -10, "CRSV" 0, "wght" 800;
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+}
+
+/* "MOCK DATA" badge. The data-attribute is set only by the mock IPC
+   bus (mock-defaults.ts) in `npm run dev` / HUSH_MOCK — so this is
+   inert in the real app and in production. Makes the fake-backend
+   state obvious so it can't be mistaken for the real thing. */
+:root[data-hush-mock] body::after {
+  content: "MOCK DATA";
+  position: fixed;
+  bottom: 10px;
+  right: 12px;
+  z-index: 99999;
+  padding: 0.2rem 0.55rem;
+  font-family: var(--font-mono);
+  font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0, "wght" 700;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: #fff;
+  background: var(--danger);
+  border-radius: 999px;
+  pointer-events: none;
+  opacity: 0.92;
 }

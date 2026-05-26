@@ -399,6 +399,9 @@
     color: var(--text-label);
     text-transform: uppercase;
     letter-spacing: 0.08em;
+    /* "Machine" voice — Recursive Mono, per the site's data labels. */
+    font-family: var(--font-mono);
+    font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
   }
   .record-row-adjunct {
     display: flex;
@@ -440,16 +443,15 @@
     --audio-waveform-bar-color: #dc2626;
   }
 
-  /* Big waveform — brand orange → blue gradient while recording,
-     muted warm at idle. */
+  /* Big waveform — black bars on the yellow canvas (duotone). */
   .record-waveform {
     width: 100%;
     --audio-waveform-width: 100%;
     --audio-waveform-height: 88px;
     --audio-waveform-bar-color: linear-gradient(
       to top,
-      #dc7932 0%,
-      #5ea1c3 100%
+      #1a1612 0%,
+      #3a322a 100%
     );
   }
   /* Bars feel taller / chunkier in the centerpiece role. */
@@ -479,7 +481,7 @@
        primary interactive element on the dark canvas. */
     box-shadow:
       0 2px 10px rgba(0, 0, 0, 0.4),
-      0 0 0 1px rgba(220, 121, 50, 0.12);
+      0 0 0 1px rgba(244, 158, 23, 0.12);
     transition:
       transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
       border-color 150ms ease,
@@ -547,7 +549,9 @@
      accent-red so the eye knows time is advancing. */
   .record-time {
     margin: 0.3rem 0 0;
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    /* Recursive Mono — the data/readout voice. */
+    font-family: var(--font-mono);
+    font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
     font-size: 1.05rem;
     font-weight: 500;
     color: var(--text-secondary);
@@ -600,7 +604,7 @@
     padding: 0.1rem 0.5rem;
     margin-left: 0.35rem;
     background-color: var(--accent-subtle);
-    color: var(--accent);
+    color: var(--accent-blue);
     border-radius: 999px;
     white-space: nowrap;
   }
@@ -610,7 +614,7 @@
     color: var(--text-secondary);
   }
   .status-mode[data-record-mode="meeting"] {
-    color: var(--accent);
+    color: var(--accent-blue);
     font-weight: 600;
   }
 
@@ -647,7 +651,7 @@
   }
   .transcription-progress-fill {
     height: 100%;
-    background: var(--accent, #8b5cf6);
+    background: var(--accent, #f49e17);
     border-radius: 2px;
     transition: width 0.3s ease;
   }

@@ -276,7 +276,7 @@
               Back
             </button>
             <button
-              class="primary"
+              class="kh-button"
               data-testid="wizard-finish"
               onclick={dismiss}
             >
@@ -318,7 +318,7 @@
               <span class="wizard-perm-badge" aria-label="Granted">✓</span>
             {:else}
               <button
-                class="primary wizard-allow-btn"
+                class="kh-button wizard-allow-btn"
                 disabled={micRequesting}
                 data-testid="wizard-allow-microphone"
                 onclick={requestMicrophone}
@@ -352,7 +352,7 @@
               <span class="wizard-perm-badge" aria-label="Granted">✓</span>
             {:else}
               <button
-                class="primary wizard-allow-btn"
+                class="kh-button wizard-allow-btn"
                 disabled={imRequesting || !isGranted("microphone")}
                 data-testid="wizard-allow-input-monitoring"
                 title={!isGranted("microphone")
@@ -396,7 +396,7 @@
           <div class="footer-actions">
             <button class="ghost" onclick={dismiss}>Skip setup</button>
             <button
-              class="primary"
+              class="kh-button"
               data-testid="wizard-continue-permissions"
               onclick={() => (step = "welcome")}
             >
@@ -460,11 +460,11 @@
   height: 0.55rem;
   border-radius: 50%;
   background-color: transparent;
-  border: 1.5px solid var(--accent, #dc7932);
+  border: 1.5px solid var(--accent, #f49e17);
   transition: background-color 0.15s;
 }
 .wizard-step-dot.active {
-  background-color: var(--accent, #dc7932);
+  background-color: var(--accent, #f49e17);
 }
 
 .welcome-body {
@@ -537,7 +537,8 @@
   width: 1.75rem;
   height: 1.75rem;
   border-radius: 50%;
-  background-color: var(--success-border);
+  /* Black badge, yellow check — the duotone's inverted treatment. */
+  background-color: var(--accent);
   color: var(--text-on-accent);
   font-size: 0.95rem;
   font-weight: 600;
@@ -566,7 +567,9 @@
   gap: 0.5rem;
 }
 
-button {
+/* :not(.kh-button) so the global hard-shadow button isn't overridden
+   by this scoped base rule's higher specificity (ghost/Back keep it). */
+button:not(.kh-button) {
   border-radius: 8px;
   border: 1px solid var(--border-input);
   padding: 0.6em 1.1em;
@@ -598,15 +601,6 @@ button.ghost {
 }
 button.ghost:hover:not(:disabled) {
   background-color: var(--bg-elevated);
-}
-button.primary {
-  background-color: var(--accent);
-  color: var(--text-on-accent);
-  border-color: var(--accent);
-}
-button.primary:hover:not(:disabled) {
-  background-color: var(--accent-hover, #ba5733);
-  border-color: var(--accent-hover, #ba5733);
 }
 
 /* Standard a11y idiom for screen-reader-only text. Used for the

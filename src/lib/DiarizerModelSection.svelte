@@ -404,7 +404,7 @@
     text-align: left;
   }
   button.link-like:hover {
-    color: var(--accent);
+    color: var(--accent-blue);
   }
   .diarizer-explainer {
     margin: 0.5rem 0 0;

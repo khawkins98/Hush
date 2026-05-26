@@ -26,9 +26,12 @@
 
 /* ── Headings ───────────────────────────────────────────── */
 .tab-title {
+  /* Display treatment, matching the screen-title type-system rule. */
   margin: 0 0 0.75rem;
-  font-size: 1.4rem;
-  letter-spacing: -0.01em;
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 /* ── Group container + group heading ────────────────────── */
@@ -127,12 +130,12 @@
   transition: background-color 0.12s, color 0.12s, border-color 0.12s;
 }
 .cue-preview-btn:hover {
-  background-color: var(--accent, #dc7932);
-  border-color: var(--accent, #dc7932);
+  background-color: var(--accent, #f49e17);
+  border-color: var(--accent, #f49e17);
   color: var(--text-on-accent, #fff);
 }
 .cue-preview-btn:focus-visible {
-  outline: 2px solid var(--accent, #dc7932);
+  outline: 2px solid var(--accent, #f49e17);
   outline-offset: 2px;
 }
 .sound-cue-subtoggles.is-disabled {

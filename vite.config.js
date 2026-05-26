@@ -4,6 +4,10 @@ import path from "path";
 
 const host = process.env.TAURI_DEV_HOST;
 const isE2E = process.env.HUSH_E2E === "1";
+// `npm run dev` sets HUSH_MOCK=1 → the plain-browser playground with a
+// seeded mock IPC bus. `npm run dev:tauri` (what `tauri dev` runs) does
+// not, so the real app talks to the real Rust backend.
+const isMock = process.env.HUSH_MOCK === "1";
 
 // `import.meta.dirname` is undefined in some toolchains; resolve via
 // `process.cwd()` since vite always invokes with cwd at project root.
@@ -13,14 +17,16 @@ const projectRoot = process.cwd();
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
-  // E2E mode (set HUSH_E2E=1) swaps the @tauri-apps/api/{core,event}
-  // imports for in-tree stubs at `tests/e2e/setup/{core,event}-stub.ts`.
-  // The stubs read mock state from `window.__hush_e2e` so a Playwright
-  // test can configure command responses and event payloads via
-  // `page.addInitScript` before navigation. The dev workflow
-  // (`npm run dev`) is unaffected — the alias only activates when the
-  // env var is set.
-  resolve: isE2E
+  // Mock-bus mode swaps the @tauri-apps/api/{core,event,app} +
+  // plugin-shell imports for in-tree stubs at `tests/e2e/setup/*-stub.ts`.
+  // The stubs route through `window.__hush_e2e`, which is seeded with
+  // populated fake data by `mock-defaults.ts` (or, under Playwright, by
+  // each test's `installMocks`). Two entry points enable it:
+  //   • HUSH_E2E=1   → Playwright (`npm run dev:e2e`)
+  //   • HUSH_MOCK=1  → the browser playground (`npm run dev`)
+  // `npm run dev:tauri` (what `tauri dev` runs) sets neither, so the
+  // real app talks to the real Rust backend.
+  resolve: (isE2E || isMock)
     ? {
         alias: {
           "@tauri-apps/api/core": path.resolve(

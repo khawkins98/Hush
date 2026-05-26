@@ -325,12 +325,12 @@
   .select-option:hover,
   .select-option[data-focused] {
     background-color: var(--accent-subtle);
-    color: var(--accent);
+    color: var(--accent-blue);
   }
 
   .select-option[aria-selected="true"] {
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-blue);
   }
 
   .select-option[aria-selected="true"]::before {

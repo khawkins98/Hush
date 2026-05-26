@@ -202,7 +202,7 @@
       </button>
       <button
         type="button"
-        class="primary"
+        class="kh-button"
         onclick={confirm}
         data-testid="export-confirm"
       >
@@ -275,8 +275,7 @@
     gap: 0.5rem;
     padding-top: 0.5rem;
   }
-  button.ghost,
-  button.primary {
+  button.ghost {
     padding: 0.4em 0.95em;
     font-size: 0.86rem;
     font-weight: 500;
@@ -292,16 +291,6 @@
   }
   button.ghost:hover {
     background-color: var(--bg-app);
-  }
-  button.primary {
-    color: var(--text-on-accent);
-    background-color: var(--accent);
-    border: 1px solid var(--accent);
-    font-weight: 600;
-  }
-  button.primary:hover {
-    background-color: var(--accent-hover);
-    border-color: var(--accent-hover);
   }
 
 </style>
