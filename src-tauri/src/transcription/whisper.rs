@@ -456,6 +456,16 @@ impl Transcribe for WhisperTranscription {
         format: CaptureFormat,
         prompt: &str,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
+        // All meeting streaming sessions share this one Arc<Mutex<WhisperContext>>.
+        // `infer` and `finish` hold the lock across the entire inference with no early
+        // drop, so a live meeting and a finalizing meeting sharing it would freeze
+        // the live transcript behind the old `finish()` for up to 60 s. This shared
+        // Arc is therefore the load-bearing constraint that defers concurrent meetings
+        // in v1 — `SessionManager::start_manual` awaits any in-flight finalization
+        // before opening a new session. To enable concurrency, give each session (or
+        // finalization) its own WhisperContext. See
+        // `docs/meeting-background-finalization-proposal.md` "Deferred" + learnings.md
+        // 2026-05-26.
         let session = WhisperStreamingSession::new(
             Arc::clone(&self.ctx),
             format,

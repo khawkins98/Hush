@@ -32,6 +32,43 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-05-26 — Meeting background finalization: release-then-finalize, deferred concurrency
+
+### Why finalization was moved to the background
+
+`meeting_stop_manual` previously awaited the pump task to completion — including each streaming session's `finish()` tail-flush, wrapped in a 60 s per-source timeout. Under whisper.cpp #612 memory pressure (observed RSS ~1.9 GB, periodic `WhisperState` recreation), a single `finish()` can balloon from ~1 s to tens of seconds. Because the pump held live `AudioSession` handles the entire time, three symptoms all shared one root cause: Stop could block for up to ~120 s (mic + system audio sequential), no new recording could start (cpal singleton reported "already in progress"), and the waveform kept animating.
+
+**Fix:** the pump's cancel path was reordered — final drain → ack-waited audio stop → emit `meeting:finalizing` → return a checkpoint to `stop_manual` — so the IPC call returns in well under a second with the mic free. The slow `flush_sessions`/`finish()`/diarize/close path runs in a background continuation parked in `SessionManager::finalizing`.
+
+### `AudioSession::stop(self: Box<Self>) -> Result<CapturedAudio>` vs `Drop` (fire-and-forget)
+
+The old cancel path relied on `CpalMicSessionHandle::Drop`, which sends `Cmd::Stop` without waiting for the reply and discards the returned `CapturedAudio`. Two problems:
+
+1. **"handle dropped ≠ device free"** — a new capture issued immediately after Drop could still hit "recording already in progress" because the worker hadn't processed the Stop yet.
+2. **Tail loss** — samples arriving between the ring-buffer drain and the drop were discarded, not fed into the final inference.
+
+The fix adds an explicit ack-waited `stop()` call that round-trips `Cmd::Stop`, waits for the worker to decrement `active_sessions`, and returns the final drained buffer to feed into the streaming session before `finish()`.
+
+### Removed post-stop diarizer rebuild + the #667 centroid race it introduced
+
+Before this branch, `stop_meeting_and_rebuild_transcriber` rebuilt the `OnnxDiarizer` after every meeting stop. Once finalization moved to the background, a rebuild would swap a fresh empty diarizer into the shared slot, racing the slow background `session_centroids()` read (#667, speaker-identity resolution) — the rebuild could complete before the background task read the centroids, destroying the cluster state that the `session_centroids()` call depended on.
+
+Lesson: `reset()` at pump start (the diarizer's existing clean-state contract) + the "new meeting awaits finalization" gate already guarantee clean cluster state for every new session. The post-stop rebuild was redundant and, once the stop was async, harmful. It was removed; the `#667` centroid read now runs inside the background continuation after `finish()`, before `close_session`, and the await-gate serializes new meetings so nothing touches the diarizer between those two operations.
+
+### Deferred: concurrent meetings (the load-bearing constraint)
+
+A new meeting cannot start while a previous one finalizes — `start_manual` awaits the `finalizing` `JoinHandle` before claiming the slot. This is the correct v1 trade-off: all meeting streaming sessions clone one `Arc<Mutex<WhisperContext>>` (`transcription/whisper.rs:460`); `infer`/`finish` hold that lock across the entire inference with no early drop. A live meeting + a finalizing meeting sharing it would freeze the live transcript behind the old `finish()` for up to 60 s — recreating the exact symptom we removed.
+
+Enabling concurrency requires:
+1. Per-session (or per-finalization) `WhisperContext` so a finalizing meeting's `finish()` never blocks a live meeting.
+2. Diarizer cluster state isolated per session (lowest-blast option: `Arc` the heavy model weights, construct a fresh `OnnxDiarizer` per session; verify `MelExtractor::extract` is `&self` before sharing).
+3. Promote `finalizing: Option<JoinHandle>` → a bounded map with a supervisor.
+4. Relax the await-gate once 1–3 hold.
+
+See `docs/meeting-background-finalization-proposal.md` "Deferred" for the full step-by-step and the open memory-profile considerations. Complementary: silence-trimming (**#974**) shrinks the tail `finish()`, reducing both the v1 "new meeting waits" delay and the eventual contention window.
+
+---
+
 ## 2026-05-16 — Homebrew tap + Gatekeeper workaround as primary install path
 
 ### Background: two layers of Gatekeeper protection

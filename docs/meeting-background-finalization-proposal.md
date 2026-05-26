@@ -1,6 +1,6 @@
 # Meeting background finalization — design proposal
 
-**Status:** Draft for review (v1 scope, revised after adversarial review) ·
+**Status:** Accepted and implemented (`feat/meeting-background-finalization`) ·
 **Date:** 2026-05-26 · **Author:** Ken + Claude
 
 > **Revision note.** An initial draft proposed *full concurrency* (a new meeting
