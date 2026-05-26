@@ -1531,6 +1531,7 @@ pub(super) fn open_source_handle(
 #[cfg(test)]
 mod tests {
     use crate::meeting::test_support::build_tail_pump_context;
+    use std::sync::Arc;
 
     /// No-tail-loss regression (#947 review Gap 1): the samples returned by
     /// `AudioSession::stop()` on release MUST be fed into the streaming
@@ -1582,5 +1583,104 @@ mod tests {
             utts.len()
         );
         assert_eq!(utts[0].text, "tail words");
+    }
+
+    /// #667 regression — the background finalization must read THIS
+    /// session's real (non-empty) diarizer centroids, not an empty diarizer
+    /// left by a racing rebuild.
+    ///
+    /// Background: the meeting-stop IPC (`stop_meeting_and_rebuild_transcriber`)
+    /// once spawned a diarizer rebuild that swapped a FRESH empty
+    /// `OnnxDiarizer` into the shared `DiarizeSlot` the moment Stop was
+    /// pressed (~80 ms). The pump's `session_centroids()` read runs at the
+    /// END of the background finalization, after the slow tail `finish()`
+    /// (up to 60 s). The rebuild won that race, so the centroid read saw an
+    /// EMPTY diarizer and #667 identity resolution silently no-op'd for every
+    /// backgrounded meeting. The fix removes that rebuild so the slot's
+    /// diarizer stays stable across the stop boundary.
+    ///
+    /// This test wires the pump's diarizer as a `FlagGatedDiarizer` reading
+    /// through a `DiarizeSlot` (the production shape), and runs the full
+    /// `run_pump` finalization. The store records every centroid that reaches
+    /// the resolver.
+    ///
+    /// Non-vacuous by construction: the second half swaps the slot to an
+    /// empty diarizer BEFORE finalization (exactly what the old rebuild did)
+    /// and asserts resolution no-ops — so if a future change reintroduces a
+    /// slot clobber before the centroid read, the first assertion fails.
+    #[tokio::test]
+    async fn background_finalization_resolves_against_real_centroids() {
+        use crate::diarization::{Diarize, DiarizeSlot, FlagGatedDiarizer, NoopDiarizer};
+        use crate::meeting::test_support::{
+            build_tail_pump_context_with_diarize, CentroidDiarizer, RecordingSpeakerStore,
+        };
+        use std::sync::atomic::AtomicBool;
+        use std::sync::RwLock;
+
+        // --- Case 1: slot holds the session's real centroids (the fix) ---
+        let slot: DiarizeSlot = Arc::new(RwLock::new(
+            Arc::new(CentroidDiarizer::with_one_cluster()) as Arc<dyn Diarize>,
+        ));
+        let flag_gated: Arc<dyn Diarize> = Arc::new(FlagGatedDiarizer::new(
+            Arc::new(AtomicBool::new(true)),
+            Arc::clone(&slot),
+            Arc::new(NoopDiarizer),
+        ));
+        let store = RecordingSpeakerStore::new();
+
+        let (ctx, _repo) = build_tail_pump_context_with_diarize(
+            vec![0.25f32; 4_096],
+            flag_gated,
+            Arc::clone(&store) as Arc<dyn crate::speakers::SpeakerStore>,
+            true,
+        )
+        .await;
+
+        super::run_pump(ctx).await;
+
+        let resolved = store.created.lock().unwrap().clone();
+        assert_eq!(
+            resolved.len(),
+            1,
+            "background finalization must resolve the session's one real \
+             centroid cluster; got {resolved:?} (an empty diarizer would yield none)"
+        );
+        assert_eq!(
+            resolved[0], 256,
+            "the resolver must receive the real 256-d centroid, not a stub"
+        );
+
+        // --- Case 2: slot clobbered to empty BEFORE the read (the bug) ---
+        // Reproduces what the old post-stop rebuild did: swap a fresh, empty
+        // diarizer into the shared slot. The pump reads through the slot, so
+        // `session_centroids()` now returns empty and resolution must no-op.
+        // This pins the regression: if the rebuild (or any pre-read swap)
+        // comes back, Case 1 would see this empty result and fail.
+        let slot2: DiarizeSlot = Arc::new(RwLock::new(
+            Arc::new(CentroidDiarizer::with_one_cluster()) as Arc<dyn Diarize>,
+        ));
+        let flag_gated2: Arc<dyn Diarize> = Arc::new(FlagGatedDiarizer::new(
+            Arc::new(AtomicBool::new(true)),
+            Arc::clone(&slot2),
+            Arc::new(NoopDiarizer),
+        ));
+        let store2 = RecordingSpeakerStore::new();
+        let (ctx2, _repo2) = build_tail_pump_context_with_diarize(
+            vec![0.25f32; 4_096],
+            flag_gated2,
+            Arc::clone(&store2) as Arc<dyn crate::speakers::SpeakerStore>,
+            true,
+        )
+        .await;
+        // Clobber the slot to empty, as the racing rebuild used to.
+        *slot2.write().unwrap() = Arc::new(NoopDiarizer);
+
+        super::run_pump(ctx2).await;
+
+        assert!(
+            store2.created.lock().unwrap().is_empty(),
+            "control: an empty diarizer in the slot must yield NO resolution — \
+             this is the failure mode the fix prevents"
+        );
     }
 }

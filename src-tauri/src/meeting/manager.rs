@@ -699,11 +699,10 @@ mod tests {
 
         // Never release the barrier before stop returns — if stop_manual
         // awaited the full tail flush, this would hang on the bounded spin.
-        let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), mgr.stop_manual())
+        tokio::time::timeout(std::time::Duration::from_secs(2), mgr.stop_manual())
             .await
             .expect("stop_manual must return well before the blocked finish()")
             .expect("stop returns Ok once audio released");
-        let _ = stopped;
 
         // Slot is Idle (audio released) and the finalization is parked +
         // still in flight (finish() is blocked on the barrier).

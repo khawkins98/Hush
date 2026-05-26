@@ -666,3 +666,113 @@ impl crate::diarization::Diarize for RecordingDiarizer {
         }
     }
 }
+
+/// Diarizer that reports a fixed, non-empty set of session centroids — a
+/// stand-in for a real `OnnxDiarizer` that accumulated cluster state over a
+/// meeting. Used by the #667 background-finalization regression
+/// ([`super::pump::tests::background_finalization_resolves_against_real_centroids`]).
+/// `label_utterances` is a no-op (the regression exercises the centroid
+/// read at finalization, not per-tick labelling).
+pub(super) struct CentroidDiarizer {
+    /// `(cluster_id, centroid, utterance_count)`. The count is set ≥
+    /// [`crate::speakers::MIN_UTTERANCE_COUNT_FOR_MATCH`] so the resolver
+    /// does not skip the cluster as a cold-start.
+    centroids: Vec<(usize, Vec<f32>, usize)>,
+}
+
+impl CentroidDiarizer {
+    pub(super) fn with_one_cluster() -> Self {
+        Self {
+            centroids: vec![(0, vec![0.1f32; 256], 8)],
+        }
+    }
+}
+
+impl crate::diarization::Diarize for CentroidDiarizer {
+    fn label_utterances(
+        &self,
+        _utterances: &mut [crate::transcription::Utterance],
+        _audio: &[Vec<f32>],
+        _format: crate::audio::CaptureFormat,
+    ) {
+        // no-op: this diarizer only models the centroid snapshot.
+    }
+
+    fn session_centroids(&self) -> Vec<(usize, Vec<f32>, usize)> {
+        self.centroids.clone()
+    }
+}
+
+/// Speaker store that records the cluster IDs handed to identity
+/// resolution. A non-empty `resolved_clusters` after finalization proves
+/// `session_centroids()` returned the session's real (non-empty) clusters
+/// at resolve time — i.e. nothing clobbered the diarizer first.
+pub(super) struct RecordingSpeakerStore {
+    /// Cluster IDs that reached the resolver (via `link_utterances`'s
+    /// `"Speaker N"` label / a `create`). Empty ⇒ resolution never ran on
+    /// any real centroid.
+    pub(super) created: Mutex<Vec<usize>>,
+}
+
+impl RecordingSpeakerStore {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            created: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl crate::speakers::SpeakerStore for RecordingSpeakerStore {
+    async fn list_with_embeddings(&self) -> Result<Vec<(i64, Vec<f32>, i64)>> {
+        // No known identities → the resolver takes the "first known
+        // speaker" branch and calls `create` for each non-empty cluster.
+        Ok(Vec::new())
+    }
+    async fn create(&self, centroid: &[f32], _utterance_count: i64) -> Result<i64> {
+        // Record that a real centroid reached the resolver. The length is
+        // 256 for the CentroidDiarizer fixture; record one entry per call.
+        self.created.lock().unwrap().push(centroid.len());
+        Ok(1)
+    }
+    async fn update_centroid(&self, _id: i64, _c: &[f32], _n: i64) -> Result<()> {
+        Ok(())
+    }
+    async fn link_utterances(&self, _sid: i64, _label: &str, _id: i64) -> Result<()> {
+        Ok(())
+    }
+    async fn rename(&self, _id: i64, _name: Option<String>) -> Result<()> {
+        Ok(())
+    }
+    async fn delete(&self, _id: i64) -> Result<()> {
+        Ok(())
+    }
+    async fn list(&self) -> Result<Vec<crate::speakers::SpeakerIdentity>> {
+        Ok(Vec::new())
+    }
+    async fn merge(&self, _keep: i64, _absorb: i64) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Like [`build_tail_pump_context`] but lets the caller inject the diarizer
+/// (so it can be a `FlagGatedDiarizer` reading through a hot-swappable
+/// [`crate::diarization::DiarizeSlot`]), the speaker store, and the
+/// speaker-identity-enabled flag. Used by the #667 regression to prove the
+/// background finalization reads the session's real centroids when the slot
+/// stays stable across the stop boundary.
+#[allow(clippy::type_complexity)]
+pub(super) async fn build_tail_pump_context_with_diarize(
+    tail_samples: Vec<f32>,
+    diarize: Arc<dyn crate::diarization::Diarize>,
+    speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
+    speaker_identity_enabled: bool,
+) -> (super::pump::PumpContext, Arc<dyn MeetingSessionRepository>) {
+    use std::sync::atomic::AtomicBool;
+
+    let (mut ctx, repo, _fed_lens) = build_tail_pump_context(tail_samples).await;
+    ctx.diarize = diarize;
+    ctx.speaker_store = speaker_store;
+    ctx.speaker_identity_enabled = Arc::new(AtomicBool::new(speaker_identity_enabled));
+    (ctx, repo)
+}
