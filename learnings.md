@@ -2758,3 +2758,15 @@ If you see references to `settings_window` in older code or comments, they are s
 **Stale-cache trap.** Editing `mock-defaults.ts` and not seeing the change is almost always Vite's optimized-dep cache serving old stub code. `rm -rf node_modules/.vite` fixes it. Cost me two confusing "still broken" cycles before I cleared it.
 
 **Seed drift.** There are now two seed sets: `_mock.ts` (Playwright, minimal/deterministic/throws) and `mock-defaults.ts` (dev, populated/forgiving). They're intentionally separate (different goals) but share command shapes — keep both in mind under the four-place IPC sync rule. `mock-defaults.ts` no-ops when `window.__hush_e2e` is already set, so Playwright (which seeds first) is unaffected.
+
+## 2026-05-26 — Brand refresh: re-keying the UI to allaboutken.com (light theme)
+
+The UI was re-keyed from v0.9.0's dark navy theme to a light theme matching the maintainer's site (cream/orange/purple, Recursive font), shipped in #971. A few non-obvious calls worth keeping:
+
+**A full dark→light flip of `:root` was safe because only the main window reads the global tokens.** The HUD, menu-bar, and debug windows hardcode their own dark colours and reference ZERO `--bg-*`/`--text-*`/`--border` tokens (verified by grep). So flipping `:root` to light themed the main window and left the three overlay windows dark automatically — no per-window scoping, no theme-toggle plumbing. If you ever add a token *read* to one of those windows, this stops being free.
+
+**Brand orange (`#f49e17`) is a FILL colour, not a line colour, on the light canvas.** It's only ~2.1:1 on cream — fine as a button face with dark text (`--text-on-accent`), but it fails WCAG 1.4.11 (3:1) as a 1px border, focus ring, or icon stroke. `--accent-border: #b06d00` exists for those uses. Don't point `--border-focus` or a callout border at `--accent`.
+
+**`.kh-button` presses on `:hover`/`:active`, never on `:focus`.** The hard-shadow button's "press" is a `translate()` + reduced shadow. Sharing that with `:focus-visible` made any programmatically-focused button render pressed at rest — the first-run modal autofocuses its first Allow button, so it looked broken on open. Focus draws the outline only; hover/active do the motion. (Also `@media (prefers-reduced-motion)` drops the translate.)
+
+**Recursive is self-hosted, not the Google CDN** — to honour the offline/no-telemetry promise. Latin + Latin-ext subset woff2 in `static/fonts/`; the casual sans + mono axes are driven via `font-variation-settings` (see `src/app.css`). The brand-decision detail (final palette is `#f49e17` orange, not the lighter `#ffb81c`; purple `#563d82` links; the human/machine type split) lives in the brand-palette memory; this entry is just the load-bearing engineering calls.
