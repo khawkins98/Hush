@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-v0.9.0's dark navy theme was short-lived. This re-keys the entire UI to the maintainer's allaboutken.com brand: a light theme — cream canvas, brand orange accent, purple links — set in the Recursive typeface. The app icon is now the real "H" mark, vector-traced from the logo. Under the hood, `npm run dev` became a backend-free browser playground for fast UI work.
+## [0.10.0] - 2026-05-26
+
+v0.10.0 re-keys the entire UI to the maintainer's allaboutken.com brand — a light theme (cream canvas, brand orange accent, purple links) in the Recursive typeface, replacing v0.9.0's short-lived dark navy. The app icon is now the real "H" mark, vector-traced from the logo. Under the hood, `npm run dev` became a backend-free browser playground for fast UI work, and the README + changelog got a tidy.
 
 ### Added
 
