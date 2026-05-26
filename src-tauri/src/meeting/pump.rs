@@ -1527,3 +1527,60 @@ pub(super) fn open_source_handle(
     };
     Ok((handle, streaming_session))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::meeting::test_support::build_tail_pump_context;
+
+    /// No-tail-loss regression (#947 review Gap 1): the samples returned by
+    /// `AudioSession::stop()` on release MUST be fed into the streaming
+    /// session before `finish()` runs, or the tail of a meeting is lost.
+    ///
+    /// The stock `StubSession::stop()` returns `samples: vec![]`, so the
+    /// `if samples.is_empty() { continue; }` guard short-circuits and the
+    /// tail-feed line never executes under any existing test. This test
+    /// uses `TailReleaseSession` (empty tick drains, NON-empty `stop()`)
+    /// plus a `RecordingFeedSession` that logs every non-empty `feed()`,
+    /// then drives the whole `run_pump` finalization path.
+    ///
+    /// Non-vacuous by construction: the tick-drain path appends nothing
+    /// (drain_into returns no samples), so the ONLY route to `feed()` is
+    /// `release_audio_handles`. If the tail-feed line is removed, `fed_lens`
+    /// stays empty (first assert fails) AND `RecordingFeedSession::finish`
+    /// emits no utterance, so no row is persisted (second assert fails).
+    #[tokio::test]
+    async fn release_feeds_captured_tail_into_streaming_session() {
+        let tail = vec![0.25f32; 4_096];
+        let (ctx, repo, fed_lens) = build_tail_pump_context(tail.clone()).await;
+        let session_id = ctx.session_id;
+
+        // cancel is pre-set inside the context, so run_pump skips the loop
+        // body and goes straight to final-drain → release_audio_handles →
+        // flush_sessions.
+        super::run_pump(ctx).await;
+
+        // 1. The captured tail reached the streaming session's feed().
+        let fed = fed_lens.lock().unwrap().clone();
+        assert!(
+            !fed.is_empty(),
+            "release_audio_handles must feed the captured tail into the streaming session; \
+             fed_lens is empty, so the tail-feed line did not execute"
+        );
+        assert_eq!(
+            fed.iter().sum::<usize>(),
+            tail.len(),
+            "the full captured tail must reach feed() exactly once"
+        );
+
+        // 2. Downstream effect: the tail produced a final utterance that
+        // was persisted (finish() emits one only if it saw a feed).
+        let utts = repo.list_utterances(session_id).await.unwrap();
+        assert_eq!(
+            utts.len(),
+            1,
+            "the tail final must be persisted; got {} utterances",
+            utts.len()
+        );
+        assert_eq!(utts[0].text, "tail words");
+    }
+}
