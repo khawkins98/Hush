@@ -77,9 +77,9 @@ impl SessionManager {
         // A new meeting must wait for any in-flight background finalization
         // to complete before claiming the slot — it would otherwise share
         // the diarizer cluster state and the meeting `WhisperContext` with
-        // the finalizing session (background finalization; see
-        // `docs/meeting-background-finalization-proposal.md` "Deferred" for
-        // why concurrent meetings are out of scope). Normally sub-second.
+        // the finalizing session (background finalization; see learnings.md
+        // 2026-05-26 "Deferred: concurrent meetings" for why concurrent
+        // meetings are out of scope). Normally sub-second.
         //
         // `take()` the handle out from under the lock, drop the guard, THEN
         // `.await` — never hold the `finalizing` mutex across an await

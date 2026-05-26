@@ -65,7 +65,7 @@ Enabling concurrency requires:
 3. Promote `finalizing: Option<JoinHandle>` → a bounded map with a supervisor.
 4. Relax the await-gate once 1–3 hold.
 
-See `docs/meeting-background-finalization-proposal.md` "Deferred" for the full step-by-step and the open memory-profile considerations. Complementary: silence-trimming (**#974**) shrinks the tail `finish()`, reducing both the v1 "new meeting waits" delay and the eventual contention window.
+The four steps above are the resume guide; weigh the memory profile — each concurrent finalization holds its own `WhisperContext`, so bound the count. Complementary: silence-trimming (**#974**) shrinks the tail `finish()`, reducing both the v1 "new meeting waits" delay and the eventual contention window.
 
 ---
 

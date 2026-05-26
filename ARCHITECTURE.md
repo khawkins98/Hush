@@ -164,7 +164,7 @@ open handles + per-source StreamingTranscribeSession(s)
 | `meeting:session-ended` | `{ sessionId }` | Background finalization complete; DB row closed |
 | `meeting:tail-dropped` | `{ sessionId }` | A `finish()` timed out or errored (backstop, fires in background) |
 
-**Deferred: concurrent meetings.** A new meeting cannot start while a previous one finalizes — it awaits the `finalizing` handle. This is deliberate: all meeting streaming sessions clone one `Arc<Mutex<WhisperContext>>` (`transcription/whisper.rs:460`); `infer`/`finish` hold that lock across the entire inference, so a live meeting and a finalizing meeting sharing it would freeze the live transcript. The shared diarizer has the same problem. Enabling concurrency requires per-session whisper contexts + diarizer isolation. See `docs/meeting-background-finalization-proposal.md` "Deferred" for the step-by-step.
+**Deferred: concurrent meetings.** A new meeting cannot start while a previous one finalizes — it awaits the `finalizing` handle. This is deliberate: all meeting streaming sessions clone one `Arc<Mutex<WhisperContext>>` (`transcription/whisper.rs:460`); `infer`/`finish` hold that lock across the entire inference, so a live meeting and a finalizing meeting sharing it would freeze the live transcript. The shared diarizer has the same problem. Enabling concurrency requires per-session whisper contexts + diarizer isolation. See `learnings.md` 2026-05-26 "Deferred: concurrent meetings" for the step-by-step.
 
 `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `CoreAudioTapSession` both have `Drop` impls that release their OS resources (the tap session sends `SIGTERM` to the Swift helper, with a `SIGKILL` fallback after 1 s).
 

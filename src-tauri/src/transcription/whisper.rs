@@ -463,9 +463,8 @@ impl Transcribe for WhisperTranscription {
         // Arc is therefore the load-bearing constraint that defers concurrent meetings
         // in v1 — `SessionManager::start_manual` awaits any in-flight finalization
         // before opening a new session. To enable concurrency, give each session (or
-        // finalization) its own WhisperContext. See
-        // `docs/meeting-background-finalization-proposal.md` "Deferred" + learnings.md
-        // 2026-05-26.
+        // finalization) its own WhisperContext. See learnings.md 2026-05-26
+        // "Deferred: concurrent meetings" for the resume guide.
         let session = WhisperStreamingSession::new(
             Arc::clone(&self.ctx),
             format,

@@ -172,7 +172,7 @@ pub(super) struct PumpContext {
     /// slow tail flush (`finish()` + diarize + persist) begins.
     /// `stop_manual` awaits this so it can return promptly while the
     /// pump task keeps finalizing in the background (background
-    /// finalization — see `docs/meeting-background-finalization-proposal.md`).
+    /// finalization — see learnings.md 2026-05-26).
     /// `Option` so `run_pump` can `take()` it (a `oneshot::Sender` is
     /// not `Clone`); `None` after it has fired or for a pump that was
     /// spawned without a checkpoint (Drop-on-shutdown path).

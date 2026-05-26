@@ -119,8 +119,8 @@ pub struct SessionManager {
     /// before claiming the slot — a concurrent meeting would otherwise
     /// share the diarizer cluster state and the meeting `WhisperContext`
     /// with the finalizing session. Hence `Option`, not a map.
-    /// Concurrent meetings are explicitly deferred — see
-    /// `docs/meeting-background-finalization-proposal.md` "Deferred".
+    /// Concurrent meetings are explicitly deferred — see learnings.md
+    /// 2026-05-26 "Deferred: concurrent meetings".
     /// Cleared by the next `start_manual` (await + take) or by `Drop`
     /// (abort-and-reconcile).
     pub(super) finalizing: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -142,7 +142,7 @@ pub(super) enum SessionState {
     /// this short interval blocks a concurrent meeting `start_manual`
     /// (the capture singleton isn't free yet); the *slow* tail flush
     /// runs in the background after the slot has already flipped back
-    /// to `Idle`. See `docs/meeting-background-finalization-proposal.md`.
+    /// to `Idle`. See learnings.md 2026-05-26.
     Releasing,
 }
 
