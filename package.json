@@ -4,7 +4,8 @@
   "description": "Offline voice-to-text for macOS, Windows, and Linux.",
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "HUSH_MOCK=1 vite dev",
+    "dev:tauri": "vite dev",
     "dev:e2e": "HUSH_E2E=1 vite dev",
     "build": "vite build",
     "preview": "vite preview",
