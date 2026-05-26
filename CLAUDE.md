@@ -11,6 +11,12 @@ Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scop
 ## Common commands
 
 ```bash
+# Browser playground with a MOCKED backend (FAKE DATA, no Tauri). Fast
+# UI/layout loop; real transcription/audio/permissions need `npm run
+# tauri dev`. Full notes (caveats, the stale-cache fix, dev:tauri) live
+# in docs/developing.md → "Which command to run".
+npm run dev
+
 # Run the full app. Default features are `whisper` (needs cmake on
 # macOS) + `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
 # no vendored binaries — compiles from source, no network needed).

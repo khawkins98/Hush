@@ -2,9 +2,15 @@
 
 Browser-driven smoke tests for the Hush frontend. Drives the SvelteKit
 dev server in **mocked-Tauri mode** — `vite.config.js` swaps
-`@tauri-apps/api/{core,event}` for the in-tree stubs in
-`tests/e2e/setup/` when `HUSH_E2E=1` is set, so tests run in plain
-Chromium without Tauri's runtime.
+`@tauri-apps/api/{core,event,app}` + `plugin-shell` for the in-tree
+stubs in `tests/e2e/setup/` when `HUSH_E2E=1` is set, so tests run in
+plain Chromium without Tauri's runtime.
+
+> The same stubs power the **`npm run dev` browser playground**
+> (`HUSH_MOCK=1`). The difference is the seed: tests use `_mock.ts`
+> (minimal, deterministic, throw-on-unmocked); `npm run dev` uses
+> `setup/mock-defaults.ts` (populated, forgiving). See
+> [`docs/developing.md`](../../docs/developing.md).
 
 These tests **cannot** validate full-stack flows (real IPC round-trips,
 HUD lifecycle, hotkey registration, real audio, real model download).
@@ -33,8 +39,12 @@ npm run test:e2e:ui
 ```
 tests/e2e/
   setup/
-    core-stub.ts          # replaces @tauri-apps/api/core in HUSH_E2E mode
+    core-stub.ts          # replaces @tauri-apps/api/core (HUSH_E2E or HUSH_MOCK)
     event-stub.ts         # replaces @tauri-apps/api/event
+    app-stub.ts           # replaces @tauri-apps/api/app
+    shell-stub.ts         # replaces @tauri-apps/plugin-shell
+    mock-defaults.ts      # populated seed for `npm run dev` (HUSH_MOCK);
+                          # no-ops under Playwright
   _mock.ts                # `installMocks(page, overrides?)` — default
                           # invoke handlers + `fireEvent(page, name, payload)`
   *.spec.ts               # actual specs

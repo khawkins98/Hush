@@ -211,7 +211,7 @@
             </button>
           {:else}
             <!-- Not downloaded, no in-flight or failure. -->
-            <button class="ghost primary" onclick={() => onDownload(card)}>
+            <button class="kh-button kh-button--sm" onclick={() => onDownload(card)}>
               Download
             </button>
           {/if}
@@ -249,7 +249,8 @@
   color: var(--text-primary);
 }
 
-button {
+/* :not(.kh-button) so the global hard-shadow button isn't overridden. */
+button:not(.kh-button) {
   border-radius: 8px;
   border: 1px solid var(--border-input);
   padding: 0.7em 1.2em;
@@ -304,15 +305,6 @@ button.ghost.danger.confirming {
   font-weight: 600;
 }
 
-button.ghost.primary {
-  border-color: var(--accent);
-  color: var(--info-text);
-}
-
-button.ghost.primary:hover:not(:disabled) {
-  background-color: var(--info-bg);
-  border-color: var(--info-border);
-}
 
 .loading-skeleton {
   margin: 0.5rem 0;

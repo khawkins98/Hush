@@ -84,7 +84,7 @@
       </div>
       <button
         type="button"
-        class="primary"
+        class="kh-button kh-button--sm"
         onclick={() => void onOpenPermissions()}
       >Open Permissions diagnostic</button>
     </aside>

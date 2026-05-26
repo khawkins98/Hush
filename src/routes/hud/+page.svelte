@@ -352,13 +352,13 @@
     width: 100vw;
     box-sizing: border-box;
     padding: 0 0.65rem;
-    /* Dark warm-orange pill, glassy — matches the app's dark canvas */
-    background-color: rgba(26, 13, 7, 0.88);
+    /* Neutral near-black pill, glassy — matches the app's dark canvas */
+    background-color: rgba(19, 18, 17, 0.88);
     border-radius: 999px;
-    border: 1px solid rgba(220, 121, 50, 0.28);
+    border: 1px solid rgba(244, 158, 23, 0.28);
     box-shadow:
       0 4px 16px rgba(0, 0, 0, 0.45),
-      0 0 0 0.5px rgba(220, 121, 50, 0.12);
+      0 0 0 0.5px rgba(244, 158, 23, 0.12);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     user-select: none;
@@ -389,7 +389,7 @@
     color: #ffffff;
   }
   .hud-dismiss:focus-visible {
-    outline: 2px solid rgba(220, 121, 50, 0.7);
+    outline: 2px solid rgba(244, 158, 23, 0.7);
     outline-offset: 1px;
   }
 
@@ -438,8 +438,8 @@
   /* Processing: dot turns orange (accent), shimmer replaces waveform */
   .hud-processing .hud-dot {
     animation: none;
-    background-color: #dc7932;
-    box-shadow: 0 0 6px rgba(220, 121, 50, 0.6);
+    background-color: #f49e17;
+    box-shadow: 0 0 6px rgba(244, 158, 23, 0.6);
   }
 
   .hud-shimmer {
@@ -454,9 +454,9 @@
     border-radius: 3px;
     background: linear-gradient(
       90deg,
-      rgba(220, 121, 50, 0.1) 0%,
-      rgba(220, 121, 50, 0.55) 50%,
-      rgba(220, 121, 50, 0.1) 100%
+      rgba(244, 158, 23, 0.1) 0%,
+      rgba(244, 158, 23, 0.55) 50%,
+      rgba(244, 158, 23, 0.1) 100%
     );
     background-size: 200% 100%;
     background-position: 100% 0;
@@ -470,14 +470,15 @@
     .hud-shimmer-fill { animation: none; background-position: 50% 0; }
   }
 
-  /* Done: blue dot + check (matches app's --success-text: #7ab8d4) */
+  /* Done: green dot + check. HUD-local green, tuned for the dark pill —
+     the light-theme --success-text (#2f7a35) would be too dark here. */
   .hud-done .hud-dot {
     animation: none;
-    background-color: #7ab8d4;
-    box-shadow: 0 0 6px rgba(122, 184, 212, 0.55);
+    background-color: #74b06c;
+    box-shadow: 0 0 6px rgba(116, 176, 108, 0.55);
   }
   .hud-done-check {
-    color: #7ab8d4;
+    color: #74b06c;
     width: 16px;
     height: 16px;
   }

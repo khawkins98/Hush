@@ -272,11 +272,11 @@
     font-weight: 600;
     color: var(--text-primary);
     border-style: solid;
-    border-color: var(--accent, #5a7fff);
-    background-color: color-mix(in srgb, var(--accent, #5a7fff) 12%, transparent);
+    border-color: var(--accent, #f49e17);
+    background-color: color-mix(in srgb, var(--accent, #f49e17) 12%, transparent);
   }
   .card-title:hover {
-    border-color: var(--accent, #5a7fff);
+    border-color: var(--accent, #f49e17);
     color: var(--text-primary);
   }
 
@@ -286,8 +286,14 @@
     align-items: center;
     gap: 0.5rem;
     margin: 0.25rem 0 0.4rem;
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     color: var(--text-muted);
+    /* Timestamps + durations are data → Recursive Mono, tracked,
+       like the dates on allaboutken.com. */
+    font-family: var(--font-mono);
+    font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
   }
 
   .meta-item {
@@ -337,7 +343,7 @@
     background: none;
     border: none;
     font-size: 0.8rem;
-    color: var(--accent, #5a7fff);
+    color: var(--accent-blue, #563d82);
     cursor: pointer;
     font-family: inherit;
   }
@@ -356,7 +362,7 @@
     margin: 0 0 0.3rem;
     padding: 0.15rem 0.4rem;
     font-size: 0.82rem;
-    border: 1px solid var(--accent, #5a7fff);
+    border: 1px solid var(--accent, #f49e17);
     border-radius: 4px;
     background-color: var(--bg-app);
     color: var(--text-primary);

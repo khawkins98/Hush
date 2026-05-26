@@ -290,7 +290,7 @@
   <div class="about-updates">
     <button
       type="button"
-      class="ghost"
+      class="kh-button kh-button--sm"
       data-testid="settings-check-updates"
       disabled={updateChecking}
       onclick={onCheckForUpdates}
@@ -330,7 +330,7 @@
                   openExternal(e.currentTarget.href);
                 }}
                 rel="noopener noreferrer"
-                class="primary about-release-notes-btn"
+                class="about-release-notes-btn"
               >Open release notes</a>
               <button
                 type="button"
@@ -398,7 +398,7 @@
               <div class="about-install-actions">
                 <button
                   type="button"
-                  class="primary"
+                  class="kh-button kh-button--sm"
                   onclick={onInstallUpdate}
                 >
                   Try again
@@ -633,8 +633,8 @@
     text-decoration: none;
   }
   .about-release-notes-btn:hover {
-    background-color: var(--accent-hover, #ba5733);
-    border-color: var(--accent-hover, #ba5733);
+    background-color: var(--accent-hover, #d9890d);
+    border-color: var(--accent-hover, #d9890d);
     color: white;
   }
   .about-update-fallback {
@@ -668,6 +668,6 @@
     font-size: 0.85rem;
   }
   .about-tab a {
-    color: var(--accent-hover);
+    color: var(--accent-blue);
   }
 </style>

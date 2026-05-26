@@ -402,15 +402,16 @@
   font-weight: 500;
   font-family: inherit;
   color: var(--text-secondary);
-  background-color: var(--bg-sidebar);
-  border: 1px solid #d8d8dc;
+  background-color: transparent;
+  border: 1px solid var(--border-input);
   border-radius: 999px;
   cursor: pointer;
   transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
 .filter-chip:hover:not(:disabled) {
-  background-color: var(--bg-sidebar);
-  border-color: var(--border);
+  background-color: var(--accent-subtle);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
 }
 .filter-chip.active {
   background-color: var(--text-primary);
@@ -495,7 +496,10 @@ button.ghost.danger:hover:not(:disabled) {
 }
 
 .empty-text {
-  font-size: 0.9rem;
+  /* Grace note — the "Hello."-style flourish for the empty state. */
+  font-variation-settings: "MONO" 0, "CASL" 1, "slnt" -8, "CRSV" 0.5, "wght" 380;
+  font-size: 1.35rem;
+  color: var(--text-secondary);
   margin: 0 0 1rem;
 }
 

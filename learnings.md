@@ -2746,3 +2746,15 @@ If you see references to `settings_window` in older code or comments, they are s
 
 **PTT settings-window env-gate note:**
 `learnings.md` (2026-04-30 PTT entry) has a sentence "A future settings-window toggle will replace the env gate." This refers to a Settings toggle inside the inline panel — not a new standalone window. That toggle is #784.
+
+## 2026-05-26 — `npm run dev` is now a mocked-backend browser playground
+
+**What changed.** `npm run dev` → `HUSH_MOCK=1 vite dev`. In a plain browser there's no Tauri runtime, so it was previously near-useless (every `invoke` threw). It now reuses the Playwright e2e stub system: `vite.config.js` aliases `@tauri-apps/api/{core,event,app}` + `plugin-shell` to `tests/e2e/setup/*-stub.ts` whenever `HUSH_E2E=1` **or** `HUSH_MOCK=1`. The stubs route through `window.__hush_e2e.invoke`, seeded by `tests/e2e/setup/mock-defaults.ts` (populated, lightly-stateful, forgiving — unknown commands return `[]`/`undefined` via a Proxy instead of throwing like the Playwright path). Result: the browser boots with populated history, granted permissions, an installed model — fast UI/layout iteration with no backend.
+
+**The load-bearing gotcha — `beforeDevCommand`.** `tauri dev` runs its `beforeDevCommand` as the vite server. It used to be `npm run dev`; if left that way, `npm run tauri dev` would have served the *mocked* frontend to the *real* app. So `tauri.conf.json` now points `beforeDevCommand` at `npm run dev:tauri` (= plain `vite dev`, no mock). **If you ever rename/retarget the dev scripts, keep `beforeDevCommand` on a mock-free one** or the real app silently gets fake data.
+
+**Why an env var, not `--mode mock`.** First attempt gated the alias on `vite --mode mock`; the alias didn't apply (mode wasn't reaching the resolve config reliably through the SvelteKit plugin). Switched to `HUSH_MOCK=1` — the exact mechanism `HUSH_E2E` already uses and which the e2e suite proves works. Env var over vite mode for this kind of build-time alias gate.
+
+**Stale-cache trap.** Editing `mock-defaults.ts` and not seeing the change is almost always Vite's optimized-dep cache serving old stub code. `rm -rf node_modules/.vite` fixes it. Cost me two confusing "still broken" cycles before I cleared it.
+
+**Seed drift.** There are now two seed sets: `_mock.ts` (Playwright, minimal/deterministic/throws) and `mock-defaults.ts` (dev, populated/forgiving). They're intentionally separate (different goals) but share command shapes — keep both in mind under the four-place IPC sync rule. `mock-defaults.ts` no-ops when `window.__hush_e2e` is already set, so Playwright (which seeds first) is unaffected.
