@@ -1,4 +1,4 @@
-// Default mock bus for `npm run dev` (which runs `vite dev --mode mock`).
+// Default mock bus for `npm run dev` (which runs `HUSH_MOCK=1 vite dev`).
 //
 // Seeds `window.__hush_e2e.invoke` with realistic, lightly-stateful
 // fake data so the plain-browser dev server is an interactive
@@ -43,12 +43,15 @@ export function seedMockBus(): void {
     speakerIdentity: false,
   };
 
+  // Shape matches `HistoryEntry` in src/lib/types.ts (appName/windowTitle/
+  // name, no `source`) so the History UI renders faithfully — incl. the
+  // app-name attribution and editable label.
   let history: Array<Record<string, unknown>> = [
-    { id: 5, transcript: "Let's ship the brand refresh and circle back on the icon export.", createdAt: isoMinutesAgo(4), ignored: false, model: "ggml-base.bin", durationMs: 5200, source: null },
-    { id: 4, transcript: "Remember to self-host the Recursive font so it works offline.", createdAt: isoMinutesAgo(38), ignored: false, model: "ggml-base.bin", durationMs: 3400, source: null },
-    { id: 3, transcript: "Quick note: the duotone needs higher contrast on the sidebar.", createdAt: isoMinutesAgo(95), ignored: false, model: "ggml-small.bin", durationMs: 2750, source: null },
-    { id: 2, transcript: "Testing push-to-talk with the right control key.", createdAt: isoMinutesAgo(180), ignored: false, model: "ggml-base.bin", durationMs: 1900, source: null },
-    { id: 1, transcript: "First transcription on the new build.", createdAt: isoMinutesAgo(1440), ignored: false, model: "ggml-base.bin", durationMs: 1200, source: null },
+    { id: 5, transcript: "Let's ship the brand refresh and circle back on the icon export.", appName: "Slack", windowTitle: "design — Slack", model: "ggml-base.bin", durationMs: 5200, createdAt: isoMinutesAgo(4), ignored: false, name: null },
+    { id: 4, transcript: "Remember to self-host the Recursive font so it works offline.", appName: "Notes", windowTitle: "Brand — Notes", model: "ggml-base.bin", durationMs: 3400, createdAt: isoMinutesAgo(38), ignored: false, name: "Font notes" },
+    { id: 3, transcript: "Quick note: the duotone needs higher contrast on the sidebar.", appName: "VS Code", windowTitle: "app.css — Hush", model: "ggml-small.bin", durationMs: 2750, createdAt: isoMinutesAgo(95), ignored: false, name: null },
+    { id: 2, transcript: "Testing push-to-talk with the right control key.", appName: "Terminal", windowTitle: "hush — zsh", model: "ggml-base.bin", durationMs: 1900, createdAt: isoMinutesAgo(180), ignored: false, name: null },
+    { id: 1, transcript: "First transcription on the new build.", appName: null, windowTitle: null, model: "ggml-base.bin", durationMs: 1200, createdAt: isoMinutesAgo(1440), ignored: false, name: null },
   ];
 
   const models: ModelCard[] = [
@@ -220,6 +223,11 @@ export function seedMockBus(): void {
     }),
   };
 
+  // Mark the document so the UI can show a visible "MOCK DATA" badge
+  // (app.css `:root[data-hush-mock]`) — a console line alone is too easy
+  // to miss, and the seed is convincing enough to mistake for the real app.
+  document.documentElement.setAttribute("data-hush-mock", "");
+
   // eslint-disable-next-line no-console
-  console.info("%c[hush] mock IPC active", "color:#f49e17;font-weight:bold", "— vite --mode mock. Fake data only; no real backend.");
+  console.info("%c[hush] mock IPC active", "color:#f49e17;font-weight:bold", "— HUSH_MOCK=1. Fake data only; no real backend.");
 }

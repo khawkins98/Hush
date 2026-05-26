@@ -481,7 +481,7 @@
        primary interactive element on the dark canvas. */
     box-shadow:
       0 2px 10px rgba(0, 0, 0, 0.4),
-      0 0 0 1px rgba(255, 184, 28, 0.12);
+      0 0 0 1px rgba(244, 158, 23, 0.12);
     transition:
       transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
       border-color 150ms ease,
@@ -651,7 +651,7 @@
   }
   .transcription-progress-fill {
     height: 100%;
-    background: var(--accent, #8b5cf6);
+    background: var(--accent, #f49e17);
     border-radius: 2px;
     transition: width 0.3s ease;
   }

@@ -26,9 +26,9 @@
 
 import { seedMockBus } from "./mock-defaults";
 
-// In `npm run dev` (vite --mode mock) there's no Playwright to wire up
-// the bus, so seed a populated default set on load. No-ops under
-// Playwright (which sets `window.__hush_e2e` first) and in production.
+// In `npm run dev` (HUSH_MOCK=1) there's no Playwright to wire up the
+// bus, so seed a populated default set on load. No-ops under Playwright
+// (which sets `window.__hush_e2e` first) and in production.
 seedMockBus();
 
 type InvokeArgs = Record<string, unknown> | undefined;

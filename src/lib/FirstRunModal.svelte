@@ -460,11 +460,11 @@
   height: 0.55rem;
   border-radius: 50%;
   background-color: transparent;
-  border: 1.5px solid var(--accent, #ffb81c);
+  border: 1.5px solid var(--accent, #f49e17);
   transition: background-color 0.15s;
 }
 .wizard-step-dot.active {
-  background-color: var(--accent, #ffb81c);
+  background-color: var(--accent, #f49e17);
 }
 
 .welcome-body {
@@ -567,7 +567,9 @@
   gap: 0.5rem;
 }
 
-button {
+/* :not(.kh-button) so the global hard-shadow button isn't overridden
+   by this scoped base rule's higher specificity (ghost/Back keep it). */
+button:not(.kh-button) {
   border-radius: 8px;
   border: 1px solid var(--border-input);
   padding: 0.6em 1.1em;

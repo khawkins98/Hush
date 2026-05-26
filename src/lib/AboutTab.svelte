@@ -633,8 +633,8 @@
     text-decoration: none;
   }
   .about-release-notes-btn:hover {
-    background-color: var(--accent-hover, #ba5733);
-    border-color: var(--accent-hover, #ba5733);
+    background-color: var(--accent-hover, #d9890d);
+    border-color: var(--accent-hover, #d9890d);
     color: white;
   }
   .about-update-fallback {

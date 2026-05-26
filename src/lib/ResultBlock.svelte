@@ -206,23 +206,23 @@
   gap: 0.25rem;
 }
 .export-option:hover:not(:disabled) {
-  border-color: var(--accent, #ffb81c);
+  border-color: var(--accent, #f49e17);
   color: var(--text-primary, #111);
 }
 .export-option.active {
-  border-color: var(--accent, #ffb81c);
-  color: var(--accent-blue, #ffb81c);
+  border-color: var(--accent, #f49e17);
+  color: var(--accent-blue, #563d82);
 }
 .export-option.confirmed {
-  background-color: var(--accent-subtle, rgba(255, 184, 28, 0.18));
-  color: var(--accent-blue, #ba5733);
-  border-color: var(--accent, #ffb81c);
+  background-color: var(--accent-subtle, rgba(244, 158, 23, 0.18));
+  color: var(--accent-blue, #563d82);
+  border-color: var(--accent, #f49e17);
 }
 .export-option .check {
   font-weight: 700;
 }
 .export-option:focus-visible {
-  outline: 2px solid var(--accent, #ffb81c);
+  outline: 2px solid var(--accent, #f49e17);
   outline-offset: 2px;
 }
 

@@ -372,7 +372,7 @@
   padding: 0.6rem 0.8rem 0.6rem 2.2rem;
   margin: 0.75rem 0 0;
   background-color: var(--bg-surface);
-  border: 3px solid var(--accent);
+  border: 3px solid var(--accent-border);
   border-radius: var(--radius-sm);
   font-size: 0.85rem;
   flex-wrap: wrap;
@@ -521,9 +521,9 @@
   border-radius: 8px;
   font-size: 0.88rem;
   line-height: 1.4;
-  border: 1px solid var(--accent-subtle, rgba(255, 184, 28, 0.18));
-  background-color: var(--accent-subtle, rgba(255, 184, 28, 0.12));
-  color: var(--accent-blue, #ba5733);
+  border: 1px solid var(--accent-subtle, rgba(244, 158, 23, 0.18));
+  background-color: var(--accent-subtle, rgba(244, 158, 23, 0.12));
+  color: var(--accent-blue, #563d82);
 }
 .app-profile-notice-icon {
   font-weight: 700;

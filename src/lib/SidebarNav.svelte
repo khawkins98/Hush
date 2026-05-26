@@ -253,8 +253,12 @@
     /* The sidebar is the orange hero band, so its text is dark
        (black-on-orange, exactly like allaboutken.com's hero). All
        nav text uses these inks rather than the app's text tokens. */
-    --sidebar-ink: #373a36;
-    --sidebar-ink-dim: rgba(55, 58, 54, 0.66);
+    /* Both inks are opaque + dark enough to clear WCAG AA on the
+       orange band (≥4.5:1) — the old dim alpha was 2.9:1. Active vs
+       inactive is distinguished by weight + the leading-edge border,
+       not by a too-light colour. */
+    --sidebar-ink: #2b2e2a;
+    --sidebar-ink-dim: #373a36;
     background: var(--bg-sidebar);
     border-right: none;
     padding: 0.6rem 0;
@@ -356,6 +360,7 @@
   .sidebar-nav-item.active {
     color: var(--sidebar-ink);
     border-left-color: var(--sidebar-ink);
+    font-weight: 600;
   }
   /* Layout per state. Collapsed: icon centred. Open: icon +
      label horizontally, icon left-aligned with consistent

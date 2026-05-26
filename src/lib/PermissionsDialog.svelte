@@ -264,7 +264,9 @@
      scoped styles don't inherit page-level rules into a
      component, so we duplicate the visible attributes — same
      pattern FirstRunModal already uses. */
-  button {
+  /* :not(.kh-button) so the global hard-shadow button isn't overridden
+     by this scoped base rule's higher specificity. */
+  button:not(.kh-button) {
     border-radius: 8px;
     border: 1px solid var(--border-input);
     padding: 0.55em 1.1em;

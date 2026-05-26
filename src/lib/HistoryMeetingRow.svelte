@@ -576,9 +576,9 @@
   }
 
   .meta-chip--meeting {
-    border-color: color-mix(in srgb, var(--accent, #5a7fff) 40%, transparent);
-    color: var(--accent-blue, #5a7fff);
-    background-color: color-mix(in srgb, var(--accent, #5a7fff) 10%, transparent);
+    border-color: color-mix(in srgb, var(--accent, #f49e17) 40%, transparent);
+    color: var(--accent-blue, #563d82);
+    background-color: color-mix(in srgb, var(--accent, #f49e17) 10%, transparent);
   }
 
   .add-name-btn {
@@ -593,7 +593,7 @@
     font-family: inherit;
   }
   .add-name-btn:hover {
-    color: var(--accent-blue, #5a7fff);
+    color: var(--accent-blue, #563d82);
   }
 
   .card-title {
@@ -615,11 +615,11 @@
     font-weight: 600;
     color: var(--text-primary);
     border-style: solid;
-    border-color: var(--accent, #5a7fff);
-    background-color: color-mix(in srgb, var(--accent, #5a7fff) 12%, transparent);
+    border-color: var(--accent, #f49e17);
+    background-color: color-mix(in srgb, var(--accent, #f49e17) 12%, transparent);
   }
   .card-title:hover {
-    border-color: var(--accent, #5a7fff);
+    border-color: var(--accent, #f49e17);
     color: var(--text-primary);
   }
 
@@ -635,7 +635,7 @@
     margin: 0 0 0.3rem;
     padding: 0.15rem 0.4rem;
     font-size: 0.82rem;
-    border: 1px solid var(--accent, #5a7fff);
+    border: 1px solid var(--accent, #f49e17);
     border-radius: 4px;
     background-color: var(--bg-app);
     color: var(--text-primary);
@@ -720,12 +720,12 @@
     line-height: 1.5;
   }
   .speaker-chip-btn--named {
-    border-color: var(--accent, #5a7fff);
+    border-color: var(--accent, #f49e17);
     color: var(--text-primary);
-    background-color: color-mix(in srgb, var(--accent, #5a7fff) 10%, transparent);
+    background-color: color-mix(in srgb, var(--accent, #f49e17) 10%, transparent);
   }
   .speaker-chip-btn:hover {
-    border-color: var(--accent, #5a7fff);
+    border-color: var(--accent, #f49e17);
     color: var(--text-primary);
   }
   .pencil-icon {
@@ -738,7 +738,7 @@
   .speaker-rename-input {
     padding: 0.12rem 0.4rem;
     font-size: 0.8rem;
-    border: 1px solid var(--accent, #5a7fff);
+    border: 1px solid var(--accent, #f49e17);
     border-radius: 4px;
     background-color: var(--bg-surface);
     color: var(--text-primary);

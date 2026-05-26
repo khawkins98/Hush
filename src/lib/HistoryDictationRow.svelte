@@ -272,11 +272,11 @@
     font-weight: 600;
     color: var(--text-primary);
     border-style: solid;
-    border-color: var(--accent, #5a7fff);
-    background-color: color-mix(in srgb, var(--accent, #5a7fff) 12%, transparent);
+    border-color: var(--accent, #f49e17);
+    background-color: color-mix(in srgb, var(--accent, #f49e17) 12%, transparent);
   }
   .card-title:hover {
-    border-color: var(--accent, #5a7fff);
+    border-color: var(--accent, #f49e17);
     color: var(--text-primary);
   }
 
@@ -343,7 +343,7 @@
     background: none;
     border: none;
     font-size: 0.8rem;
-    color: var(--accent-blue, #5a7fff);
+    color: var(--accent-blue, #563d82);
     cursor: pointer;
     font-family: inherit;
   }
@@ -362,7 +362,7 @@
     margin: 0 0 0.3rem;
     padding: 0.15rem 0.4rem;
     font-size: 0.82rem;
-    border: 1px solid var(--accent, #5a7fff);
+    border: 1px solid var(--accent, #f49e17);
     border-radius: 4px;
     background-color: var(--bg-app);
     color: var(--text-primary);

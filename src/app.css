@@ -54,9 +54,13 @@ body {
      text, purple links, grey secondary, pale-cream callouts. Exact
      hexes lifted from the site's stylesheet. MAIN window only —
      HUD/menu-bar/debug hardcode their own dark colours, stay dark. */
-  --accent:           #f49e17;  /* brand orange — fills, focus, sidebar band (--kh-color--orange) */
+  --accent:           #f49e17;  /* brand orange — fills + the sidebar band (--kh-color--orange) */
   --accent-hover:     #d9890d;
   --accent-subtle:    rgba(244, 158, 23, 0.16);
+  /* Darker orange for accent used as a 1px line / border / focus ring
+     on the light canvas — #f49e17 is only ~2.1:1 there (fails WCAG
+     1.4.11); this clears 3:1. Use for borders/focus, not fills. */
+  --accent-border:    #b06d00;
   /* Links / accent-as-text = the site's purple (legacy var name). */
   --accent-blue:      #563d82;
   --accent-blue-hover:#734595;
@@ -81,7 +85,7 @@ body {
   --border:        #e0ddd8;
   --border-subtle: #ececea;
   --border-input:  #d0d0ce;
-  --border-focus:  var(--accent);
+  --border-focus:  var(--accent-border);
 
   /* ── Semantic — light tints; callouts reuse the site cream ── */
   --danger:         #b4231a;
@@ -150,11 +154,6 @@ body {
   box-shadow: 5px 5px 0 var(--text-primary);
   transform: none;
 }
-/* Inverted (primary) variant: black face, yellow label. */
-.kh-button--primary {
-  color: var(--text-on-accent);
-  background-color: var(--accent);
-}
 .kh-button--sm {
   padding: 0.35rem 0.75rem;
   font-size: 0.85rem;
@@ -162,6 +161,17 @@ body {
 }
 .kh-button--sm:active {
   transform: translate(4px, 4px);
+}
+/* Honour reduced-motion: keep the shadow state-change (the affordance)
+   but drop the press-translate animation. */
+@media (prefers-reduced-motion: reduce) {
+  .kh-button,
+  .kh-button:hover,
+  .kh-button:focus-visible,
+  .kh-button:active {
+    transition: none;
+    transform: none;
+  }
 }
 
 /* ── Type system, inspired by allaboutken.com ──────────────────
@@ -212,7 +222,7 @@ body {
 .kh-note-box {
   position: relative;
   background: var(--bg-surface);
-  border: 3px solid var(--accent);
+  border: 3px solid var(--accent-border);
   border-radius: var(--radius-sm);
   padding: 0.7rem 0.9rem 0.7rem 2.1rem;
 }
@@ -235,4 +245,26 @@ body {
   font-variation-settings: "MONO" 1, "CASL" 1, "slnt" -10, "CRSV" 0, "wght" 800;
   font-size: 0.6rem;
   letter-spacing: 0.12em;
+}
+
+/* "MOCK DATA" badge. The data-attribute is set only by the mock IPC
+   bus (mock-defaults.ts) in `npm run dev` / HUSH_MOCK — so this is
+   inert in the real app and in production. Makes the fake-backend
+   state obvious so it can't be mistaken for the real thing. */
+:root[data-hush-mock] body::after {
+  content: "MOCK DATA";
+  position: fixed;
+  bottom: 10px;
+  right: 12px;
+  z-index: 99999;
+  padding: 0.2rem 0.55rem;
+  font-family: var(--font-mono);
+  font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0, "wght" 700;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: #fff;
+  background: var(--danger);
+  border-radius: 999px;
+  pointer-events: none;
+  opacity: 0.92;
 }

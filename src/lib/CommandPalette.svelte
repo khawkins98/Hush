@@ -404,14 +404,14 @@
     cursor: pointer;
   }
   .cmdpal-row.highlighted {
-    background: var(--accent-subtle, rgba(255, 184, 28, 0.14));
+    background: var(--accent-subtle, rgba(244, 158, 23, 0.14));
   }
   .cmdpal-row.disabled {
     opacity: 0.45;
     cursor: not-allowed;
   }
   .cmdpal-row:focus-visible {
-    outline: 2px solid var(--accent, #ffb81c);
+    outline: 2px solid var(--accent, #f49e17);
     outline-offset: -2px;
   }
 

@@ -242,7 +242,7 @@
 
 .macos-diag-reset-result {
   padding: 0.5rem 0.75rem;
-  background-color: rgba(255, 184, 28, 0.1);
+  background-color: rgba(244, 158, 23, 0.1);
   border-left: 3px solid var(--accent);
   border-radius: 4px;
   font-size: 0.9rem;
