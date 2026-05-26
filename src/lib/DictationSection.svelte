@@ -268,7 +268,9 @@
   .shortcut-hint kbd {
     display: inline-block;
     padding: 0.05rem 0.4rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* Recursive Mono keycaps — same machine voice as the timer. */
+    font-family: var(--font-mono);
+    font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
     font-size: 0.85em;
     color: var(--text-primary);
     background-color: var(--bg-elevated);

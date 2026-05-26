@@ -286,8 +286,14 @@
     align-items: center;
     gap: 0.5rem;
     margin: 0.25rem 0 0.4rem;
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     color: var(--text-muted);
+    /* Timestamps + durations are data → Recursive Mono, tracked,
+       like the dates on allaboutken.com. */
+    font-family: var(--font-mono);
+    font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
   }
 
   .meta-item {

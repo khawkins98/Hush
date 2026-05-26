@@ -250,12 +250,11 @@
 <style>
   .sidebar-nav {
     flex-shrink: 0;
-    /* The sidebar is the brand orange band. Text on it is white
-       (matching the white-on-orange tags on allaboutken.com), so
-       all nav text uses these two inks rather than the app's dark
-       text tokens. */
-    --sidebar-ink: #ffffff;
-    --sidebar-ink-dim: rgba(255, 255, 255, 0.78);
+    /* The sidebar is the orange hero band, so its text is dark
+       (black-on-orange, exactly like allaboutken.com's hero). All
+       nav text uses these inks rather than the app's text tokens. */
+    --sidebar-ink: #373a36;
+    --sidebar-ink-dim: rgba(55, 58, 54, 0.66);
     background: var(--bg-sidebar);
     border-right: none;
     padding: 0.6rem 0;

@@ -300,16 +300,13 @@
 
 <style>
 :root {
-  /* System font stack — picks San Francisco on macOS, Segoe UI on
-     Windows, the distro default on Linux. Inter / Avenir were
-     close-enough fallbacks but rendered noticeably "off" on macOS,
-     so the app deliberately uses whatever the host considers
-     native instead. The trailing emoji families let macOS render
-     coloured emoji inline; Linux fonts handle the rest. */
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-    Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji";
+  /* Recursive (self-hosted), the allaboutken.com typeface, with a
+     system stack as the font-display:swap fallback. CASL 1 = the
+     "casual" axis that gives the site its warm character; MONO 0 =
+     sans. Weight is driven by font-weight (the wght axis), so it's
+     left out of font-variation-settings here. */
+  font-family: var(--font-sans), "Apple Color Emoji", "Segoe UI Emoji";
+  font-variation-settings: "MONO" 0, "CASL" 1, "slnt" 0, "CRSV" 0;
 
   /* Layer 1 of "feel native":
      - `color-scheme: light` aligns native form controls and
@@ -363,33 +360,47 @@
    when any permission health is "stale" (csreq mismatch after
    a rebuild). Lives at the top of .app-main so it's visible
    regardless of which section is active. */
-.stale-perm-banner {
+/* Both alert banners use the site's note-box callout: thick orange
+   border, surface fill, and a vertical slanted-mono label tab down
+   the left edge (added via ::before, no extra markup). */
+.stale-perm-banner,
+.source-failed-banner {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.55rem 0.8rem;
+  padding: 0.6rem 0.8rem 0.6rem 2.2rem;
   margin: 0.75rem 0 0;
-  background-color: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: 7px;
+  background-color: var(--bg-surface);
+  border: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
   font-size: 0.85rem;
   flex-wrap: wrap;
 }
-
-/* Meeting source-failed banner (#533). Same amber style as the
-   stale-perm banner; shown when a mic or system-audio source
-   stops transcribing mid-session. */
-.source-failed-banner {
+.stale-perm-banner::before,
+.source-failed-banner::before {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1.6rem;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.55rem 0.8rem;
-  margin: 0.75rem 0 0;
-  background-color: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: 7px;
-  font-size: 0.85rem;
-  flex-wrap: wrap;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-family: var(--font-mono);
+  font-variation-settings: "MONO" 1, "CASL" 1, "slnt" -10, "CRSV" 0, "wght" 800;
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+}
+.stale-perm-banner::before {
+  content: "PERMS";
+}
+.source-failed-banner::before {
+  content: "AUDIO";
 }
 
 .source-failed-banner-icon {
@@ -399,7 +410,7 @@
 .source-failed-banner-text {
   flex: 1;
   min-width: 0;
-  color: var(--warning-text);
+  color: var(--text-primary);
   line-height: 1.4;
 }
 
@@ -486,9 +497,9 @@
   margin-bottom: 1.5rem;
 }
 .section-header h1 {
+  /* Size/weight/tracking come from the global display-title rule in
+     app.css (type system); only the margin is local here. */
   margin: 0 0 0.25rem;
-  font-size: 1.75rem;
-  letter-spacing: -0.02em;
 }
 
 /* Meeting auto-copy outcome notice (#408). Sits between the

@@ -194,7 +194,7 @@
       {/if}
 
       <footer class="perm-dialog-footer">
-        <button class="primary" onclick={() => void dismiss()}>Done</button>
+        <button class="kh-button" onclick={() => void dismiss()}>Done</button>
       </footer>
     </article>
   </div>
@@ -287,14 +287,5 @@
   }
   button.ghost:hover:not(:disabled) {
     background-color: var(--bg-elevated);
-  }
-  button.primary {
-    background-color: var(--accent);
-    color: var(--text-on-accent);
-    border-color: var(--accent);
-  }
-  button.primary:hover:not(:disabled) {
-    background-color: var(--accent-hover);
-    border-color: var(--accent-hover);
   }
 </style>

@@ -495,7 +495,10 @@ button.ghost.danger:hover:not(:disabled) {
 }
 
 .empty-text {
-  font-size: 0.9rem;
+  /* Grace note — the "Hello."-style flourish for the empty state. */
+  font-variation-settings: "MONO" 0, "CASL" 1, "slnt" -8, "CRSV" 0.5, "wght" 380;
+  font-size: 1.35rem;
+  color: var(--text-secondary);
   margin: 0 0 1rem;
 }
 

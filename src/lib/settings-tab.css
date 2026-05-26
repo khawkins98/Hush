@@ -26,9 +26,12 @@
 
 /* ── Headings ───────────────────────────────────────────── */
 .tab-title {
+  /* Display treatment, matching the screen-title type-system rule. */
   margin: 0 0 0.75rem;
-  font-size: 1.4rem;
-  letter-spacing: -0.01em;
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 /* ── Group container + group heading ────────────────────── */

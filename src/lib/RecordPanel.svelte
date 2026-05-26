@@ -399,6 +399,9 @@
     color: var(--text-label);
     text-transform: uppercase;
     letter-spacing: 0.08em;
+    /* "Machine" voice — Recursive Mono, per the site's data labels. */
+    font-family: var(--font-mono);
+    font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
   }
   .record-row-adjunct {
     display: flex;
@@ -440,16 +443,15 @@
     --audio-waveform-bar-color: #dc2626;
   }
 
-  /* Big waveform — brand yellow → amber gradient while recording,
-     muted warm at idle. */
+  /* Big waveform — black bars on the yellow canvas (duotone). */
   .record-waveform {
     width: 100%;
     --audio-waveform-width: 100%;
     --audio-waveform-height: 88px;
     --audio-waveform-bar-color: linear-gradient(
       to top,
-      #ffb81c 0%,
-      #f5a623 100%
+      #1a1612 0%,
+      #3a322a 100%
     );
   }
   /* Bars feel taller / chunkier in the centerpiece role. */
@@ -547,7 +549,9 @@
      accent-red so the eye knows time is advancing. */
   .record-time {
     margin: 0.3rem 0 0;
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    /* Recursive Mono — the data/readout voice. */
+    font-family: var(--font-mono);
+    font-variation-settings: "MONO" 1, "CASL" 0, "slnt" 0, "CRSV" 0;
     font-size: 1.05rem;
     font-weight: 500;
     color: var(--text-secondary);

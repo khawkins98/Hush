@@ -290,7 +290,7 @@
   <div class="about-updates">
     <button
       type="button"
-      class="ghost"
+      class="kh-button kh-button--sm"
       data-testid="settings-check-updates"
       disabled={updateChecking}
       onclick={onCheckForUpdates}
