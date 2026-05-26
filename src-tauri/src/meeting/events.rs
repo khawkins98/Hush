@@ -161,8 +161,6 @@ pub(super) fn emit_meeting_session_ended(event_emitter: &dyn EventEmitter, sessi
 /// `meeting.activeId` on receipt (unblocking dictation) and shows a
 /// "finalizing…" indicator; `MeetingSessionEnded` later clears it.
 /// Payload: `{ sessionId }`.
-// removed when wired in Task 2
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct MeetingFinalizingPayload {
@@ -171,12 +169,8 @@ pub(super) struct MeetingFinalizingPayload {
 
 /// Tauri event name for [`MeetingFinalizingPayload`]. Matches the
 /// TypeScript constant `Events.MeetingFinalizing` in `events.ts`.
-// removed when wired in Task 2
-#[allow(dead_code)]
 pub(super) const MEETING_FINALIZING_EVENT: &str = "meeting:finalizing";
 
-// removed when wired in Task 2
-#[allow(dead_code)]
 pub(super) fn emit_meeting_finalizing(event_emitter: &dyn EventEmitter, session_id: i64) {
     emit_payload(
         event_emitter,

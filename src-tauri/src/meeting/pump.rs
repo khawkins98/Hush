@@ -166,6 +166,26 @@ pub(super) struct PumpContext {
     /// pipeline. Empty slice is a no-op. Snapshotted at session-open
     /// so mid-session rule edits take effect on the next session.
     pub replacement_rules: Arc<Vec<crate::dictionary::ReplacementRule>>,
+    /// Fired exactly once, by [`run_pump`], the moment every audio
+    /// handle has been explicitly stopped (device released) and the
+    /// tail samples fed into the streaming sessions — and *before* the
+    /// slow tail flush (`finish()` + diarize + persist) begins.
+    /// `stop_manual` awaits this so it can return promptly while the
+    /// pump task keeps finalizing in the background (background
+    /// finalization — see `docs/meeting-background-finalization-proposal.md`).
+    /// `Option` so `run_pump` can `take()` it (a `oneshot::Sender` is
+    /// not `Clone`); `None` after it has fired or for a pump that was
+    /// spawned without a checkpoint (Drop-on-shutdown path).
+    pub audio_released_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Cross-session speaker identity store (#667). The background
+    /// finalization tail (moved out of `stop_manual`) reads the
+    /// diarizer's session centroids and resolves them against known
+    /// identities through this store. Cloned from the manager.
+    pub speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
+    /// Whether speaker identity resolution is enabled (#667). Shared
+    /// Arc from `RuntimeFlags::speaker_identity_enabled`. Read at the
+    /// end of the pump to gate the centroid → identity resolution.
+    pub speaker_identity_enabled: Arc<AtomicBool>,
 }
 
 /// Per-tick mutable working state for [`run_pump`]. Bundled so the
@@ -322,6 +342,33 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         .await;
     }
 
+    // Explicit, ack-waited release of every audio handle BEFORE the slow
+    // tail flush (background finalization, see the proposal). `AudioSession::stop()`
+    // round-trips `Cmd::Stop` through the cpal/SCK worker and *returns the
+    // final drained buffer* — so the device singleton is actually free the
+    // moment this returns (not "eventually, when ctx drops"), and no tail
+    // audio is lost across the drain→stop gap. We feed those returned tail
+    // samples into the matching streaming session exactly as `tick_inference`
+    // feeds drained samples (mic-gain → diarizer-buffer append → `feed`) so
+    // the subsequent `finish()` still sees them. Relying on the handle's
+    // `Drop` instead would (a) not wait for the worker to process the Stop,
+    // so a new capture could still hit "recording already in progress", and
+    // (b) discard the returned `CapturedAudio` entirely.
+    release_audio_handles(&mut ctx, &mut state);
+
+    // Audio is released. Tell the frontend so it clears `activeId`
+    // (unblocking dictation/PTT) and shows a "finishing…" indicator while
+    // the background tail processes.
+    crate::meeting::events::emit_meeting_finalizing(ctx.event_emitter.as_ref(), ctx.session_id);
+
+    // Signal the audio-released checkpoint so `stop_manual` can return.
+    // Everything past this point runs in the background; the receiver may
+    // have dropped if `stop_manual` hit its timeout fallback, hence the
+    // ignored send result.
+    if let Some(tx) = ctx.audio_released_tx.take() {
+        let _ = tx.send(());
+    }
+
     // Tail flush: finish each streaming session, merge-sort-label-split, dispatch.
     let mut tail_buckets: Vec<TickBucket> = Vec::new();
     flush_sessions(&mut ctx, &mut state, &mut tail_buckets).await;
@@ -358,7 +405,102 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             "meeting pump: per-source utterance summary (#533 diagnostic)"
         );
     }
+
+    // Background finalization tail (moved out of `stop_manual`, see the
+    // proposal). Runs *after* the tail flush so all utterances — including
+    // the tail `finish()` finals — are in the DB before identities are
+    // resolved and the row is closed.
+    //
+    // Cross-session speaker identity resolution (#667): reads THIS session's
+    // diarizer cluster centroids and matches them against known identities.
+    // Safe to run here because a new meeting start awaits this finalization
+    // (the manager's single `finalizing` lane), so nothing has `reset()` the
+    // shared diarizer between this pump's start-of-session reset and now.
+    // Snapshot the centroids *before* any future pump resets them.
+    if ctx.speaker_identity_enabled.load(Ordering::Relaxed) {
+        let centroids = ctx.diarize.session_centroids();
+        if !centroids.is_empty() {
+            crate::meeting::lifecycle::resolve_speaker_identities(
+                Arc::clone(&ctx.speaker_store),
+                ctx.session_id,
+                centroids,
+            )
+            .await;
+        }
+    }
+
+    // Close the session row. Behaviour change vs the old foreground close:
+    // a failure here can no longer surface a retry to an already-returned
+    // Stop — it is logged and `reconcile_orphan_sessions` closes the row on
+    // next launch (#249), the same guarantee as a crash.
+    if let Err(e) = ctx.repo.close_session(ctx.session_id).await {
+        tracing::warn!(
+            error = ?e,
+            session_id = ctx.session_id,
+            "meeting finalization: close_session failed; orphan reconcile will close it next launch"
+        );
+    }
+
+    // Emit session-ended so the frontend clears the "finishing…" indicator.
+    // Emitted last so a `meeting_session_get` fired from the frontend's
+    // handler sees `ended_at` already set in the DB.
+    crate::meeting::events::emit_meeting_session_ended(ctx.event_emitter.as_ref(), ctx.session_id);
+
     tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
+}
+
+/// Explicitly stop every audio handle (ack-waited) and feed the returned
+/// tail samples into the matching streaming session — mirroring exactly how
+/// [`tick_inference`] feeds drained samples (mic-gain on the mic source,
+/// diarizer-buffer append for slice alignment, then `feed`). This frees the
+/// cpal/SCK capture singleton *now* and guarantees no tail-loss across the
+/// final-drain→stop gap. Called once, on the cancel path, before the tail
+/// flush. Errors are logged and swallowed — a stop failure on one source
+/// must not block releasing the others or the rest of finalization.
+fn release_audio_handles(ctx: &mut PumpContext, state: &mut PumpTickState) {
+    #[allow(clippy::needless_range_loop)] // parallel index into handles/sources/streaming_sessions
+    for i in 0..ctx.handles.len() {
+        let Some(handle) = ctx.handles[i].take() else {
+            continue;
+        };
+        let captured = match handle.stop() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    source_kind = ctx.sources[i].kind_label(),
+                    session_id = ctx.session_id,
+                    "meeting pump: audio stop on release failed"
+                );
+                continue;
+            }
+        };
+        let mut samples = captured.samples;
+        if samples.is_empty() {
+            continue;
+        }
+        // Mirror tick_inference: apply mic gain only to the microphone
+        // source (system-audio must not be distorted, #865).
+        if matches!(ctx.sources[i], AudioSource::Microphone(_)) {
+            let gain_db = f32::from_bits(ctx.mic_gain_db.load(Ordering::Relaxed));
+            apply_mic_gain(&mut samples, gain_db);
+        }
+        // Mirror the tail samples into the diarizer rolling buffer so the
+        // tail-flush utterance slicing stays aligned (same as tick_inference).
+        state.audio_buffers[i].append(&samples, captured.format);
+        // Feed into the streaming session so `finish()` sees the tail.
+        if let Some(session) = ctx.streaming_sessions[i].as_mut() {
+            if let Err(e) = session.feed(&samples) {
+                tracing::warn!(
+                    error = ?e,
+                    source_kind = ctx.sources[i].kind_label(),
+                    session_id = ctx.session_id,
+                    "meeting pump: feeding released tail samples failed; tail may be short"
+                );
+            }
+        }
+        samples.zeroize(); // (#869/#930) don't leave PCM lingering in heap
+    }
 }
 
 fn tick_drain_sources(
