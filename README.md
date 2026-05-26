@@ -85,46 +85,21 @@ A workflow page for knowledge workers in privacy-sensitive roles is on the roadm
 
 ## Install
 
-### macOS
+Hush isn't signed with an Apple Developer ID — the $99/year certificate isn't worth it for a solo hobby project — so macOS (and Windows) show a security warning on first launch. Clearing it is a one-time, ~30-second step.
 
-Hush is not signed with an Apple Developer ID (the certificate programme costs $99/year — this is a solo hobby project), so macOS will show a security warning on **first launch** regardless of how you install. The bypass is a one-time, 30-second step.
-
-**Homebrew (recommended — easy updates):**
+**macOS — Homebrew (recommended):**
 
 ```bash
 brew install --cask khawkins98/tap/hush
 ```
 
-Future updates: `brew upgrade --cask hush`. Tap source: [`khawkins98/homebrew-tap`](https://github.com/khawkins98/homebrew-tap)
+Updates: `brew upgrade --cask hush`. Or download the `.dmg` from [Releases](https://github.com/khawkins98/Hush/releases) and drag Hush.app to Applications.
 
-**Or download the DMG** from **[GitHub Releases](https://github.com/khawkins98/Hush/releases)**, open it, and drag Hush.app to Applications.
+**Linux / Windows:** [Releases](https://github.com/khawkins98/Hush/releases) → latest `v*` tag (`.AppImage` / `.deb`, or `.msi` / `.exe`). CI-built, not hands-on tested.
 
-**First launch — bypass Gatekeeper (one-time):**
+**New to Hush?** [`docs/getting-started.md`](./docs/getting-started.md) is the full walkthrough — install, the one-time Gatekeeper / SmartScreen bypass, permissions, your first recording, and meeting capture. macOS permission troubleshooting (including the "was granted — now revoked" prompt after updates) lives in [`docs/macos-permissions.md`](./docs/macos-permissions.md).
 
-Right-click `Hush.app` in Applications → **Open** → **Open** again in the dialog. If that option is greyed out on macOS 26, run this in Terminal instead:
-
-```bash
-xattr -rd com.apple.quarantine /Applications/Hush.app
-```
-
-After the first successful open, all future launches are silent. The DMG includes a "Read Me First.txt" with the same instructions offline.
-
-**New to Hush?** [`docs/getting-started.md`](./docs/getting-started.md) walks through the full flow: install → Gatekeeper → permissions → first recording → meeting capture.
-
-### Linux / Windows
-
-**[GitHub Releases](https://github.com/khawkins98/Hush/releases)** → pick the latest `v*` tag.
-
-| Platform | File | Notes |
-|---|---|---|
-| **Linux** | `.AppImage` or `.deb` | Any distro / Debian + Ubuntu; CI-built, not hands-on tested |
-| **Windows** | `.msi` (recommended) or `.exe` | CI-built, not hands-on tested |
-
-After an update, one or more permissions (Microphone, Input Monitoring) may show "Was granted — now revoked" in Settings → Permissions — this is a macOS TCC side-effect of ad-hoc signing. Re-grant each one in System Settings or use the Reset button in Settings → Permissions. Full troubleshooting steps are in [`docs/macos-permissions.md`](./docs/macos-permissions.md). Code-signing would eliminate this entirely; if you'd like to sponsor it, GitHub Sponsors is at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
-
-Windows shows a SmartScreen warning on first run — click **More info** → **Run anyway**. A Windows EV cert is also on the roadmap.
-
-Hush does **not** check for updates automatically. To check manually: **Settings → About → Check for updates**, or on macOS the **Hush** menu.
+Hush does **not** auto-update — check manually via **Settings → About → Check for updates** (or the **Hush** menu on macOS). Code-signing would remove the warnings; it's sponsorable at [github.com/sponsors/khawkins98](https://github.com/sponsors/khawkins98).
 
 ---
 
@@ -160,11 +135,10 @@ This isn't Electron-with-a-mic-icon. Four native windows (main, HUD overlay, men
 | For | Read |
 |---|---|
 | **Discovering Hush** — what it does | This README + the live app (install it, open Settings → menus describe what each thing does) |
-| **Installing + first recording** | [docs/getting-started.md](./docs/getting-started.md) — install options, Gatekeeper walkthrough, permissions, dictation, meeting capture |
+| **Install + first recording** | [docs/getting-started.md](./docs/getting-started.md) — install, Gatekeeper / SmartScreen bypass, permissions, dictation, meetings. macOS TCC troubleshooting: [`docs/macos-permissions.md`](./docs/macos-permissions.md) |
 | **What's shipped right now** | [STATUS.md](./STATUS.md) (rolling snapshot), [CHANGELOG.md](./CHANGELOG.md) (release-by-release record) |
 | **Attribution + legal posture** | [hush-prd.md](./hush-prd.md) — black-box reimplementation discipline (§13.8), product non-goals, and VoiceInk attribution rationale. The original full product spec is historical; see STATUS.md and CHANGELOG.md for current state |
 | **How it's built** | [ARCHITECTURE.md](./ARCHITECTURE.md) — stack, four-window topology, trait seams, meeting pump, module map |
-| **Installing + using** | [Releases](https://github.com/khawkins98/Hush/releases), [`docs/macos-permissions.md`](./docs/macos-permissions.md) for macOS TCC troubleshooting |
 | **Running it locally / dev commands** | [docs/developing.md](./docs/developing.md) — setup, command reference, macOS quirks, test layers |
 | **Building + contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md), [CLAUDE.md](./CLAUDE.md) for the Claude-assisted contributor workflow |
 | **Why decisions were made** | [learnings.md](./learnings.md) — append-only engineering decision log |
