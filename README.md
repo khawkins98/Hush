@@ -15,6 +15,14 @@ Dictate anywhere with a hotkey. Capture meetings with mic + system audio in para
 
 ---
 
+## Why I made it
+
+This started as a hobby project. I wanted transcripts of my work calls, but I never liked recording my colleagues just to get them — I needed the words, not a sound file of everyone that outlives the meeting. I'd also gotten hooked on a push-to-talk dictation hotkey and didn't want to give it up. What nagged at me was keeping two separate tools for that: one for dictation, one for meetings. I wanted a single app that did both, kept everything on my machine, and left no recording behind.
+
+So I wanted to see how far I could get building it myself. Hush is what I came up with.
+
+---
+
 ## What it is
 
 - **A push-to-talk dictation tool.** Hold your hotkey (default `Right ⌘` on macOS, `Right Ctrl` on Linux + Windows), speak, release. The transcript is on your clipboard, ready to paste, before you've moved your hands. No browser tab, no web service, no upload.
