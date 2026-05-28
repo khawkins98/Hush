@@ -28,6 +28,7 @@ pub mod speakers;
 pub mod transcription;
 pub mod tray;
 pub mod updater;
+pub mod vad;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -322,7 +322,8 @@ impl SessionManager {
                     continue;
                 }
             };
-            match transcriber.start_stream(format, &dict_opts.vocab_prompt) {
+            match transcriber.start_stream(format, &dict_opts.vocab_prompt, self.vad.new_session())
+            {
                 Ok(mut sess) => {
                     // Replay pre-warm audio into the streaming session before
                     // zeroizing the buffer (#868). Without this, audio captured
@@ -426,6 +427,7 @@ impl SessionManager {
             cancel: Arc::clone(&cancel),
             event_emitter: Arc::clone(&self.event_emitter),
             diarize: Arc::clone(&self.diarize),
+            vad: Arc::clone(&self.vad),
             mic_gain_db: Arc::clone(&self.mic_gain_db),
             audio: Arc::clone(&self.audio),
             transcribe: transcriber_snapshot,

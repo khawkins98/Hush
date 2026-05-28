@@ -117,7 +117,14 @@ fn streaming_fixture_emits_partials_and_finals() {
     );
 
     let mut session = transcriber
-        .start_stream(format, "")
+        .start_stream(
+            format,
+            "",
+            // #974: Task 2 wired the VAD gate parameter through; the
+            // fixture runs against the no-op session because this test
+            // exercises the whisper streaming policy, not the gate.
+            Box::new(hush_lib::vad::NoopVadSession),
+        )
         .expect("open streaming session");
 
     // Chunk the WAV into ~250 ms slices to mimic the meeting pump's

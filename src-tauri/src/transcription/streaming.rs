@@ -268,6 +268,39 @@ impl SlidingWindowState {
     /// state machine is decoupled from whisper-rs so the policy can be
     /// unit-tested with a scripted mock.
     pub fn tick(&mut self, inferer: &mut dyn WhisperLikeInferer) -> Result<Vec<Utterance>> {
+        self.tick_impl(inferer, false)
+    }
+
+    /// Force-commit variant of [`Self::tick`] — runs inference and
+    /// treats the stable cutoff as the full window duration so any
+    /// segment with text is committed as final rather than emitted as
+    /// a partial. Used by the gate-close flush mechanism (#974
+    /// follow-up): when the VAD gate transitions from "running" to
+    /// "gating", anything mid-flight that hasn't crossed the normal
+    /// `commit_tail_ms` threshold yet would otherwise be stranded by
+    /// the 30 s `window_max_ms` head-slide. Flushing aggressively at
+    /// the boundary recovers that text without changing steady-state
+    /// behaviour.
+    ///
+    /// All other pre-conditions in `tick` (`window.is_empty()`,
+    /// `min_first_inference_ms`, `infer_interval_ms`) are honoured —
+    /// if a normal `tick` would skip, the flush skips too. There's no
+    /// new audio to infer over in those cases, so a forced inference
+    /// would be wasted work.
+    pub fn tick_flush(&mut self, inferer: &mut dyn WhisperLikeInferer) -> Result<Vec<Utterance>> {
+        self.tick_impl(inferer, true)
+    }
+
+    /// Shared body for `tick` and `tick_flush`. When `force_commit` is
+    /// true the stable cutoff collapses to the full window duration,
+    /// so any segment whose end is within the window is treated as
+    /// stable enough to commit as final. Otherwise the normal
+    /// `commit_tail_ms` tail-young window applies.
+    fn tick_impl(
+        &mut self,
+        inferer: &mut dyn WhisperLikeInferer,
+        force_commit: bool,
+    ) -> Result<Vec<Utterance>> {
         // Inline the inference gates so each skip reason is individually
         // logged. This makes RUST_LOG=hush=debug output diagnostic: seeing
         // only "utterances = 0" at the pump level without any "inference ran"
@@ -329,7 +362,16 @@ impl SlidingWindowState {
         // (relative-to-window-start) is old enough to commit. Saturating
         // sub means a young window (duration < commit_tail_ms) commits
         // nothing, which is the right behaviour at session start.
-        let stable_cutoff_rel_ms = window_duration_ms.saturating_sub(self.config.commit_tail_ms);
+        //
+        // `force_commit = true` collapses the cutoff to the full window
+        // duration so every segment with text is committed as final —
+        // used by `tick_flush` on the gate-close boundary so in-flight
+        // utterances aren't stranded by the head-slide (#974 follow-up).
+        let stable_cutoff_rel_ms = if force_commit {
+            window_duration_ms
+        } else {
+            window_duration_ms.saturating_sub(self.config.commit_tail_ms)
+        };
 
         let mut out = Vec::new();
         let mut last_committed_rel_end_ms: Option<u64> = None;
@@ -1276,6 +1318,53 @@ mod tests {
     fn streaming_session_trait_is_object_safe() {
         // The pump holds these via Box<dyn StreamingTranscribeSession>.
         fn _assert(_: &dyn StreamingTranscribeSession) {}
+    }
+
+    #[test]
+    fn tick_flush_commits_with_zero_tail() {
+        // Normal `tick` won't commit a segment whose end sits inside
+        // the `commit_tail_ms` young-window — it emits as a partial
+        // and waits for the audio to age past the tail before promoting.
+        // `tick_flush` collapses the cutoff to the full window so the
+        // same segment commits as final on the spot. Pins the gate-close
+        // flush behaviour the streaming session calls into on the first
+        // gated drain after a stretch of speech (#974 follow-up).
+        let mut state = SlidingWindowState::new(16_000, config_for_test());
+        // 1 s of audio — window is shorter than commit_tail_ms (2 s),
+        // so a segment ending at t=1 s would normally be a partial.
+        state.feed_mono(&one_second_of_audio());
+
+        // Sanity: normal tick emits a partial, not a final.
+        let mut inferer = ScriptedInferer::new(vec![
+            vec![StreamSegment {
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "in flight".into(),
+            }],
+            vec![StreamSegment {
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "in flight".into(),
+            }],
+        ]);
+        let normal = state.tick(&mut inferer).unwrap();
+        assert_eq!(normal.len(), 1);
+        assert!(
+            !normal[0].is_final,
+            "control: normal tick must emit this as partial, not final"
+        );
+
+        // Force a flush. The same segment must now commit as final.
+        // Feed another second so the interval gate opens on the flush.
+        state.feed_mono(&one_second_of_audio());
+        let flushed = state.tick_flush(&mut inferer).unwrap();
+        let finals: Vec<_> = flushed.iter().filter(|u| u.is_final).collect();
+        assert_eq!(
+            finals.len(),
+            1,
+            "tick_flush must commit the in-flight segment as final"
+        );
+        assert_eq!(finals[0].text, "in flight");
     }
 
     #[test]

@@ -350,10 +350,19 @@ pub trait Transcribe: Send + Sync {
     /// model's preferred input format. `prompt` is the
     /// vocabulary-bias initial prompt — same semantics as
     /// [`Self::transcribe_with_prompt`].
+    ///
+    /// `vad_session` is a per-stream VAD session the backend uses to
+    /// gate inference behind a speech-presence check (#974). Callers
+    /// pass a fresh session from the production VAD model; backends
+    /// that don't yet wire VAD through (or want to A/B without it)
+    /// can ignore it. The whisper backend drains audio through this
+    /// in 512-sample frames and skips `infer()` on silent windows so
+    /// hallucination-prone non-speech inputs never reach whisper.cpp.
     fn start_stream(
         &self,
         format: CaptureFormat,
         prompt: &str,
+        vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
         // Default returns an error rather than silently degrading to a
         // one-shot adapter: a "streaming" call against a non-streaming
@@ -363,7 +372,7 @@ pub trait Transcribe: Send + Sync {
         // ONNX) override here AND override `supports_streaming` to
         // return `true`. Test mocks that don't care about streaming
         // get the default-error and the pump never invokes them.
-        let _ = (format, prompt);
+        let _ = (format, prompt, vad_session);
         Err(anyhow::anyhow!(
             "start_stream is not implemented for this Transcribe backend; \
              override the method to opt into streaming (used by the meeting pump \

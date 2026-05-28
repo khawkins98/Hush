@@ -57,6 +57,7 @@ The load-bearing seams:
 | `audio::AudioSession` | `audio/mod.rs` | `CpalMicSessionHandle`; `CoreAudioTapSession` for macOS system audio | `NoOpSession` / `StubSession` in `meeting/test_support.rs`; `WavFileAudioSession` under `--features test-utils` |
 | `transcription::Transcribe` | `transcription/mod.rs` | `WhisperTranscription` (gated on `whisper`) | `EchoTranscribe` / `FailingTranscribe` in `ipc/tests.rs`; `NoopStreamTranscribe` in `meeting/test_support.rs`; domain-specific stubs in `commands/**/tests.rs` |
 | `diarization::Diarize` | `diarization/mod.rs` | `FlagGatedDiarizer` → `OnnxDiarizer` / `NoopDiarizer` | `NoopDiarizer`; targeted test doubles such as `RecordingDiarizer` in `diarization/mod.rs` tests |
+| `vad::VadModel` / `vad::VadSession` | `vad/mod.rs` | `SileroVad` (shared model) / `SileroVadSession` (per-stream LSTM state) | `NoopVad` / `NoopVadSession` (always returns 1.0 — no gating); scripted mock `VadSession` in `transcription::whisper::tests` |
 | `events::EventEmitter` | `events.rs` | `ipc::events::TauriEventEmitter` | `events::NoopEventEmitter`; `ipc::events::RecordingEventEmitter` |
 | `history::HistoryRepository` | `history/mod.rs` | `SqliteHistoryRepository` | `NoopHistory` / `MemHistory` in `ipc/tests.rs` |
 | `meeting::MeetingSessionRepository` | `meeting/mod.rs` | `SqliteMeetingSessionRepository` | `NoopMeetings` in `ipc/tests.rs`; `FailingCloseRepo` in `meeting/test_support.rs`; in-memory SQLite in `SessionManager::new_for_test` |
@@ -75,7 +76,7 @@ The load-bearing seams:
 | `flags: RuntimeFlags` | `hud_visible`, `sound_cues`, `diarization_enabled`, `inference_in_progress`, `hotkey_toggle_error`, `recorder_active_sessions` | `AtomicBool`/`Mutex` runtime state shared between the IPC layer and background tasks |
 | `ptt: PttState` | `combo`, `active`, `spawned` | Push-to-talk hotkey combo, active flag, and listener task handle |
 | `update_check: UpdateCheckCache` | `last`, `inflight` | Manual update-check result cache + in-flight de-dup lock |
-| `inference: InferenceState` | `transcribe`, `transcribe_meeting`, `diarize`, `diarize_slot`, `transcriber_generation` | Hot-swap slots for both transcription paths and the diarizer; generation counter guards stale rebuild races |
+| `inference: InferenceState` | `transcribe`, `transcribe_meeting`, `diarize`, `diarize_slot`, `vad`, `transcriber_generation` | Hot-swap slots for both transcription paths, the diarizer, and the VAD model; generation counter guards stale rebuild races |
 | `models: ModelStore` | `models_dir`, `downloads` | GGUF/ONNX directory path + in-flight download cancel-handle registry |
 | `http: reqwest::Client` | — | Single shared HTTP client (used by both downloads and update-check) |
 | `settings: Arc<dyn SettingsRepository>` | — | Settings seam (flat because it's used across sub-struct domains) |
@@ -131,6 +132,10 @@ open handles + per-source StreamingTranscribeSession(s)
                     └─ feed each source's StreamingTranscribeSession in spawn_blocking
                                    │
                                    ▼
+                      drain() checks per-stream Silero VAD gate (#974):
+                      windows with no speech in the last ~1.5 s bypass infer()
+                                   │ (speech present)
+                                   ▼
                       collect TickBucket { source, utterances, audio }
                                    │
                                    ▼
@@ -141,6 +146,8 @@ open handles + per-source StreamingTranscribeSession(s)
           update in-memory partials      persist final utterances
           + emit live events             + emit session events / notices
 ```
+
+**VAD gate (#974).** Before each `infer()` call, `WhisperStreamingSession::drain()` checks a per-stream Silero VAD speech-presence gate: audio samples are scored in 512-sample (32ms) frames; if no frame exceeds the threshold within the hangover window (~1.5s default), the inferer is bypassed entirely and an empty segment list is returned. `finish()` at session close is intentionally ungated so the tail audio always flushes. Each `StreamingTranscribeSession` mints its own `VadSession` (carrying Silero's recurrent LSTM state) from the shared `Arc<dyn VadModel>` in `InferenceState`. Mic and system-audio sources gate independently. See `learnings.md` 2026-05-28 for the full design rationale and `src-tauri/src/vad/` for the trait + ONNX impl.
 
 **State machine.** `Mutex<SessionState>` where `SessionState` is `Idle | Opening | Active(...) | Releasing`. The `Opening` sentinel is held across the async DB / handle-open work so concurrent `meeting_start_manual` IPC calls can't race past the precondition. `Releasing` covers the brief foreground window between `stop_manual` signalling cancel and the pump confirming audio is released; it blocks a concurrent meeting start (the capture singleton isn't free yet) but not a dictation start.
 
@@ -306,6 +313,9 @@ Read once at process / session construction. Mid-session changes do not take eff
 | `HUSH_LOG_FILE` | (on) | Set to `off` (or `0`) to disable the daily-rolling file appender. |
 | `HUSH_WHISPER_STATE_RECREATE_INTERVAL` | `30` | Number of streaming inferences before `WhisperState` is dropped + lazy-recreated to bound whisper.cpp's per-call C-heap accumulation (#623). Set to `0` for "never recreate" (legacy / A-B test). |
 | `HUSH_DIARIZER_THRESHOLD` | `0.4` | Cosine-distance threshold for declaring two utterance embeddings distinct speakers in `OnnxDiarizer::SessionClusterState::assign` (#316 / #633). Lower → more clusters; higher → speakers merge. Range `[0.0, 2.0]`. Out-of-range values warn and fall back to default. |
+| `HUSH_VAD_THRESHOLD` | `0.5` | Silero speech-probability threshold per 512-sample frame. Frames scoring at or above this are considered speech; frames below are silence. Lower → less aggressive gating; higher → stricter. (#974) |
+| `HUSH_VAD_HANGOVER_MS` | `1500` | Milliseconds after the last speech frame before `drain()` starts skipping inference. Longer → trailing words are preserved; shorter → silence gaps suppress inference sooner. (#974) |
+| `HUSH_VAD_DISABLE` | unset | Set to `1` to force `NoopVad` everywhere (always-speech, no gating). Use for A/B comparison or debug. (#974) |
 
 For the in-process tunables that aren't env-driven (inference thread count, model selection, diarization toggle), see the hot-swap slots in the trait-seam pattern section above — those flow through Settings.
 
@@ -348,6 +358,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `settings/` | Settings repository plus string/JSON codec helpers |
 | `transcription/` | `Transcribe` trait, whisper-rs backend, streaming session machinery, GGUF download/catalog, resample |
 | `tray/` | Status-bar / system-tray icon and menu-bar popover launcher |
+| `vad/` | `VadModel`/`VadSession` trait pair, `NoopVad` fallback, and `SileroVad` ONNX impl backed by a bundled 16kHz-specialised Silero v5.1.2 model. Loaded once at startup via `tract-onnx`; each streaming session mints its own `VadSession` with independent recurrent state. (#974) |
 | `updater/` | Manual `check_for_updates` probe against GitHub releases |
 | `lib.rs` / `main.rs` | Tauri builder, plugin registration, tracing init, and binary entrypoint |
 
