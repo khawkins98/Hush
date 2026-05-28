@@ -136,6 +136,13 @@ pub(super) struct PumpContext {
     /// non-Noop impl can override `"mic"` / `"system"` with
     /// per-speaker labels.
     pub diarize: Arc<dyn crate::diarization::Diarize>,
+    /// Speech-presence VAD (#974). Cloned from the manager at session
+    /// start; `open_source_handle` calls `vad.new_session()` whenever
+    /// the pump recreates a streaming session on device-loss fallback
+    /// or reconnect so the recreated `WhisperStreamingSession` has its
+    /// own per-stream VAD state (matching the per-source isolation the
+    /// initial `start_stream` sites set up in `lifecycle::start_manual`).
+    pub vad: Arc<dyn crate::vad::VadModel>,
     /// Live microphone gain in dB (#531). Shared Arc from `RuntimeFlags`;
     /// applied to the drained capture-format samples before they enter
     /// both the streaming inference session and the diarizer audio buffer.
@@ -620,6 +627,7 @@ fn tick_drain_sources(
                             match open_source_handle(
                                 &ctx.audio,
                                 ctx.transcribe.as_ref(),
+                                &ctx.vad,
                                 &fallback_source,
                                 &ctx.vocab_prompt,
                             ) {
@@ -1018,6 +1026,7 @@ fn tick_recovery_check(ctx: &mut PumpContext, state: &mut PumpTickState) {
             match open_source_handle(
                 &ctx.audio,
                 ctx.transcribe.as_ref(),
+                &ctx.vad,
                 &original_source,
                 &ctx.vocab_prompt,
             ) {
@@ -1471,6 +1480,7 @@ pub(super) async fn dispatch_utterances(
 pub(super) fn open_source_handle(
     audio: &Arc<dyn AudioCapture>,
     transcriber: Option<&Arc<dyn Transcribe>>,
+    vad: &Arc<dyn crate::vad::VadModel>,
     source: &AudioSource,
     vocab_prompt: &str,
 ) -> Result<(
@@ -1482,11 +1492,8 @@ pub(super) fn open_source_handle(
         Some(t) => {
             let mut scratch = Vec::new();
             match handle.drain_into(&mut scratch) {
-                // TODO(#974): swap NoopVadSession for the real per-session VAD
-                // minted from AppState once Task 4 lands.
                 Ok(format) => {
-                    match t.start_stream(format, vocab_prompt, Box::new(crate::vad::NoopVadSession))
-                    {
+                    match t.start_stream(format, vocab_prompt, vad.new_session()) {
                         Ok(mut sess) => {
                             // Replay pre-warm audio so the first inference
                             // window is not cold (#868). Treat feed failure

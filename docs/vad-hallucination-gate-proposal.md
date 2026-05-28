@@ -41,8 +41,16 @@ on it). The fix has to be upstream of `infer()`, in our own code.
 2. **Preserve real speech, including soft onsets and trailing-off words.** A
    hangover after the last detected speech keeps inference live long enough to
    capture conversational tails.
-3. **Apply uniformly to meeting and dictation** — the fix lives in the shared
-   streaming-session layer, so both paths benefit at no extra cost.
+3. **Apply the VAD gate to meeting; tune `FullParams` for both paths.** The
+   gate sits in front of the streaming `infer()` call, so only the meeting
+   path receives the structural protection. Dictation is one-shot
+   (`Transcribe::transcribe_chunks` on the full PTT buffer) — it benefits
+   from the Task 5 `FullParams` tuning (`set_temperature(0.0)` +
+   `set_suppress_nst(true)`) as defense-in-depth, but doesn't get
+   speech-presence gating. No reported dictation hallucinations in the
+   issue corpus; if dogfood surfaces them, a small input-trim pass before
+   `run_inference()` is a ~30-line follow-up (the VAD model is already
+   loaded by Task 4 and the slot is wired through `InferenceState`).
 
 ## Non-goals (v1)
 
@@ -98,8 +106,9 @@ Concrete impls:
   baseline for tests that aren't exercising the gate.
 
 Production wires the live `VadModel` through `AppState` and into `PumpContext`
-the same way `Diarize` flows today. The `StreamingTranscribeSession` (and the
-dictation streaming session) hold a `Box<dyn VadSession>` minted at session start.
+the same way `Diarize` flows today. The `StreamingTranscribeSession` holds a
+`Box<dyn VadSession>` minted at session start (dictation is one-shot, not a
+streaming session, and doesn't use a `VadSession`).
 
 ### B. Gate logic in `SlidingWindowState::tick()`
 

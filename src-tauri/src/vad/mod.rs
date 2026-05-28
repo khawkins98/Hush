@@ -3,12 +3,18 @@
 //! (".com", "Thanks for watching!", repeating-phrase loops). See
 //! `docs/vad-hallucination-gate-proposal.md` for the design rationale.
 //!
-//! Production *will wire* [`onnx::SileroVad`] into the
-//! [`crate::ipc::state::InferenceState`] `vad` slot at startup (Task 4 of the
-//! implementation plan adds the slot — see `docs/vad-hallucination-gate-plan.md`).
-//! Each streaming transcription session will mint a fresh [`VadSession`] at
-//! start (`new_session`) and feed frames through it as audio arrives. A
-//! `learnings.md` entry will be added when the feature lands.
+//! Production wires [`onnx::SileroVad`] into the
+//! [`crate::ipc::state::InferenceState`] `vad` slot at startup. Each
+//! streaming transcription session mints a fresh [`VadSession`] at start
+//! (`new_session`) and feeds frames through it as audio arrives.
+//!
+//! Today only the **meeting** transcription path is streamed (and therefore
+//! VAD-gated). The dictation path is one-shot — it calls
+//! `Transcribe::transcribe_chunks` on the entire captured PTT buffer — and
+//! relies on the `FullParams` tuning (`set_temperature(0.0)` +
+//! `set_suppress_nst(true)`, see Task 5) for defense-in-depth. The slot is
+//! plumbed and ready if dictation ever moves to streaming or grows an
+//! input-trim path.
 
 // `onnx::SileroVad` depends on `tract-onnx`, which is only in the dep
 // graph when the `diarization-onnx` feature is on (it's the existing
