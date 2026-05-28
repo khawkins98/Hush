@@ -21,6 +21,13 @@ let meetingSessionsError = $state<ErrorDisplay | null>(null);
 let meetingActiveId = $state<number | null>(null);
 let meetingActiveDetail = $state<MeetingSessionDetail | null>(null);
 let meetingBusy = $state(false);
+/// Set when the backend emits `meeting:finalizing` — mic has been
+/// released but background transcription is still running. Cleared
+/// when `meeting:session-ended` fires for the same session.
+/// Kept separate from `meetingActiveId` so PTT/dictation (which keys
+/// off `activeId`) unblocks the moment audio is released, while the
+/// UI can still show a quiet "finishing transcription…" indicator.
+let meetingFinalizingId = $state<number | null>(null);
 let meetingCopyNotice = $state<MeetingCopyNotice | null>(null);
 let pendingPermissionsDialogIntro = $state<string | null>(null);
 /// Source-failed banner text set when the backend emits
@@ -53,6 +60,38 @@ let meetingActiveDetailSeq = 0;
 /// so meeting.refresh() uses the right filter without importing history.
 let meetingSearchQuery = "";
 
+// ---------------------------------------------------------------------------
+// Pure reducer helpers — exported for unit-testing without Tauri.
+// Both functions are side-effect-free; the caller applies the returned
+// state to the reactive variables.
+// ---------------------------------------------------------------------------
+
+/// Applied on `meeting:finalizing`: releases `activeId` (so PTT/dictation
+/// unblocks immediately) and stamps `finalizingId` so the UI can show a
+/// quiet "finishing transcription…" indicator.
+export function reduceFinalizing(
+  state: { activeId: number | null; finalizingId: number | null },
+  sessionId: number,
+): { activeId: number | null; finalizingId: number | null } {
+  return {
+    activeId: state.activeId === sessionId ? null : state.activeId,
+    finalizingId: sessionId,
+  };
+}
+
+/// Applied on `meeting:session-ended`: clears `activeId` if it still
+/// matches (covers the non-finalizing stop path) and clears `finalizingId`
+/// once background transcription is done.
+export function reduceEnded(
+  state: { activeId: number | null; finalizingId: number | null },
+  sessionId: number,
+): { activeId: number | null; finalizingId: number | null } {
+  return {
+    activeId: state.activeId === sessionId ? null : state.activeId,
+    finalizingId: state.finalizingId === sessionId ? null : state.finalizingId,
+  };
+}
+
 export const meeting = {
   get sessions() {
     return meetingSessions;
@@ -77,6 +116,12 @@ export const meeting = {
   },
   set activeId(val: number | null) {
     meetingActiveId = val;
+  },
+  get finalizingId() {
+    return meetingFinalizingId;
+  },
+  set finalizingId(val: number | null) {
+    meetingFinalizingId = val;
   },
   get activeDetail() {
     return meetingActiveDetail;
@@ -328,16 +373,46 @@ export const meeting = {
       meeting.sourceFailedNotice = `${label} ${verb}.`;
     });
 
+    const unlistenFinalizing = await listen<{ sessionId: number }>(
+      Events.MeetingFinalizing,
+      (e) => {
+        // Mic has been released; background transcription is now running.
+        // Clear activeId (unblocks PTT/dictation) and set finalizingId
+        // (drives the "finishing transcription…" indicator).
+        const next = reduceFinalizing(
+          { activeId: meetingActiveId, finalizingId: meetingFinalizingId },
+          e.payload.sessionId,
+        );
+        meetingActiveId = next.activeId;
+        meetingFinalizingId = next.finalizingId;
+        // Safe: the backend emits MeetingFinalizing only after releasing audio,
+        // by which point meeting_active_session returns null — so refresh()
+        // won't re-arm activeId.
+        void meeting.refresh();
+      },
+    );
+
     const unlistenEnded = await listen<{ sessionId: number }>(
       Events.MeetingSessionEnded,
       (e) => {
-        // Clear activeId if it still matches the session that just ended.
-        // Guards against a race where the user stopped manually (already
-        // cleared activeId) before this event arrives (#799).
-        if (meeting.activeId === e.payload.sessionId) {
-          meeting.activeId = null;
+        // Clear activeId (if not already cleared by MeetingFinalizing) and
+        // finalizingId now that background transcription is done. Guards
+        // against a race where the user stopped manually before this event
+        // arrives (#799).
+        const next = reduceEnded(
+          { activeId: meetingActiveId, finalizingId: meetingFinalizingId },
+          e.payload.sessionId,
+        );
+        const wasActive = meeting.activeId === e.payload.sessionId;
+        const wasEitherSet =
+          meetingActiveId !== next.activeId || meetingFinalizingId !== next.finalizingId;
+        meetingActiveId = next.activeId;
+        meetingFinalizingId = next.finalizingId;
+        if (wasActive) {
           meetingSourceFailedNotice = null;
           meetingAppendFailedNotice = null;
+        }
+        if (wasEitherSet) {
           void meeting.refresh();
         }
       },
@@ -349,6 +424,10 @@ export const meeting = {
         // Guard against stale events from a previous session — only
         // show the banner if the session that failed is the one still
         // active (#816). Also guards late events after a session ends (#931).
+        // During background finalization activeId is null, so append-failed
+        // events for the finalizing session are intentionally dropped — the
+        // session is done from the UI's perspective and the backend can no
+        // longer append to a null active session either.
         if (meeting.activeId === null || meeting.activeId !== e.payload.sessionId) return;
         console.warn("[DictationMeetingAppendFailed]", e.payload.error);
         meeting.appendFailedNotice =
@@ -371,6 +450,7 @@ export const meeting = {
     return () => {
       unlistenStarted();
       unlistenSourceFailed();
+      unlistenFinalizing();
       unlistenEnded();
       unlistenAppendFailed();
       unlistenTailDropped();

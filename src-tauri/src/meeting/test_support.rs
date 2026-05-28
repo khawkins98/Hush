@@ -295,6 +295,114 @@ pub(super) fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> Sess
     )
 }
 
+/// Streaming session whose `finish()` blocks until a shared flag is set,
+/// used to keep a meeting's background finalization in flight long enough
+/// for a concurrency assertion. `feed`/`drain` are no-ops. `finish` flips
+/// `started` (so the test can observe it began) then spins on `release`,
+/// sleeping briefly between polls — this runs inside `spawn_blocking`, so
+/// blocking the thread is safe and intended.
+struct SlowFinishStreamingSession {
+    release: Arc<std::sync::atomic::AtomicBool>,
+    started: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StreamingTranscribeSession for SlowFinishStreamingSession {
+    fn feed(&mut self, _captured: &[f32]) -> Result<()> {
+        Ok(())
+    }
+
+    fn drain(&mut self) -> Result<Vec<Utterance>> {
+        Ok(vec![])
+    }
+
+    fn finish(self: Box<Self>) -> Result<Vec<Utterance>> {
+        self.started
+            .store(true, std::sync::atomic::Ordering::Release);
+        // Bounded spin so a test bug can't hang CI forever (~5 s cap).
+        for _ in 0..1_000 {
+            if self.release.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Ok(vec![])
+    }
+}
+
+struct SlowFinishTranscribe {
+    release: Arc<std::sync::atomic::AtomicBool>,
+    started: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Transcribe for SlowFinishTranscribe {
+    fn transcribe(&self, _audio: &CapturedAudio) -> Result<String> {
+        Ok(String::new())
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn start_stream(
+        &self,
+        _format: CaptureFormat,
+        _prompt: &str,
+    ) -> Result<Box<dyn StreamingTranscribeSession>> {
+        Ok(Box::new(SlowFinishStreamingSession {
+            release: Arc::clone(&self.release),
+            started: Arc::clone(&self.started),
+        }))
+    }
+}
+
+/// A manager whose streaming `finish()` blocks on `release` — keeps the
+/// background finalization in flight so the "new meeting awaits
+/// finalization" gate can be observed deterministically. `started` flips
+/// when `finish()` begins (unused by the current test but handy for
+/// finer-grained ordering assertions).
+pub(super) async fn manager_with_slow_finish(
+    release: Arc<std::sync::atomic::AtomicBool>,
+    started: Arc<std::sync::atomic::AtomicBool>,
+) -> SessionManager {
+    let db = SqliteDatabase::open_in_memory().await.unwrap();
+    let repo: Arc<dyn MeetingSessionRepository> =
+        Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+    let emitter: Arc<dyn crate::events::EventEmitter> = Arc::new(crate::events::NoopEventEmitter);
+    manager_with_slow_finish_parts(release, started, repo, emitter)
+}
+
+/// Like [`manager_with_slow_finish`] but lets the caller supply the repo
+/// and event emitter so they can read back the closed session row and
+/// assert on the emitted `MeetingSessionEnded`. Used by the IPC-layer
+/// dictation-during-finalize test (#947 review Gap 2), which is why it's
+/// re-exported `pub(crate)` from the meeting module under `cfg(test)`.
+pub(crate) fn manager_with_slow_finish_parts(
+    release: Arc<std::sync::atomic::AtomicBool>,
+    started: Arc<std::sync::atomic::AtomicBool>,
+    repo: Arc<dyn MeetingSessionRepository>,
+    emitter: Arc<dyn crate::events::EventEmitter>,
+) -> SessionManager {
+    let audio: Arc<dyn AudioCapture> = Arc::new(StubParallelAudio);
+    let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> =
+        Arc::new(Mutex::new(Some(Arc::new(SlowFinishTranscribe {
+            release,
+            started,
+        }))));
+    let diarize: Arc<dyn crate::diarization::Diarize> = Arc::new(crate::diarization::NoopDiarizer);
+    let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
+    SessionManager::new(
+        repo,
+        audio,
+        transcribe,
+        emitter,
+        diarize,
+        app_overrides,
+        Arc::new(AtomicU32::new(0f32.to_bits())),
+        Arc::new(crate::speakers::MemSpeakerStore),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+}
+
 pub(super) fn make_partial(text: &str, started: u64, ended: u64, label: &str) -> Utterance {
     Utterance {
         text: text.to_owned(),
@@ -386,6 +494,149 @@ impl MeetingSessionRepository for FailingCloseRepo {
     }
 }
 
+/// Audio session that produces NO samples on the tick-drain path but
+/// returns a non-empty `CapturedAudio` from `stop()`. This is the only
+/// way to exercise the tail-feed branch in
+/// [`super::pump::release_audio_handles`]: the stock `StubSession`'s
+/// `stop()` returns `samples: vec![]`, so `if samples.is_empty() {
+/// continue; }` short-circuits and the tail-feed line never runs.
+///
+/// `drain_into` returns the format but appends nothing, so no per-tick
+/// inference fires — any samples the recording streaming session sees
+/// in `feed()` came from the tail-release path, not a tick drain.
+pub(super) struct TailReleaseSession {
+    source: AudioSource,
+    /// Samples `stop()` hands back as the captured tail.
+    tail_samples: Vec<f32>,
+    format: CaptureFormat,
+}
+
+impl AudioSession for TailReleaseSession {
+    fn source(&self) -> &AudioSource {
+        &self.source
+    }
+
+    fn drain_into(&self, _sink: &mut Vec<f32>) -> Result<CaptureFormat> {
+        // No tick-drain samples — only the tail comes through stop().
+        Ok(self.format)
+    }
+
+    fn stop(self: Box<Self>) -> Result<CapturedAudio> {
+        Ok(CapturedAudio {
+            samples: self.tail_samples,
+            format: self.format,
+        })
+    }
+}
+
+/// Streaming session that records every sample slice handed to `feed()`
+/// (in arrival order) and, if it ever saw a tail feed, emits one final
+/// utterance from `finish()`. Lets a pump test assert both the
+/// load-bearing fact (tail samples reached `feed()` before `finish()`)
+/// and the downstream effect (a final utterance is produced + persisted).
+pub(super) struct RecordingFeedSession {
+    /// Each `feed()` call appends the slice length it received. The
+    /// tail-feed path is the only feed source in the `TailReleaseSession`
+    /// setup, so a non-empty log proves the tail reached the session.
+    fed_lens: Arc<Mutex<Vec<usize>>>,
+}
+
+impl StreamingTranscribeSession for RecordingFeedSession {
+    fn feed(&mut self, captured: &[f32]) -> Result<()> {
+        if !captured.is_empty() {
+            self.fed_lens.lock().unwrap().push(captured.len());
+        }
+        Ok(())
+    }
+
+    fn drain(&mut self) -> Result<Vec<Utterance>> {
+        Ok(vec![])
+    }
+
+    fn finish(self: Box<Self>) -> Result<Vec<Utterance>> {
+        // Only emit a tail final if something was actually fed — this
+        // makes the downstream "tail utterance persisted" assertion fail
+        // if the tail-feed line is removed (nothing fed → no final).
+        if self.fed_lens.lock().unwrap().is_empty() {
+            Ok(vec![])
+        } else {
+            Ok(vec![make_final("tail words", 0, 100, "mic")])
+        }
+    }
+}
+
+/// Build a [`super::pump::PumpContext`] wired for the tail-feed test.
+/// The single mic source has a [`TailReleaseSession`] handle (empty tick
+/// drains, non-empty `stop()`) and a [`RecordingFeedSession`] streaming
+/// session. `cancel` is pre-set so [`super::pump::run_pump`] skips the
+/// loop body and goes straight to the final-drain → `release_audio_handles`
+/// → `flush_sessions` path. Returns the context, the in-memory repo (to
+/// read back the persisted tail utterance), and the shared `fed_lens`
+/// log (to assert the tail reached `feed()`).
+pub(super) async fn build_tail_pump_context(
+    tail_samples: Vec<f32>,
+) -> (
+    super::pump::PumpContext,
+    Arc<dyn MeetingSessionRepository>,
+    Arc<Mutex<Vec<usize>>>,
+) {
+    use std::sync::atomic::AtomicBool;
+
+    let db = SqliteDatabase::open_in_memory().await.unwrap();
+    let repo: Arc<dyn MeetingSessionRepository> =
+        Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+    // A real open session row so dispatch's append_utterance has a target.
+    let session = repo
+        .create(NewMeetingSession {
+            app_name: "Zoom".to_owned(),
+            app_kind: super::MeetingAppKind::Meeting,
+            sources: vec!["mic".to_owned()],
+            app_title: None,
+        })
+        .await
+        .unwrap();
+
+    let source = AudioSource::default_microphone();
+    let format = CaptureFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    };
+    let handle: Box<dyn AudioSession> = Box::new(TailReleaseSession {
+        source: source.clone(),
+        tail_samples,
+        format,
+    });
+
+    let fed_lens = Arc::new(Mutex::new(Vec::new()));
+    let streaming: Box<dyn StreamingTranscribeSession> = Box::new(RecordingFeedSession {
+        fed_lens: Arc::clone(&fed_lens),
+    });
+
+    let cancel = Arc::new(AtomicBool::new(true)); // pre-cancelled: skip the loop body
+    let ctx = super::pump::PumpContext {
+        session_id: session.id,
+        repo: Arc::clone(&repo),
+        sources: vec![source],
+        handles: vec![Some(handle)],
+        streaming_sessions: vec![Some(streaming)],
+        partials: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        cancel,
+        event_emitter: Arc::new(crate::events::NoopEventEmitter),
+        diarize: Arc::new(crate::diarization::NoopDiarizer),
+        mic_gain_db: Arc::new(AtomicU32::new(0f32.to_bits())),
+        audio: Arc::new(StubParallelAudio),
+        transcribe: Some(Arc::new(NoopStreamTranscribe)),
+        session_start: std::time::Instant::now(),
+        vocab_prompt: String::new(),
+        replacement_rules: Arc::new(Vec::new()),
+        audio_released_tx: None,
+        speaker_store: Arc::new(crate::speakers::MemSpeakerStore),
+        speaker_identity_enabled: Arc::new(AtomicBool::new(false)),
+    };
+
+    (ctx, repo, fed_lens)
+}
+
 /// Recording diarizer for the merged-dispatch tests. Saves the
 /// chronological sequence of `started_at_ms` values it receives + the
 /// audio chunk lengths, then writes deterministic `"Speaker A"` labels
@@ -414,4 +665,114 @@ impl crate::diarization::Diarize for RecordingDiarizer {
             u.speaker_label = Some("Speaker A".to_owned());
         }
     }
+}
+
+/// Diarizer that reports a fixed, non-empty set of session centroids — a
+/// stand-in for a real `OnnxDiarizer` that accumulated cluster state over a
+/// meeting. Used by the #667 background-finalization regression
+/// ([`super::pump::tests::background_finalization_resolves_against_real_centroids`]).
+/// `label_utterances` is a no-op (the regression exercises the centroid
+/// read at finalization, not per-tick labelling).
+pub(super) struct CentroidDiarizer {
+    /// `(cluster_id, centroid, utterance_count)`. The count is set ≥
+    /// [`crate::speakers::MIN_UTTERANCE_COUNT_FOR_MATCH`] so the resolver
+    /// does not skip the cluster as a cold-start.
+    centroids: Vec<(usize, Vec<f32>, usize)>,
+}
+
+impl CentroidDiarizer {
+    pub(super) fn with_one_cluster() -> Self {
+        Self {
+            centroids: vec![(0, vec![0.1f32; 256], 8)],
+        }
+    }
+}
+
+impl crate::diarization::Diarize for CentroidDiarizer {
+    fn label_utterances(
+        &self,
+        _utterances: &mut [crate::transcription::Utterance],
+        _audio: &[Vec<f32>],
+        _format: crate::audio::CaptureFormat,
+    ) {
+        // no-op: this diarizer only models the centroid snapshot.
+    }
+
+    fn session_centroids(&self) -> Vec<(usize, Vec<f32>, usize)> {
+        self.centroids.clone()
+    }
+}
+
+/// Speaker store that records the cluster IDs handed to identity
+/// resolution. A non-empty `resolved_clusters` after finalization proves
+/// `session_centroids()` returned the session's real (non-empty) clusters
+/// at resolve time — i.e. nothing clobbered the diarizer first.
+pub(super) struct RecordingSpeakerStore {
+    /// Cluster IDs that reached the resolver (via `link_utterances`'s
+    /// `"Speaker N"` label / a `create`). Empty ⇒ resolution never ran on
+    /// any real centroid.
+    pub(super) created: Mutex<Vec<usize>>,
+}
+
+impl RecordingSpeakerStore {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            created: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl crate::speakers::SpeakerStore for RecordingSpeakerStore {
+    async fn list_with_embeddings(&self) -> Result<Vec<(i64, Vec<f32>, i64)>> {
+        // No known identities → the resolver takes the "first known
+        // speaker" branch and calls `create` for each non-empty cluster.
+        Ok(Vec::new())
+    }
+    async fn create(&self, centroid: &[f32], _utterance_count: i64) -> Result<i64> {
+        // Record that a real centroid reached the resolver. The length is
+        // 256 for the CentroidDiarizer fixture; record one entry per call.
+        self.created.lock().unwrap().push(centroid.len());
+        Ok(1)
+    }
+    async fn update_centroid(&self, _id: i64, _c: &[f32], _n: i64) -> Result<()> {
+        Ok(())
+    }
+    async fn link_utterances(&self, _sid: i64, _label: &str, _id: i64) -> Result<()> {
+        Ok(())
+    }
+    async fn rename(&self, _id: i64, _name: Option<String>) -> Result<()> {
+        Ok(())
+    }
+    async fn delete(&self, _id: i64) -> Result<()> {
+        Ok(())
+    }
+    async fn list(&self) -> Result<Vec<crate::speakers::SpeakerIdentity>> {
+        Ok(Vec::new())
+    }
+    async fn merge(&self, _keep: i64, _absorb: i64) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Like [`build_tail_pump_context`] but lets the caller inject the diarizer
+/// (so it can be a `FlagGatedDiarizer` reading through a hot-swappable
+/// [`crate::diarization::DiarizeSlot`]), the speaker store, and the
+/// speaker-identity-enabled flag. Used by the #667 regression to prove the
+/// background finalization reads the session's real centroids when the slot
+/// stays stable across the stop boundary.
+#[allow(clippy::type_complexity)]
+pub(super) async fn build_tail_pump_context_with_diarize(
+    tail_samples: Vec<f32>,
+    diarize: Arc<dyn crate::diarization::Diarize>,
+    speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
+    speaker_identity_enabled: bool,
+) -> (super::pump::PumpContext, Arc<dyn MeetingSessionRepository>) {
+    use std::sync::atomic::AtomicBool;
+
+    let (mut ctx, repo, _fed_lens) = build_tail_pump_context(tail_samples).await;
+    ctx.diarize = diarize;
+    ctx.speaker_store = speaker_store;
+    ctx.speaker_identity_enabled = Arc::new(AtomicBool::new(speaker_identity_enabled));
+    (ctx, repo)
 }

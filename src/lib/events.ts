@@ -68,6 +68,12 @@ export const Events = {
   /// `meeting.activeId` even when no explicit `stopSession()` call was
   /// made from the UI (#799).
   MeetingSessionEnded: "meeting:session-ended",
+  /// Backend → frontend (main): the meeting pump released the audio device
+  /// and began background finalization (tail-flush + DB write). Payload is
+  /// `{ sessionId: number }`. The main window clears `meeting.activeId`
+  /// on receipt (unblocking dictation) and sets a finalizing indicator;
+  /// `MeetingSessionEnded` later clears it.
+  MeetingFinalizing: "meeting:finalizing",
   /// Backend → frontend (main): one or more streaming-session tail flushes
   /// failed or timed out at meeting stop. The last few seconds of audio from
   /// that source were lost and won't appear in the transcript. Payload is

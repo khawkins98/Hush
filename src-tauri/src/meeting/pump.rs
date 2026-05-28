@@ -166,6 +166,26 @@ pub(super) struct PumpContext {
     /// pipeline. Empty slice is a no-op. Snapshotted at session-open
     /// so mid-session rule edits take effect on the next session.
     pub replacement_rules: Arc<Vec<crate::dictionary::ReplacementRule>>,
+    /// Fired exactly once, by [`run_pump`], the moment every audio
+    /// handle has been explicitly stopped (device released) and the
+    /// tail samples fed into the streaming sessions — and *before* the
+    /// slow tail flush (`finish()` + diarize + persist) begins.
+    /// `stop_manual` awaits this so it can return promptly while the
+    /// pump task keeps finalizing in the background (background
+    /// finalization — see learnings.md 2026-05-26).
+    /// `Option` so `run_pump` can `take()` it (a `oneshot::Sender` is
+    /// not `Clone`); `None` after it has fired or for a pump that was
+    /// spawned without a checkpoint (Drop-on-shutdown path).
+    pub audio_released_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Cross-session speaker identity store (#667). The background
+    /// finalization tail (moved out of `stop_manual`) reads the
+    /// diarizer's session centroids and resolves them against known
+    /// identities through this store. Cloned from the manager.
+    pub speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
+    /// Whether speaker identity resolution is enabled (#667). Shared
+    /// Arc from `RuntimeFlags::speaker_identity_enabled`. Read at the
+    /// end of the pump to gate the centroid → identity resolution.
+    pub speaker_identity_enabled: Arc<AtomicBool>,
 }
 
 /// Per-tick mutable working state for [`run_pump`]. Bundled so the
@@ -322,6 +342,33 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
         .await;
     }
 
+    // Explicit, ack-waited release of every audio handle BEFORE the slow
+    // tail flush (background finalization, see the proposal). `AudioSession::stop()`
+    // round-trips `Cmd::Stop` through the cpal/SCK worker and *returns the
+    // final drained buffer* — so the device singleton is actually free the
+    // moment this returns (not "eventually, when ctx drops"), and no tail
+    // audio is lost across the drain→stop gap. We feed those returned tail
+    // samples into the matching streaming session exactly as `tick_inference`
+    // feeds drained samples (mic-gain → diarizer-buffer append → `feed`) so
+    // the subsequent `finish()` still sees them. Relying on the handle's
+    // `Drop` instead would (a) not wait for the worker to process the Stop,
+    // so a new capture could still hit "recording already in progress", and
+    // (b) discard the returned `CapturedAudio` entirely.
+    release_audio_handles(&mut ctx, &mut state);
+
+    // Audio is released. Tell the frontend so it clears `activeId`
+    // (unblocking dictation/PTT) and shows a "finishing…" indicator while
+    // the background tail processes.
+    crate::meeting::events::emit_meeting_finalizing(ctx.event_emitter.as_ref(), ctx.session_id);
+
+    // Signal the audio-released checkpoint so `stop_manual` can return.
+    // Everything past this point runs in the background; the receiver may
+    // have dropped if `stop_manual` hit its timeout fallback, hence the
+    // ignored send result.
+    if let Some(tx) = ctx.audio_released_tx.take() {
+        let _ = tx.send(());
+    }
+
     // Tail flush: finish each streaming session, merge-sort-label-split, dispatch.
     let mut tail_buckets: Vec<TickBucket> = Vec::new();
     flush_sessions(&mut ctx, &mut state, &mut tail_buckets).await;
@@ -358,7 +405,102 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
             "meeting pump: per-source utterance summary (#533 diagnostic)"
         );
     }
+
+    // Background finalization tail (moved out of `stop_manual`, see the
+    // proposal). Runs *after* the tail flush so all utterances — including
+    // the tail `finish()` finals — are in the DB before identities are
+    // resolved and the row is closed.
+    //
+    // Cross-session speaker identity resolution (#667): reads THIS session's
+    // diarizer cluster centroids and matches them against known identities.
+    // Safe to run here because a new meeting start awaits this finalization
+    // (the manager's single `finalizing` lane), so nothing has `reset()` the
+    // shared diarizer between this pump's start-of-session reset and now.
+    // Snapshot the centroids *before* any future pump resets them.
+    if ctx.speaker_identity_enabled.load(Ordering::Relaxed) {
+        let centroids = ctx.diarize.session_centroids();
+        if !centroids.is_empty() {
+            crate::meeting::lifecycle::resolve_speaker_identities(
+                Arc::clone(&ctx.speaker_store),
+                ctx.session_id,
+                centroids,
+            )
+            .await;
+        }
+    }
+
+    // Close the session row. Behaviour change vs the old foreground close:
+    // a failure here can no longer surface a retry to an already-returned
+    // Stop — it is logged and `reconcile_orphan_sessions` closes the row on
+    // next launch (#249), the same guarantee as a crash.
+    if let Err(e) = ctx.repo.close_session(ctx.session_id).await {
+        tracing::warn!(
+            error = ?e,
+            session_id = ctx.session_id,
+            "meeting finalization: close_session failed; orphan reconcile will close it next launch"
+        );
+    }
+
+    // Emit session-ended so the frontend clears the "finishing…" indicator.
+    // Emitted last so a `meeting_session_get` fired from the frontend's
+    // handler sees `ended_at` already set in the DB.
+    crate::meeting::events::emit_meeting_session_ended(ctx.event_emitter.as_ref(), ctx.session_id);
+
     tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
+}
+
+/// Explicitly stop every audio handle (ack-waited) and feed the returned
+/// tail samples into the matching streaming session — mirroring exactly how
+/// [`tick_inference`] feeds drained samples (mic-gain on the mic source,
+/// diarizer-buffer append for slice alignment, then `feed`). This frees the
+/// cpal/SCK capture singleton *now* and guarantees no tail-loss across the
+/// final-drain→stop gap. Called once, on the cancel path, before the tail
+/// flush. Errors are logged and swallowed — a stop failure on one source
+/// must not block releasing the others or the rest of finalization.
+fn release_audio_handles(ctx: &mut PumpContext, state: &mut PumpTickState) {
+    #[allow(clippy::needless_range_loop)] // parallel index into handles/sources/streaming_sessions
+    for i in 0..ctx.handles.len() {
+        let Some(handle) = ctx.handles[i].take() else {
+            continue;
+        };
+        let captured = match handle.stop() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    source_kind = ctx.sources[i].kind_label(),
+                    session_id = ctx.session_id,
+                    "meeting pump: audio stop on release failed"
+                );
+                continue;
+            }
+        };
+        let mut samples = captured.samples;
+        if samples.is_empty() {
+            continue;
+        }
+        // Mirror tick_inference: apply mic gain only to the microphone
+        // source (system-audio must not be distorted, #865).
+        if matches!(ctx.sources[i], AudioSource::Microphone(_)) {
+            let gain_db = f32::from_bits(ctx.mic_gain_db.load(Ordering::Relaxed));
+            apply_mic_gain(&mut samples, gain_db);
+        }
+        // Mirror the tail samples into the diarizer rolling buffer so the
+        // tail-flush utterance slicing stays aligned (same as tick_inference).
+        state.audio_buffers[i].append(&samples, captured.format);
+        // Feed into the streaming session so `finish()` sees the tail.
+        if let Some(session) = ctx.streaming_sessions[i].as_mut() {
+            if let Err(e) = session.feed(&samples) {
+                tracing::warn!(
+                    error = ?e,
+                    source_kind = ctx.sources[i].kind_label(),
+                    session_id = ctx.session_id,
+                    "meeting pump: feeding released tail samples failed; tail may be short"
+                );
+            }
+        }
+        samples.zeroize(); // (#869/#930) don't leave PCM lingering in heap
+    }
 }
 
 fn tick_drain_sources(
@@ -1384,4 +1526,161 @@ pub(super) fn open_source_handle(
         None => None,
     };
     Ok((handle, streaming_session))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::meeting::test_support::build_tail_pump_context;
+    use std::sync::Arc;
+
+    /// No-tail-loss regression (#947 review Gap 1): the samples returned by
+    /// `AudioSession::stop()` on release MUST be fed into the streaming
+    /// session before `finish()` runs, or the tail of a meeting is lost.
+    ///
+    /// The stock `StubSession::stop()` returns `samples: vec![]`, so the
+    /// `if samples.is_empty() { continue; }` guard short-circuits and the
+    /// tail-feed line never executes under any existing test. This test
+    /// uses `TailReleaseSession` (empty tick drains, NON-empty `stop()`)
+    /// plus a `RecordingFeedSession` that logs every non-empty `feed()`,
+    /// then drives the whole `run_pump` finalization path.
+    ///
+    /// Non-vacuous by construction: the tick-drain path appends nothing
+    /// (drain_into returns no samples), so the ONLY route to `feed()` is
+    /// `release_audio_handles`. If the tail-feed line is removed, `fed_lens`
+    /// stays empty (first assert fails) AND `RecordingFeedSession::finish`
+    /// emits no utterance, so no row is persisted (second assert fails).
+    #[tokio::test]
+    async fn release_feeds_captured_tail_into_streaming_session() {
+        let tail = vec![0.25f32; 4_096];
+        let (ctx, repo, fed_lens) = build_tail_pump_context(tail.clone()).await;
+        let session_id = ctx.session_id;
+
+        // cancel is pre-set inside the context, so run_pump skips the loop
+        // body and goes straight to final-drain → release_audio_handles →
+        // flush_sessions.
+        super::run_pump(ctx).await;
+
+        // 1. The captured tail reached the streaming session's feed().
+        let fed = fed_lens.lock().unwrap().clone();
+        assert!(
+            !fed.is_empty(),
+            "release_audio_handles must feed the captured tail into the streaming session; \
+             fed_lens is empty, so the tail-feed line did not execute"
+        );
+        assert_eq!(
+            fed.iter().sum::<usize>(),
+            tail.len(),
+            "the full captured tail must reach feed() exactly once"
+        );
+
+        // 2. Downstream effect: the tail produced a final utterance that
+        // was persisted (finish() emits one only if it saw a feed).
+        let utts = repo.list_utterances(session_id).await.unwrap();
+        assert_eq!(
+            utts.len(),
+            1,
+            "the tail final must be persisted; got {} utterances",
+            utts.len()
+        );
+        assert_eq!(utts[0].text, "tail words");
+    }
+
+    /// #667 regression — the background finalization must read THIS
+    /// session's real (non-empty) diarizer centroids, not an empty diarizer
+    /// left by a racing rebuild.
+    ///
+    /// Background: the meeting-stop IPC (`stop_meeting_and_rebuild_transcriber`)
+    /// once spawned a diarizer rebuild that swapped a FRESH empty
+    /// `OnnxDiarizer` into the shared `DiarizeSlot` the moment Stop was
+    /// pressed (~80 ms). The pump's `session_centroids()` read runs at the
+    /// END of the background finalization, after the slow tail `finish()`
+    /// (up to 60 s). The rebuild won that race, so the centroid read saw an
+    /// EMPTY diarizer and #667 identity resolution silently no-op'd for every
+    /// backgrounded meeting. The fix removes that rebuild so the slot's
+    /// diarizer stays stable across the stop boundary.
+    ///
+    /// This test wires the pump's diarizer as a `FlagGatedDiarizer` reading
+    /// through a `DiarizeSlot` (the production shape), and runs the full
+    /// `run_pump` finalization. The store records every centroid that reaches
+    /// the resolver.
+    ///
+    /// Non-vacuous by construction: the second half swaps the slot to an
+    /// empty diarizer BEFORE finalization (exactly what the old rebuild did)
+    /// and asserts resolution no-ops — so if a future change reintroduces a
+    /// slot clobber before the centroid read, the first assertion fails.
+    #[tokio::test]
+    async fn background_finalization_resolves_against_real_centroids() {
+        use crate::diarization::{Diarize, DiarizeSlot, FlagGatedDiarizer, NoopDiarizer};
+        use crate::meeting::test_support::{
+            build_tail_pump_context_with_diarize, CentroidDiarizer, RecordingSpeakerStore,
+        };
+        use std::sync::atomic::AtomicBool;
+        use std::sync::RwLock;
+
+        // --- Case 1: slot holds the session's real centroids (the fix) ---
+        let slot: DiarizeSlot = Arc::new(RwLock::new(
+            Arc::new(CentroidDiarizer::with_one_cluster()) as Arc<dyn Diarize>,
+        ));
+        let flag_gated: Arc<dyn Diarize> = Arc::new(FlagGatedDiarizer::new(
+            Arc::new(AtomicBool::new(true)),
+            Arc::clone(&slot),
+            Arc::new(NoopDiarizer),
+        ));
+        let store = RecordingSpeakerStore::new();
+
+        let (ctx, _repo) = build_tail_pump_context_with_diarize(
+            vec![0.25f32; 4_096],
+            flag_gated,
+            Arc::clone(&store) as Arc<dyn crate::speakers::SpeakerStore>,
+            true,
+        )
+        .await;
+
+        super::run_pump(ctx).await;
+
+        let resolved = store.created.lock().unwrap().clone();
+        assert_eq!(
+            resolved.len(),
+            1,
+            "background finalization must resolve the session's one real \
+             centroid cluster; got {resolved:?} (an empty diarizer would yield none)"
+        );
+        assert_eq!(
+            resolved[0], 256,
+            "the resolver must receive the real 256-d centroid, not a stub"
+        );
+
+        // --- Case 2: slot clobbered to empty BEFORE the read (the bug) ---
+        // Reproduces what the old post-stop rebuild did: swap a fresh, empty
+        // diarizer into the shared slot. The pump reads through the slot, so
+        // `session_centroids()` now returns empty and resolution must no-op.
+        // This pins the regression: if the rebuild (or any pre-read swap)
+        // comes back, Case 1 would see this empty result and fail.
+        let slot2: DiarizeSlot = Arc::new(RwLock::new(
+            Arc::new(CentroidDiarizer::with_one_cluster()) as Arc<dyn Diarize>,
+        ));
+        let flag_gated2: Arc<dyn Diarize> = Arc::new(FlagGatedDiarizer::new(
+            Arc::new(AtomicBool::new(true)),
+            Arc::clone(&slot2),
+            Arc::new(NoopDiarizer),
+        ));
+        let store2 = RecordingSpeakerStore::new();
+        let (ctx2, _repo2) = build_tail_pump_context_with_diarize(
+            vec![0.25f32; 4_096],
+            flag_gated2,
+            Arc::clone(&store2) as Arc<dyn crate::speakers::SpeakerStore>,
+            true,
+        )
+        .await;
+        // Clobber the slot to empty, as the racing rebuild used to.
+        *slot2.write().unwrap() = Arc::new(NoopDiarizer);
+
+        super::run_pump(ctx2).await;
+
+        assert!(
+            store2.created.lock().unwrap().is_empty(),
+            "control: an empty diarizer in the slot must yield NO resolution — \
+             this is the failure mode the fix prevents"
+        );
+    }
 }
