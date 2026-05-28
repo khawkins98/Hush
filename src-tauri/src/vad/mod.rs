@@ -10,6 +10,12 @@
 //! start (`new_session`) and feed frames through it as audio arrives. A
 //! `learnings.md` entry will be added when the feature lands.
 
+// `onnx::SileroVad` depends on `tract-onnx`, which is only in the dep
+// graph when the `diarization-onnx` feature is on (it's the existing
+// owner of the tract dep — see `Cargo.toml`). Gating here keeps
+// `cargo clippy --lib --no-default-features` green; production builds
+// always ship with `diarization-onnx` enabled.
+#[cfg(feature = "diarization-onnx")]
 pub mod onnx;
 
 use anyhow::Result;
