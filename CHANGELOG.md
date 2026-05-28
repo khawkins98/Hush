@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-28
+
+v0.11.0 fixes the meeting-stop hang: pressing **Stop** on a meeting now releases the microphone and returns in well under a second, with whisper tail flush, diarization, speaker identity, and persistence running in the background. Push-to-talk dictation works the moment a meeting's audio is released, even while the tail is still committing; the meeting panel shows a quiet "Finishing transcription…" indicator during the background pass. Internally this re-shapes the meeting pump's cancel path around the existing ack-waited `AudioSession::stop()` (returning the drained tail to avoid loss), narrows the old `Stopping` state to a brief `Releasing` window, and parks the long work in a single-lane `finalizing` slot. Concurrent meetings are explicitly deferred — `learnings.md` 2026-05-26 carries the resume guide.
+
+### Added
+
+- **Meeting: background finalization on Stop.** The Stop button resolves sub-second by releasing the audio device immediately and running whisper tail `finish()` + tail diarization + speaker-identity (#667) + DB close in the background. Resolves the "Stop hangs for up to ~60s per source while the mic stays held" symptom on long calls and under whisper memory pressure (#612). A new `meeting:finalizing` event drives a subtle "Finishing transcription…" indicator on the meeting panel. (#975)
+
+### Changed
+
+- **Push-to-talk dictation works during meeting finalization.** A new dictation can start the moment audio is released, even while the meeting's tail is still committing (separate transcribe slot, #248, and no diarizer — inherently safe). A new meeting waits for any in-flight finalization (single lane; concurrent meetings deferred — see [`learnings.md`](./learnings.md) 2026-05-26). (#975)
+- **Backend: ack-waited `AudioSession::stop()` on the pump's cancel path.** The pump no longer relies on the fire-and-forget `Drop` to free the cpal/SCK singleton — Drop could leave the device held just long enough to reject a follow-up start and could lose the trailing tail audio. The explicit stop round-trips `Cmd::Stop` and feeds the returned tail samples into the streaming session before `finish()`. (#975)
+- **Removed the redundant post-stop diarizer rebuild.** The pump's `reset()`-at-start plus the new await-finalization gate already guarantee clean cluster state for the next meeting; the rebuild was racing the background centroid read used for #667 speaker-identity resolution. (#975)
+
+### Fixed
+
+- **Record-button dictation flow: clipboard includes the trailing utterance.** The synchronous clipboard hydration after Stop could miss the last sentence in the tail once finalization went async; the flow now polls for the session's `endedAt` before copying the transcript, so the clipboard and result block always include the trailing utterances. (#975)
+
 ## [0.10.0] - 2026-05-26
 
 v0.10.0 re-keys the entire UI to the maintainer's allaboutken.com brand — a light theme (cream canvas, brand orange accent, purple links) in the Recursive typeface, replacing v0.9.0's short-lived dark navy. The app icon is now the real "H" mark, vector-traced from the logo. Under the hood, `npm run dev` became a backend-free browser playground for fast UI work, and the README + changelog got a tidy.
