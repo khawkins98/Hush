@@ -69,6 +69,18 @@ The four steps above are the resume guide; weigh the memory profile — each con
 
 ---
 
+## 2026-05-28 — Homebrew tap retired (and the cross-repo-auth lesson it taught us)
+
+The v0.11.0 release exposed the failure mode `docs/releases.md` "What can go wrong" had anticipated: the "Update Homebrew tap" step in `release.yml` pushed to `khawkins98/homebrew-tap` using `secrets.GITHUB_TOKEN` and got a `403 Permission denied` for `github-actions[bot]`. The default Actions token only has write access to the repo the workflow lives in — cross-repo pushes require a dedicated PAT stored as a repo secret. v0.10.0 also never reached the tap, for an unrelated builder issue, so the tap had been stuck at v0.9.0 for two consecutive releases without anyone noticing.
+
+We considered fixing it (switch the env source to `secrets.TAP_GITHUB_TOKEN`, provision a fine-grained PAT with `Contents: write` on the tap repo). But the deeper question — *why do we run a Homebrew tap at all?* — landed on: not worth it for a hobby project with no user base. Two consecutive releases hadn't reached the tap and nobody complained, which is the strongest evidence we needed. The DMG/installer paths from GitHub Releases cover every platform we support, with the same one-time Gatekeeper bypass the brew install would have required anyway (Homebrew 5.1.0 removed `--no-quarantine`, so the brew "advantage" was the update path, not bypass).
+
+**Decision (this PR):** the tap step is removed from `release.yml`; README / `docs/releases.md` / `docs/getting-started.md` / `docs/dmg-readme.txt` / the release-body template now describe DMG-first install on every platform; the `khawkins98/homebrew-tap` repo is deleted. The earlier 2026-05-16 "Homebrew tap as primary install path" decision is **superseded** by this one — leaving the older entry intact as the historical record.
+
+**Cross-repo-auth lesson worth keeping** (general, not brew-specific): GitHub Actions' default `secrets.GITHUB_TOKEN` is scoped to the workflow's owner repo only. Any cross-repo write (pushing to a homebrew-tap, syncing a docs site, mirroring releases, updating a status page) requires a separate PAT (fine-grained tokens with the narrowest possible scope, stored as a repo secret) and an explicit env-var swap in the step. If you find yourself reaching for a cross-repo write in a workflow, build it with the PAT pattern from day one — the silent 403 is easy to miss until the first real run.
+
+---
+
 ## 2026-05-16 — Homebrew tap + Gatekeeper workaround as primary install path
 
 ### Background: two layers of Gatekeeper protection
