@@ -99,11 +99,19 @@ npm run test:e2e:tauri
 npm run dev-cleanup
 
 # Full vanilla reset — kills processes AND wipes TCC grants, settings,
-# dictionary, preferences, and caches. Transcription/meeting history preserved
-# by default. Use before testing onboarding or new-user flows.
+# dictionary, preferences, caches, autostart, and app installs.
+# Transcription/meeting history preserved by default. Use before testing
+# onboarding or new-user flows.
 # Pass --nuke-db to also wipe history; --nuke-models to remove downloaded models;
 # --user <name> for another account.
 npm run dev-reset
+
+# TCC-focused reset — only clears the things that affect macOS permission
+# testing: kills processes, resets TCC grants, removes app installs. Preserves
+# Hush app state (settings, dictionary, replacements, prefs, caches, autostart,
+# history, models). Use when re-testing the permission flow without losing
+# your real working state.
+npm run dev-reset:keep
 
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
