@@ -99,15 +99,3 @@ warning go away for everyone), GitHub Sponsors is at:
 
 
 ──────────────────────────────────────────────────────────────────────────
-PREFER HOMEBREW FOR FUTURE UPDATES?
-──────────────────────────────────────────────────────────────────────────
-
-If you have Homebrew, you can switch to the tap for easier updates:
-
-    brew install --cask khawkins98/tap/hush
-
-Then future updates are just:  brew upgrade --cask hush
-
-You still need to do the Gatekeeper bypass above on first launch.
-
-──────────────────────────────────────────────────────────────────────────

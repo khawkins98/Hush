@@ -8,22 +8,14 @@ End-to-end walkthrough: install → first recording → meeting capture.
 
 Hush is not signed with an Apple Developer ID, so macOS will show a security warning on first launch regardless of how you install. The bypass is a one-time step covered in [section 1b](#1b-bypass-the-gatekeeper-warning-macos-one-time) below.
 
-### Option A — Homebrew (macOS, recommended for easy updates)
-
-```bash
-brew install --cask khawkins98/tap/hush
-```
-
-Future updates: `brew upgrade --cask hush`. Skip to [section 1b](#1b-bypass-the-gatekeeper-warning-macos-one-time).
-
-### Option B — Download the DMG (macOS, no Homebrew needed)
+### macOS — DMG
 
 1. Go to [github.com/khawkins98/Hush/releases](https://github.com/khawkins98/Hush/releases) and download the latest `.dmg`.
 2. Open the DMG and drag **Hush.app** into your Applications folder.
 
 The DMG also includes a **Read Me First.txt** with offline instructions.
 
-### Option C — Linux / Windows
+### Linux / Windows
 
 Download the `.AppImage` / `.deb` (Linux) or `.msi` (Windows) from [Releases](https://github.com/khawkins98/Hush/releases).
 
@@ -34,7 +26,7 @@ Download the `.AppImage` / `.deb` (Linux) or `.msi` (Windows) from [Releases](ht
 
 ## 1b. Bypass the Gatekeeper warning (macOS, one-time)
 
-macOS blocks unsigned apps on first launch. This applies whether you used Homebrew or the DMG. You only need to do this once — all future launches are silent.
+macOS blocks unsigned apps on first launch. You only need to do this once — all future launches are silent.
 
 **Method 1 — right-click (quickest):**
 

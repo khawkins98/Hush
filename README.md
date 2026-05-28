@@ -74,13 +74,7 @@ That's the posture that matters if you handle audio you can't upload — therapy
 
 Hush isn't signed with an Apple Developer ID — the $99/year certificate isn't worth it for a solo hobby project — so macOS (and Windows) show a security warning on first launch. Clearing it is a one-time, ~30-second step.
 
-**macOS — Homebrew (recommended):**
-
-```bash
-brew install --cask khawkins98/tap/hush
-```
-
-Updates: `brew upgrade --cask hush`. Or download the `.dmg` from [Releases](https://github.com/khawkins98/Hush/releases) and drag Hush.app to Applications.
+**macOS:** Download the `.dmg` from [Releases](https://github.com/khawkins98/Hush/releases), open it, drag **Hush.app** to Applications. First launch shows a Gatekeeper warning — right-click → **Open** clears it once.
 
 **Linux / Windows:** [Releases](https://github.com/khawkins98/Hush/releases) → latest `v*` tag (`.AppImage` / `.deb`, or `.msi` / `.exe`). CI-built, not hands-on tested.
 
