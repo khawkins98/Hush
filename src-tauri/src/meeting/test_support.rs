@@ -236,6 +236,7 @@ impl Transcribe for NoopStreamTranscribe {
         &self,
         _format: CaptureFormat,
         _prompt: &str,
+        _vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
         Ok(Box::new(NoopStreamingSession))
     }
@@ -347,6 +348,7 @@ impl Transcribe for SlowFinishTranscribe {
         &self,
         _format: CaptureFormat,
         _prompt: &str,
+        _vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
         Ok(Box::new(SlowFinishStreamingSession {
             release: Arc::clone(&self.release),

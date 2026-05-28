@@ -322,7 +322,13 @@ impl SessionManager {
                     continue;
                 }
             };
-            match transcriber.start_stream(format, &dict_opts.vocab_prompt) {
+            // TODO(#974): swap NoopVadSession for the real per-session VAD
+            // minted from AppState once Task 4 lands.
+            match transcriber.start_stream(
+                format,
+                &dict_opts.vocab_prompt,
+                Box::new(crate::vad::NoopVadSession),
+            ) {
                 Ok(mut sess) => {
                     // Replay pre-warm audio into the streaming session before
                     // zeroizing the buffer (#868). Without this, audio captured

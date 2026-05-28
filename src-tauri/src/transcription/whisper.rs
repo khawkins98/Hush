@@ -95,6 +95,16 @@ pub const MAX_INFERENCE_THREADS: i32 = 16;
 /// helper below) so we can A/B without rebuilding.
 pub const DEFAULT_STATE_RECREATE_INTERVAL: u64 = 30;
 
+/// VAD speech-probability threshold (#974). Frames at or above this score
+/// count as "speech" and update `last_speech_at`. Tunable at runtime via
+/// `HUSH_VAD_THRESHOLD`.
+const DEFAULT_VAD_THRESHOLD: f32 = 0.5;
+
+/// Hangover after the last detected speech frame before `drain()` starts
+/// skipping inference (#974). Catches the "I…" hesitation pattern; tunable
+/// via `HUSH_VAD_HANGOVER_MS`.
+const DEFAULT_VAD_HANGOVER_MS: u64 = 1500;
+
 /// Resolves [`DEFAULT_STATE_RECREATE_INTERVAL`] against an env-var
 /// override read at process start. Returns 0 to mean "never recreate"
 /// (legacy pre-#612-followup behavior — keep available for A/B tests
@@ -104,6 +114,39 @@ fn state_recreate_interval() -> u64 {
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(DEFAULT_STATE_RECREATE_INTERVAL)
+}
+
+/// Read VAD configuration from env vars at session construction (#974).
+/// Matches the `HUSH_DIARIZER_THRESHOLD` convention so operators can A/B
+/// the gate without a rebuild.
+///
+///   * `HUSH_VAD_THRESHOLD` → probability threshold (default 0.5,
+///     clamped to `[0.0, 1.0]`).
+///   * `HUSH_VAD_HANGOVER_MS` → ms after the last speech-positive frame
+///     before `drain` starts gating inference (default 1500).
+///   * `HUSH_VAD_DISABLE=1` → force the gate off entirely. `feed` skips
+///     VAD work and `drain` is never gated. Useful for the "is the gate
+///     responsible for this miss?" debugging path.
+///
+/// Returned as a tuple captured once into the session at construction so
+/// a mid-meeting env-var change cannot perturb gate behavior partway
+/// through (matches the `state_recreate_interval` pattern above).
+fn vad_config_from_env() -> (f32, std::time::Duration, bool) {
+    let threshold = std::env::var("HUSH_VAD_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(DEFAULT_VAD_THRESHOLD)
+        .clamp(0.0, 1.0);
+    let hangover_ms = std::env::var("HUSH_VAD_HANGOVER_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_VAD_HANGOVER_MS);
+    let disabled = matches!(std::env::var("HUSH_VAD_DISABLE").as_deref(), Ok("1"));
+    (
+        threshold,
+        std::time::Duration::from_millis(hangover_ms),
+        disabled,
+    )
 }
 
 /// `whisper-rs` backed implementation of [`Transcribe`].
@@ -455,6 +498,7 @@ impl Transcribe for WhisperTranscription {
         &self,
         format: CaptureFormat,
         prompt: &str,
+        vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
         // All meeting streaming sessions share this one Arc<Mutex<WhisperContext>>.
         // `infer` and `finish` hold the lock across the entire inference with no early
@@ -471,6 +515,7 @@ impl Transcribe for WhisperTranscription {
             prompt.to_owned(),
             SlidingWindowConfig::meeting_defaults(),
             Arc::clone(&self.inference_threads),
+            vad_session,
         );
         Ok(Box::new(session))
     }
@@ -494,7 +539,14 @@ impl Transcribe for WhisperTranscription {
 /// over the full ~30 s window). The pump runs `drain` on the
 /// blocking pool via `tokio::task::spawn_blocking`.
 pub struct WhisperStreamingSession {
-    ctx: Arc<Mutex<WhisperContext>>,
+    /// Loaded whisper.cpp context. `Some` in production (every
+    /// real `start_stream` call clones the parent's `Arc`); `None`
+    /// only on the `#[cfg(test)]` `new_for_test` path so the
+    /// VAD-gate tests can construct a session without loading a real
+    /// GGUF model. The `drain_with_inferer` test helper bypasses
+    /// `ctx` entirely so this branching never reaches production code
+    /// paths.
+    ctx: Option<Arc<Mutex<WhisperContext>>>,
     /// Capture format the pump is feeding samples in. `feed`
     /// downmixes and resamples to 16 kHz mono before pushing into
     /// the policy machine.
@@ -541,6 +593,39 @@ pub struct WhisperStreamingSession {
     /// can't change behaviour partway through. 0 means "never
     /// recreate" — used for A/B against a recurrence of the leak.
     state_recreate_interval: u64,
+    // ---- VAD gate state (#974) -------------------------------------
+    /// Per-stream VAD session. `feed()` drains accumulated audio in
+    /// [`crate::vad::FRAME_LEN_SAMPLES`]-sized chunks through this and
+    /// updates [`Self::last_speech_at`] whenever a frame's speech
+    /// probability crosses [`Self::vad_threshold`].
+    vad_session: Box<dyn crate::vad::VadSession>,
+    /// Partial-frame buffer carried between `feed()` calls. Lifetime is
+    /// the session — `finish` consumes `Box<Self>` so no explicit flush
+    /// is needed; a future re-use across a logical stream boundary would
+    /// need an explicit clear.
+    vad_residual: Vec<f32>,
+    /// Wall-clock instant of the most recent VAD-positive frame. `None`
+    /// until the first speech-positive frame. `should_gate()` reads it
+    /// through the hangover predicate. **Note:** when `vad_disabled` is
+    /// `true` this field is forced to `Some(Instant::now())` on every
+    /// `feed`, so a direct read is meaningless — always check
+    /// `vad_disabled` first.
+    last_speech_at: Option<std::time::Instant>,
+    /// Cached env-var configuration; read once at construction. Holds
+    /// the threshold + hangover so a mid-meeting env-var change
+    /// can't perturb gate behavior partway through (mirrors
+    /// `state_recreate_interval`'s freeze-at-construction rule).
+    vad_threshold: f32,
+    vad_hangover: std::time::Duration,
+    /// `HUSH_VAD_DISABLE=1` short-circuits the gate: `feed()` skips
+    /// VAD work and `drain()` always treats the session as speech-
+    /// present. Behaviour matches the pre-#974 ungated path so we can
+    /// A/B against it without rebuilding.
+    vad_disabled: bool,
+    /// Set once `vad_session.score_frame` returns an error in this session.
+    /// Prevents the WARN log from firing on every 32ms frame if the VAD
+    /// is consistently failing — first error tells us everything.
+    vad_error_logged: bool,
 }
 
 impl WhisperStreamingSession {
@@ -550,9 +635,11 @@ impl WhisperStreamingSession {
         prompt: String,
         config: SlidingWindowConfig,
         inference_threads: Arc<std::sync::atomic::AtomicI32>,
+        vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Self {
+        let (vad_threshold, vad_hangover, vad_disabled) = vad_config_from_env();
         Self {
-            ctx,
+            ctx: Some(ctx),
             capture_format,
             prompt,
             state: SlidingWindowState::new(WHISPER_SAMPLE_RATE, config),
@@ -560,7 +647,139 @@ impl WhisperStreamingSession {
             whisper_state: None,
             inferences_on_current_state: 0,
             state_recreate_interval: state_recreate_interval(),
+            vad_session,
+            vad_residual: Vec::with_capacity(crate::vad::FRAME_LEN_SAMPLES),
+            last_speech_at: None,
+            vad_threshold,
+            vad_hangover,
+            vad_disabled,
+            vad_error_logged: false,
         }
+    }
+
+    /// Test-only constructor: build a session without a real
+    /// `WhisperContext`. The VAD-gate tests in this module need to
+    /// exercise `feed`'s framing logic and `drain`'s gate decision
+    /// without loading a real GGUF model — `ctx = None` plus the
+    /// `drain_with_inferer` helper below let them do that. Production
+    /// callers always go through [`Self::new`].
+    #[cfg(test)]
+    pub(super) fn new_for_test(
+        capture_format: CaptureFormat,
+        config: SlidingWindowConfig,
+        vad_session: Box<dyn crate::vad::VadSession>,
+    ) -> Self {
+        let (vad_threshold, vad_hangover, vad_disabled) = vad_config_from_env();
+        Self {
+            ctx: None,
+            capture_format,
+            prompt: String::new(),
+            state: SlidingWindowState::new(WHISPER_SAMPLE_RATE, config),
+            inference_threads: Arc::new(std::sync::atomic::AtomicI32::new(
+                DEFAULT_INFERENCE_THREADS,
+            )),
+            whisper_state: None,
+            inferences_on_current_state: 0,
+            state_recreate_interval: 0,
+            vad_session,
+            vad_residual: Vec::with_capacity(crate::vad::FRAME_LEN_SAMPLES),
+            last_speech_at: None,
+            vad_threshold,
+            vad_hangover,
+            vad_disabled,
+            vad_error_logged: false,
+        }
+    }
+
+    /// Test-only setter for the speech-presence clock — lets the
+    /// VAD-gate tests place the last speech instant at any offset
+    /// without actually feeding speech-positive frames + sleeping.
+    #[cfg(test)]
+    pub(super) fn set_last_speech_at_for_test(&mut self, when: Option<std::time::Instant>) {
+        self.last_speech_at = when;
+    }
+
+    /// Test-only accessor for the hangover window. Tests place
+    /// `last_speech_at` relative to this value to land on either side
+    /// of the gate.
+    #[cfg(test)]
+    pub(super) fn vad_hangover_for_test(&self) -> std::time::Duration {
+        self.vad_hangover
+    }
+
+    /// Whether `drain` should skip inference: `true` iff the VAD gate
+    /// is enabled AND no recent speech is within the hangover window.
+    /// Pulled out so production `drain` and the test-only
+    /// `drain_with_inferer` share the same gate decision verbatim.
+    fn should_gate(&self) -> bool {
+        if self.vad_disabled {
+            return false;
+        }
+        match self.last_speech_at {
+            None => true,
+            Some(when) => when.elapsed() > self.vad_hangover,
+        }
+    }
+
+    /// Drain accumulated audio through the VAD in
+    /// [`crate::vad::FRAME_LEN_SAMPLES`]-sized frames; update
+    /// `last_speech_at` when any frame's probability crosses
+    /// [`Self::vad_threshold`]. Carry partial frames in `vad_residual`
+    /// for the next call.
+    ///
+    /// VAD errors are logged at WARN and treated as "speech" — same
+    /// graceful-degrade philosophy as `NoopVad`: a broken gate must
+    /// never silently swallow real audio.
+    fn drain_vad(&mut self, samples: &[f32]) {
+        if self.vad_disabled {
+            // Disabled gate: pretend every feed contains speech so
+            // `drain` never gates. Skip the framing + ONNX work
+            // entirely (the whole point of the disable knob).
+            self.last_speech_at = Some(std::time::Instant::now());
+            return;
+        }
+        let frame_len = crate::vad::FRAME_LEN_SAMPLES;
+        self.vad_residual.extend_from_slice(samples);
+        let mut offset = 0usize;
+        while self.vad_residual.len() - offset >= frame_len {
+            let frame = &self.vad_residual[offset..offset + frame_len];
+            match self.vad_session.score_frame(frame) {
+                Ok(prob) if prob >= self.vad_threshold => {
+                    self.last_speech_at = Some(std::time::Instant::now());
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    if !self.vad_error_logged {
+                        tracing::warn!(
+                            error = ?e,
+                            "VAD frame scoring failed; falling back to ungated \
+                             (further errors in this session will be suppressed)"
+                        );
+                        self.vad_error_logged = true;
+                    }
+                    self.last_speech_at = Some(std::time::Instant::now());
+                }
+            }
+            offset += frame_len;
+        }
+        self.vad_residual.drain(..offset);
+    }
+
+    /// Test-only drain that runs the gate against an arbitrary
+    /// inferer. Lets the VAD-gate tests assert "inferer was / was not
+    /// invoked" without constructing a real `WhisperContext`. The
+    /// production [`StreamingTranscribeSession::drain`] runs the same
+    /// gate check then dispatches against a real `WhisperInferer`
+    /// built from `self.ctx`.
+    #[cfg(test)]
+    pub(super) fn drain_with_inferer(
+        &mut self,
+        inferer: &mut dyn WhisperLikeInferer,
+    ) -> Result<Vec<Utterance>> {
+        if self.should_gate() {
+            return Ok(Vec::new());
+        }
+        self.state.tick(inferer)
     }
 
     /// Convert one chunk of capture-format samples to mono 16 kHz
@@ -586,14 +805,33 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
     fn feed(&mut self, captured: &[f32]) -> Result<()> {
         let mono_16k = self.convert_chunk(captured)?;
         if !mono_16k.is_empty() {
+            // Drive the VAD against the mono-16kHz sample stream — the
+            // same rate Silero expects, and the rate the policy machine
+            // sees. Doing this BEFORE the policy push keeps the window
+            // and the VAD's view perfectly aligned regardless of how
+            // the capture pump chunks samples (#974).
+            self.drain_vad(&mono_16k);
             self.state.feed_mono(&mono_16k);
         }
         Ok(())
     }
 
     fn drain(&mut self) -> Result<Vec<Utterance>> {
+        // VAD gate (#974): skip inference entirely when no recent
+        // speech is within the hangover window. Whisper.cpp is the
+        // expensive bit; skipping it on silence is the load-bearing
+        // win — preventing hallucinations on non-speech windows like
+        // a Zoom hold beep or a typing sound.
+        if self.should_gate() {
+            return Ok(Vec::new());
+        }
+        let ctx = self
+            .ctx
+            .as_ref()
+            .expect("WhisperStreamingSession::drain called without a loaded ctx (production paths always supply Some)")
+            .clone();
         let mut inferer = WhisperInferer {
-            ctx: Arc::clone(&self.ctx),
+            ctx,
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
             whisper_state: &mut self.whisper_state,
@@ -604,8 +842,13 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
     }
 
     fn finish(mut self: Box<Self>) -> Result<Vec<Utterance>> {
+        let ctx = self
+            .ctx
+            .as_ref()
+            .expect("WhisperStreamingSession::finish called without a loaded ctx (production paths always supply Some)")
+            .clone();
         let mut inferer = WhisperInferer {
-            ctx: Arc::clone(&self.ctx),
+            ctx,
             prompt: &self.prompt,
             inference_threads: Arc::clone(&self.inference_threads),
             whisper_state: &mut self.whisper_state,
@@ -959,6 +1202,239 @@ mod tests {
             },
             None => unsafe { std::env::remove_var("HUSH_WHISPER_STATE_RECREATE_INTERVAL") },
         }
+    }
+
+    // -- VAD gate (#974) -----------------------------------------------
+    //
+    // The gate sits inside `WhisperStreamingSession::drain`. Exercising
+    // it without a real GGUF model relies on two test-only seams:
+    //   * `WhisperStreamingSession::new_for_test` builds a session with
+    //     `ctx = None` so `drain_with_inferer` can run the gate decision
+    //     without ever touching whisper.cpp.
+    //   * `set_last_speech_at_for_test` directly places the speech clock
+    //     wherever the test wants it, so we don't need to feed real
+    //     speech-positive frames + sleep.
+    //
+    // The four tests below pin the load-bearing properties: gate-on
+    // when silent past hangover; gate-off when speech is present;
+    // gate-off when silence is inside the hangover; and the framing
+    // contract (residual carry-over + exactly one VAD call per full
+    // frame).
+
+    use crate::vad::VadSession;
+
+    /// VAD that always reports speech — every frame's probability is
+    /// 1.0, so `drain` should never gate.
+    struct AlwaysSpeechVad;
+    impl VadSession for AlwaysSpeechVad {
+        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
+            Ok(1.0)
+        }
+    }
+
+    /// VAD that always reports silence — every frame's probability is
+    /// 0.0, so once the hangover elapses `drain` must gate.
+    struct AlwaysSilenceVad;
+    impl VadSession for AlwaysSilenceVad {
+        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
+            Ok(0.0)
+        }
+    }
+
+    /// VAD whose probabilities follow a scripted sequence, defaulting
+    /// to 0.0 when the queue is exhausted. Counts every call so the
+    /// framing test can assert "exactly one call per full frame".
+    /// Uses an `Arc<AtomicUsize>` rather than `Rc<RefCell<usize>>`
+    /// because `VadSession: Send` requires the impl be thread-safe.
+    struct ScriptedVad {
+        probs: std::collections::VecDeque<f32>,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl VadSession for ScriptedVad {
+        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(self.probs.pop_front().unwrap_or(0.0))
+        }
+    }
+
+    /// Counts how many times `infer` was called so the gate tests can
+    /// assert "inference ran" vs "inference skipped" without depending
+    /// on the segment payload.
+    struct CountingInferer {
+        calls: usize,
+        segments_per_call: Vec<StreamSegment>,
+    }
+    impl WhisperLikeInferer for CountingInferer {
+        fn infer(&mut self, _mono_16k_pcm: &[f32]) -> Result<Vec<StreamSegment>> {
+            self.calls += 1;
+            Ok(self.segments_per_call.clone())
+        }
+    }
+
+    fn meeting_capture_format() -> CaptureFormat {
+        // 16 kHz mono — matches the policy's internal rate so `feed`
+        // does no resampling. Lets the test's sample count map 1:1 to
+        // milliseconds and to VAD frames.
+        CaptureFormat {
+            sample_rate: WHISPER_SAMPLE_RATE,
+            channels: 1,
+        }
+    }
+
+    /// Build a streaming-policy config that lets `tick` infer over a
+    /// short window. Mirrors `streaming::tests::config_for_test`'s
+    /// shape so the gate tests don't fight the policy's min-window /
+    /// commit-tail thresholds.
+    fn vad_gate_streaming_config() -> SlidingWindowConfig {
+        // 500 ms min-first + 1 s infer interval + 2 s commit-tail is
+        // sufficient for the gate tests; they feed 1 s of audio.
+        SlidingWindowConfig {
+            window_max_ms: 6_000,
+            infer_interval_ms: 1_000,
+            commit_tail_ms: 2_000,
+            min_first_inference_ms: 500,
+        }
+    }
+
+    fn one_second_of_speech() -> Vec<f32> {
+        vec![0.1_f32; 16_000]
+    }
+
+    #[test]
+    fn vad_all_speech_does_not_gate_inference() {
+        // With every VAD frame reporting speech, `feed` updates the
+        // speech clock on every call; `drain` finds the clock fresh
+        // and dispatches to the inferer. Pins the must-not-gate path
+        // so a future refactor that flips the default direction is
+        // caught immediately.
+        let mut session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            vad_gate_streaming_config(),
+            Box::new(AlwaysSpeechVad),
+        );
+        session.feed(&one_second_of_speech()).unwrap();
+        let mut inferer = CountingInferer {
+            calls: 0,
+            segments_per_call: vec![StreamSegment {
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "hello".into(),
+            }],
+        };
+        let _ = session.drain_with_inferer(&mut inferer).unwrap();
+        assert!(
+            inferer.calls >= 1,
+            "AlwaysSpeechVad must not gate inference; calls = {}",
+            inferer.calls
+        );
+    }
+
+    #[test]
+    fn vad_all_silence_after_hangover_skips_inference() {
+        // Place the speech clock well past the hangover. `drain` must
+        // short-circuit before the inferer is touched. Pins the
+        // load-bearing win of the gate — the whole point of #974.
+        let mut session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            vad_gate_streaming_config(),
+            Box::new(AlwaysSilenceVad),
+        );
+        session.feed(&one_second_of_speech()).unwrap();
+        let past = std::time::Instant::now()
+            .checked_sub(2 * session.vad_hangover_for_test())
+            .expect("Instant arithmetic doesn't underflow on any sane system");
+        session.set_last_speech_at_for_test(Some(past));
+
+        let mut inferer = CountingInferer {
+            calls: 0,
+            segments_per_call: vec![],
+        };
+        let out = session.drain_with_inferer(&mut inferer).unwrap();
+        assert!(out.is_empty(), "gated drain must return no utterances");
+        assert_eq!(
+            inferer.calls, 0,
+            "inferer must not be invoked when the gate fires"
+        );
+    }
+
+    #[test]
+    fn vad_speech_then_silence_inside_hangover_still_infers() {
+        // Speech clock is recent but not stale; `drain` is inside the
+        // hangover window and must still dispatch. Pins the "don't
+        // chop off the trailing audio after the last speech ends"
+        // property — the hangover exists to let whisper run on the
+        // final utterance's tail before silence settles in.
+        let mut session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            vad_gate_streaming_config(),
+            Box::new(AlwaysSilenceVad),
+        );
+        session.feed(&one_second_of_speech()).unwrap();
+        let inside = std::time::Instant::now()
+            .checked_sub(
+                session
+                    .vad_hangover_for_test()
+                    .saturating_sub(std::time::Duration::from_millis(500)),
+            )
+            .expect("inside-hangover Instant arithmetic is well-defined");
+        session.set_last_speech_at_for_test(Some(inside));
+
+        let mut inferer = CountingInferer {
+            calls: 0,
+            segments_per_call: vec![StreamSegment {
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "hello".into(),
+            }],
+        };
+        let _ = session.drain_with_inferer(&mut inferer).unwrap();
+        assert!(
+            inferer.calls >= 1,
+            "drain inside the hangover must still infer; calls = {}",
+            inferer.calls
+        );
+    }
+
+    #[test]
+    fn vad_feed_chunks_in_frame_len_groups_and_handles_residual() {
+        // Feed a non-multiple of FRAME_LEN_SAMPLES in two calls; the
+        // VAD should be invoked exactly once per *complete* frame and
+        // the leftover samples should carry over to the next feed.
+        // Pins the framing contract — Silero requires exact 512-sample
+        // frames at 16 kHz and any drift between feed chunks and frame
+        // boundaries would silently corrupt its hidden state in Task 3.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scripted = ScriptedVad {
+            probs: std::collections::VecDeque::new(),
+            calls: std::sync::Arc::clone(&calls),
+        };
+        let mut session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            vad_gate_streaming_config(),
+            Box::new(scripted),
+        );
+
+        let frame_len = crate::vad::FRAME_LEN_SAMPLES;
+        // 1.5 frames in the first feed — one full frame consumed, half
+        // a frame carried as residual.
+        let first = vec![0.0_f32; frame_len + frame_len / 2];
+        session.feed(&first).unwrap();
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "first feed: only one full frame should have been scored"
+        );
+
+        // 0.5 frame in the second feed — combines with the residual to
+        // form exactly one more full frame.
+        let second = vec![0.0_f32; frame_len / 2];
+        session.feed(&second).unwrap();
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "second feed: residual + new samples should yield one more frame"
+        );
     }
 
     /// Smoke test that requires a real GGUF model. Ignored by default; run
