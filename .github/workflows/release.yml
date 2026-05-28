@@ -266,7 +266,14 @@ jobs:
         if: matrix.platform == 'macos-latest' && github.event_name == 'push'
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Sourced from secrets.TAP_GITHUB_TOKEN (a PAT with Contents:write on
+          # khawkins98/homebrew-tap), NOT the default secrets.GITHUB_TOKEN —
+          # the default token only has write access to the repo that owns the
+          # workflow, so a push to a different repo (the tap) gets a 403. See
+          # docs/releases.md "What can go wrong" and learnings.md 2026-05-28
+          # for the v0.11.0 incident this fixes. If the secret is missing the
+          # git push fails loudly (empty token) rather than silently regressing.
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"   # strip leading 'v'

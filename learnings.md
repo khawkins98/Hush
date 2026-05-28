@@ -69,6 +69,18 @@ The four steps above are the resume guide; weigh the memory profile — each con
 
 ---
 
+## 2026-05-28 — Release pipeline: Homebrew tap push needs a PAT, not the default `GITHUB_TOKEN`
+
+The v0.11.0 release confirmed the failure mode `docs/releases.md` "What can go wrong" anticipated: the "Update Homebrew tap" step in `release.yml` pushed to `khawkins98/homebrew-tap` using `secrets.GITHUB_TOKEN` and got a `403 Permission denied` for `github-actions[bot]`. The default Actions token only has write access to the **same repo** the workflow lives in — cross-repo pushes require a dedicated PAT. The previous release (v0.10.0) had a separate, unrelated builder issue that also kept the tap from updating, so the tap had been stuck at v0.9.0 for two releases.
+
+**Recovery for v0.11.0** (manual, following the doc's "Homebrew tap" recipe): `gh release download v0.11.0 -p '*aarch64.dmg'` → `shasum -a 256` → clone `khawkins98/homebrew-tap` → `sed` the `version` and `sha256` lines in `Casks/hush.rb` → commit + push. The local user had push rights to the tap repo, so the recovery push succeeded.
+
+**Fix for the next release** (this branch): `release.yml` now sources the env var from `secrets.TAP_GITHUB_TOKEN` instead of the default `secrets.GITHUB_TOKEN`. The remaining one-time setup is on the maintainer: create a fine-grained PAT with `Contents: write` on `khawkins98/homebrew-tap`, add it as a repo secret named `TAP_GITHUB_TOKEN` on `khawkins98/Hush`. With the secret missing, the patched step now fails loudly with an empty-token error rather than silently regressing to the broken-permission path.
+
+The build itself (DMG/AppImage/deb/rpm/MSI/exe + macOS app tarball) was clean; only the post-upload tap step failed. Artefacts were already attached to the draft release, so publishing required only the narrative-prepend + `gh release edit --draft=false` from the doc's step 5.
+
+---
+
 ## 2026-05-16 — Homebrew tap + Gatekeeper workaround as primary install path
 
 ### Background: two layers of Gatekeeper protection
