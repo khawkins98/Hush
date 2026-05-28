@@ -1,6 +1,6 @@
 # VAD gate to stop Whisper hallucinations on silence — design proposal
 
-**Status:** Draft (in implementation) · **Date:** 2026-05-28 · **Author:** Ken + Claude · **Issue:** #974
+**Status:** Accepted (implemented) · **Date:** 2026-05-28 · **Author:** Ken + Claude · **Issue:** #974
 
 ## Problem
 
