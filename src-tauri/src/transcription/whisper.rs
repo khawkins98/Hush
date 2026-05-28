@@ -377,6 +377,15 @@ impl WhisperTranscription {
         // For M1 we always transcribe (never translate). Locale handling is
         // a settings concern that lands with the model picker.
         params.set_translate(false);
+        // #974: defense-in-depth against silence/non-speech hallucinations.
+        // `set_temperature(0.0)` pins greedy decoding (no sampling-fallback escape
+        // hatch on low logprob, where ".com" / "Thanks for watching" type
+        // confabulations emerge).
+        // `set_suppress_nst(true)` suppresses non-speech tokens like `[Music]` /
+        // `[Applause]` from being decoded at all. Both are additive and safe for
+        // real-speech decoding.
+        params.set_temperature(0.0);
+        params.set_suppress_nst(true);
 
         // Progress hook for "Processing… N%" in the HUD (#566). Clone the
         // Arc under a short lock so the mutex is not held across the full
@@ -907,6 +916,15 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         params.set_print_timestamps(false);
         params.set_translate(false);
         params.set_no_context(true);
+        // #974: defense-in-depth against silence/non-speech hallucinations.
+        // `set_temperature(0.0)` pins greedy decoding (no sampling-fallback escape
+        // hatch on low logprob, where ".com" / "Thanks for watching" type
+        // confabulations emerge).
+        // `set_suppress_nst(true)` suppresses non-speech tokens like `[Music]` /
+        // `[Applause]` from being decoded at all. Both are additive and safe for
+        // real-speech decoding.
+        params.set_temperature(0.0);
+        params.set_suppress_nst(true);
         if !self.prompt.is_empty() {
             params.set_initial_prompt(self.prompt);
         }
