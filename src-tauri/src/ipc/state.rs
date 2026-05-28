@@ -288,6 +288,13 @@ pub struct InferenceState {
     /// startup and observes the swap on the next meeting pump tick —
     /// no app restart required.
     pub diarize_slot: crate::diarization::DiarizeSlot,
+    /// Speech-presence VAD used to gate whisper inference (#974). Mints a
+    /// per-stream [`crate::vad::VadSession`] at each meeting / dictation
+    /// session start. Production is [`crate::vad::onnx::SileroVad`];
+    /// tests use [`crate::vad::NoopVad`]. If the bundled ONNX fails to load
+    /// at startup, [`crate::vad::NoopVad`] is used so transcription still
+    /// works — the gate is the additive nice-to-have, not load-bearing.
+    pub vad: Arc<dyn crate::vad::VadModel>,
 }
 
 /// Local AI model assets: shared models directory and in-flight
@@ -551,6 +558,41 @@ fn build_diarizer_inner(_models_dir: &Path) -> Arc<dyn crate::diarization::Diari
     }
     Arc::new(crate::diarization::NoopDiarizer)
 }
+
+/// Build the production VAD model (#974).
+///
+/// When the `diarization-onnx` feature is built in, returns a
+/// [`crate::vad::onnx::SileroVad`] loaded from the bundled asset.
+/// Otherwise (feature off, or the bundled asset is corrupted under
+/// git) returns [`crate::vad::NoopVad`] so transcription still works
+/// — the gate is the additive nice-to-have. The `#[cfg]` split
+/// mirrors [`crate::vad::onnx`] itself, which shares the `tract-onnx`
+/// dep with the diarizer.
+fn build_vad() -> Arc<dyn crate::vad::VadModel> {
+    #[cfg(feature = "diarization-onnx")]
+    {
+        match crate::vad::onnx::SileroVad::load() {
+            Ok(m) => {
+                tracing::info!("vad: loaded SileroVad (bundled v5 16kHz-specialized)");
+                return Arc::new(m);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "vad: SileroVad load failed; falling back to NoopVad — \
+                     transcription will work but won't be gated against \
+                     silence-hallucinations (#974)"
+                );
+            }
+        }
+    }
+    #[cfg(not(feature = "diarization-onnx"))]
+    {
+        tracing::info!("vad: NoopVad (diarization-onnx feature disabled at build time)");
+    }
+    Arc::new(crate::vad::NoopVad)
+}
+
 impl AppState {
     /// Helper used by `build_default` to read a settings key at startup.
     /// Returns `None` on a DB error and logs a warning so the failure is
@@ -760,6 +802,16 @@ impl AppState {
         // next tick — no restart needed.
         let diarize_inner_initial = build_diarizer_inner(&models_dir);
         record_phase("diarizer init");
+        // Bundled Silero VAD (#974). Loaded once at startup, mints a
+        // fresh per-stream session at each `start_stream` site. If the
+        // bundled ONNX is corrupted under git we degrade to NoopVad so
+        // transcription still works — the gate is the additive
+        // hallucination-suppression nice-to-have, not load-bearing.
+        // Production builds always carry `diarization-onnx`; the
+        // `#[cfg]` split mirrors how the `vad::onnx` module itself is
+        // gated (it shares the tract-onnx dep).
+        let vad = build_vad();
+        record_phase("vad init");
         tracing::info!(
             elapsed_ms = t_start.elapsed().as_millis(),
             "app state: diarizer ready"
@@ -780,6 +832,7 @@ impl AppState {
             Arc::clone(&transcribe_meeting_shared),
             event_emitter,
             Arc::clone(&diarize),
+            Arc::clone(&vad),
             Arc::clone(&meeting_app_overrides),
             Arc::clone(&mic_gain_db_arc),
             Arc::clone(&speakers),
@@ -885,6 +938,7 @@ impl AppState {
             .transcribe_arc(transcribe_shared)
             .transcribe_meeting_arc(transcribe_meeting_shared)
             .diarize(diarize)
+            .vad(vad)
             .history(history)
             .replacements(replacements)
             .vocabulary(vocabulary)

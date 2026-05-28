@@ -122,12 +122,14 @@ impl SessionManager {
         let diarize: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
         let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
+        let vad: Arc<dyn crate::vad::VadModel> = Arc::new(crate::vad::NoopVad);
         Self::new(
             repo,
             audio,
             transcribe,
             emitter,
             diarize,
+            vad,
             app_overrides,
             Arc::new(AtomicU32::new(0f32.to_bits())),
             Arc::new(crate::speakers::MemSpeakerStore),
@@ -236,6 +238,7 @@ impl Transcribe for NoopStreamTranscribe {
         &self,
         _format: CaptureFormat,
         _prompt: &str,
+        _vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
         Ok(Box::new(NoopStreamingSession))
     }
@@ -258,6 +261,7 @@ pub(super) async fn fresh_manager_no_transcriber() -> SessionManager {
     let transcribe: Arc<Mutex<Option<Arc<dyn Transcribe>>>> = Arc::new(Mutex::new(None));
     let emitter: Arc<dyn crate::events::EventEmitter> = Arc::new(crate::events::NoopEventEmitter);
     let diarize: Arc<dyn crate::diarization::Diarize> = Arc::new(crate::diarization::NoopDiarizer);
+    let vad: Arc<dyn crate::vad::VadModel> = Arc::new(crate::vad::NoopVad);
     let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
     SessionManager::new(
         repo,
@@ -265,6 +269,7 @@ pub(super) async fn fresh_manager_no_transcriber() -> SessionManager {
         transcribe,
         emitter,
         diarize,
+        vad,
         app_overrides,
         Arc::new(AtomicU32::new(0f32.to_bits())),
         Arc::new(crate::speakers::MemSpeakerStore),
@@ -281,6 +286,7 @@ pub(super) fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> Sess
         Arc::new(Mutex::new(Some(Arc::new(NoopStreamTranscribe))));
     let emitter: Arc<dyn crate::events::EventEmitter> = Arc::new(crate::events::NoopEventEmitter);
     let diarize: Arc<dyn crate::diarization::Diarize> = Arc::new(crate::diarization::NoopDiarizer);
+    let vad: Arc<dyn crate::vad::VadModel> = Arc::new(crate::vad::NoopVad);
     let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
     SessionManager::new(
         repo,
@@ -288,6 +294,7 @@ pub(super) fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> Sess
         transcribe,
         emitter,
         diarize,
+        vad,
         app_overrides,
         Arc::new(AtomicU32::new(0f32.to_bits())),
         Arc::new(crate::speakers::MemSpeakerStore),
@@ -347,6 +354,7 @@ impl Transcribe for SlowFinishTranscribe {
         &self,
         _format: CaptureFormat,
         _prompt: &str,
+        _vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
         Ok(Box::new(SlowFinishStreamingSession {
             release: Arc::clone(&self.release),
@@ -389,6 +397,7 @@ pub(crate) fn manager_with_slow_finish_parts(
             started,
         }))));
     let diarize: Arc<dyn crate::diarization::Diarize> = Arc::new(crate::diarization::NoopDiarizer);
+    let vad: Arc<dyn crate::vad::VadModel> = Arc::new(crate::vad::NoopVad);
     let app_overrides: Arc<dyn MeetingAppOverrideRepository> = Arc::new(NoOpAppOverrides);
     SessionManager::new(
         repo,
@@ -396,6 +405,7 @@ pub(crate) fn manager_with_slow_finish_parts(
         transcribe,
         emitter,
         diarize,
+        vad,
         app_overrides,
         Arc::new(AtomicU32::new(0f32.to_bits())),
         Arc::new(crate::speakers::MemSpeakerStore),
@@ -623,6 +633,7 @@ pub(super) async fn build_tail_pump_context(
         cancel,
         event_emitter: Arc::new(crate::events::NoopEventEmitter),
         diarize: Arc::new(crate::diarization::NoopDiarizer),
+        vad: Arc::new(crate::vad::NoopVad),
         mic_gain_db: Arc::new(AtomicU32::new(0f32.to_bits())),
         audio: Arc::new(StubParallelAudio),
         transcribe: Some(Arc::new(NoopStreamTranscribe)),

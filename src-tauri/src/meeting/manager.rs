@@ -102,6 +102,14 @@ pub struct SessionManager {
     /// the source-derived `"mic"` / `"system"` tag from
     /// `AudioSource::speaker_tag()`.
     pub(super) diarize: Arc<dyn crate::diarization::Diarize>,
+    /// Speech-presence VAD (#974). Cloned from
+    /// [`crate::ipc::state::InferenceState::vad`] at construction.
+    /// `lifecycle::start_manual` calls [`crate::vad::VadModel::new_session`]
+    /// on this to mint a fresh per-stream [`crate::vad::VadSession`] for
+    /// each `start_stream` site. Production is
+    /// [`crate::vad::onnx::SileroVad`] (or [`crate::vad::NoopVad`] if the
+    /// bundled model failed to load); tests use [`crate::vad::NoopVad`].
+    pub(super) vad: Arc<dyn crate::vad::VadModel>,
     /// Live microphone gain in dB (#531). Shared Arc from `RuntimeFlags`.
     /// Passed to `PumpContext` at session start so the pump can apply
     /// the current gain value each tick without a session restart.
@@ -228,6 +236,7 @@ impl SessionManager {
         transcribe: crate::ipc::TranscribeSlot,
         event_emitter: Arc<dyn crate::events::EventEmitter>,
         diarize: Arc<dyn crate::diarization::Diarize>,
+        vad: Arc<dyn crate::vad::VadModel>,
         app_overrides: Arc<dyn super::MeetingAppOverrideRepository>,
         mic_gain_db: Arc<AtomicU32>,
         speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
@@ -243,6 +252,7 @@ impl SessionManager {
             partials: Arc::new(RwLock::new(HashMap::new())),
             event_emitter,
             diarize,
+            vad,
             mic_gain_db,
             speaker_store,
             speaker_identity_enabled,

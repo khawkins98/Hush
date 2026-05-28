@@ -136,6 +136,13 @@ pub(super) struct PumpContext {
     /// non-Noop impl can override `"mic"` / `"system"` with
     /// per-speaker labels.
     pub diarize: Arc<dyn crate::diarization::Diarize>,
+    /// Speech-presence VAD (#974). Cloned from the manager at session
+    /// start; `open_source_handle` calls `vad.new_session()` whenever
+    /// the pump recreates a streaming session on device-loss fallback
+    /// or reconnect so the recreated `WhisperStreamingSession` has its
+    /// own per-stream VAD state (matching the per-source isolation the
+    /// initial `start_stream` sites set up in `lifecycle::start_manual`).
+    pub vad: Arc<dyn crate::vad::VadModel>,
     /// Live microphone gain in dB (#531). Shared Arc from `RuntimeFlags`;
     /// applied to the drained capture-format samples before they enter
     /// both the streaming inference session and the diarizer audio buffer.
@@ -620,6 +627,7 @@ fn tick_drain_sources(
                             match open_source_handle(
                                 &ctx.audio,
                                 ctx.transcribe.as_ref(),
+                                &ctx.vad,
                                 &fallback_source,
                                 &ctx.vocab_prompt,
                             ) {
@@ -1018,6 +1026,7 @@ fn tick_recovery_check(ctx: &mut PumpContext, state: &mut PumpTickState) {
             match open_source_handle(
                 &ctx.audio,
                 ctx.transcribe.as_ref(),
+                &ctx.vad,
                 &original_source,
                 &ctx.vocab_prompt,
             ) {
@@ -1471,6 +1480,7 @@ pub(super) async fn dispatch_utterances(
 pub(super) fn open_source_handle(
     audio: &Arc<dyn AudioCapture>,
     transcriber: Option<&Arc<dyn Transcribe>>,
+    vad: &Arc<dyn crate::vad::VadModel>,
     source: &AudioSource,
     vocab_prompt: &str,
 ) -> Result<(
@@ -1482,36 +1492,38 @@ pub(super) fn open_source_handle(
         Some(t) => {
             let mut scratch = Vec::new();
             match handle.drain_into(&mut scratch) {
-                Ok(format) => match t.start_stream(format, vocab_prompt) {
-                    Ok(mut sess) => {
-                        // Replay pre-warm audio so the first inference
-                        // window is not cold (#868). Treat feed failure
-                        // as stream-setup failure — a broken session
-                        // is worse than no session.
-                        if !scratch.is_empty() {
-                            if let Err(e) = sess.feed(&scratch) {
-                                tracing::warn!(
-                                    error = ?e,
-                                    source_kind = source.kind_label(),
-                                    "open_source_handle: pre-warm replay failed; audio-only"
-                                );
-                                scratch.zeroize(); // (#930)
-                                return Ok((handle, None));
+                Ok(format) => {
+                    match t.start_stream(format, vocab_prompt, vad.new_session()) {
+                        Ok(mut sess) => {
+                            // Replay pre-warm audio so the first inference
+                            // window is not cold (#868). Treat feed failure
+                            // as stream-setup failure — a broken session
+                            // is worse than no session.
+                            if !scratch.is_empty() {
+                                if let Err(e) = sess.feed(&scratch) {
+                                    tracing::warn!(
+                                        error = ?e,
+                                        source_kind = source.kind_label(),
+                                        "open_source_handle: pre-warm replay failed; audio-only"
+                                    );
+                                    scratch.zeroize(); // (#930)
+                                    return Ok((handle, None));
+                                }
                             }
+                            scratch.zeroize(); // (#930) after successful feed
+                            Some(sess)
                         }
-                        scratch.zeroize(); // (#930) after successful feed
-                        Some(sess)
+                        Err(e) => {
+                            scratch.zeroize();
+                            tracing::warn!(
+                                error = ?e,
+                                source_kind = source.kind_label(),
+                                "open_source_handle: start_stream failed; audio-only"
+                            );
+                            None
+                        }
                     }
-                    Err(e) => {
-                        scratch.zeroize();
-                        tracing::warn!(
-                            error = ?e,
-                            source_kind = source.kind_label(),
-                            "open_source_handle: start_stream failed; audio-only"
-                        );
-                        None
-                    }
-                },
+                }
                 Err(e) => {
                     scratch.zeroize();
                     tracing::warn!(

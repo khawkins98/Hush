@@ -60,6 +60,11 @@ pub struct AppStateBuilder {
     /// for tests that don't drive the meeting pump.
     transcribe_meeting_arc: Option<TranscribeSlot>,
     diarize: Option<Arc<dyn crate::diarization::Diarize>>,
+    /// Speech-presence VAD shared handle (#974). Defaults to
+    /// [`crate::vad::NoopVad`] when unset — fine for tests and for the
+    /// degraded production path where [`crate::vad::onnx::SileroVad::load`]
+    /// failed at startup.
+    vad: Option<Arc<dyn crate::vad::VadModel>>,
     history: Option<Arc<dyn HistoryRepository>>,
     replacements: Option<Arc<dyn ReplacementRepository>>,
     vocabulary: Option<Arc<dyn VocabularyRepository>>,
@@ -162,6 +167,16 @@ impl AppStateBuilder {
     /// `"system"` labels survive. Override to wire D1 / D2.
     pub fn diarize(mut self, diarize: Arc<dyn crate::diarization::Diarize>) -> Self {
         self.diarize = Some(diarize);
+        self
+    }
+
+    /// Optional. Defaults to [`crate::vad::NoopVad`] — every frame is
+    /// reported as full speech and the gate never fires. Production
+    /// (`build_default`) supplies [`crate::vad::onnx::SileroVad`]; if
+    /// loading the bundled ONNX fails at startup we still call this
+    /// with [`crate::vad::NoopVad`] so the rest of the app boots.
+    pub fn vad(mut self, vad: Arc<dyn crate::vad::VadModel>) -> Self {
+        self.vad = Some(vad);
         self
     }
 
@@ -345,6 +360,7 @@ impl AppStateBuilder {
                             as Arc<dyn crate::diarization::Diarize>,
                     ))
                 }),
+                vad: self.vad.unwrap_or_else(|| Arc::new(crate::vad::NoopVad)),
             },
             data: DataServices {
                 history: self

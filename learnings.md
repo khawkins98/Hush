@@ -32,6 +32,70 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-05-28 — VAD gate in front of Whisper inference (#974)
+
+Whisper hallucinates on silence / low-information audio with signature
+training-data ghosts: `.com`, `.org`, "Thanks for watching!", repeating
+phrases like "We're going to use the web." × 6. Root cause is the
+streaming pump feeding every window to the decoder regardless of speech
+content; given an uninformative window, Whisper falls back to high-prior
+phrases from its training set (YouTube outros, tutorial templates).
+
+Whisper.cpp has knobs that would mitigate this (`no_speech_thold`,
+`logprob_thold`, built-in VAD) but **whisper-rs 0.14 doesn't expose
+them** — verified from the FullParams setter list. So the gate has to
+live upstream in our own code.
+
+**Fix:** Silero VAD v5 (bundled ONNX, ~1.3MB after 16kHz specialisation,
+MIT) loaded once via `tract-onnx` (already in the tree for wespeaker).
+Each streaming transcription session mints its own `VadSession` carrying
+recurrent LSTM state. `WhisperStreamingSession::feed` drains samples
+into the VAD in 512-sample frames; `drain()` short-circuits inference if
+no frame scored above threshold within the hangover window (default
+1500ms). `finish()` is intentionally NOT gated so the tail audio at
+session close still flushes. Plus two FullParams tweaks we *do* have
+access to — `set_temperature(0.0)` and `set_suppress_nst(true)` — as
+defense-in-depth applied to both the streaming meeting path AND the
+one-shot dictation path.
+
+**Bundled vs downloaded:** chose to commit the ONNX bytes via
+`include_bytes!` rather than auto-download. ~1.3MB is acceptable in a
+binary distributed via signed installers, and it eliminates the
+first-run download UX entirely. A SHA self-check at startup catches
+asset corruption under git.
+
+**The model is a *derived* artifact, not the upstream release.** Tract
+0.22.1 analyses both branches of ONNX `If` ops strictly, and Silero v5
+wraps inference in `If(sr == 16000) { ... } else { ... }` whose dead
+8kHz branch has shape-incompatible ops against the 16kHz-pinned inputs.
+A Python script (`scripts/build-silero-vad-onnx.py`) downloads the
+upstream v5.1.2 release, substitutes `sr` with a constant initializer,
+then iteratively splices nested `If` branches by probing each `If`'s
+condition via onnxruntime — `onnxsim` couldn't handle the nested ones.
+Provenance + reproducibility live alongside the bundled artifact in
+`src-tauri/assets/README.md`.
+
+**Trait shape requires the per-session split.** Silero is recurrent —
+each frame's prediction depends on the prior frame's hidden state. So
+the `VadModel` (shared, immutable) / `VadSession` (per-stream, mutable)
+split that was deferred for the diarizer (where it was a "would be
+nicer") is mandatory here. No way to make Silero stateless.
+
+**Scope: meeting only at the structural-gate level.** Dictation is
+one-shot (`Transcribe::transcribe_chunks` on the full PTT buffer), not
+streamed, so it doesn't carry a `VadSession`. It still benefits from
+the FullParams defense-in-depth at the inference call site. No
+reported dictation hallucinations in the issue corpus; if dogfood
+surfaces them, a small input-trim pass before `run_inference()` is a
+~30-line follow-up (the VAD model is already loaded and the slot is
+wired through `InferenceState`).
+
+**Knobs:** `HUSH_VAD_THRESHOLD` (default 0.5), `HUSH_VAD_HANGOVER_MS`
+(default 1500), `HUSH_VAD_DISABLE=1` for A/B and debug. No
+user-facing setting in v1 — env vars only.
+
+---
+
 ## 2026-05-26 — Meeting background finalization: release-then-finalize, deferred concurrency
 
 ### Why finalization was moved to the background
