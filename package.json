@@ -20,6 +20,7 @@
     "test:screenshots": "playwright test tests/e2e/zz-screenshots.spec.ts --reporter=list && echo 'Screenshots → tmp/uxwalk/light/  and  tmp/uxwalk/dark/'",
     "dev-cleanup": "bash scripts/dev-cleanup.sh",
     "dev-reset": "bash scripts/dev-reset.sh",
+    "dev-reset:keep": "bash scripts/dev-reset.sh --keep-app-state",
     "tauri": "tauri",
     "tauri:bundle": "bash scripts/tauri-bundle-macos.sh",
     "tauri:dmg": "bash scripts/tauri-dmg-macos.sh",

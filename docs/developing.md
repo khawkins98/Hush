@@ -67,7 +67,8 @@ Subsequent runs are incremental.
 | Run frontend type check | `npm run check` |
 | Run frontend e2e tests (Playwright) | `npm run test:e2e` |
 | Kill stale dev server processes | `npm run dev-cleanup` |
-| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/dictionary (preserves transcription history); add `--nuke-db` to also wipe history (macOS only) |
+| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/dictionary/prefs/caches/autostart/app installs (preserves transcription history); add `--nuke-db` to also wipe history (macOS only) |
+| Re-test TCC permission flow without losing app state | `npm run dev-reset:keep` — TCC-focused reset: wipes TCC grants + removes app installs, but preserves settings, dictionary, replacements, prefs, caches, autostart, history (macOS only) |
 
 ---
 
@@ -174,13 +175,23 @@ npm run test:e2e:tauri
 npm run dev-cleanup
 
 # Full vanilla reset — kills processes AND wipes TCC grants, settings,
-# dictionary, and preferences. Transcription and meeting history is preserved
-# by default so you don't lose recordings between dev cycles.
+# dictionary, preferences, caches, autostart, and app installs. Transcription
+# and meeting history is preserved by default so you don't lose recordings
+# between dev cycles.
 # Use this before testing onboarding, first-run permission prompts, or any
 # "new user" flow.
 # Pass --nuke-db to also wipe history; --nuke-models to remove downloaded
 # models; --user <name> to target another account.
 npm run dev-reset
+
+# TCC-focused reset — for when you want to re-test the macOS permission flow
+# without losing your dictionary, text replacements, window layout, or other
+# app state. Kills processes, resets TCC grants (current + legacy bundle IDs),
+# removes app installs (to avoid stale codesign-identity TCC rows). PRESERVES:
+# settings, dictionary, replacements, prefs plist, caches, autostart, history,
+# downloaded models. After running, `npm run tauri:bundle` re-installs the
+# bundle and the permission flow tests on top of your real working state.
+npm run dev-reset:keep
 
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
@@ -217,6 +228,14 @@ npm run dev-reset
 ```
 
 This wipes all TCC grants, settings, dictionary, preferences, and caches. Transcription history and meeting sessions are **preserved** by default. Pass `--nuke-db` to also wipe history. Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
+
+If you only need to re-test the permission flow itself and want to keep your dictionary, text replacements, window layout, and other settings intact, use the softer mode instead:
+
+```bash
+npm run dev-reset:keep
+```
+
+This still kills processes, resets TCC grants, and removes app installs (so a re-installed bundle doesn't carry a stale codesign-identity TCC row — see `learnings.md` 2026-05-13). But it preserves everything else, so you can run `npm run tauri:bundle` after and test the permission flow on top of your real working state.
 
 Full recovery recipes: [`docs/macos-permissions.md`](./macos-permissions.md).
 

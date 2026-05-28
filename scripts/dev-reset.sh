@@ -1,31 +1,56 @@
 #!/usr/bin/env bash
-# Full Hush dev reset — restores the machine to vanilla "first-ever-install" state.
+# Hush dev reset — clears state for testing onboarding / TCC permission flows.
 #
-# By default, transcription and meeting history is preserved so you keep your
-# recordings between dev cycles.  Use --nuke-db to also wipe the database (full
-# wipe, equivalent to pre-2026-06 behaviour).
+# Two modes:
+#
+# 1. **Default ("full reset")** — restores the machine to vanilla
+#    "first-ever-install" state. Wipes TCC permissions, prefs, caches, app
+#    installs, autostart, and the in-database settings/dictionary/replacements.
+#    Transcription + meeting history are preserved by default (use --nuke-db
+#    to wipe those too). Use before testing onboarding from scratch.
+#
+# 2. **`--keep-app-state` ("TCC-focused reset")** — clears only the things
+#    that affect macOS permission testing: kills processes, resets TCC
+#    grants (current + legacy bundle IDs), removes app installs (so a
+#    re-installed bundle doesn't carry a stale codesign-identity TCC row).
+#    PRESERVES: settings, dictionary, replacements, prefs plist, caches,
+#    autostart LaunchAgent, history, downloaded models. Use when you want
+#    to re-test the macOS permission flow without losing your dictionary,
+#    text-replacement rules, or window layout.
 #
 # Usage:
-#   npm run dev-reset                        # reset for the current (or sudo-originating) user
+#   npm run dev-reset                        # full reset (current user)
+#   npm run dev-reset:keep                   # TCC-focused reset, app state preserved
+#   npm run dev-reset -- --keep-app-state    # same as dev-reset:keep
 #   npm run dev-reset -- --user alice        # reset for a specific macOS user account
 #   npm run dev-reset -- --nuke-models       # also delete downloaded models (~GB)
 #   npm run dev-reset -- --nuke-db           # also wipe transcription + meeting history
 #   npm run dev-reset -- --user alice --nuke-models
 #
-# What gets removed (default):
+# What gets removed in the **full reset** (default):
 #   macOS TCC permissions (ScreenCapture, Microphone, ListenEvent, Accessibility)
 #   settings / dictionary terms / text replacements rows (inside hush.db)
 #   <home>/Library/Preferences/io.github.khawkins98.hush.plist             (NSUserDefaults)
 #   <home>/Library/Caches/io.github.khawkins98.hush/                       (WebKit etc.)
 #   <home>/Library/Caches/hush/
 #   autostart LaunchAgent (if enabled via Settings → Launch at Login)
+#   Hush.app installs in /Applications and ~/Applications
 #   Legacy com.khawkins.hush data/TCC/prefs (from before PR #526 bundle rename)
 #
-# What is PRESERVED by default (to keep your dev recordings):
+# What gets removed with **--keep-app-state**:
+#   macOS TCC permissions (ScreenCapture, Microphone, ListenEvent, Accessibility)
+#   Hush.app installs in /Applications and ~/Applications
+#   (Same legacy bundle-ID purges for TCC + app installs.)
+#
+# What is PRESERVED by default in both modes (to keep your dev recordings):
 #   transcription history
 #   meeting sessions + utterances
 #
 # With --nuke-db the entire database file is deleted (no history preserved).
+# --nuke-db with --keep-app-state is unusual but supported — wipes history
+# while preserving settings/dictionary that would normally also be in the DB.
+# (Concretely: --nuke-db deletes the file outright, so it wins over the
+# selective row-wipe that --keep-app-state would otherwise skip.)
 #
 # Models are kept by default because they are large and slow to re-download.
 # Pass --nuke-models to wipe them too.
@@ -45,6 +70,7 @@ BUNDLE_ID="io.github.khawkins98.hush"
 LEGACY_BUNDLE_ID="com.khawkins.hush"
 nuke_models=0
 nuke_db=0
+keep_app_state=0
 explicit_user=""
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -56,6 +82,13 @@ while [[ $# -gt 0 ]]; do
       ;;
     --nuke-db)
       nuke_db=1
+      shift
+      ;;
+    --keep-app-state)
+      # TCC-focused reset: skip the in-DB selective wipe, prefs plist,
+      # caches, and autostart removal. Still kills processes, resets TCC,
+      # removes app installs (to avoid stale codesign-identity TCC rows).
+      keep_app_state=1
       shift
       ;;
     --user)
@@ -160,7 +193,9 @@ echo "[dev-reset] clearing app data..."
 DB_FILE="$APP_SUPPORT/hush.db"
 
 if [ "$nuke_db" -eq 1 ]; then
-  # Hard wipe: remove the entire database file (and WAL/SHM).
+  # Hard wipe: remove the entire database file (and WAL/SHM). This runs
+  # even with --keep-app-state if --nuke-db was passed explicitly — the
+  # user opted in to losing history.
   for f in hush.db hush.db-shm hush.db-wal; do
     target="$APP_SUPPORT/$f"
     if [ -f "$target" ]; then
@@ -168,6 +203,8 @@ if [ "$nuke_db" -eq 1 ]; then
       echo "  removed $target"
     fi
   done
+elif [ "$keep_app_state" -eq 1 ]; then
+  echo "  --keep-app-state: preserving settings, dictionary, and replacements (DB untouched)"
 elif [ -f "$DB_FILE" ]; then
   # Soft wipe: preserve transcription and meeting history; clear settings,
   # dictionary, and replacements only so the next launch feels like a
@@ -208,50 +245,62 @@ if [ -d "$legacy_app_support" ]; then
 fi
 
 # ── 4. Preferences (NSUserDefaults / window geometry / recent dirs) ───────────
-pref="$TARGET_HOME/Library/Preferences/$BUNDLE_ID.plist"
-if [ -f "$pref" ]; then
-  rm "$pref"
-  echo "  removed $pref"
-fi
-# Legacy pref file from before the bundle ID rename.
-legacy_pref="$TARGET_HOME/Library/Preferences/$LEGACY_BUNDLE_ID.plist"
-if [ -f "$legacy_pref" ]; then
-  rm "$legacy_pref"
-  echo "  removed legacy $legacy_pref"
-fi
-# Flush cfprefsd cache so the deleted plist takes effect immediately.
-# Run as the target user to avoid flushing a different user's daemon.
-if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
-  launchctl asuser "$TARGET_UID" killall cfprefsd 2>/dev/null || true
+if [ "$keep_app_state" -eq 1 ]; then
+  echo "[dev-reset] --keep-app-state: preserving preferences plist"
 else
-  killall cfprefsd 2>/dev/null || true
+  pref="$TARGET_HOME/Library/Preferences/$BUNDLE_ID.plist"
+  if [ -f "$pref" ]; then
+    rm "$pref"
+    echo "  removed $pref"
+  fi
+  # Legacy pref file from before the bundle ID rename.
+  legacy_pref="$TARGET_HOME/Library/Preferences/$LEGACY_BUNDLE_ID.plist"
+  if [ -f "$legacy_pref" ]; then
+    rm "$legacy_pref"
+    echo "  removed legacy $legacy_pref"
+  fi
+  # Flush cfprefsd cache so the deleted plist takes effect immediately.
+  # Run as the target user to avoid flushing a different user's daemon.
+  if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
+    launchctl asuser "$TARGET_UID" killall cfprefsd 2>/dev/null || true
+  else
+    killall cfprefsd 2>/dev/null || true
+  fi
 fi
 
 # ── 5. Caches ─────────────────────────────────────────────────────────────────
-for cache_dir in \
-  "$TARGET_HOME/Library/Caches/$BUNDLE_ID" \
-  "$TARGET_HOME/Library/Caches/$LEGACY_BUNDLE_ID" \
-  "$TARGET_HOME/Library/Caches/hush"; do
-  if [ -d "$cache_dir" ]; then
-    rm -rf "$cache_dir"
-    echo "  removed $cache_dir"
-  fi
-done
+if [ "$keep_app_state" -eq 1 ]; then
+  echo "[dev-reset] --keep-app-state: preserving caches"
+else
+  for cache_dir in \
+    "$TARGET_HOME/Library/Caches/$BUNDLE_ID" \
+    "$TARGET_HOME/Library/Caches/$LEGACY_BUNDLE_ID" \
+    "$TARGET_HOME/Library/Caches/hush"; do
+    if [ -d "$cache_dir" ]; then
+      rm -rf "$cache_dir"
+      echo "  removed $cache_dir"
+    fi
+  done
+fi
 
 # ── 6. Autostart LaunchAgent ──────────────────────────────────────────────────
-for launch_agent in \
-  "$TARGET_HOME/Library/LaunchAgents/$BUNDLE_ID.plist" \
-  "$TARGET_HOME/Library/LaunchAgents/$LEGACY_BUNDLE_ID.plist"; do
-  if [ -f "$launch_agent" ]; then
-    if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
-      launchctl asuser "$TARGET_UID" launchctl unload "$launch_agent" 2>/dev/null || true
-    else
-      launchctl unload "$launch_agent" 2>/dev/null || true
+if [ "$keep_app_state" -eq 1 ]; then
+  echo "[dev-reset] --keep-app-state: preserving autostart LaunchAgent (if configured)"
+else
+  for launch_agent in \
+    "$TARGET_HOME/Library/LaunchAgents/$BUNDLE_ID.plist" \
+    "$TARGET_HOME/Library/LaunchAgents/$LEGACY_BUNDLE_ID.plist"; do
+    if [ -f "$launch_agent" ]; then
+      if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
+        launchctl asuser "$TARGET_UID" launchctl unload "$launch_agent" 2>/dev/null || true
+      else
+        launchctl unload "$launch_agent" 2>/dev/null || true
+      fi
+      rm "$launch_agent"
+      echo "  removed autostart LaunchAgent: $launch_agent"
     fi
-    rm "$launch_agent"
-    echo "  removed autostart LaunchAgent: $launch_agent"
-  fi
-done
+  done
+fi
 
 # ── 7. App installs ───────────────────────────────────────────────────────────
 # Remove ALL known Hush.app locations so stale binaries with different
@@ -276,7 +325,14 @@ for app_loc in \
 done
 
 echo ""
-echo "[dev-reset] done. Next launch of Hush will behave as a first-ever install."
+if [ "$keep_app_state" -eq 1 ]; then
+  echo "[dev-reset] done (--keep-app-state). TCC permissions cleared + app installs removed."
+  echo "            Your Hush settings, dictionary, replacements, prefs, caches, and"
+  echo "            autostart are intact. Re-install Hush.app (tauri:bundle / tauri:dmg)"
+  echo "            and test the permission flow on top of your real state."
+else
+  echo "[dev-reset] done. Next launch of Hush will behave as a first-ever install."
+fi
 echo "            Note: Screen Recording rows from previous builds may still appear"
 echo "            in System Settings → Privacy → Screen & System Audio Recording."
 echo "            Remove any stale 'Hush' rows there manually before testing onboarding."
