@@ -22,7 +22,7 @@ in the same transcript.
 
 ## Root cause
 
-The streaming pump (`SlidingWindowState::tick()`) feeds every window of audio
+The streaming pump (`WhisperStreamingSession::drain()`) feeds every window of audio
 to `WhisperInferer::infer()` regardless of whether that audio contains speech.
 When the input is uninformative, Whisper's decoder gravitates to high-prior
 phrases from its training set.
@@ -62,10 +62,10 @@ on it). The fix has to be upstream of `infer()`, in our own code.
 ## Approved decisions
 
 - **Algorithm:** **Silero VAD** via `tract-onnx`. Best accuracy of the realistic
-  options; tract is already in the tree for the wespeaker diarizer; ~1.7MB ONNX
-  model bundles cleanly into the existing auto-download flow.
-- **Gate point:** in `SlidingWindowState::tick()`, just before
-  `inferer.infer()`. The window/timestamps stay aligned (audio is still fed);
+  options; tract is already in the tree for the wespeaker diarizer; ~1.28 MB ONNX
+  model bundled at compile time via `include_bytes!`.
+- **Gate point:** in `WhisperStreamingSession::drain()`, just before
+  `state.tick(inferer)`. The window/timestamps stay aligned (audio is still fed);
   only the *inference call* is gated.
 - **Defense-in-depth:** also tune the FullParams whisper-rs 0.14 does expose —
   `set_temperature(0.0)` and `set_suppress_nst(true)` — as a free belt-and-braces.
@@ -110,31 +110,31 @@ the same way `Diarize` flows today. The `StreamingTranscribeSession` holds a
 `Box<dyn VadSession>` minted at session start (dictation is one-shot, not a
 streaming session, and doesn't use a `VadSession`).
 
-### B. Gate logic in `SlidingWindowState::tick()`
+### B. Gate logic in `WhisperStreamingSession::drain()`
 
-Per-tick (~500ms) state on the session:
+Per-drain state on the session:
 
 ```text
 FRAME_LEN: u32   = SileroVad::FRAME_LEN_SAMPLES;   // Silero-mandated (512 @ 16kHz)
 VAD_THRESHOLD    = 0.5                              // env: HUSH_VAD_THRESHOLD
 HANGOVER_MS      = 1500                             // env: HUSH_VAD_HANGOVER_MS
 
-on each tick, before calling inferer.infer(window):
-  for each FRAME_LEN-sample frame f in the *newly-fed* samples since last tick:
+on each drain, before calling state.tick(inferer):
+  for each FRAME_LEN-sample frame f in the *newly-fed* samples since last drain:
       prob = vad_session.score_frame(f)
       if prob >= VAD_THRESHOLD:
           last_speech_ms = wall_clock_ms()
   if (wall_clock_ms() - last_speech_ms) > HANGOVER_MS:
       return Ok(vec![])      // skip infer — no segments → no partials → no hallucinations
   else:
-      return inferer.infer(window)
+      return state.tick(inferer)
 ```
 
 - The window itself isn't truncated; audio still accumulates. When speech
   resumes after a silent stretch, the next allowed infer sees the full
   in-window history (Whisper has its onset context).
 - Skipping `infer()` returns `Vec<StreamSegment>` empty — the streaming policy
-  handles "no segments" as "nothing to commit this tick" today, so no
+  handles "no segments" as "nothing to commit this drain" today, so no
   downstream changes are needed.
 - **Per-source independence**: each `StreamingTranscribeSession` has its own
   `VadSession` and its own `last_speech_ms`. Meeting mic and system-audio gate
@@ -153,20 +153,30 @@ params.set_suppress_nst(true);   // suppress non-speech tokens ([Music], [Applau
 These are one-line additions that target the specific token classes Whisper
 hallucinates. Safe and additive — they don't affect real-speech decoding.
 
-### D. Model bundling — auto-download alongside wespeaker
+### D. Model bundling — `include_bytes!` of a 16kHz-specialized derived artifact
 
-Silero VAD ships an ONNX model. Hush already auto-downloads the wespeaker
-diarizer model on first use; the VAD model follows the same pattern:
+The bundled Silero v5 ONNX is committed to `src-tauri/assets/silero_vad.onnx`
+(~1.28 MB) and loaded at compile time via `include_bytes!`. There is no
+first-run download — the model is always present.
 
-- **Source:** [Silero VAD v5](https://github.com/snakers4/silero-vad), MIT licensed.
-- **Filename:** `silero_vad.onnx` in `models_dir` (same dir as wespeaker).
-- **Size:** ~1.7MB.
-- **Trigger:** first time a meeting or dictation session needs it; same
-  download UI/progress affordance the model picker uses today.
-- **Pinning:** SHA256 verified against a constant in `vad/onnx.rs`
-  (mirrors wespeaker's pattern). Source URL also pinned.
-- **Fallback:** if the model can't be downloaded or loaded, runtime falls back
-  to `NoopVad` — transcription works as today (just without the gate).
+The committed artifact is a **derived** model, not the upstream v5.1.2
+release. tract-onnx 0.22.1 strict-analyses both branches of ONNX `If` ops,
+and Silero v5 wraps its inference in `If(sr == 16000) { ... } else { ... }`
+whose dead 8kHz branch has shape-incompatible ops against the inputs we
+pin for the 16kHz path. `scripts/build-silero-vad-onnx.py` downloads the
+upstream release, substitutes `sr` with a constant initializer, then
+iteratively splices nested `If` branches (six of them inside the LSTM
+dispatch + decoder) by probing each `If`'s condition via onnxruntime.
+The resulting model has the `If`s constant-folded away and loads cleanly
+in tract. See `src-tauri/assets/README.md` for the reproduction recipe.
+
+A SHA256 self-check at startup verifies the in-memory bytes match a pinned
+constant — catches asset corruption (or "I forgot to bump the SHA after
+re-deriving") loud and early.
+
+**Fallback if the bundled model fails to load**: runtime falls back to
+`NoopVad` (`ipc/state.rs::build_vad`); transcription continues to work
+just without the gate. Logged at WARN.
 
 ### E. Cargo feature flag
 
@@ -223,7 +233,7 @@ Env vars only — no user-facing settings in v1. Convention follows
 - **Unit (`vad/onnx.rs`)**: load the model, score a known-silent and a
   known-speech frame, assert probability ordering.
 - **Unit (`transcription/streaming.rs`)**: scripted `VadSession` mock returning
-  programmed probabilities; assert `tick()` skips `infer()` exactly when the
+  programmed probabilities; assert `drain()` skips `infer()` exactly when the
   gate predicts skip; assert hangover boundary behavior.
 - **Integration (`meeting_fixture.rs`)**: feed a fixture containing alternating
   speech + ≥3s silence; assert that hallucinated tokens (`.com`, "Thanks for

@@ -378,14 +378,23 @@ impl WhisperTranscription {
         // a settings concern that lands with the model picker.
         params.set_translate(false);
         // #974: defense-in-depth against silence/non-speech hallucinations.
-        // `set_temperature(0.0)` pins greedy decoding (no sampling-fallback escape
-        // hatch on low logprob, where ".com" / "Thanks for watching" type
-        // confabulations emerge).
-        // `set_suppress_nst(true)` suppresses non-speech tokens like `[Music]` /
-        // `[Applause]` from being decoded at all. Both are additive and safe for
-        // real-speech decoding.
+        // Pin greedy decoding with no sampling-fallback ladder so confabulation
+        // tokens have no high-T escape hatch. (`set_suppress_nst(true)`, used
+        // on the streaming meeting path, is intentionally NOT applied here:
+        // whisper.cpp's NST set includes routine punctuation like `[`, `(`,
+        // `"`, `:`, `;`, `/` which a developer-dictation user types into
+        // structured text — the cost is real and dictation hasn't shown the
+        // hallucination class that motivated the streaming gate.)
+        //
+        // `set_temperature(0.0)` + `set_temperature_inc(0.0)` together pin
+        // greedy decoding with NO sampling fallback. whisper.cpp's default
+        // builds a fallback ladder [T, T+inc, ..., 1.0] and walks up on
+        // decode failure (default inc = 0.2). The ".com" / "Thanks for
+        // watching" confabulations come specifically from the high-T
+        // fallback step, so pinning T=0 alone (without inc=0) leaves the
+        // escape hatch open. Setting inc=0 collapses the ladder.
         params.set_temperature(0.0);
-        params.set_suppress_nst(true);
+        params.set_temperature_inc(0.0);
 
         // Progress hook for "Processing… N%" in the HUD (#566). Clone the
         // Arc under a short lock so the mutex is not held across the full
@@ -635,6 +644,15 @@ pub struct WhisperStreamingSession {
     /// Prevents the WARN log from firing on every 32ms frame if the VAD
     /// is consistently failing — first error tells us everything.
     vad_error_logged: bool,
+    /// Whether the previous drain ran inference. Used by the gate-close
+    /// flush mechanism (#974 follow-up): when drain transitions from
+    /// running → gating, fire one more `state.tick_flush(...)` pass so
+    /// utterances mid-flight at the moment of silence get committed
+    /// before the streaming policy's head-slide can strand them.
+    ///
+    /// `true` means "last call to drain ran the inferer"; `false` means
+    /// "either never inferred yet, or last drain was gated".
+    was_inferring: bool,
 }
 
 impl WhisperStreamingSession {
@@ -663,6 +681,7 @@ impl WhisperStreamingSession {
             vad_hangover,
             vad_disabled,
             vad_error_logged: false,
+            was_inferring: false,
         }
     }
 
@@ -697,6 +716,7 @@ impl WhisperStreamingSession {
             vad_hangover,
             vad_disabled,
             vad_error_logged: false,
+            was_inferring: false,
         }
     }
 
@@ -778,16 +798,25 @@ impl WhisperStreamingSession {
     /// inferer. Lets the VAD-gate tests assert "inferer was / was not
     /// invoked" without constructing a real `WhisperContext`. The
     /// production [`StreamingTranscribeSession::drain`] runs the same
-    /// gate check then dispatches against a real `WhisperInferer`
-    /// built from `self.ctx`.
+    /// gate check (including the gate-close flush) then dispatches
+    /// against a real `WhisperInferer` built from `self.ctx`.
     #[cfg(test)]
     pub(super) fn drain_with_inferer(
         &mut self,
         inferer: &mut dyn WhisperLikeInferer,
     ) -> Result<Vec<Utterance>> {
         if self.should_gate() {
+            if self.was_inferring {
+                // First gated drain after a run of inferences: flush
+                // anything in flight so the head-slide doesn't strand
+                // it. After this, subsequent gated drains skip.
+                self.was_inferring = false;
+                return self.state.tick_flush(inferer);
+            }
             return Ok(Vec::new());
         }
+        // Not gating — record so the next gate-close fires a flush.
+        self.was_inferring = true;
         self.state.tick(inferer)
     }
 
@@ -832,8 +861,31 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
         // win — preventing hallucinations on non-speech windows like
         // a Zoom hold beep or a typing sound.
         if self.should_gate() {
+            if self.was_inferring {
+                // First gated drain after a run of inferences: flush
+                // anything mid-flight before the head-slide can strand
+                // it (#974 follow-up). After this fires, subsequent
+                // gated drains skip cheaply via the early-return below.
+                self.was_inferring = false;
+                let ctx = self
+                    .ctx
+                    .as_ref()
+                    .expect("WhisperStreamingSession::drain called without a loaded ctx (production paths always supply Some)")
+                    .clone();
+                let mut inferer = WhisperInferer {
+                    ctx,
+                    prompt: &self.prompt,
+                    inference_threads: Arc::clone(&self.inference_threads),
+                    whisper_state: &mut self.whisper_state,
+                    inferences_on_current_state: &mut self.inferences_on_current_state,
+                    state_recreate_interval: self.state_recreate_interval,
+                };
+                return self.state.tick_flush(&mut inferer);
+            }
             return Ok(Vec::new());
         }
+        // Not gating — record so the next gate-close fires a flush.
+        self.was_inferring = true;
         let ctx = self
             .ctx
             .as_ref()
@@ -917,13 +969,19 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         params.set_translate(false);
         params.set_no_context(true);
         // #974: defense-in-depth against silence/non-speech hallucinations.
-        // `set_temperature(0.0)` pins greedy decoding (no sampling-fallback escape
-        // hatch on low logprob, where ".com" / "Thanks for watching" type
-        // confabulations emerge).
-        // `set_suppress_nst(true)` suppresses non-speech tokens like `[Music]` /
-        // `[Applause]` from being decoded at all. Both are additive and safe for
-        // real-speech decoding.
+        //
+        // `set_temperature(0.0)` + `set_temperature_inc(0.0)` together pin
+        // greedy decoding with NO sampling fallback. whisper.cpp's default
+        // builds a fallback ladder [T, T+inc, ..., 1.0] and walks up on
+        // decode failure (default inc = 0.2). The ".com" / "Thanks for
+        // watching" confabulations come specifically from the high-T
+        // fallback step, so pinning T=0 alone (without inc=0) leaves the
+        // escape hatch open. Setting inc=0 collapses the ladder.
+        //
+        // `set_suppress_nst(true)` blocks non-speech tokens like `[Music]`
+        // / `[Applause]` from being decoded at all.
         params.set_temperature(0.0);
+        params.set_temperature_inc(0.0);
         params.set_suppress_nst(true);
         if !self.prompt.is_empty() {
             params.set_initial_prompt(self.prompt);
@@ -1100,9 +1158,17 @@ mod tests {
     use crate::audio::CaptureFormat;
     use std::sync::Mutex;
 
-    // Tests that mutate HUSH_WHISPER_STATE_RECREATE_INTERVAL must hold this
-    // lock for the full read-mutate-restore cycle; Rust test threads run in
-    // parallel and a remove_var in one test can race a set_var in another.
+    // Tests that mutate env vars must hold this lock for the full
+    // read-mutate-restore cycle; Rust test threads run in parallel and a
+    // remove_var in one test can race a set_var in another.
+    //
+    // Currently guards:
+    //   * HUSH_WHISPER_STATE_RECREATE_INTERVAL (state_recreate_interval tests)
+    //
+    // Future tests that set HUSH_VAD_THRESHOLD, HUSH_VAD_HANGOVER_MS, or
+    // HUSH_VAD_DISABLE must also acquire this lock — the VAD config is read
+    // at session construction (WhisperStreamingSession::new / new_for_test)
+    // and is equally susceptible to concurrent-env-var races.
     static ENV_VAR_LOCK: Mutex<()> = Mutex::new(());
 
     /// `prepare_audio` is the pure-logic glue between the audio module's
@@ -1239,42 +1305,7 @@ mod tests {
     // contract (residual carry-over + exactly one VAD call per full
     // frame).
 
-    use crate::vad::VadSession;
-
-    /// VAD that always reports speech — every frame's probability is
-    /// 1.0, so `drain` should never gate.
-    struct AlwaysSpeechVad;
-    impl VadSession for AlwaysSpeechVad {
-        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
-            Ok(1.0)
-        }
-    }
-
-    /// VAD that always reports silence — every frame's probability is
-    /// 0.0, so once the hangover elapses `drain` must gate.
-    struct AlwaysSilenceVad;
-    impl VadSession for AlwaysSilenceVad {
-        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
-            Ok(0.0)
-        }
-    }
-
-    /// VAD whose probabilities follow a scripted sequence, defaulting
-    /// to 0.0 when the queue is exhausted. Counts every call so the
-    /// framing test can assert "exactly one call per full frame".
-    /// Uses an `Arc<AtomicUsize>` rather than `Rc<RefCell<usize>>`
-    /// because `VadSession: Send` requires the impl be thread-safe.
-    struct ScriptedVad {
-        probs: std::collections::VecDeque<f32>,
-        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    }
-    impl VadSession for ScriptedVad {
-        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(self.probs.pop_front().unwrap_or(0.0))
-        }
-    }
+    use crate::vad::test_mocks::{AlwaysSilenceVad, AlwaysSpeechVad, ScriptedVad};
 
     /// Counts how many times `infer` was called so the gate tests can
     /// assert "inference ran" vs "inference skipped" without depending
@@ -1452,6 +1483,123 @@ mod tests {
             calls.load(std::sync::atomic::Ordering::Relaxed),
             2,
             "second feed: residual + new samples should yield one more frame"
+        );
+    }
+
+    #[test]
+    fn vad_gate_close_flushes_in_flight_segments() {
+        // Pin the load-bearing flush behaviour (#974 follow-up): when
+        // the gate transitions from "running inference" to "gating",
+        // the first gated drain fires `state.tick_flush` to commit any
+        // mid-flight utterance that hasn't crossed `commit_tail_ms`
+        // yet. Without this the 30 s `window_max_ms` head-slide would
+        // strand the user's last sentence after a long silence.
+        let mut session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            vad_gate_streaming_config(),
+            Box::new(AlwaysSilenceVad),
+        );
+        // 1 s of audio with the VAD reporting silence. We override
+        // `last_speech_at` for the first drain so the gate is open,
+        // then for the second drain so the gate has just closed.
+        session.feed(&one_second_of_speech()).unwrap();
+        session.set_last_speech_at_for_test(Some(std::time::Instant::now()));
+
+        // Drain 1: gate open, inferer returns a segment that's "young"
+        // (1 s end with commit_tail_ms = 2 s). Normal `tick` emits it
+        // as a partial.
+        let mut inferer = CountingInferer {
+            calls: 0,
+            segments_per_call: vec![StreamSegment {
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "stranded sentence".into(),
+            }],
+        };
+        let first = session.drain_with_inferer(&mut inferer).unwrap();
+        assert_eq!(inferer.calls, 1, "first drain runs inference");
+        let partials_first: Vec<_> = first.iter().filter(|u| !u.is_final).collect();
+        assert_eq!(
+            partials_first.len(),
+            1,
+            "young segment surfaces as partial under normal tick"
+        );
+
+        // Feed another second so the interval gate opens on drain 2.
+        session.feed(&one_second_of_speech()).unwrap();
+        // Now place the speech clock past the hangover — gate closes.
+        let past = std::time::Instant::now()
+            .checked_sub(2 * session.vad_hangover_for_test())
+            .expect("Instant arithmetic doesn't underflow on any sane system");
+        session.set_last_speech_at_for_test(Some(past));
+
+        // Drain 2: gate just closed AND was_inferring=true from drain 1
+        // — flush must run, committing the in-flight segment as final.
+        let flushed = session.drain_with_inferer(&mut inferer).unwrap();
+        assert_eq!(
+            inferer.calls, 2,
+            "gate-close flush must invoke the inferer exactly once"
+        );
+        let finals: Vec<_> = flushed.iter().filter(|u| u.is_final).collect();
+        assert_eq!(
+            finals.len(),
+            1,
+            "flush must commit the in-flight segment as final, not partial"
+        );
+        assert_eq!(finals[0].text, "stranded sentence");
+    }
+
+    #[test]
+    fn vad_gate_close_flush_fires_exactly_once_then_skips() {
+        // The flush is exactly-once-per-gate-close: subsequent gated
+        // drains must not invoke the inferer until speech returns and
+        // a new run of inferences begins. Pins the discipline that the
+        // flush doesn't degrade to "infer on every gated drain", which
+        // would re-introduce the hallucination cost the gate exists to
+        // prevent.
+        let mut session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            vad_gate_streaming_config(),
+            Box::new(AlwaysSilenceVad),
+        );
+        session.feed(&one_second_of_speech()).unwrap();
+        session.set_last_speech_at_for_test(Some(std::time::Instant::now()));
+
+        // Drain 1: gate open, inference runs.
+        let mut inferer = CountingInferer {
+            calls: 0,
+            segments_per_call: vec![StreamSegment {
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "in flight".into(),
+            }],
+        };
+        let _ = session.drain_with_inferer(&mut inferer).unwrap();
+        assert_eq!(inferer.calls, 1, "drain 1 runs inference");
+
+        // Feed more audio so the interval gate is open for drain 2.
+        session.feed(&one_second_of_speech()).unwrap();
+        // Close the gate.
+        let past = std::time::Instant::now()
+            .checked_sub(2 * session.vad_hangover_for_test())
+            .expect("hangover-relative Instant subtraction is well-defined");
+        session.set_last_speech_at_for_test(Some(past));
+
+        // Drain 2: first gated drain after a run — flush fires.
+        let _ = session.drain_with_inferer(&mut inferer).unwrap();
+        assert_eq!(inferer.calls, 2, "drain 2 fires the flush");
+
+        // Drain 3+: still gated, no new speech — flush must NOT fire
+        // again. Feed audio between calls to clear the interval-gate
+        // skip path; the flush should still be suppressed.
+        for _ in 0..3 {
+            session.feed(&one_second_of_speech()).unwrap();
+            let out = session.drain_with_inferer(&mut inferer).unwrap();
+            assert!(out.is_empty(), "subsequent gated drains return empty");
+        }
+        assert_eq!(
+            inferer.calls, 2,
+            "flush must fire exactly once per gate-close, not on every drain"
         );
     }
 

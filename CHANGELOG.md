@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Meeting transcripts: silent stretches no longer produce phantom transcripts.**
+  A speech-presence gate (Silero VAD, bundled, ~1.3 MB) now sits in front of
+  Whisper inference during meetings. The `.com`, "Thanks for watching!", and
+  looping "We're going to use the web." artefacts that appeared on hold music,
+  keyboard noise, and breath pauses are skipped before Whisper runs. Phantom
+  diarizer clusters built from those hallucinations are eliminated as a side
+  effect. (#974)
+
 ### Changed
+
+- **Push-to-talk dictation: greedy decode pinned, sampling fallback disabled.**
+  Two whisper.cpp parameters (`temperature=0`, `temperature_inc=0`) tightened
+  on the dictation path as defense-in-depth against the same hallucination
+  class. (#974)
+
+- **Meetings: ~1-3% extra CPU per audio source.** Continuous speech-presence
+  checks add modest load during meetings; the net battery impact is favourable
+  on long calls with silent stretches since the much-more-expensive Whisper
+  inference is skipped on those stretches. Tunable via `HUSH_VAD_THRESHOLD`,
+  `HUSH_VAD_HANGOVER_MS`, and `HUSH_VAD_DISABLE` env vars for A/B and debug. (#974)
 
 - **Distribution: Homebrew tap retired.** The `khawkins98/homebrew-tap` cask and the release workflow's "Update Homebrew tap" step are removed. Install via the GitHub Releases page (DMG for macOS, AppImage/.deb for Linux, MSI/.exe for Windows). The maintenance cost of the cross-repo PAT + tap CI step is hard to justify for a hobby project with no current user base; the DMG/installer path was already supported and remains unchanged.
 

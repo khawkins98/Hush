@@ -73,6 +73,53 @@ impl VadSession for NoopVadSession {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_mocks {
+    //! Reusable test mocks for [`VadSession`]. Available under the
+    //! `test-utils` feature so integration tests in `tests/` and
+    //! downstream crates can compose them without reinventing.
+
+    use super::VadSession;
+    use anyhow::Result;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Always reports speech (probability 1.0). Equivalent to `NoopVad`'s
+    /// session but spelled out for tests that want a clear "this VAD
+    /// never gates" signal.
+    pub struct AlwaysSpeechVad;
+    impl VadSession for AlwaysSpeechVad {
+        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
+            Ok(1.0)
+        }
+    }
+
+    /// Always reports silence (probability 0.0). The default-gating
+    /// counterpart for tests that want to force the gate closed.
+    pub struct AlwaysSilenceVad;
+    impl VadSession for AlwaysSilenceVad {
+        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
+            Ok(0.0)
+        }
+    }
+
+    /// Returns probabilities from a scripted queue in order. When the
+    /// queue empties, returns `0.0` (silence) forever. The `calls`
+    /// counter is `Arc<AtomicUsize>` so the test can observe how many
+    /// frames were scored (the `Send` bound on `VadSession` rules out
+    /// `Rc<RefCell<_>>`).
+    pub struct ScriptedVad {
+        pub probs: std::collections::VecDeque<f32>,
+        pub calls: Arc<AtomicUsize>,
+    }
+    impl VadSession for ScriptedVad {
+        fn score_frame(&mut self, _frame: &[f32]) -> Result<f32> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.probs.pop_front().unwrap_or(0.0))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
