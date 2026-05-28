@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Distribution: Homebrew tap retired.** The `khawkins98/homebrew-tap` cask and the release workflow's "Update Homebrew tap" step are removed. Install via the GitHub Releases page (DMG for macOS, AppImage/.deb for Linux, MSI/.exe for Windows). The maintenance cost of the cross-repo PAT + tap CI step is hard to justify for a hobby project with no current user base; the DMG/installer path was already supported and remains unchanged.
+
 ## [0.11.0] - 2026-05-28
 
 v0.11.0 fixes the meeting-stop hang: pressing **Stop** on a meeting now releases the microphone and returns in well under a second, with whisper tail flush, diarization, speaker identity, and persistence running in the background. Push-to-talk dictation works the moment a meeting's audio is released, even while the tail is still committing; the meeting panel shows a quiet "Finishing transcription…" indicator during the background pass. Internally this re-shapes the meeting pump's cancel path around the existing ack-waited `AudioSession::stop()` (returning the drained tail to avoid loss), narrows the old `Stopping` state to a brief `Releasing` window, and parks the long work in a single-lane `finalizing` slot. Concurrent meetings are explicitly deferred — `learnings.md` 2026-05-26 carries the resume guide.
