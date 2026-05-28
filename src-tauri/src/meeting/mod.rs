@@ -50,6 +50,15 @@ pub mod sqlite;
 #[cfg(test)]
 mod test_support;
 
+/// Test-only re-export so the IPC-layer dictation tests can build a
+/// `SessionManager` whose streaming `finish()` blocks on a barrier —
+/// used to keep a meeting's background finalization in flight while a
+/// dictation start is exercised at the IPC seam (background
+/// finalization, #947 review Gap 2). Scoped `pub(crate)` + `cfg(test)`
+/// so it widens nothing in production.
+#[cfg(test)]
+pub(crate) use test_support::manager_with_slow_finish_parts;
+
 pub use app_overrides::{
     MeetingAppOverride, MeetingAppOverrideRepository, NewMeetingAppOverride,
     SqliteMeetingAppOverrideRepository,

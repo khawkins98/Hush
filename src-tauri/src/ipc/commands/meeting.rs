@@ -624,13 +624,16 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
     // thread; same rationale as the start path (#476).
     crate::hud::hide_async(app);
 
-    // Check *before* calling stop_manual so we know whether the pump
-    // was involved. We need this to distinguish two error cases:
+    // Check *before* calling stop_manual so we know whether a meeting pump
+    // was involved. `stop_manual` returns as soon as the audio device is
+    // released; the pump's tail finalization (flush, #667 identity
+    // resolution, DB close) keeps running in the background `finalizing`
+    // lane. We only need this flag to decide whether to rebuild the
+    // transcribe contexts after the stop:
     //
-    //   (a) "no meeting session active" — no pump was ever running,
-    //       transcribe slots are still live for dictation → skip cleanup.
-    //   (b) DB close failed after pump was already joined — pump is
-    //       gone, contexts are safe to drop → run cleanup anyway.
+    //   - meeting was active → rebuild (bound whisper #612 C-heap growth).
+    //   - "no meeting session active" → no pump ran, the transcribe slots
+    //     are still live for dictation, so skip the pointless rebuild.
     let had_active = state.meeting_manager.has_active_session();
 
     let stop_result = state
@@ -640,28 +643,39 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
         .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e:#}")));
 
     if had_active {
-        // The pump task has been joined (or this is a DB-close retry
-        // where it was already joined previously). All Arc<dyn Transcribe>
-        // clones held inside WhisperStreamingSession have been dropped.
+        // `stop_manual` returned the moment the audio device was released;
+        // the pump's continuation (tail flush, speaker-identity resolution,
+        // DB close) is parked in the manager's `finalizing` lane and STILL
+        // RUNNING. It holds its own Arc snapshot of the meeting transcribe
+        // context (proposal §A "Concurrency safety"), so swapping a fresh
+        // Arc into the slot here does not disturb the in-flight finalization.
         //
-        // Rebuild both the transcribers AND the diarizer in the background.
+        // Rebuild the transcribers (dictation + meeting) in the background.
         // The old Arcs stay live in their slots while the rebuild runs
-        // (~1 s transcribers, ~80 ms diarizer), so a rapid stop-then-start
-        // always finds a valid transcriber + diarizer in their slots and
-        // doesn't run idle / fall back to source labels for the new
-        // session. Only overwrite a slot when the rebuild returns Some
-        // (transcriber) or Ok (diarizer) — a failure is logged at error!
-        // and the existing (possibly high-watermarked) context stays live
-        // rather than leaving dictation/meetings broken until restart.
+        // (~1 s), so a rapid stop-then-start always finds a valid
+        // transcriber and doesn't run idle / fall back to source labels for
+        // the new session. Only overwrite a slot when the rebuild returns
+        // Some — a failure is logged at error! and the existing (possibly
+        // high-watermarked) context stays live rather than leaving
+        // dictation/meetings broken until restart.
         //
-        // SessionClusterState reset: a fresh `OnnxDiarizer` instance
-        // built by `swap_diarizer_after_download` has its own empty
-        // `SessionClusterState`, so installing it via the atomic write
-        // implicitly resets the speaker-label namespace — no bleed
-        // across meeting boundaries. The reset happens at swap-time,
-        // not at null-time, which is why we no longer need the
-        // synchronous `*slot = NoopDiarizer` step that earlier
-        // iterations of this PR included.
+        // The DIARIZER is deliberately NOT rebuilt here. Earlier iterations
+        // swapped in a fresh `OnnxDiarizer` to reset cluster state across
+        // the meeting boundary, but that is now both redundant and harmful:
+        //   - Redundant: the pump calls `diarize.reset()` at the START of
+        //     each session (#794), clearing `SessionClusterState`; and a new
+        //     meeting `start_manual` awaits the in-flight `finalizing` lane
+        //     before opening, so no two meetings ever share live cluster
+        //     state. `OnnxDiarizer` has no other growing/session state
+        //     besides `clusters`, which `reset()` fully replaces.
+        //   - Harmful: the background finalization reads THIS session's
+        //     cluster centroids (`session_centroids()`, #667) AFTER the slow
+        //     tail `finish()`. A rebuild (~80 ms) wins the race against that
+        //     tail (up to 60 s) and would install an EMPTY diarizer, so the
+        //     centroid read would see nothing and #667 identity resolution
+        //     would silently no-op for every backgrounded meeting. Keeping
+        //     the slot's diarizer stable across the stop boundary lets the
+        //     finalization read the session's real centroids.
         //
         // Old WhisperContext compute buffers (KV cache, mel scratch, beam
         // scratch) are freed when the new Arcs replace the old ones and
@@ -681,8 +695,6 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
             .transcriber_generation
             .load(std::sync::atomic::Ordering::Acquire);
         let generation_bg = Arc::clone(&state.inference.transcriber_generation);
-        #[cfg(feature = "diarization-onnx")]
-        let diarize_slot_bg = Arc::clone(&state.inference.diarize_slot);
 
         tauri::async_runtime::spawn(async move {
             let (dictation, meeting) = tokio::join!(
@@ -730,44 +742,6 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
                 );
             } else if let Ok(mut g) = transcribe_meeting_slot.lock() {
                 *g = meeting;
-            }
-
-            #[cfg(feature = "diarization-onnx")]
-            {
-                use crate::diarization::catalog::WESPEAKER_RESNET34_LM_FILENAME;
-                let model_path = models_dir_bg.join(WESPEAKER_RESNET34_LM_FILENAME);
-                if model_path.exists() {
-                    // `diarize_slot` holds the inner diarizer directly;
-                    // FlagGatedDiarizer wraps the slot in AppState and reads
-                    // through it on every call (not a snapshot at session start).
-                    let slot = Arc::clone(&diarize_slot_bg);
-                    match tokio::task::spawn_blocking(move || {
-                        crate::ipc::commands::diarizer::swap_diarizer_after_download(
-                            &slot,
-                            &model_path,
-                        )
-                    })
-                    .await
-                    {
-                        Ok(Ok(())) => {
-                            tracing::info!("diarizer reloaded after meeting stop");
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!(
-                                error = ?e,
-                                "meeting stop: diarizer reload failed; \
-                                 speaker identification unavailable until next model selection"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                error = ?e,
-                                "meeting stop: diarizer reload task panicked; \
-                                 speaker identification unavailable until next model selection"
-                            );
-                        }
-                    }
-                }
             }
         });
     }

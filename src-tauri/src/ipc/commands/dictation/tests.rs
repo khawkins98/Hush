@@ -719,3 +719,155 @@ fn take_foreground_snapshot_pops_and_clears_the_slot() {
     let again = take_foreground_snapshot(&state).expect("not poisoned");
     assert!(again.is_none());
 }
+
+/// IPC-layer regression (#947 review Gap 2): a DICTATION start must
+/// succeed WHILE a meeting's background finalization is still in flight.
+///
+/// Dictation uses the separate `transcribe` (dictation) slot and is
+/// gated only on `meeting_manager.active_session_id()` — NOT on the
+/// meeting `finalizing` lane. Background finalization flips the slot to
+/// Idle (`active_session_id() == None`) the moment audio is released,
+/// then parks the slow tail flush off to the side. So a dictation start
+/// fired during that window must go through.
+///
+/// Drives the real IPC start path (`start_dictation_inner`, the body of
+/// the `start_dictation` command) against a full `AppState`. A
+/// slow-`finish()` streaming session keeps finalization blocked on a
+/// barrier so the assertion lands deterministically while it's in flight.
+#[tokio::test]
+async fn dictation_start_succeeds_while_meeting_finalization_in_flight() {
+    use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
+
+    // Independent in-memory repo + recording emitter so we can read the
+    // closed session row and assert MeetingSessionEnded after release.
+    let db = crate::db::SqliteDatabase::open_in_memory().await.unwrap();
+    let meeting_repo: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(
+        crate::meeting::SqliteMeetingSessionRepository::new(Arc::new(db)),
+    );
+    let emitter = crate::ipc::events::RecordingEventEmitter::new();
+
+    let release = Arc::new(StdAtomicBool::new(false));
+    let started = Arc::new(StdAtomicBool::new(false));
+    let mgr = crate::meeting::manager_with_slow_finish_parts(
+        Arc::clone(&release),
+        Arc::clone(&started),
+        Arc::clone(&meeting_repo),
+        Arc::new(emitter.clone()),
+    );
+
+    // Start + stop a meeting so its finalization is in flight (blocked on
+    // the barrier inside the slow finish()). Done before wrapping the
+    // manager into AppState — start/stop go through the manager directly,
+    // exactly as the meeting IPC commands would.
+    let session = mgr
+        .start_manual(
+            vec![AudioSource::default_microphone()],
+            Some("Zoom".into()),
+            None,
+            Default::default(),
+        )
+        .await
+        .expect("meeting start succeeds");
+    mgr.stop_manual()
+        .await
+        .expect("stop returns once audio released");
+
+    // The slot is Idle while the tail flush is parked + blocked on the
+    // barrier — this is precisely what unblocks a dictation start.
+    assert!(
+        mgr.active_session_id().is_none(),
+        "meeting slot must be Idle (audio released) while finalization is parked"
+    );
+
+    // Confirm finalization is genuinely in flight (not already done):
+    // the slow finish() flips `started` when it begins spinning on the
+    // barrier. Wait for it so the dictation start below is exercised
+    // against a truly-blocked finalization, not a no-op window.
+    let mut finalize_in_flight = false;
+    for _ in 0..200 {
+        if started.load(StdOrdering::Acquire) {
+            finalize_in_flight = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        finalize_in_flight,
+        "the meeting's tail finish() must be in flight (blocked on the barrier) \
+         so the dictation start is exercised during real finalization"
+    );
+    assert!(
+        !release.load(StdOrdering::Acquire),
+        "barrier must still be held — finalization is blocked, not complete"
+    );
+
+    // Build the AppState the dictation IPC path runs against. The
+    // dictation audio + transcriber are independent of the meeting's
+    // (the meeting used StubParallelAudio internally).
+    let dictation_audio: Arc<dyn AudioCapture> = Arc::new(AudioThatStarts {
+        recording: AtomicBool::new(false),
+    });
+    let dictation_transcribe: Arc<dyn Transcribe> = Arc::new(OkTranscribe);
+    let state = crate::ipc::AppStateBuilder::new()
+        .audio(dictation_audio)
+        .transcribe(Some(dictation_transcribe))
+        .history(Arc::new(crate::ipc::tests::NoopHistory))
+        .replacements(Arc::new(crate::ipc::tests::NoopReplacements))
+        .vocabulary(Arc::new(crate::ipc::tests::NoopVocabulary))
+        .settings(Arc::new(crate::ipc::tests::MemSettings {
+            map: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }))
+        .meetings(Arc::clone(&meeting_repo))
+        .meeting_app_overrides({
+            let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                Arc::new(crate::ipc::tests::NoopMeetingAppOverrides);
+            o
+        })
+        .meeting_manager(Arc::new(mgr))
+        .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+        .build()
+        .expect("test state: builder fields complete");
+
+    // The load-bearing assertion: a dictation start through the real IPC
+    // body succeeds while the meeting's finalization is still blocked.
+    // If dictation were (incorrectly) gated on the finalizing lane, this
+    // would fail or block.
+    start_dictation_inner(&state, AudioSource::default_microphone())
+        .expect("dictation start must succeed during background finalization");
+
+    // Now release the barrier and let the parked finalization task run to
+    // completion. It's a spawned tokio task; poll until MeetingSessionEnded
+    // is emitted (the pump emits it as its LAST action, right after
+    // close_session) — bounded so a regression can't hang CI. Polling
+    // rather than joining the handle keeps the test off the manager's
+    // `pub(super)` `finalizing` field; the observable outcome is the point.
+    release.store(true, StdOrdering::Release);
+    let mut ended_for_session = false;
+    for _ in 0..200 {
+        let ended = emitter.payloads_for("meeting:session-ended");
+        if ended
+            .iter()
+            .any(|p| p.get("sessionId").and_then(|v| v.as_i64()) == Some(session.id))
+        {
+            ended_for_session = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        ended_for_session,
+        "MeetingSessionEnded must be emitted for the finalized session after release"
+    );
+
+    // The session row is closed (ended_at set) — emitted-ended implies
+    // close_session already ran (pump order: close then emit-ended).
+    let row = meeting_repo
+        .get_by_id(session.id)
+        .await
+        .unwrap()
+        .expect("session row exists");
+    assert!(
+        row.ended_at.is_some(),
+        "background finalization must close the session row"
+    );
+}

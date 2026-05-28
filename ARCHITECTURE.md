@@ -142,9 +142,31 @@ open handles + per-source StreamingTranscribeSession(s)
           + emit live events             + emit session events / notices
 ```
 
-**State machine.** `Mutex<SessionState>` where `SessionState` is `Idle | Opening | Active(...)`. The `Opening` sentinel is held across the async DB / handle-open work so concurrent `meeting_start_manual` IPC calls can't race past the precondition.
+**State machine.** `Mutex<SessionState>` where `SessionState` is `Idle | Opening | Active(...) | Releasing`. The `Opening` sentinel is held across the async DB / handle-open work so concurrent `meeting_start_manual` IPC calls can't race past the precondition. `Releasing` covers the brief foreground window between `stop_manual` signalling cancel and the pump confirming audio is released; it blocks a concurrent meeting start (the capture singleton isn't free yet) but not a dictation start.
 
-**Shutdown.** `stop_manual` sets the cancel flag, awaits one final drain/inference pass plus each streaming session's `finish()` tail flush, then writes `ended_at` on the session row. `SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `CoreAudioTapSession` both have `Drop` impls that release their OS resources (the tap session sends `SIGTERM` to the Swift helper, with a `SIGKILL` fallback after 1 s).
+**Shutdown / release-then-finalize.** `stop_manual` signals cancel and awaits only an audio-released checkpoint — not the full tail flush. The pump's cancel path is:
+
+1. Final drain of each source's ring buffer.
+2. **Ack-waited stop** of every `AudioSession` (`handle.stop()` round-trips `Cmd::Stop` and returns the captured tail, rather than relying on `Drop` which discards the tail and doesn't guarantee the device is free before the reply). The tail samples are fed into the streaming session.
+3. Emit `meeting:finalizing { sessionId }` — frontend clears `activeId` (unblocking PTT/dictation) and shows "Finishing transcription…".
+4. Fire the `audio_released` oneshot, allowing `stop_manual` to flip `Releasing → Idle`, park the pump's continuation in the single `finalizing` lane, and return. **Sub-second.**
+5. **Background phase** (no audio held): `flush_sessions` (`finish()` per source, up to 60 s each) → tail diarization → persist tail finals → speaker-identity resolution (`session_centroids()`, #667) → `repo.close_session(id)` → emit `meeting:session-ended`.
+
+`SessionManager` holds a single `finalizing: Mutex<Option<JoinHandle<()>>>`. A new meeting `start_manual` awaits this handle before claiming the slot (the new session would otherwise share the diarizer cluster state and the meeting `WhisperContext` with the finalizing one — see the "Deferred: concurrent meetings" note below). Dictation `start` does **not** wait: it uses a separate transcriber slot (#248) and no diarizer, so it proceeds as soon as `live = Idle`. `SessionManager::Drop` aborts the handle (abort-and-reconcile: the `finish()` runs in `spawn_blocking` and cannot be cancelled, so joining would hang shutdown; any unclosed session row is cleaned up by `reconcile_orphan_sessions` on next launch).
+
+**Meeting events emitted:**
+
+| Event | Payload | When |
+|---|---|---|
+| `meeting:session-started` | `{ sessionId }` | Pump open, before first tick |
+| `meeting:source-failed` | `{ sessionId, source, error }` | A capture handle fails mid-session |
+| `meeting:finalizing` | `{ sessionId }` | Audio released; background tail flush starting |
+| `meeting:session-ended` | `{ sessionId }` | Background finalization complete; DB row closed |
+| `meeting:tail-dropped` | `{ sessionId }` | A `finish()` timed out or errored (backstop, fires in background) |
+
+**Deferred: concurrent meetings.** A new meeting cannot start while a previous one finalizes — it awaits the `finalizing` handle. This is deliberate: all meeting streaming sessions clone one `Arc<Mutex<WhisperContext>>` (`transcription/whisper.rs:460`); `infer`/`finish` hold that lock across the entire inference, so a live meeting and a finalizing meeting sharing it would freeze the live transcript. The shared diarizer has the same problem. Enabling concurrency requires per-session whisper contexts + diarizer isolation. See `learnings.md` 2026-05-26 "Deferred: concurrent meetings" for the step-by-step.
+
+`SessionManager::Drop` aborts the pump's `JoinHandle` on app shutdown; `CpalMicSessionHandle` and `CoreAudioTapSession` both have `Drop` impls that release their OS resources (the tap session sends `SIGTERM` to the Swift helper, with a `SIGKILL` fallback after 1 s).
 
 **Privacy.** Audio is buffered in RAM (`AudioRollingBuffer`, ~30 s window) and never written to disk. Only the resulting transcript text is persisted.
 

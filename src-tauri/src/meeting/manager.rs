@@ -112,6 +112,18 @@ pub struct SessionManager {
     /// Whether speaker identity resolution is enabled. Shared Arc
     /// from `RuntimeFlags::speaker_identity_enabled`.
     pub(super) speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Single in-flight background finalization (whisper tail flush +
+    /// diarize + speaker-identity + DB close + emit-ended) parked here
+    /// by `stop_manual` once the pump confirms audio is released. At
+    /// most one because a new meeting `start_manual` awaits this handle
+    /// before claiming the slot — a concurrent meeting would otherwise
+    /// share the diarizer cluster state and the meeting `WhisperContext`
+    /// with the finalizing session. Hence `Option`, not a map.
+    /// Concurrent meetings are explicitly deferred — see learnings.md
+    /// 2026-05-26 "Deferred: concurrent meetings".
+    /// Cleared by the next `start_manual` (await + take) or by `Drop`
+    /// (abort-and-reconcile).
+    pub(super) finalizing: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// Lifecycle state for the manager's session slot. Three-valued
@@ -125,14 +137,13 @@ pub(super) enum SessionState {
     Idle,
     Opening,
     Active(ActiveSession),
-    /// Pump has been signalled to cancel and is draining its tail
-    /// transcription. `start_manual` and `append_if_active` treat
-    /// this state as busy so a new session cannot claim audio device
-    /// handles while the old pump still holds them (#839). Transitions
-    /// to `Idle` once `close_session` succeeds, or back to
-    /// `Active(close_attempted = true)` if the DB close fails and
-    /// a retry is needed.
-    Stopping,
+    /// Brief foreground window between `stop_manual` signalling cancel
+    /// and the pump confirming it has released the audio device. Only
+    /// this short interval blocks a concurrent meeting `start_manual`
+    /// (the capture singleton isn't free yet); the *slow* tail flush
+    /// runs in the background after the slot has already flipped back
+    /// to `Idle`. See learnings.md 2026-05-26.
+    Releasing,
 }
 
 /// In-memory state for an open meeting session. Held inside the
@@ -148,21 +159,22 @@ pub(super) struct ActiveSession {
     /// `stop_manual`; the pump completes its in-flight chunk, drains
     /// + transcribes one final time, then exits.
     pub(super) cancel: Arc<AtomicBool>,
-    /// Pump task. Joined on `stop_manual` so the final chunk's
-    /// transcription + append are observed before the session row
-    /// is closed. Wrapped in `Mutex<Option<...>>` so `stop_manual`
-    /// can take it out without the borrow checker complaining.
+    /// Pump task. On `stop_manual` this handle is *not* joined inline
+    /// any more — it is parked in `SessionManager::finalizing` so the
+    /// slow tail flush runs in the background while `stop_manual`
+    /// returns promptly. Wrapped in `Mutex<Option<...>>` so
+    /// `stop_manual` can take it out without the borrow checker
+    /// complaining.
     pub(super) pump_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Set to `true` when `stop_manual`'s `repo.close_session`
-    /// call fails and the recovery path restores the session for
-    /// a retry (#249). A subsequent `stop_manual` then skips the
-    /// cancel + pump-join steps (the pump is already gone — it
-    /// finished and exited on the first try) and goes straight
-    /// to retrying the DB close. Without this flag the second
-    /// stop would store `true` into a fresh `AtomicBool` no
-    /// task reads, and `take()` an already-empty `pump_handle`,
-    /// burning the user's "let me retry" intent on no-op work.
-    pub(super) close_attempted: bool,
+    /// Resolves when the pump has explicitly released every audio handle
+    /// (device freed) and is about to begin the background tail flush.
+    /// `stop_manual` awaits this (with a timeout fallback) so it returns
+    /// only after the capture singleton is actually free — then flips
+    /// `Releasing → Idle`. The matching `oneshot::Sender` lives in the
+    /// pump's `PumpContext`. `Mutex<Option<...>>` so `stop_manual` can
+    /// `take()` the receiver out (a `oneshot::Receiver` is consumed by
+    /// `.await`).
+    pub(super) audio_released_rx: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 impl SessionManager {
@@ -234,6 +246,7 @@ impl SessionManager {
             mic_gain_db,
             speaker_store,
             speaker_identity_enabled,
+            finalizing: Mutex::new(None),
         }
     }
 
@@ -280,7 +293,7 @@ impl SessionManager {
     pub fn active_session_id(&self) -> Option<i64> {
         self.state.lock().ok().and_then(|guard| match &*guard {
             SessionState::Active(a) => Some(a.id),
-            SessionState::Idle | SessionState::Opening | SessionState::Stopping => None,
+            SessionState::Idle | SessionState::Opening | SessionState::Releasing => None,
         })
     }
 }
@@ -312,9 +325,9 @@ impl Drop for SessionManager {
         let active = self.state.lock().ok().and_then(|mut guard| {
             match std::mem::replace(&mut *guard, SessionState::Idle) {
                 SessionState::Active(a) => Some(a),
-                // Stopping means the pump was already signalled — grab the
-                // cancel + handle for the abort below, same as Active.
-                SessionState::Stopping => None, // pump is already signalled; nothing to abort
+                // Releasing means the pump was already signalled — its
+                // continuation is parked in `finalizing` and aborted below.
+                SessionState::Releasing => None,
                 state @ (SessionState::Opening | SessionState::Idle) => {
                     *guard = state;
                     None
@@ -334,6 +347,18 @@ impl Drop for SessionManager {
             // re-use rowids) could merge into its first poll.
             if let Ok(mut guard) = self.partials.write() {
                 guard.remove(&active.id);
+            }
+        }
+
+        // Abort any in-flight background finalization (abort-and-reconcile,
+        // per the proposal). The tail `finish()` runs in `spawn_blocking`
+        // and cannot be cancelled, so we must NOT block shutdown joining it
+        // — aborting drops the task at its next await; any session row that
+        // didn't get closed is closed by `reconcile_orphan_sessions` on the
+        // next launch, the same tail-loss guarantee as a crash.
+        if let Ok(mut slot) = self.finalizing.lock() {
+            if let Some(handle) = slot.take() {
+                handle.abort();
             }
         }
     }
@@ -586,12 +611,17 @@ mod tests {
         );
     }
 
-    /// #492: with no concurrent start in flight, a `close_session`
-    /// failure restores the session for retry — preserving the
-    /// pre-fix behaviour that #249 relies on. Slot ends up
-    /// `Active(old_id)` with `close_attempted = true`.
+    /// #492/#839 adapted for background finalization. The DB
+    /// `close_session` now runs in the *background* pump continuation,
+    /// not inline in `stop_manual`. So a close failure can no longer
+    /// surface a retry to an already-returned Stop:
+    ///   - `stop_manual` returns `Ok` once audio is released, regardless
+    ///     of whether the eventual background close succeeds.
+    ///   - The slot flips back to `Idle` (the device is free).
+    ///   - A background close failure is logged and leaves the row open
+    ///     for `reconcile_orphan_sessions` to close on next launch.
     #[tokio::test]
-    async fn stop_manual_close_failure_restores_session_for_retry_when_idle() {
+    async fn stop_manual_returns_ok_and_close_failure_leaves_row_open_for_reconcile() {
         let db = SqliteDatabase::open_in_memory().await.unwrap();
         let inner: Arc<dyn MeetingSessionRepository> =
             Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
@@ -611,96 +641,101 @@ mod tests {
             .await
             .unwrap();
 
-        let err = mgr.stop_manual().await.expect_err("close fails by design");
-        assert!(format!("{err:#}").contains("simulated close_session failure"));
+        // Stop returns Ok even though the background close will fail —
+        // close is no longer inline, so its failure can't propagate here.
+        mgr.stop_manual()
+            .await
+            .expect("stop returns Ok once audio is released");
 
-        // Slot should now be Active(session.id) with close_attempted = true,
-        // ready for the user's retry.
-        let guard = mgr.state.lock().unwrap();
-        match &*guard {
-            SessionState::Active(a) => {
-                assert_eq!(a.id, session.id, "old session id preserved for retry");
-                assert!(
-                    a.close_attempted,
-                    "close_attempted should be set so retry skips pump teardown"
-                );
-            }
-            SessionState::Idle => panic!("expected Active(old) after close failure; got Idle"),
-            SessionState::Opening => {
-                panic!("expected Active(old) after close failure; got Opening")
-            }
-            SessionState::Stopping => {
-                panic!("expected Active(old) after close failure; got Stopping")
-            }
+        // Slot flipped back to Idle (audio released) — a new session can
+        // be claimed; active_session_id reports nothing in flight.
+        assert!(
+            mgr.active_session_id().is_none(),
+            "slot must be Idle after stop_manual returns"
+        );
+
+        // Drain the background finalization so we can observe its effect
+        // deterministically (the close will fail by design).
+        let finalization = mgr.finalizing.lock().unwrap().take();
+        if let Some(handle) = finalization {
+            let _ = handle.await;
+        }
+
+        // The row is still open: the failing close left ended_at NULL. The
+        // boot-time reconcile is what closes it (simulate that pass here to
+        // pin the recovery story end-to-end). Read against the inner repo
+        // since FailingCloseRepo only overrides close_session.
+        let row = inner.get_by_id(session.id).await.unwrap().unwrap();
+        assert!(
+            row.ended_at.is_none(),
+            "background close failure must leave the row open for reconcile"
+        );
+    }
+
+    /// `stop_manual` returns *before* the slow streaming `finish()`
+    /// completes — the whole point of background finalization. With a
+    /// `finish()` that blocks until released, the stop must still resolve
+    /// promptly (audio released) while the tail flush is still blocked.
+    #[tokio::test]
+    async fn stop_manual_returns_before_slow_finish_completes() {
+        use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
+
+        let release = Arc::new(StdAtomicBool::new(false));
+        let started = Arc::new(StdAtomicBool::new(false));
+        let mgr = crate::meeting::test_support::manager_with_slow_finish(
+            Arc::clone(&release),
+            Arc::clone(&started),
+        )
+        .await;
+
+        mgr.start_manual(
+            vec![AudioSource::default_microphone()],
+            Some("Zoom".into()),
+            None,
+            Default::default(),
+        )
+        .await
+        .unwrap();
+
+        // Never release the barrier before stop returns — if stop_manual
+        // awaited the full tail flush, this would hang on the bounded spin.
+        tokio::time::timeout(std::time::Duration::from_secs(2), mgr.stop_manual())
+            .await
+            .expect("stop_manual must return well before the blocked finish()")
+            .expect("stop returns Ok once audio released");
+
+        // Slot is Idle (audio released) and the finalization is parked +
+        // still in flight (finish() is blocked on the barrier).
+        assert!(mgr.active_session_id().is_none());
+
+        // Release and drain so the test doesn't leak a blocked task.
+        release.store(true, StdOrdering::Release);
+        let finalization = mgr.finalizing.lock().unwrap().take();
+        if let Some(handle) = finalization {
+            let _ = handle.await;
         }
     }
 
-    /// #492 — the race the bug describes. While `stop_manual`
-    /// awaits `close_session`, a concurrent `start_manual` claims
-    /// the slot for a NEW session. Pre-fix the recovery path
-    /// would unconditionally overwrite that with `Active(<old id>)`,
-    /// silently dropping the new session. Post-fix the recovery
-    /// only fires when the slot is still `Idle` — when it's been
-    /// claimed by a new Opening/Active state, the close error
-    /// surfaces but the new session survives.
-    ///
-    /// Implementation: the failing repo's `close_session` callback
-    /// flips the slot to a synthetic `Active(<new id>)` state right
-    /// before returning Err, simulating the concurrent claim
-    /// without spawning real concurrent tasks.
+    /// A new *meeting* `start_manual` must await any in-flight background
+    /// finalization before claiming the slot — a concurrent meeting would
+    /// otherwise share the diarizer cluster state + meeting WhisperContext
+    /// with the finalizing one. A slow streaming `finish()` keeps the
+    /// finalization in flight so the gate is exercised, not skipped.
     #[tokio::test]
-    async fn stop_manual_close_failure_does_not_clobber_concurrent_start() {
-        use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
-        use std::sync::OnceLock;
+    async fn start_manual_meeting_awaits_in_flight_finalization() {
+        use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
-        let inner: Arc<dyn MeetingSessionRepository> =
-            Arc::new(SqliteMeetingSessionRepository::new(Arc::new(db)));
+        // Manager whose streaming `finish()` blocks until released, so the
+        // background finalization is genuinely in flight after stop_manual.
+        let release = Arc::new(StdAtomicBool::new(false));
+        let started = Arc::new(StdAtomicBool::new(false));
+        let mgr = crate::meeting::test_support::manager_with_slow_finish(
+            Arc::clone(&release),
+            Arc::clone(&started),
+        )
+        .await;
 
-        // The slot-flip callback needs the manager's state mutex,
-        // but the manager is built with the failing repo — so the
-        // repo can't yet hold an Arc to a manager that doesn't
-        // exist. Sidestep with a `OnceLock<Arc<SessionManager>>`:
-        // build the failing repo with a callback that reads the
-        // OnceLock, build the manager wrapping that repo, then
-        // populate the OnceLock with the manager Arc.
-        const NEW_SESSION_ID: i64 = 999;
-        let mgr_slot: Arc<OnceLock<Arc<SessionManager>>> = Arc::new(OnceLock::new());
-        let callback_fired = Arc::new(AtomicI64::new(0));
-
-        let cb_fired = Arc::clone(&callback_fired);
-        let mgr_slot_for_cb = Arc::clone(&mgr_slot);
-        let on_close: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            // Simulate a concurrent `start_manual` claiming the
-            // slot during stop_manual's `close_session` await.
-            let mgr = mgr_slot_for_cb
-                .get()
-                .expect("mgr_slot populated before stop_manual runs");
-            let mut guard = mgr.state.lock().unwrap();
-            *guard = SessionState::Active(ActiveSession {
-                id: NEW_SESSION_ID,
-                started_at: std::time::Instant::now(),
-                cancel: Arc::new(AtomicBool::new(false)),
-                pump_handle: Mutex::new(None),
-                close_attempted: false,
-            });
-            cb_fired.fetch_add(1, AtomicOrdering::Relaxed);
-        });
-
-        let failing: Arc<dyn MeetingSessionRepository> = Arc::new(FailingCloseRepo {
-            inner: Arc::clone(&inner),
-            on_close_session: Some(on_close),
-        });
-        let mgr = Arc::new(manager_with_repo(failing));
-        mgr_slot
-            .set(Arc::clone(&mgr))
-            .ok()
-            .expect("OnceLock populated exactly once");
-
-        // Start a session under the (now-failing) repo. That writes
-        // an open row to the DB (via inner) and parks the slot in
-        // Active(session.id).
-        let session = mgr
+        let session_a = mgr
             .start_manual(
                 vec![AudioSource::default_microphone()],
                 Some("Zoom".into()),
@@ -710,43 +745,50 @@ mod tests {
             .await
             .unwrap();
 
-        // Now stop. close_session will fail AND its callback will
-        // flip the slot to Active(NEW_SESSION_ID), simulating the
-        // race. The recovery path must NOT overwrite that.
-        let err = mgr.stop_manual().await.expect_err("close fails by design");
-        assert!(format!("{err:#}").contains("simulated close_session failure"));
-        assert_eq!(
-            callback_fired.load(AtomicOrdering::Relaxed),
-            1,
-            "the slot-flip callback must have fired during close_session"
+        // Stop A — returns once audio is released; the background finish()
+        // is now blocked on the barrier, so finalization is in flight.
+        mgr.stop_manual().await.unwrap();
+
+        // Spawn B's start. It must block on the await-finalization gate
+        // until we release the barrier. Pin that it does NOT complete
+        // while finalization is still in flight.
+        let mgr = Arc::new(mgr);
+        let mgr_for_b = Arc::clone(&mgr);
+        let start_b = tokio::spawn(async move {
+            mgr_for_b
+                .start_manual(
+                    vec![AudioSource::default_microphone()],
+                    Some("Teams".into()),
+                    None,
+                    Default::default(),
+                )
+                .await
+        });
+
+        // Give B a chance to reach (and block on) the gate.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(
+            !start_b.is_finished(),
+            "B's start must block until A's finalization completes"
         );
 
-        // The slot should still be Active(NEW_SESSION_ID) — the
-        // pre-fix bug would have overwritten this with
-        // Active(session.id, close_attempted: true).
-        let guard = mgr.state.lock().unwrap();
-        match &*guard {
-            SessionState::Active(a) => {
-                assert_eq!(
-                    a.id, NEW_SESSION_ID,
-                    "new session must survive the close-failure recovery; \
-                     pre-#492 the old id ({}) clobbered it",
-                    session.id
-                );
-                assert!(
-                    !a.close_attempted,
-                    "close_attempted must stay false on the new session"
-                );
-            }
-            SessionState::Idle => {
-                panic!("expected Active(NEW_SESSION_ID) preserved; got Idle")
-            }
-            SessionState::Opening => {
-                panic!("expected Active(NEW_SESSION_ID) preserved; got Opening")
-            }
-            SessionState::Stopping => {
-                panic!("expected Active(NEW_SESSION_ID) preserved; got Stopping")
-            }
+        // Release the barrier so A's finish() returns and finalization
+        // completes; B's gate then clears and B succeeds.
+        release.store(true, StdOrdering::Release);
+        let session_b = start_b
+            .await
+            .expect("B's start task joined")
+            .expect("B start succeeds after A finalizes");
+        assert_ne!(
+            session_b.id, session_a.id,
+            "B is a distinct session that opened after A finalized"
+        );
+
+        mgr.stop_manual().await.unwrap();
+        // Drain B's finalization so the test doesn't leak a blocked task.
+        let finalization = mgr.finalizing.lock().unwrap().take();
+        if let Some(handle) = finalization {
+            let _ = handle.await;
         }
     }
 
