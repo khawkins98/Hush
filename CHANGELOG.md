@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-28
+
+v0.12.0 kills the silence-hallucination class in meeting transcripts. Whisper had been emitting signature artefacts on hold music and quiet stretches — `.com`, "Thanks for watching!", and looping phrases lifted from its YouTube training data. A bundled Silero VAD model now gates inference: silent windows skip Whisper entirely, and a gate-close flush commits in-flight utterances before they can be stranded by the 30-second window slide. Push-to-talk dictation gets a related belt-and-braces tightening (greedy decode pinned, sampling fallback disabled). Internally, most of the commit count went into housekeeping: the Homebrew tap was retired (the GitHub Releases page covers every platform), and the dependency tree took two coordinated majors — TypeScript 5.6 → 6.0 and vite 6 → 8 + @sveltejs/vite-plugin-svelte 5 → 7.
+
 ### Fixed
 
 - **Meeting transcripts: silent stretches no longer produce phantom transcripts.**
@@ -30,7 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inference is skipped on those stretches. Tunable via `HUSH_VAD_THRESHOLD`,
   `HUSH_VAD_HANGOVER_MS`, and `HUSH_VAD_DISABLE` env vars for A/B and debug. (#974)
 
-- **Distribution: Homebrew tap retired.** The `khawkins98/homebrew-tap` cask and the release workflow's "Update Homebrew tap" step are removed. Install via the GitHub Releases page (DMG for macOS, AppImage/.deb for Linux, MSI/.exe for Windows). The maintenance cost of the cross-repo PAT + tap CI step is hard to justify for a hobby project with no current user base; the DMG/installer path was already supported and remains unchanged.
+- **Build tooling: TypeScript 5.6 → 6.0, vite 6 → 8, @sveltejs/vite-plugin-svelte 5 → 7.**
+  Coordinated major-version bumps; no user-visible behaviour change. SvelteKit
+  2.61's peerDeps already supported the new range. (#980, #981)
+
+### Removed
+
+- **Distribution: Homebrew tap retired.** The `khawkins98/homebrew-tap` cask and the release workflow's "Update Homebrew tap" step are removed. Install via the GitHub Releases page (DMG for macOS, AppImage/.deb for Linux, MSI/.exe for Windows). The maintenance cost of the cross-repo PAT + tap CI step is hard to justify for a hobby project with no current user base; the DMG/installer path was already supported and remains unchanged. (#978)
 
 ## [0.11.0] - 2026-05-28
 
