@@ -83,6 +83,17 @@ fix can be compared on the same build.
 kernel reclaims under pressure — alarming but not true starvation. It
 still bloats swap, panics users, and deserves the fix.
 
+**Validation (real ~20-min meeting, same day):** footprint 5.2 GB vs
+~20 GB baseline-equivalent; mimalloc dirty pages pinned at 0 K (purge
+working); `force_collect` cost measured at 3–6 µs (not a perf risk).
+Two follow-ups surfaced: (1) the **webview** is the dominant remaining
+leak — `WebKit Malloc` 134 MB → 3.2 GB over the meeting (~160 MB/min,
+~82% of growth), keeps growing post-meeting, not proportional to
+transcript volume; (2) the validated build also contained the VAD gate
+(#982), which independently reduces whisper churn, so the two fixes'
+contributions are confounded in the headline number — the mechanism
+verification (dirty = 0) is the clean evidence for this fix.
+
 ## 2026-05-28 — VAD gate in front of Whisper inference (#974)
 
 Whisper hallucinates on silence / low-information audio with signature
