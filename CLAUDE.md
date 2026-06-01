@@ -113,6 +113,14 @@ npm run dev-reset
 # your real working state.
 npm run dev-reset:keep
 
+# Memory diagnostics (macOS): sample the running Hush process's RSS +
+# physical footprint + per-sample vmmap snapshots → /tmp/hush-memwatch-*/.
+# IMPORTANT: Activity Monitor "Memory" = physical footprint, NOT RSS; leaks
+# in this codebase have repeatedly hidden in compressed dirty pages that
+# RSS-based monitoring misses. Every memory claim needs BOTH numbers.
+# Methodology + vmmap region attribution: docs/memory-debugging.md.
+npm run memwatch
+
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo fmt --all
@@ -226,6 +234,7 @@ The high-level module map is in [`ARCHITECTURE.md`](./ARCHITECTURE.md). Below ar
 - **`routes/+page.svelte` ownership.** Does NOT own model picker, vocabulary, replacements, or TCC diagnostic state — those live in the `src/lib/state/*.svelte.ts` modules rendered by `SettingsPanel.svelte` inside the main window. `+page.svelte` owns the global recording signals: it derives `meetingOnlyActive` / `anyRecordingActive` (mirroring `DictationSection`) and wires document title, tray `UiRecordingState`, sidebar recording dot, toggle hotkey, and command palette to `anyRecordingActive` so they respond to both dictation and auto-detected meeting sessions.
 - **`permissions/` cross-platform split.** Renamed from `macos_perms/` in #597. `permissions/macos.rs` holds the AVFoundation / CoreGraphics / IOKit TCC reads behind `#[cfg(target_os = "macos")]`; `permissions/mod.rs` is the home for future Linux / Windows impls. The IPC layer at `ipc/commands/permissions.rs` (also renamed) wraps them; command names on the wire are unchanged.
 - **Logging has three sinks.** stderr fmt + daily-rolling file appender at `~/Library/Logs/io.github.khawkins98.hush/hush.log.<date>` (#624) + the in-app `DebugLogLayer` ring buffer (#532). `init_tracing` in `lib.rs` composes them. Disable the file sink with `HUSH_LOG_FILE=off`. Settings → Debug surfaces the file path with reveal/copy controls (#627). Architecture detail: see `ARCHITECTURE.md` "Logging / observability".
+- **`alloc_tuning/` mimalloc purge tuning.** mimalloc (the global allocator, `override` feature) retains freed pages as committed-dirty by default; whisper.cpp's per-inference scratch churn then accumulates as compressed dirty pages — *physical footprint* grows ~1 GB/min during meetings while RSS stays flat. `alloc_tuning::init()` (called in `run()`) sets `purge_delay=0`, and `whisper.rs` calls `alloc_tuning::force_collect()` after each streaming inference. `HUSH_ALLOC_PURGE=0` disables both (A/B baseline knob). Don't remove mimalloc itself — system malloc is worse (23.5 GB MALLOC_LARGE, see learnings.md 2026-05-07). When touching memory-related code, validate with `npm run memwatch` and read `docs/memory-debugging.md` first.
 - **`tests/e2e/` mock serialization.** Playwright mocks at `tests/e2e/_mock.ts` are serialized via `toString()` and rebuilt in the page context, so they can't capture closure variables — any per-test counters must go through `page.exposeFunction`.
 - **`src-tauri/capabilities/`.** Per-window. Adding a permission to a window is deliberate; every grant widens that window's blast radius. Settings UI actions live in the main window, so plugin permissions they need belong in `default.json`; the `hud`, `menu-bar`, and `debug` windows must be granted separately if their scope grows. Custom `#[tauri::command]` functions don't need permission entries; Tauri plugin commands do.
 - **`.github/workflows/release.yml`.** macOS deployment target is 14.0 (the `macos-latest` runner's Xcode 16.4 ships the macOS 15 SDK — that's the ceiling); design target stays macOS 26. The release workflow also auto-patches `khawkins98/homebrew-tap` — see "Homebrew tap" in [`docs/releases.md`](./docs/releases.md). The default `GITHUB_TOKEN` cannot write to a different repo; the tap step needs a PAT stored as `TAP_GITHUB_TOKEN`. Maintainer recipe in [`docs/releases.md`](./docs/releases.md).

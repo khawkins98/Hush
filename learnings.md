@@ -32,6 +32,68 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-06-01 — "40 GB during meetings" is physical footprint, not RSS: mimalloc dirty-page retention
+
+A 30–40 minute meeting on v0.11.0 showed ~40 GB in Activity Monitor's
+"Memory" column. Initial suspicion fell on the recent transcription
+changes (#975 background finalization, #982 VAD gate) regressing the
+earlier memory fixes. Investigation cleared them completely:
+
+**What the evidence showed:**
+- The leaky build was v0.11.0 — #982 (VAD) and #979 (dep bumps) aren't
+  even in it. #975 is, but is structurally clean (no retained buffers,
+  no duplicate contexts).
+- Every #612 invariant (lazy-init / drop-on-Err / periodic recreate) is
+  intact and *working*: the in-app #629 recreation log shows every
+  recreation reclaiming ~216–250 MB, and **RSS sawtooths between ~1 and
+  3.5 GB for the entire meeting — it never goes near 40 GB.**
+- `vmmap -summary` decomposition: the dominant dirty category is
+  **untagged `VM_ALLOCATE` (mimalloc's arenas), ~100% swapped/compressed**.
+  Activity Monitor's "Memory" counts those compressed dirty pages; RSS
+  doesn't. The 40 GB is committed-but-compressed freed memory.
+
+**Root cause:** whisper.cpp frees tens of MB of scratch per
+`whisper_full` call, and those frees go through mimalloc (global
+allocator since #639). mimalloc's default purge policy (`purge_delay`
+1000 ms, lazy arena purging, freed pages parked on thread-local free
+lists) doesn't decommit them fast enough — or at all — under the
+meeting pump's churn. macOS compresses the never-touched-again dirty
+pages; footprint balloons at ~1 GB/min while RSS stays flat. This is a
+known mimalloc-on-macOS behavior class (microsoft/mimalloc#1025).
+
+**Why nobody caught it earlier:** the #641 victory measurement ("Real
+Mem 1.29 GB stable over 18 min") tracked RSS — exactly the metric
+mimalloc keeps healthy. This entry is the third time a Hush memory
+issue hid in a metric nobody was watching (see 2026-05-07 "#612 not
+actually closed"). **Rule: every memory claim needs both numbers — RSS
+*and* `Physical footprint` from `vmmap -summary` — before being called
+fixed.** `npm run memwatch` (added with this entry) samples both.
+
+**Fix (`alloc_tuning` module):** keep mimalloc (removing it would
+regress to the pre-#639 23.5 GB MALLOC_LARGE problem) but make it purge
+aggressively: `mi_option_set(purge_delay, 0)` at startup +
+`mi_collect(force)` on the inference thread after every streaming
+inference. The bundled mimalloc v3 decommits with
+`madvise(MADV_FREE_REUSABLE)` on macOS (correct footprint accounting),
+so an immediate purge is actually visible in Activity Monitor.
+`HUSH_ALLOC_PURGE=0` disables both levers — the A/B knob; baseline and
+fix can be compared on the same build.
+
+**Severity context:** the 40 GB is mostly compressed garbage pages the
+kernel reclaims under pressure — alarming but not true starvation. It
+still bloats swap, panics users, and deserves the fix.
+
+**Validation (real ~20-min meeting, same day):** footprint 5.2 GB vs
+~20 GB baseline-equivalent; mimalloc dirty pages pinned at 0 K (purge
+working); `force_collect` cost measured at 3–6 µs (not a perf risk).
+Two follow-ups surfaced: (1) the **webview** is the dominant remaining
+leak — `WebKit Malloc` 134 MB → 3.2 GB over the meeting (~160 MB/min,
+~82% of growth), keeps growing post-meeting, not proportional to
+transcript volume; (2) the validated build also contained the VAD gate
+(#982), which independently reduces whisper churn, so the two fixes'
+contributions are confounded in the headline number — the mechanism
+verification (dirty = 0) is the clean evidence for this fix.
+
 ## 2026-05-28 — VAD gate in front of Whisper inference (#974)
 
 Whisper hallucinates on silence / low-information audio with signature

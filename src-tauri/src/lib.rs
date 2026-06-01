@@ -1,5 +1,6 @@
 // Domain modules. Exposed at the crate root so integration tests and the
 // IPC layer can address them by their public surface.
+pub mod alloc_tuning;
 pub mod app_menu;
 
 // Replace macOS libmalloc's hold-forever freelist with mimalloc, which
@@ -766,6 +767,12 @@ pub fn run() {
     // (`cargo tauri dev`-restart-cycle) do not panic.
     let debug_log = crate::debug_log::DebugLogState::new();
     let _file_log_guard = init_tracing(debug_log.clone());
+
+    // Tune mimalloc for purge-on-free so whisper.cpp's per-inference
+    // scratch churn doesn't accumulate as compressed dirty pages
+    // (physical-footprint growth, learnings.md 2026-06-01). Runs after
+    // tracing init so the enable/disable decision is logged.
+    crate::alloc_tuning::init();
 
     tauri::Builder::default()
         // Single-instance lock (#326). Registered first so a second

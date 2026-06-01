@@ -69,6 +69,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # madvises; Physical Footprint stays pinned even after Drop fires. See
 # learnings.md 2026-05-07 for measurement context.
 mimalloc = { version = "0.1", features = ["override"] }
+# Direct dependency on mimalloc's -sys crate for the runtime tuning API
+# (`mi_option_set` / `mi_collect`) used by `alloc_tuning`. The `extended`
+# feature only adds Rust bindings; it does not change how the C library is
+# compiled, and cargo unifies this with the copy the `mimalloc` crate
+# already builds — one allocator, two views. See `alloc_tuning.rs` and
+# learnings.md 2026-06-01 for why the default purge policy isn't enough.
+libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 # Daily-rolling file appender for the on-disk log layer (#622 follow-up).
 # Persists tracing output to `~/Library/Logs/io.github.khawkins98.hush/`
 # on macOS so post-hoc grepping is possible. The in-app Debug Console

@@ -69,6 +69,7 @@ Subsequent runs are incremental.
 | Kill stale dev server processes | `npm run dev-cleanup` |
 | Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/dictionary/prefs/caches/autostart/app installs (preserves transcription history); add `--nuke-db` to also wipe history (macOS only) |
 | Re-test TCC permission flow without losing app state | `npm run dev-reset:keep` — TCC-focused reset: wipes TCC grants + removes app installs, but preserves settings, dictionary, replacements, prefs, caches, autostart, history (macOS only) |
+| Diagnose memory growth (RSS + physical footprint + per-region attribution) | `npm run memwatch` — see [`docs/memory-debugging.md`](./memory-debugging.md) (macOS only) |
 
 ---
 
@@ -192,6 +193,15 @@ npm run dev-reset
 # downloaded models. After running, `npm run tauri:bundle` re-installs the
 # bundle and the permission flow tests on top of your real working state.
 npm run dev-reset:keep
+
+# Memory diagnostics — sample the running Hush process's RSS + physical
+# footprint + full vmmap snapshots on an interval (default 30 s; pass a
+# number for a custom interval). Output goes to /tmp/hush-memwatch-*/.
+# Activity Monitor's "Memory" column is physical footprint, NOT RSS — leaks
+# can hide entirely in compressed dirty pages that RSS-based monitoring
+# misses. Full methodology: docs/memory-debugging.md.
+npm run memwatch
+npm run memwatch -- 15
 
 # Lint + format
 cd src-tauri && cargo clippy --all-targets -- -D warnings
@@ -428,3 +438,22 @@ meeting pump: inference tick  utterances=0 elapsed_ms=47
 | `"whisper: inference complete"` | `whisper.rs` `infer()` | What Whisper saw before text post-processing |
 | `"meeting pump: inference tick"` | `pump.rs` | Top-level utterance count; `elapsed_ms` distinguishes slow inference from empty-gate |
 | `"transcription slot is None"` (WARN) | `pump.rs` | Model not loaded |
+
+## Diagnosing memory growth
+
+When Hush's memory climbs during a meeting (or any long session), don't reach
+for `top` — Activity Monitor's "Memory" column is *physical footprint*, which
+includes compressed/swapped dirty pages that RSS-based tools miss entirely.
+Leaks in this codebase have repeatedly hidden in exactly that gap.
+
+The full methodology — the RSS-vs-footprint distinction, `npm run memwatch`
+usage, the vmmap region-to-owner attribution table, A/B knobs
+(`HUSH_ALLOC_PURGE=0`), and the history of every leak found so far — lives in
+[`docs/memory-debugging.md`](./memory-debugging.md).
+
+Quick start:
+
+```bash
+npm run memwatch          # start sampling, then reproduce (e.g. hold a meeting)
+# → /tmp/hush-memwatch-<timestamp>/memwatch.csv + per-sample vmmap snapshots
+```
