@@ -65,6 +65,12 @@ pub fn open_debug_window(app: AppHandle) -> IpcResult<()> {
     if let Err(e) = window.set_focus() {
         tracing::warn!(error = ?e, "open_debug_window: set_focus failed");
     }
+    // Console is visible → resume the log:event live-stream (#986).
+    // While hidden, log entries only land in the ring buffer; the
+    // frontend re-syncs missed entries (seq-deduplicated) when it
+    // detects the window became visible. Pairs with the hide-on-close
+    // handler in `lib.rs::setup_windows` which flips this back off.
+    app.state::<AppState>().debug_log.set_console_visible(true);
     Ok(())
 }
 
