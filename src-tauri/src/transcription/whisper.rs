@@ -1113,6 +1113,15 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             );
         }
 
+        // Hand the pages this inference (and the periodic state drop
+        // above, when it fired) just freed back to the OS immediately.
+        // Without this, mimalloc keeps them committed-and-dirty on
+        // thread-local free lists and macOS compresses them — physical
+        // footprint grows ~1 GB/min over a meeting even though RSS
+        // stays bounded (learnings.md 2026-06-01). No-op unless
+        // allocator purge tuning is enabled (`alloc_tuning::init`).
+        crate::alloc_tuning::force_collect();
+
         Ok(out)
     }
 }
