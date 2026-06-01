@@ -32,6 +32,47 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-06-01 (webview) — #986: log:event streaming into a hidden window leaks via WKWebView evaluateJavaScript
+
+Once the mimalloc leak (#985) was fixed, the dominant remaining meeting-time
+growth was `WebKit Malloc` (host-process bmalloc): 134 MB → 3.2 GB over a
+20-min meeting (~160 MB/min, 82% of total growth), continuing post-meeting,
+NOT proportional to transcript volume.
+
+**Root cause — three stacked mistakes:**
+
+1. `DebugLogLayer` was attached **without** `.with_filter(env_filter())`
+   (stderr/file layers had it). In `tracing-subscriber`, an unfiltered layer
+   raises the global max level to TRACE — so every `trace!`/`debug!` in the
+   meeting pump / VAD / whisper hot paths was being formatted, ring-buffered,
+   and forwarded, even though stderr/file only showed INFO+.
+2. The `log:event` emit was unconditional — no gating on whether the debug
+   console is visible.
+3. The debug window is pre-created hidden at startup with a live `log:event`
+   listener — so Tauri delivered every log line into a webview nobody can see.
+
+Each delivery is a `WKWebView evaluateJavaScript` call, and those **leak
+host-process memory per call** — WebKit bug 215729 (unfixed since 2020) plus
+bmalloc page retention. Known Tauri-ecosystem reports of the same class:
+tauri#12724, wry#1489, Handy#1279 (a near-identical whisper app). **No
+tauri/wry version fixes it; the only lever is reducing eval call volume.**
+
+**Fix:** `.with_filter(env_filter())` on the debug layer + emit gated on a
+`console_visible` AtomicBool (set by `open_debug_window`, cleared by the
+hide-on-close handler). The console re-syncs missed entries from the
+500-entry ring buffer (seq-deduplicated) on `visibilitychange`/`focus`.
+
+**Lessons:**
+- A tracing layer without a filter isn't "unfiltered", it's a global
+  level-override for the whole process. Every layer needs an explicit filter.
+- Never stream events into a hidden webview. On macOS each emit is an
+  `evaluateJavaScript` call with a per-call leak; visibility-gate any
+  high-frequency emit (the 30 Hz `audio:level` emit is the remaining
+  follow-up of this class).
+- Diagnosed with `npm run memwatch` + the vmmap region-attribution table in
+  `docs/memory-debugging.md` — total time from symptom to root cause was one
+  session because the tooling existed.
+
 ## 2026-06-01 — "40 GB during meetings" is physical footprint, not RSS: mimalloc dirty-page retention
 
 A 30–40 minute meeting on v0.11.0 showed ~40 GB in Activity Monitor's

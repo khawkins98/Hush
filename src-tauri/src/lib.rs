@@ -389,7 +389,19 @@ fn init_tracing(
     }
 
     let stderr_layer = tracing_subscriber::fmt::layer().with_filter(env_filter());
-    let debug_layer = crate::debug_log::DebugLogLayer::new(debug_log);
+    // The debug layer gets the same env filter as stderr/file. Without
+    // it, an unfiltered layer raises tracing's global max level to
+    // TRACE, so every `trace!`/`debug!` in hot paths (meeting pump,
+    // VAD, whisper streaming) gets formatted, ring-buffered, and
+    // emitted to the debug webview — the dominant driver of the #986
+    // WebKit Malloc leak (~160 MB/min during meetings) plus pointless
+    // CPU cost. RUST_LOG=debug still flows everywhere consistently.
+    //
+    // Type note: `with_filter` produces `Filtered<L, F, S>` which bakes
+    // the subscriber-stack type `S` into the layer's type, so this layer
+    // must sit at the SAME stack position in both registry compositions
+    // below — it goes first (directly on the Registry) in each branch.
+    let debug_layer = crate::debug_log::DebugLogLayer::new(debug_log).with_filter(env_filter());
 
     // Opt-out via env var so CI / one-off binaries don't accumulate
     // logs in the user's Library. Default-on for normal runs, where
@@ -415,9 +427,9 @@ fn init_tracing(
             .with_writer(non_blocking)
             .with_filter(env_filter());
         let _ = tracing_subscriber::registry()
+            .with(debug_layer)
             .with(stderr_layer)
             .with(file_layer)
-            .with(debug_layer)
             .try_init();
         // Print the path so a user grepping for "where did logs
         // go" sees it even before the first tracing event reaches
@@ -426,8 +438,8 @@ fn init_tracing(
         Some(guard)
     } else {
         let _ = tracing_subscriber::registry()
-            .with(stderr_layer)
             .with(debug_layer)
+            .with(stderr_layer)
             .try_init();
         None
     }
@@ -535,6 +547,14 @@ fn setup_windows<R: tauri::Runtime>(app: &mut tauri::App<R>) {
     for label in ["main", "debug"] {
         if let Some(window) = app.get_webview_window(label) {
             let win_clone = window.clone();
+            // For the debug console, hiding must also stop the
+            // `log:event` live-stream (#986) — capture the shared
+            // DebugLogState so the close handler can flip the
+            // visibility flag. `setup_windows` runs after AppState is
+            // managed (see the call site in `setup`), so `state()` is
+            // safe here.
+            let debug_log_state =
+                (label == "debug").then(|| app.state::<ipc::AppState>().debug_log.clone());
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     // Always prevent the destroy. If the subsequent
@@ -550,6 +570,10 @@ fn setup_windows<R: tauri::Runtime>(app: &mut tauri::App<R>) {
                             error = ?e,
                             "hide-on-close failed; window remains visible"
                         );
+                    } else if let Some(ref debug_log) = debug_log_state {
+                        // Console hidden → stop streaming log events
+                        // into its webview (#986).
+                        debug_log.set_console_visible(false);
                     }
                 }
             });

@@ -91,13 +91,13 @@
     }
   }
 
-  onMount(async () => {
-    // Subscribe first to guarantee no events are missed between the
-    // snapshot call and the listener registration.
-    unlisten = await listen<LogEntry>(Events.LogEvent, (e) => {
-      append(e.payload);
-    });
-
+  // Pull the ring-buffer snapshot and merge it (seq-deduplicated via
+  // `append`). Called on mount AND whenever the window becomes visible
+  // again: while the console is hidden the backend does not stream
+  // `log:event` (each event is a WKWebView evaluateJavaScript call that
+  // leaks host-process memory per call — #986), so entries accumulate
+  // only in the backend ring buffer until we re-sync here.
+  async function resync() {
     try {
       const snapshot = await invoke<LogEntry[]>("get_log_entries");
       for (const entry of snapshot) {
@@ -106,10 +106,35 @@
     } catch (e) {
       console.warn("[hush] get_log_entries failed", e);
     }
+  }
+
+  function onVisibilityChange() {
+    if (!document.hidden) {
+      void resync();
+    }
+  }
+
+  onMount(async () => {
+    // Subscribe first to guarantee no events are missed between the
+    // snapshot call and the listener registration.
+    unlisten = await listen<LogEntry>(Events.LogEvent, (e) => {
+      append(e.payload);
+    });
+
+    await resync();
+
+    // Re-sync when the (pre-created, hide-on-close) window is shown
+    // again. `visibilitychange` covers show/hide; `focus` is the
+    // belt-and-suspenders path since `open_debug_window` always
+    // focuses after showing. Both are idempotent thanks to seq dedup.
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onVisibilityChange);
   });
 
   onDestroy(() => {
     unlisten?.();
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("focus", onVisibilityChange);
   });
 </script>
 

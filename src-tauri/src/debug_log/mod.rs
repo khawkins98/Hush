@@ -10,12 +10,26 @@
 //! ```text
 //! tracing macros → DebugLogLayer::on_event
 //!                      │
-//!                      ├─► ring buffer (cap 200, seq-numbered)
+//!                      ├─► ring buffer (cap 500, seq-numbered)
 //!                      │
 //!                      └─► AppHandle::emit("log:event", entry)
-//!                            (only after handle is set; lock dropped
+//!                            (only after handle is set AND the debug
+//!                            console window is visible; lock dropped
 //!                            before the emit call)
 //! ```
+//!
+//! ## Why the emit is gated on console visibility (#986)
+//!
+//! Every `emit` to a webview becomes a WKWebView `evaluateJavaScript`
+//! call on macOS, and those leak host-process memory *per call*
+//! (WebKit bug 215729, unfixed upstream) on top of bmalloc page
+//! retention. The debug window is pre-created (hidden) at startup with
+//! a live `log:event` listener, so an ungated emit streams every log
+//! line into a window nobody can see — during meetings that was
+//! measured at ~160 MB/min of `WebKit Malloc` growth. While the
+//! console is hidden, entries land in the ring buffer only; the
+//! frontend re-syncs from the buffer (seq-deduplicated) when the
+//! window becomes visible again.
 //!
 //! ## Startup ordering
 //!
@@ -25,7 +39,7 @@
 //! duplicates — guaranteeing no events are lost across the gap.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -66,6 +80,13 @@ pub struct DebugLogState {
     /// Set once during Tauri `setup()`. Write-once so we never pay
     /// a lock on the hot path; reads after `set` are lock-free.
     handle: Arc<OnceLock<AppHandle>>,
+    /// Whether the debug-console window is currently visible. The
+    /// `log:event` live-stream emit is gated on this (#986): each emit
+    /// is a WKWebView `evaluateJavaScript` call that leaks per-call on
+    /// macOS, so streaming into a hidden window is pure waste. Starts
+    /// `false` (the window is created `visible: false`); flipped by
+    /// `open_debug_window` and the hide-on-close handler.
+    console_visible: Arc<AtomicBool>,
 }
 
 impl DebugLogState {
@@ -74,6 +95,7 @@ impl DebugLogState {
             seq: Arc::new(AtomicU64::new(0)),
             buffer: Arc::new(Mutex::new(VecDeque::with_capacity(500))),
             handle: Arc::new(OnceLock::new()),
+            console_visible: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -81,6 +103,17 @@ impl DebugLogState {
     pub fn set_handle(&self, handle: AppHandle) {
         // `set` is a no-op if already set — safe to call more than once.
         let _ = self.handle.set(handle);
+    }
+
+    /// Record whether the debug-console window is visible. Live
+    /// `log:event` streaming only happens while it is (#986).
+    pub fn set_console_visible(&self, visible: bool) {
+        self.console_visible.store(visible, Ordering::Relaxed);
+    }
+
+    /// Whether the debug-console window is currently visible.
+    pub fn console_visible(&self) -> bool {
+        self.console_visible.load(Ordering::Relaxed)
     }
 
     /// Return a snapshot of the current ring buffer contents in
@@ -164,10 +197,43 @@ where
             self.state.handle.get().cloned()
         };
 
-        // 2. Forward to frontend (only if the handle has been set).
+        // 2. Forward to frontend — only if the handle has been set AND
+        //    the debug console is actually visible (#986). Each emit is
+        //    a WKWebView evaluateJavaScript call into the (possibly
+        //    hidden) debug webview, and those leak host-process memory
+        //    per call on macOS. While hidden, the ring buffer is the
+        //    only sink; the console re-syncs from it on reopen.
         if let Some(handle) = handle_opt {
-            let _ = handle.emit("log:event", &entry);
+            if self.state.console_visible() {
+                let _ = handle.emit("log:event", &entry);
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_visibility_defaults_to_hidden() {
+        // The debug window is created `visible: false` in
+        // tauri.conf.json, so a fresh state must start with streaming
+        // disabled — otherwise the #986 leak comes back silently.
+        let state = DebugLogState::new();
+        assert!(!state.console_visible());
+    }
+
+    #[test]
+    fn console_visibility_roundtrips_and_is_shared_across_clones() {
+        // The layer holds one clone of the state and the IPC layer
+        // another; the visibility flag must be shared, not per-clone.
+        let state = DebugLogState::new();
+        let layer_clone = state.clone();
+        state.set_console_visible(true);
+        assert!(layer_clone.console_visible());
+        layer_clone.set_console_visible(false);
+        assert!(!state.console_visible());
     }
 }
 
