@@ -20,6 +20,7 @@
   import StatusLine from "./StatusLine.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import { Events } from "./events";
+  import { formatElapsed, resolveRecordingStartMs } from "./recording-time";
   import {
     listenForStatusLineChanges,
     readStatusLineEnabled,
@@ -54,6 +55,11 @@
     /// button label, "press Stop" hint) and to show the waiting-
     /// for-speech placeholder when the live transcript is empty.
     meetingOnlyActive?: boolean;
+    /// Wall-clock ms when the dictation-phase recording started, from
+    /// the dictation state module (survives this component's remounts,
+    /// #990). `null` for auto-detected meetings — those resolve their
+    /// start from `meetingActiveDetail.session.startedAt` instead.
+    recordingStartedAtMs?: number | null;
     /// Left adjunct slot — audio source picker. Optional so the
     /// component still renders standalone in the test harness or
     /// any future minimal surface.
@@ -78,6 +84,7 @@
     onOpenPermissions,
     meetingActiveDetail = null,
     meetingOnlyActive = false,
+    recordingStartedAtMs = null,
     leftAdjunct,
     rightAdjunct,
   }: Props = $props();
@@ -102,29 +109,37 @@
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenHudState: UnlistenFn | null = null;
 
-  // Recording-duration timer. Mirrors the HUD's pattern (#360):
-  // wall-clock start stamp when `recording` flips true, rAF
-  // refresh of the label, reset to `0:00` on stop. Lets the user
-  // see how long they've been recording without checking the HUD.
-  let recordingStartedAt: number | null = null;
-  let elapsedLabel = $state("0:00");
+  // Recording-duration timer. Anchored to when the recording actually
+  // started — NOT to when this component mounted (#990). The start is
+  // resolved from remount-safe sources (dictation state module, or the
+  // backend-persisted meeting session start) so navigating to Settings/
+  // History and back during a recording doesn't reset the counter.
+  // rAF refreshes the label; reset to "00:00" when not recording.
+  let elapsedLabel = $state("00:00");
   let raf: number | undefined;
 
-  function formatElapsed(ms: number): string {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    const mm = minutes.toString().padStart(2, "0");
-    const ss = seconds.toString().padStart(2, "0");
-    if (hours > 0) return `${hours}:${mm}:${ss}`;
-    return `${mm}:${ss}`;
-  }
+  // Remount-safe start timestamp. Re-derives whenever the dictation
+  // phase or the polled meeting detail changes; null while idle or
+  // before the first meeting-detail poll lands (≤3 s for auto-detected
+  // meetings — the label shows 00:00 until then).
+  let effectiveStartMs = $derived(
+    recording
+      ? resolveRecordingStartMs(
+          recordingStartedAtMs,
+          meetingActiveDetail?.session.startedAt,
+        )
+      : null,
+  );
 
   $effect(() => {
     if (recording) {
-      recordingStartedAt = Date.now();
-      elapsedLabel = "00:00";
+      // Seed immediately from the resolved start (rAF refines it every
+      // frame after). Falls back to 00:00 only when no source has the
+      // start time yet.
+      elapsedLabel =
+        effectiveStartMs !== null
+          ? formatElapsed(Date.now() - effectiveStartMs)
+          : "00:00";
       transcriptionProgress = null;
       // Reset the "Copied!" flash when a new recording starts.
       if (doneTimer !== null) {
@@ -133,7 +148,6 @@
       }
       hudDone = false;
     } else {
-      recordingStartedAt = null;
       elapsedLabel = "00:00";
     }
   });
@@ -160,8 +174,8 @@
       }
     });
     const tick = () => {
-      if (recordingStartedAt !== null) {
-        elapsedLabel = formatElapsed(Date.now() - recordingStartedAt);
+      if (recording && effectiveStartMs !== null) {
+        elapsedLabel = formatElapsed(Date.now() - effectiveStartMs);
       }
       raf = requestAnimationFrame(tick);
     };
