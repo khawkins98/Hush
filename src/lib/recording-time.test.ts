@@ -37,24 +37,29 @@ describe("resolveRecordingStartMs", () => {
 });
 
 describe("formatElapsed", () => {
-  it("formats sub-minute durations as MM:SS", () => {
-    expect(formatElapsed(5_000)).toBe("00:05");
+  // House format (#481, unified across HUD + Transcribe panel in the
+  // multi-agent review follow-up): unpadded minutes under an hour.
+  it("formats sub-minute durations as M:SS", () => {
+    expect(formatElapsed(5_000)).toBe("0:05");
   });
 
-  it("formats sub-hour durations as MM:SS", () => {
+  it("formats sub-hour durations as M:SS", () => {
     expect(formatElapsed(45 * 60_000 + 7_000)).toBe("45:07");
+    expect(formatElapsed(5 * 60_000 + 7_000)).toBe("5:07");
   });
 
   it("switches to H:MM:SS past one hour", () => {
     // 1h 28m 16s — the duration from the #989 report screenshot.
     expect(formatElapsed(((1 * 60 + 28) * 60 + 16) * 1000)).toBe("1:28:16");
+    // Minutes ARE padded once hours are present.
+    expect(formatElapsed((60 * 60 + 5 * 60 + 7) * 1000)).toBe("1:05:07");
   });
 
   it("clamps negative durations to zero (clock skew)", () => {
-    expect(formatElapsed(-3_000)).toBe("00:00");
+    expect(formatElapsed(-3_000)).toBe("0:00");
   });
 
   it("floors partial seconds", () => {
-    expect(formatElapsed(1_999)).toBe("00:01");
+    expect(formatElapsed(1_999)).toBe("0:01");
   });
 });

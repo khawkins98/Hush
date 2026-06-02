@@ -1,10 +1,11 @@
 # Memory debugging
 
-How to diagnose memory growth in Hush. This project has had three significant
-memory hunts (#612 whisper state, #641 ORT/Metal, the 2026-06-01 mimalloc
-footprint investigation) and each one initially hid in a metric nobody was
-watching. This doc exists so the fourth hunt starts from tooling, not from
-re-deriving methodology.
+How to diagnose memory growth in Hush. This project has had several
+significant memory hunts (see the leak-history table at the bottom — #612
+whisper state, #639 system-malloc hoarding, #641 ORT/Metal, the 2026-06-01
+mimalloc and webview investigations) and each one initially hid in a metric
+nobody was watching. This doc exists so the next hunt starts from tooling,
+not from re-deriving methodology.
 
 ## The iron rule: measure BOTH numbers
 

@@ -20,7 +20,7 @@
   import StatusLine from "./StatusLine.svelte";
   import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import { Events } from "./events";
-  import { formatElapsed, resolveRecordingStartMs } from "./recording-time";
+  import { ELAPSED_ZERO, formatElapsed, resolveRecordingStartMs } from "./recording-time";
   import {
     listenForStatusLineChanges,
     readStatusLineEnabled,
@@ -114,8 +114,9 @@
   // resolved from remount-safe sources (dictation state module, or the
   // backend-persisted meeting session start) so navigating to Settings/
   // History and back during a recording doesn't reset the counter.
-  // rAF refreshes the label; reset to "00:00" when not recording.
-  let elapsedLabel = $state("00:00");
+  // rAF refreshes the label; reset to the zero placeholder when not
+  // recording.
+  let elapsedLabel = $state(ELAPSED_ZERO);
   let raf: number | undefined;
 
   // Remount-safe start timestamp. Re-derives whenever the dictation
@@ -139,7 +140,7 @@
       elapsedLabel =
         effectiveStartMs !== null
           ? formatElapsed(Date.now() - effectiveStartMs)
-          : "00:00";
+          : ELAPSED_ZERO;
       transcriptionProgress = null;
       // Reset the "Copied!" flash when a new recording starts.
       if (doneTimer !== null) {
@@ -148,7 +149,7 @@
       }
       hudDone = false;
     } else {
-      elapsedLabel = "00:00";
+      elapsedLabel = ELAPSED_ZERO;
     }
   });
 

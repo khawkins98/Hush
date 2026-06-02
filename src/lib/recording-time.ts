@@ -38,17 +38,25 @@ export function resolveRecordingStartMs(
   return null;
 }
 
-/// Format an elapsed duration as `MM:SS`, switching to `H:MM:SS` past
-/// one hour. Negative inputs clamp to zero (clock skew between the
-/// backend-persisted start and the frontend clock must never render
-/// a negative timer).
+/// Format an elapsed duration as `M:SS` (unpadded minutes), switching to
+/// `H:MM:SS` past one hour. This is the house timer format — the HUD
+/// established it in #481 and both surfaces now share this single
+/// implementation so they can never disagree (multi-agent review
+/// follow-up). Negative inputs clamp to zero (clock skew between the
+/// backend-persisted start and the frontend clock must never render a
+/// negative timer).
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  const mm = minutes.toString().padStart(2, "0");
   const ss = seconds.toString().padStart(2, "0");
-  if (hours > 0) return `${hours}:${mm}:${ss}`;
-  return `${mm}:${ss}`;
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${ss}`;
+  }
+  return `${minutes}:${ss}`;
 }
+
+/// The timer's idle/reset placeholder, matching [`formatElapsed`]'s
+/// zero rendering.
+export const ELAPSED_ZERO = "0:00";

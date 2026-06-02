@@ -30,8 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window — each event was a WebKit `evaluateJavaScript` call with a per-call
   leak (~160 MB/min during meetings). The console now catches up from the
   in-memory ring buffer when opened. (#986, #988)
-  Combined result, measured on a real 90-minute call: memory stays flat at
-  ~2.2 GB (previously ~40 GB at the 40-minute mark).
+  Combined result, measured across ~2.5 hours of real back-to-back calls:
+  memory plateaus at ~2.2 GB during meetings and returns to ~1.4 GB after.
 
 ### Added
 
@@ -41,12 +41,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methodology, the region-to-owner attribution table, and the full leak
   history. (#985)
 
+- **Debug Console: reopening the console after it was hidden through a busy
+  stretch now shows an explicit "earlier entries not shown" marker** instead
+  of a silent gap, so copied logs can't accidentally omit a window of
+  activity without you knowing.
+
 ### Changed
 
 - **In-app Debug Console now shows INFO-level logs and above by default**,
   matching the stderr and file logs (it previously received every
   trace/debug event). Set `RUST_LOG=debug` to see debug-level entries in all
   three sinks consistently. (#988)
+
+- **The Transcribe panel and the HUD now format the elapsed timer
+  identically** (`0:05`, `45:07`, `1:28:16`). Previously the panel padded
+  minutes (`00:05`) while the HUD didn't — the two surfaces could show
+  different strings for the same recording.
 
 ## [0.12.0] - 2026-05-28
 
