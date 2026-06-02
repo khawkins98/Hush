@@ -33,21 +33,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// on every [`force_collect`] call.
 static PURGE_TUNING_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// `mi_option_purge_delay`'s index in mimalloc v3's `mi_option_t` enum.
+/// `mi_option_purge_delay`'s index in mimalloc's `mi_option_t` enum.
 ///
 /// libmimalloc-sys 0.1.49's `extended` bindings predate the v3 option
 /// enum and don't export this constant, so we pin the index ourselves.
 /// The index is identical in the bundled v2 and v3 sources
 /// (`c_src/mimalloc/*/include/mimalloc.h`). [`init`] guards against
 /// index drift across future libmimalloc-sys bumps by checking that the
-/// option's compiled-in default (1000 ms) is what we expect *before*
-/// writing to it — if the enum ever shifts, we refuse to tune rather
-/// than silently set a different option to zero.
+/// option's compiled-in default is one we recognise *before* writing to
+/// it — if the enum ever shifts, we refuse to tune rather than silently
+/// set a different option to zero.
 const MI_OPTION_PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
 
-/// The compiled-in default for `purge_delay` in the bundled mimalloc v3
-/// (`options.c`): 1000 ms. Used by [`init`]'s index-drift guard.
-const EXPECTED_PURGE_DELAY_DEFAULT: std::os::raw::c_long = 1000;
+/// The compiled-in defaults for `purge_delay` across the mimalloc majors
+/// libmimalloc-sys can build (selected by its `v2` feature flag):
+/// **v3 = 1000 ms** (`v3/src/options.c`), **v2 = 10 ms**
+/// (`v2/src/options.c`). Hush builds v3 today (the `mimalloc` crate
+/// doesn't request `v2`), but the guard accepts both so a future flip to
+/// v2 — e.g. to dodge a v3 regression — doesn't silently disable this
+/// tuning and quietly reintroduce the #985 footprint leak. Re-verify the
+/// index + defaults pair on any libmimalloc-sys bump (see learnings.md
+/// "Supply-chain pins").
+const KNOWN_PURGE_DELAY_DEFAULTS: [std::os::raw::c_long; 2] = [1000, 10];
 
 /// Configure mimalloc for aggressive purge-on-free. Call once, early in
 /// `run()`, after tracing is initialised (the outcome is logged).
@@ -76,11 +83,11 @@ pub fn init() {
     // happened long before `run()` since mimalloc is the
     // `#[global_allocator]`).
     let current = unsafe { libmimalloc_sys::mi_option_get(MI_OPTION_PURGE_DELAY) };
-    if current != EXPECTED_PURGE_DELAY_DEFAULT && current != 0 {
+    if !KNOWN_PURGE_DELAY_DEFAULTS.contains(&current) && current != 0 {
         tracing::warn!(
             current,
-            expected = EXPECTED_PURGE_DELAY_DEFAULT,
-            "allocator purge tuning skipped: purge_delay read-back doesn't match the bundled \
+            expected = ?KNOWN_PURGE_DELAY_DEFAULTS,
+            "allocator purge tuning skipped: purge_delay read-back doesn't match any bundled \
              mimalloc default — either MIMALLOC_PURGE_DELAY is set externally or the option \
              enum shifted across a libmimalloc-sys bump"
         );
@@ -97,22 +104,24 @@ pub fn init() {
     );
 }
 
-/// Force-collect the calling thread's mimalloc heap and purge arena
-/// pages back to the OS.
+/// Force-collect the **calling thread's** mimalloc heap, purging its
+/// freed pages back to the OS.
 ///
-/// Call from the thread that just freed a large burst of memory — in
-/// practice the whisper inference thread right after `whisper_full`
-/// returns (and after the periodic #612 WhisperState drop), so the
-/// multi-MB scratch that call freed is decommitted immediately rather
-/// than left dirty for macOS to compress. No-op when tuning is
-/// disabled. Cost is sub-millisecond against an inference that takes
-/// 1–3 s.
+/// Scope note: `mi_collect(force)` collects the calling thread's
+/// thread-local heap (mimalloc v3 `theap.c`), not every thread's — so
+/// it must be called from the thread that just freed a large burst of
+/// memory. In practice that's the whisper inference thread right after
+/// `whisper_full` returns (and after the periodic #612 WhisperState
+/// drop), so the multi-MB scratch that call freed is decommitted
+/// immediately rather than left dirty for macOS to compress. No-op when
+/// tuning is disabled. Cost is sub-millisecond against an inference
+/// that takes 1–3 s.
 pub fn force_collect() {
     if !PURGE_TUNING_ENABLED.load(Ordering::Relaxed) {
         return;
     }
     // SAFETY: `mi_collect` is documented thread-safe; `true` forces a
-    // full collect of the calling thread's heap including arena purging.
+    // full collect of the calling thread's heap.
     unsafe { libmimalloc_sys::mi_collect(true) };
 }
 

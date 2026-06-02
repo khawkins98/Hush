@@ -1019,6 +1019,15 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         if let Err(e) = infer_result {
             *self.whisper_state = None;
             *self.inferences_on_current_state = 0;
+            // The error path frees the most memory of any exit (the
+            // failed inference's scratch PLUS the ~76 MB state we just
+            // dropped) — purge it like the success path does so a burst
+            // of decode failures can't accumulate dirty pages (#985
+            // review follow-up). Release the shared context mutex first
+            // so the purge never extends lock hold time for the other
+            // source's session.
+            drop(ctx);
+            crate::alloc_tuning::force_collect();
             return Err(anyhow!("whisper streaming inference failed: {e}"));
         }
         // Re-borrow for segment reading on the success path. The slot
@@ -1120,6 +1129,9 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         // footprint grows ~1 GB/min over a meeting even though RSS
         // stays bounded (learnings.md 2026-06-01). No-op unless
         // allocator purge tuning is enabled (`alloc_tuning::init`).
+        // Release the shared context mutex first so the purge never
+        // extends lock hold time for the other source's session.
+        drop(ctx);
         crate::alloc_tuning::force_collect();
 
         Ok(out)

@@ -73,6 +73,15 @@ hide-on-close handler). The console re-syncs missed entries from the
   `docs/memory-debugging.md` — total time from symptom to root cause was one
   session because the tooling existed.
 
+**Combined validation (2026-06-02, both fixes, the number the CHANGELOG
+cites):** ~2.5 hours of real back-to-back meetings (95 min + 44 min,
+continuous multi-speaker speech, 104 WhisperState recreations). Footprint
+plateaued at 2.1–2.8 GB during calls, peaked 3.4 GB transiently during
+finalization, and **returned to 1.4 GB after meetings ended**. `WebKit
+Malloc` stayed at ~2 MB throughout (was 3.2 GB over a single 20-min meeting
+pre-fix). Remaining minor grower: IOAccelerator (HUD animation) at
+~5 MB/min steady-state, which plateaus.
+
 ## 2026-06-01 — "40 GB during meetings" is physical footprint, not RSS: mimalloc dirty-page retention
 
 A 30–40 minute meeting on v0.11.0 showed ~40 GB in Activity Monitor's
@@ -1345,6 +1354,18 @@ One production dep lives outside the "stable crates.io release" baseline. It is 
 2. fufesou publishes their fork to crates.io.
 
 If you're considering bumping the rev (`rev = "..."`) to track newer fufesou commits, read the fork's CHANGELOG / open issues first — the rev is currently load-bearing because it predates a refactor we haven't validated. The 2026-04-30 entry on rdev::listen has the architectural reasoning.
+
+### `libmimalloc-sys` (standard caret pin, but FFI-coupled — re-verify on bump)
+
+`alloc_tuning.rs` calls `mi_option_set` with a **hardcoded option index** (15
+= `mi_option_purge_delay`) because the crate's `extended` bindings don't
+export the v3 enum constants. The index and the known compiled-in defaults
+(v3 = 1000 ms, v2 = 10 ms) are verified against the bundled C sources as of
+libmimalloc-sys 0.1.49. **Any `cargo update -p libmimalloc-sys` must
+re-verify both** against the new bundled `mimalloc.h` enum and `options.c`
+defaults — the module's read-before-write guard refuses to tune (and logs a
+warning) on a mismatch, which fails safe but silently reintroduces the #985
+footprint leak. Check: `grep -A40 'typedef enum mi_option_e' ~/.cargo/registry/src/*/libmimalloc-sys-*/c_src/mimalloc/v3/include/mimalloc.h`.
 
 ---
 

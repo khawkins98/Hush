@@ -72,6 +72,7 @@
   function onClear() {
     entries = [];
     maxSeenSeq = -1;
+    entriesDropped = false;
   }
 
   let allCopied = $state(false);
@@ -91,6 +92,14 @@
     }
   }
 
+  // True when entries were dropped between console sessions: the backend
+  // ring buffer only holds the last 500 entries, so if the console stays
+  // hidden through a busy stretch (e.g. a long meeting), older entries
+  // are gone by the time we re-sync. A silent gap on a diagnostic
+  // surface misleads (someone copies "all" logs for a bug report and
+  // unknowingly omits a window) — surface it honestly instead.
+  let entriesDropped = $state(false);
+
   // Pull the ring-buffer snapshot and merge it (seq-deduplicated via
   // `append`). Called on mount AND whenever the window becomes visible
   // again: while the console is hidden the backend does not stream
@@ -100,6 +109,12 @@
   async function resync() {
     try {
       const snapshot = await invoke<LogEntry[]>("get_log_entries");
+      // Gap detection: if the oldest snapshot entry's seq is beyond the
+      // next one we expected, the ring buffer rolled past entries this
+      // console never received.
+      if (snapshot.length > 0 && maxSeenSeq >= 0 && snapshot[0].seq > maxSeenSeq + 1) {
+        entriesDropped = true;
+      }
       for (const entry of snapshot) {
         append(entry);
       }
@@ -163,6 +178,11 @@
   {#if entries.length === 0}
     <p class="debug-console-empty">No log entries yet.</p>
   {:else}
+    {#if entriesDropped}
+      <p class="debug-console-gap">
+        … earlier entries not shown (buffer holds the last 500) …
+      </p>
+    {/if}
     {#each entries as entry (entry.seq)}
       <div class="log-row">
         <span class="log-time">{formatTime(entry.timestampMs)}</span>
@@ -236,6 +256,15 @@
     font-style: italic;
     text-align: center;
     padding-top: 2rem;
+  }
+
+  /* Dropped-entries marker — same muted voice as the empty state, but
+     inline at the top of the list where the gap actually is. */
+  .debug-console-gap {
+    margin: 0 0 0.5rem;
+    color: var(--debug-text-muted);
+    font-style: italic;
+    text-align: center;
   }
 
   .log-row {

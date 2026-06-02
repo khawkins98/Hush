@@ -25,6 +25,10 @@
   import { onDestroy, onMount } from "svelte";
   import { Events } from "$lib/events";
   import AudioWaveform from "$lib/AudioWaveform.svelte";
+  // Shared timer formatting (multi-agent review follow-up): the HUD and
+  // the Transcribe panel must render identical elapsed strings for the
+  // same recording, so both import the single tested helper.
+  import { formatElapsed } from "$lib/recording-time";
 
   // Wire shape mirrors `HudStatePayload` in `src-tauri/src/hud/mod.rs`
   // (camelCase per `serde(rename_all = "camelCase")`). `startedAtMs`
@@ -85,19 +89,6 @@
   let unlistenState: UnlistenFn | null = null;
   let unlistenProgress: UnlistenFn | null = null;
   let raf: number | undefined;
-
-  // Format a millisecond duration as `M:SS` (under an hour) or
-  // `H:MM:SS` (one hour and beyond — meetings hit this routinely).
-  function formatElapsed(ms: number): string {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-    }
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-  }
 
   onMount(async () => {
     const tick = () => {
