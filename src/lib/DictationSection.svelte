@@ -115,6 +115,7 @@
     error={effectiveError}
     meetingActiveDetail={meeting.activeDetail}
     meetingOnlyActive={dictation.meetingOnlyActive}
+    recordingStartedAtMs={dictation.startedAtMs}
     {onStart}
     {onStop}
     onOpenPermissions={onOpenPermissionsTab}

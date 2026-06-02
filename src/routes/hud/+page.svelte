@@ -406,6 +406,10 @@
   .hud-dot {
     width: 0.85rem;
     height: 0.85rem;
+    /* Never let the flex row compress the dot's width — once the elapsed
+       timer grows to H:MM:SS (calls over an hour) the pill gets tight and
+       a shrinkable dot renders as an ellipse (#989). */
+    flex-shrink: 0;
     border-radius: 50%;
     background-color: #e85050;
     box-shadow: 0 0 8px rgba(232, 80, 80, 0.6);

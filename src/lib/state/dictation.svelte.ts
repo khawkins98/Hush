@@ -122,6 +122,18 @@ export const dictation = {
   get recordMode() {
     return recordMode;
   },
+  /// Wall-clock ms when the current recording started, or null when no
+  /// dictation-phase recording is in flight. Lives here (module-level
+  /// state) rather than in RecordPanel so the Transcribe tab's elapsed
+  /// timer survives tab-navigation remounts (#990). Covers "recording"
+  /// AND "stopping" so the timer doesn't blank while a stop is in flight.
+  /// Auto-detected meetings (phase idle) resolve their start time from
+  /// `meeting.activeDetail` instead — see `resolveRecordingStartMs`.
+  get startedAtMs(): number | null {
+    return phase.tag === "recording" || phase.tag === "stopping"
+      ? phase.startedAtMs
+      : null;
+  },
   // ---- independently mutable state ----
   get result() {
     return result;

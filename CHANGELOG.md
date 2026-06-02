@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transcribe tab: the recording timer no longer resets to 00:00 when you
+  navigate to Settings or History and back during a recording.** The timer is
+  now anchored to when the recording actually started (from the recording
+  state / the meeting session's persisted start time) instead of to when the
+  panel was last rendered. The recording itself was never affected — only the
+  displayed counter. (#990)
+
+- **HUD: the pulsing recording dot no longer deforms into an ellipse once a
+  call passes the one-hour mark** (when the elapsed timer widens to
+  `H:MM:SS`). (#989)
+
 - **Meetings: memory no longer balloons during long calls.** Two independent
   leaks fixed. (1) The allocator (mimalloc) now purges freed pages back to the
   OS immediately instead of letting whisper.cpp's per-inference scratch
