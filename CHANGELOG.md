@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Meetings: memory no longer balloons during long calls.** Two independent
+  leaks fixed. (1) The allocator (mimalloc) now purges freed pages back to the
+  OS immediately instead of letting whisper.cpp's per-inference scratch
+  accumulate as compressed dirty pages — previously ~1 GB/min of Activity
+  Monitor "Memory" growth, ~40 GB over a 40-minute call. Disable with
+  `HUSH_ALLOC_PURGE=0` for A/B comparison. (#985)
+  (2) Backend log events are no longer streamed into the hidden debug-console
+  window — each event was a WebKit `evaluateJavaScript` call with a per-call
+  leak (~160 MB/min during meetings). The console now catches up from the
+  in-memory ring buffer when opened. (#986, #988)
+  Combined result, measured on a real 90-minute call: memory stays flat at
+  ~2.2 GB (previously ~40 GB at the 40-minute mark).
+
+### Added
+
+- **Memory diagnostics tooling for contributors.** `npm run memwatch` samples
+  the running app's RSS + physical footprint + per-region vmmap snapshots;
+  [`docs/memory-debugging.md`](./docs/memory-debugging.md) documents the
+  methodology, the region-to-owner attribution table, and the full leak
+  history. (#985)
+
+### Changed
+
+- **In-app Debug Console now shows INFO-level logs and above by default**,
+  matching the stderr and file logs (it previously received every
+  trace/debug event). Set `RUST_LOG=debug` to see debug-level entries in all
+  three sinks consistently. (#988)
+
 ## [0.12.0] - 2026-05-28
 
 v0.12.0 kills the silence-hallucination class in meeting transcripts. Whisper had been emitting signature artefacts on hold music and quiet stretches — `.com`, "Thanks for watching!", and looping phrases lifted from its YouTube training data. A bundled Silero VAD model now gates inference: silent windows skip Whisper entirely, and a gate-close flush commits in-flight utterances before they can be stranded by the 30-second window slide. Push-to-talk dictation gets a related belt-and-braces tightening (greedy decode pinned, sampling fallback disabled). Internally, most of the commit count went into housekeeping: the Homebrew tap was retired (the GitHub Releases page covers every platform), and the dependency tree took two coordinated majors — TypeScript 5.6 → 6.0 and vite 6 → 8 + @sveltejs/vite-plugin-svelte 5 → 7.
