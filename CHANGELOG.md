@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-04
+
+v0.13.0 is the memory-stability release. Long meetings used to balloon the
+app's memory into the tens of gigabytes — a 40-minute call could reach ~40 GB
+in Activity Monitor. Two independent leaks were behind it: the allocator
+holding freed whisper.cpp scratch as compressed dirty pages, and backend log
+events being streamed into a hidden debug window (each one a leaky WebKit
+`evaluateJavaScript` call). Both are fixed; a real 2.5-hour back-to-back call
+test now plateaus at ~2.2 GB and reclaims to ~1.4 GB between meetings. The
+rest of the release is UI polish surfaced by the same long-call testing — the
+recording timer no longer resets when you switch tabs mid-call, and the HUD
+dot keeps its shape past the one-hour mark. Internally, this release adds a
+durable memory-diagnostics workflow (`npm run memwatch` +
+[`docs/memory-debugging.md`](./docs/memory-debugging.md)) so the next memory
+hunt starts from tooling instead of re-deriving methodology.
+
 ### Fixed
 
 - **Transcribe tab: the recording timer no longer resets to 00:00 when you
