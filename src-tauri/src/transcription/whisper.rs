@@ -105,6 +105,38 @@ const DEFAULT_VAD_THRESHOLD: f32 = 0.5;
 /// via `HUSH_VAD_HANGOVER_MS`.
 const DEFAULT_VAD_HANGOVER_MS: u64 = 1500;
 
+/// whisper.cpp's `no_speech_thold` (#974 follow-up). A decoded segment is
+/// discarded as silence when its no-speech token probability exceeds this
+/// AND its average logprob is below `logprob_thold`. **Lower = more
+/// aggressive** silence filtering. whisper.cpp's built-in default is
+/// 0.6; we set it explicitly (same value, no behavior change) so it's a
+/// single tunable knob via `HUSH_WHISPER_NO_SPEECH_THOLD` — the value to
+/// lower once a meeting's `HUSH_VAD_TRACE` evidence shows where the
+/// compressed-call-audio hallucinations sit. See learnings.md
+/// "2026-06-05 VAD hallucination follow-up".
+const DEFAULT_NO_SPEECH_THOLD: f32 = 0.6;
+
+/// Resolve [`DEFAULT_NO_SPEECH_THOLD`] against `HUSH_WHISPER_NO_SPEECH_THOLD`,
+/// clamped to `[0.0, 1.0]`. Read per inference (cheap env read; matches the
+/// runtime-tunable convention of the VAD knobs).
+fn no_speech_thold() -> f32 {
+    std::env::var("HUSH_WHISPER_NO_SPEECH_THOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(DEFAULT_NO_SPEECH_THOLD)
+        .clamp(0.0, 1.0)
+}
+
+/// Whether per-decision VAD-gate tracing is enabled (`HUSH_VAD_TRACE=1`).
+/// When on, `drain_vad` logs the max Silero probability per feed and
+/// `drain` logs each gate suppress/allow/flush decision at INFO — so a
+/// real meeting's decisions land in the default (INFO-level) file log
+/// without the operator having to set `RUST_LOG=debug` through launchd.
+/// Off by default (no per-tick log spam in normal use).
+fn vad_trace_enabled() -> bool {
+    matches!(std::env::var("HUSH_VAD_TRACE").as_deref(), Ok("1"))
+}
+
 /// Resolves [`DEFAULT_STATE_RECREATE_INTERVAL`] against an env-var
 /// override read at process start. Returns 0 to mean "never recreate"
 /// (legacy pre-#612-followup behavior — keep available for A/B tests
@@ -770,13 +802,21 @@ impl WhisperStreamingSession {
         let frame_len = crate::vad::FRAME_LEN_SAMPLES;
         self.vad_residual.extend_from_slice(samples);
         let mut offset = 0usize;
+        // Track the loudest frame this feed for the `HUSH_VAD_TRACE`
+        // diagnostic (#974 follow-up) — lets a real meeting reveal where
+        // compressed call audio sits relative to the threshold.
+        let mut max_prob = 0.0f32;
+        let mut frames_scored = 0usize;
         while self.vad_residual.len() - offset >= frame_len {
             let frame = &self.vad_residual[offset..offset + frame_len];
             match self.vad_session.score_frame(frame) {
-                Ok(prob) if prob >= self.vad_threshold => {
-                    self.last_speech_at = Some(std::time::Instant::now());
+                Ok(prob) => {
+                    frames_scored += 1;
+                    max_prob = max_prob.max(prob);
+                    if prob >= self.vad_threshold {
+                        self.last_speech_at = Some(std::time::Instant::now());
+                    }
                 }
-                Ok(_) => {}
                 Err(e) => {
                     if !self.vad_error_logged {
                         tracing::warn!(
@@ -792,6 +832,16 @@ impl WhisperStreamingSession {
             offset += frame_len;
         }
         self.vad_residual.drain(..offset);
+
+        if frames_scored > 0 && vad_trace_enabled() {
+            tracing::info!(
+                max_prob,
+                threshold = self.vad_threshold,
+                frames = frames_scored,
+                speech = max_prob >= self.vad_threshold,
+                "VAD trace: feed scored (HUSH_VAD_TRACE)"
+            );
+        }
     }
 
     /// Test-only drain that runs the gate against an arbitrary
@@ -860,12 +910,18 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
         // expensive bit; skipping it on silence is the load-bearing
         // win — preventing hallucinations on non-speech windows like
         // a Zoom hold beep or a typing sound.
+        let trace = vad_trace_enabled();
         if self.should_gate() {
             if self.was_inferring {
                 // First gated drain after a run of inferences: flush
                 // anything mid-flight before the head-slide can strand
                 // it (#974 follow-up). After this fires, subsequent
                 // gated drains skip cheaply via the early-return below.
+                if trace {
+                    tracing::info!(
+                        "VAD trace: gate closed → final flush inference (HUSH_VAD_TRACE)"
+                    );
+                }
                 self.was_inferring = false;
                 let ctx = self
                     .ctx
@@ -882,7 +938,13 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
                 };
                 return self.state.tick_flush(&mut inferer);
             }
+            if trace {
+                tracing::info!("VAD trace: gate suppressing inference (silence) (HUSH_VAD_TRACE)");
+            }
             return Ok(Vec::new());
+        }
+        if trace {
+            tracing::info!("VAD trace: gate open → inference (speech) (HUSH_VAD_TRACE)");
         }
         // Not gating — record so the next gate-close fires a flush.
         self.was_inferring = true;
@@ -983,6 +1045,14 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         params.set_temperature(0.0);
         params.set_temperature_inc(0.0);
         params.set_suppress_nst(true);
+        // `no_speech_thold` (#974 follow-up): explicitly set the
+        // silence-discard threshold whisper.cpp otherwise leaves at its
+        // 0.6 default, so it becomes a single tunable knob
+        // (`HUSH_WHISPER_NO_SPEECH_THOLD`). Default value matches the
+        // built-in, so this is behavior-neutral until tuned. `suppress_nst`
+        // only blocks bracketed non-speech tokens; this is the lever for
+        // the English-text confabulations on compressed call audio.
+        params.set_no_speech_thold(no_speech_thold());
         if !self.prompt.is_empty() {
             params.set_initial_prompt(self.prompt);
         }

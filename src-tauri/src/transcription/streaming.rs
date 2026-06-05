@@ -159,6 +159,49 @@ impl Default for SlidingWindowConfig {
     }
 }
 
+/// Minimum word count for the consecutive-final repetition guard to
+/// apply (#974 follow-up). Whisper's decoder loops on low-information
+/// audio, emitting the same *full sentence* as many consecutive finals
+/// (observed: "So, I'm going to go ahead and take a look at the slide."
+/// × 7 in one meeting). The `committed_until_ms` high-water mark doesn't
+/// catch these because each loop iteration carries an advancing
+/// timestamp. We drop a final that's identical to the immediately
+/// preceding committed final — but only for substantial text, so a
+/// presenter legitimately saying "next." / "yes." back-to-back is never
+/// suppressed. Four words is comfortably above real short confirmations
+/// and well below a looped sentence.
+const MIN_REPEAT_GUARD_WORDS: usize = 4;
+
+/// Normalise a final's text for repetition comparison: trim, lowercase,
+/// collapse internal whitespace runs to single spaces. Pure; keeps the
+/// repetition guard insensitive to the cosmetic spacing/case differences
+/// whisper sometimes introduces between otherwise-identical loop
+/// iterations.
+fn normalize_for_repeat(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Whether `candidate` should be dropped as a repetition of the
+/// immediately-preceding committed final `prev` (#974 follow-up).
+///
+/// Returns true only when both normalise to the same string AND the
+/// candidate is at least [`MIN_REPEAT_GUARD_WORDS`] words — the
+/// word-count floor protects legitimate short repeats. `prev == None`
+/// (nothing committed yet) is never a repeat.
+fn is_repeat_final(prev: Option<&str>, candidate: &str) -> bool {
+    let Some(prev) = prev else {
+        return false;
+    };
+    let norm_candidate = normalize_for_repeat(candidate);
+    if norm_candidate.split(' ').count() < MIN_REPEAT_GUARD_WORDS {
+        return false;
+    }
+    normalize_for_repeat(prev) == norm_candidate
+}
+
 /// Policy state machine. Owns a rolling buffer of mono 16 kHz PCM,
 /// triggers inference at the configured cadence, and splits the
 /// returned segments into finals + partial per the commit-tail rule.
@@ -201,6 +244,12 @@ pub struct SlidingWindowState {
     /// identical partial twice (avoids redundant DB / IPC work in the
     /// pump). Cleared when a partial is committed as final.
     last_partial_text: Option<String>,
+    /// Text of the most recently committed final. Drives the
+    /// consecutive-final repetition guard (#974 follow-up) — a final
+    /// identical to this is a whisper decoder loop and gets dropped.
+    /// See [`is_repeat_final`]. Persists across ticks so a loop spanning
+    /// multiple inferences is still caught.
+    last_committed_text: Option<String>,
 }
 
 impl SlidingWindowState {
@@ -217,6 +266,7 @@ impl SlidingWindowState {
             samples_since_last_inference: 0,
             committed_until_ms: 0,
             last_partial_text: None,
+            last_committed_text: None,
         }
     }
 
@@ -393,6 +443,24 @@ impl SlidingWindowState {
                 if abs_end_ms <= self.committed_until_ms {
                     continue;
                 }
+                // Repetition guard (#974 follow-up): drop a final that
+                // duplicates the immediately preceding committed final —
+                // a whisper decoder loop on low-information audio. Still
+                // advance `committed_until_ms` so the dropped range
+                // isn't re-evaluated next tick, but don't emit the
+                // duplicate or update `last_committed_text` (so a third
+                // identical loop iteration is also caught against the
+                // same anchor).
+                if is_repeat_final(self.last_committed_text.as_deref(), text) {
+                    self.committed_until_ms = abs_end_ms;
+                    if tracing::enabled!(tracing::Level::DEBUG) {
+                        tracing::debug!(
+                            text,
+                            "streaming: dropped repeated final (decoder loop, #974 follow-up)"
+                        );
+                    }
+                    continue;
+                }
                 out.push(Utterance {
                     text: text.to_owned(),
                     started_at_ms: abs_start_ms.max(self.committed_until_ms),
@@ -401,6 +469,7 @@ impl SlidingWindowState {
                     speaker_label: None,
                 });
                 self.committed_until_ms = abs_end_ms;
+                self.last_committed_text = Some(text.to_owned());
                 last_committed_rel_end_ms = Some(seg.end_ms);
             }
         }
@@ -1365,6 +1434,47 @@ mod tests {
             "tick_flush must commit the in-flight segment as final"
         );
         assert_eq!(finals[0].text, "in flight");
+    }
+
+    #[test]
+    fn repeat_guard_drops_identical_consecutive_sentence() {
+        // The exact failure from the field report: a full sentence
+        // looped by the whisper decoder.
+        let sentence = "So, I'm going to go ahead and take a look at the slide.";
+        assert!(
+            is_repeat_final(Some(sentence), sentence),
+            "an identical consecutive long final must be flagged as a repeat"
+        );
+    }
+
+    #[test]
+    fn repeat_guard_is_case_and_whitespace_insensitive() {
+        assert!(is_repeat_final(
+            Some("Take a look at the slide"),
+            "take  a   look at the   slide"
+        ));
+    }
+
+    #[test]
+    fn repeat_guard_spares_short_legit_repeats() {
+        // A presenter saying "next." twice, or "yes yes", must NOT be
+        // dropped — below the word floor.
+        assert!(!is_repeat_final(Some("next."), "next."));
+        assert!(!is_repeat_final(Some("yes yes"), "yes yes"));
+        assert!(!is_repeat_final(Some("okay okay okay"), "okay okay okay"));
+    }
+
+    #[test]
+    fn repeat_guard_keeps_distinct_finals() {
+        assert!(!is_repeat_final(
+            Some("the first point is about budget"),
+            "the second point is about timeline"
+        ));
+    }
+
+    #[test]
+    fn repeat_guard_no_prior_is_never_a_repeat() {
+        assert!(!is_repeat_final(None, "any text at all here goes"));
     }
 
     #[test]
