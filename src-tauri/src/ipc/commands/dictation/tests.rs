@@ -680,6 +680,21 @@ async fn load_vocabulary_prompt_swallows_repository_errors() {
         Arc::new(crate::ipc::tests::NoopReplacements),
     );
 
+    // Isolate the repo-failure path from the 2026-06-05 default-pack /
+    // Oxford-style change: with no packs and American selected, the only
+    // contributor is the (failing) user vocab repo, so a swallowed error
+    // yields an empty prompt.
+    state
+        .settings
+        .set(crate::settings::keys::ENABLED_PACKS, "[]")
+        .await
+        .unwrap();
+    state
+        .settings
+        .set(crate::settings::keys::LANGUAGE_STYLE, "american")
+        .await
+        .unwrap();
+
     let prompt = load_vocabulary_prompt(&state).await;
     assert!(prompt.is_empty(), "got: {prompt}");
 }
@@ -693,6 +708,15 @@ async fn load_replacement_rules_returns_empty_on_error() {
         Arc::new(crate::ipc::tests::NoopVocabulary),
         Arc::new(FailingReplacements),
     );
+
+    // Disable the default Developer pack (which ships 17 replacement
+    // rules as of 2026-06-05) so this test isolates the user-repo
+    // failure path: with no packs, the failing repo is the only source.
+    state
+        .settings
+        .set(crate::settings::keys::ENABLED_PACKS, "[]")
+        .await
+        .unwrap();
 
     let rules = load_replacement_rules(&state).await;
     assert!(rules.is_empty());

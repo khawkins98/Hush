@@ -38,6 +38,14 @@ pub struct PackDescriptor {
     pub replacements: &'static [(&'static str, &'static str)],
 }
 
+/// Slug of the pack enabled by default when the `enabled_packs` setting
+/// is absent (product default as of 2026-06-05). Single source of truth
+/// for the two readers that resolve the absent-default — the UI
+/// (`ipc::commands::dictionary::load_enabled_slugs`) and the prompt path
+/// (`dictation::pipeline::load_enabled_packs`) — so they can't drift.
+/// Must match one of [`PACKS`]' slugs.
+pub const DEFAULT_PACK_SLUG: &str = "dev-general";
+
 /// All built-in packs, in display order.
 pub fn all_packs() -> &'static [PackDescriptor] {
     PACKS

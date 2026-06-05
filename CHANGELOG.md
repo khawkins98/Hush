@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **New default configuration.** Out of the box (and for anyone who hasn't
+  set these explicitly): audio cues are **on** (start + complete chimes; they
+  honour system volume and Do Not Disturb), Language Style defaults to
+  **Oxford English**, and the **Developer — General** vocabulary pack is
+  enabled. Existing explicit choices are untouched — only unset values pick up
+  the new defaults. Change any of them in Settings → General / Vocabulary.
+
 ### Fixed
 
 - **Meeting transcripts: stray `.com` / `.org` / lone-punctuation lines from
