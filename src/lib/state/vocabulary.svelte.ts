@@ -20,7 +20,9 @@ let terms = $state<VocabularyTerm[]>([]);
 let loaded = $state(false);
 let error = $state<ErrorDisplay | null>(null);
 let packs = $state<PackStatus[]>([]);
-let languageStyle = $state<LanguageStyle>("american");
+// Pre-load placeholder; matches the backend default (Oxford as of
+// 2026-06-05) so the radio doesn't flash before the real value loads.
+let languageStyle = $state<LanguageStyle>("oxford");
 
 export const vocab = {
   get terms() {

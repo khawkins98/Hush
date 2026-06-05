@@ -21,7 +21,10 @@ let hudEnabled = $state(true);
 let hudBusy = $state(false);
 let hudError = $state<string | null>(null);
 
-let soundCuesEnabled = $state(false);
+// Pre-load placeholder; matches the backend default (on as of
+// 2026-06-05) so the toggle doesn't flash off→on before the real value
+// loads on mount.
+let soundCuesEnabled = $state(true);
 let soundCuesBusy = $state(false);
 let soundCuesError = $state<string | null>(null);
 

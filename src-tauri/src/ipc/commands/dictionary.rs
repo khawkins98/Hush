@@ -242,7 +242,11 @@ async fn load_enabled_slugs(state: &AppState) -> IpcResult<Vec<String>> {
                 Vec::new()
             }),
         ),
-        Ok(None) => Ok(Vec::new()),
+        // Absent row → the Developer — General pack is the product
+        // default (2026-06-05). An explicit empty array (user disabled
+        // every pack) is `Some("[]")` and correctly stays empty above —
+        // only an unset row falls through to this default.
+        Ok(None) => Ok(vec![crate::dictionary::DEFAULT_PACK_SLUG.to_owned()]),
         Err(e) => Err(IpcError::Replacements(e.to_string())),
     }
 }
@@ -261,8 +265,9 @@ async fn save_enabled_slugs(state: &AppState, slugs: &[String]) -> IpcResult<()>
 
 /// Get the stored language style preference.
 ///
-/// Returns `"american"` if the setting is absent or unrecognised — that is
-/// Whisper's default behaviour and the product default for Hush.
+/// Returns `"oxford"` if the setting is absent or unrecognised — the
+/// product default as of 2026-06-05 (was `"american"`). An explicit
+/// `"american"` is preserved.
 #[tauri::command]
 pub async fn get_language_style(state: State<'_, AppState>) -> IpcResult<String> {
     let style = state
@@ -294,13 +299,15 @@ pub async fn set_language_style(state: State<'_, AppState>, style: String) -> Ip
 }
 
 /// Normalise a stored style slug to a known value, defaulting to
-/// `"american"` for anything unrecognised (including the empty string
-/// from an absent row).
+/// `"oxford"` for anything unrecognised (including the empty string from
+/// an absent row) as of 2026-06-05. An explicit `"american"` is mapped
+/// through unchanged — only an unset row falls through to the default.
 fn normalise_language_style(stored: &str) -> &'static str {
     match stored {
+        "american" => "american",
         "british" => "british",
         "oxford" => "oxford",
-        _ => "american",
+        _ => "oxford",
     }
 }
 
@@ -327,25 +334,27 @@ mod tests {
     }
 
     #[test]
-    fn normalise_language_style_defaults_unknown_to_american() {
+    fn normalise_language_style_defaults_unknown_to_oxford() {
+        // Explicit american is preserved; absent / unknown default to
+        // Oxford (product default 2026-06-05).
         assert_eq!(normalise_language_style("american"), "american");
-        assert_eq!(normalise_language_style(""), "american");
-        assert_eq!(normalise_language_style("garbage"), "american");
+        assert_eq!(normalise_language_style(""), "oxford");
+        assert_eq!(normalise_language_style("garbage"), "oxford");
     }
 
     // -- language style settings round-trip ---------------------------------
 
     #[tokio::test]
-    async fn language_style_defaults_to_american_when_absent() {
+    async fn language_style_defaults_to_oxford_when_absent() {
         let state = mock_state();
-        // No row stored yet → normalise_language_style("") → "american".
+        // No row stored yet → normalise_language_style("") → "oxford".
         let stored = state
             .settings
             .get(settings::keys::LANGUAGE_STYLE)
             .await
             .unwrap()
             .unwrap_or_default();
-        assert_eq!(normalise_language_style(&stored), "american");
+        assert_eq!(normalise_language_style(&stored), "oxford");
     }
 
     #[tokio::test]
@@ -397,9 +406,22 @@ mod tests {
     #[tokio::test]
     async fn load_save_enabled_slugs_round_trips() {
         let state = mock_state();
-        // Nothing stored yet → empty list.
-        let empty = load_enabled_slugs(&state).await.unwrap();
-        assert!(empty.is_empty(), "no slugs stored initially");
+        // Nothing stored yet → the default pack (2026-06-05).
+        let default = load_enabled_slugs(&state).await.unwrap();
+        assert_eq!(
+            default,
+            vec![crate::dictionary::DEFAULT_PACK_SLUG],
+            "absent row defaults to the Developer — General pack"
+        );
+
+        // An explicit empty array (user disabled all packs) stays empty —
+        // only the absent row defaults.
+        save_enabled_slugs(&state, &[]).await.unwrap();
+        let explicit_empty = load_enabled_slugs(&state).await.unwrap();
+        assert!(
+            explicit_empty.is_empty(),
+            "explicit empty selection must be preserved, not re-defaulted"
+        );
 
         // Save two slugs.
         save_enabled_slugs(&state, &["dev-general".to_string(), "business".to_string()])

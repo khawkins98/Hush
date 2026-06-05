@@ -439,11 +439,13 @@ pub(crate) fn parse_hud_enabled_setting(raw: Option<String>) -> bool {
 
 /// Parse the persisted [`crate::settings::keys::SOUND_CUES_ENABLED`]
 /// row (#292). Wire encoding lives in [`crate::settings::codec`];
-/// per-key default is `false` (audio cues are off by default —
-/// they'd be intrusive in shared spaces / meeting rooms, opt-in is
-/// the right shape).
+/// per-key default is `true` as of 2026-06-05 (audio cues on by
+/// default — they honour system volume and Do Not Disturb, so they
+/// stay quiet in shared spaces / meeting rooms). The two per-event
+/// sub-toggles already default `true`, so flipping the master makes
+/// all three on out of the box.
 pub(crate) fn parse_sound_cues_setting(raw: Option<String>) -> bool {
-    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(false)
+    crate::settings::codec::decode_bool(raw.as_deref()).unwrap_or(true)
 }
 
 /// Parse a per-event sound-cue sub-toggle row (#463). Absent /

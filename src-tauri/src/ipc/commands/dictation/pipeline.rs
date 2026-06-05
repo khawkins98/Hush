@@ -309,7 +309,11 @@ pub(crate) async fn load_enabled_packs(state: &AppState) -> Vec<String> {
         .await
     {
         Ok(Some(json)) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
-        Ok(None) => Vec::new(),
+        // Absent row → Developer — General default (2026-06-05); must
+        // match the UI reader in `dictionary.rs::load_enabled_slugs` so
+        // the prompt and the settings checkboxes agree. Explicit `[]`
+        // (user disabled all) is `Some("[]")` and stays empty above.
+        Ok(None) => vec![crate::dictionary::DEFAULT_PACK_SLUG.to_owned()],
         Err(e) => {
             tracing::warn!(error = ?e, "failed to load enabled packs; continuing with none");
             Vec::new()
@@ -318,28 +322,35 @@ pub(crate) async fn load_enabled_packs(state: &AppState) -> Vec<String> {
 }
 
 /// Read the language style prefix from settings. Returns an empty string
-/// for American English (the Whisper default) and for any missing /
-/// unrecognised setting value.
+/// only for an explicit American selection; an absent row defaults to the
+/// Oxford prefix (product default as of 2026-06-05). A DB read error
+/// degrades to no prefix (safe — the recording still transcribes).
 pub(super) async fn load_language_style_prefix(state: &AppState) -> String {
-    let style = match state
+    match state
         .settings
         .get(crate::settings::keys::LANGUAGE_STYLE)
         .await
     {
-        Ok(Some(s)) => s,
-        Ok(None) | Err(_) => String::new(),
-    };
-    language_style_prefix(&style)
+        // Absent row → empty string → the default arm of
+        // `language_style_prefix` (Oxford).
+        Ok(Some(s)) => language_style_prefix(&s),
+        Ok(None) => language_style_prefix(""),
+        Err(_) => String::new(),
+    }
 }
 
 /// Map a language style slug to the prompt prefix string.
 ///
 /// Kept as a pure function so it can be unit-tested without a database.
+/// Absent / unrecognised (the empty string from an unset row) maps to the
+/// Oxford prefix — the product default as of 2026-06-05. An explicit
+/// `"american"` maps to no prefix.
 pub(crate) fn language_style_prefix(style: &str) -> String {
     match style {
+        "american" => String::new(),
         "british" => "Use British English spelling.".to_owned(),
         "oxford" => "Use Oxford English spelling.".to_owned(),
-        _ => String::new(), // "american" or any unrecognised value → no prefix
+        _ => "Use Oxford English spelling.".to_owned(),
     }
 }
 

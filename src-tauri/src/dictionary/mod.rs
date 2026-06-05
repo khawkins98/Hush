@@ -31,6 +31,8 @@ pub mod packs;
 pub mod replacements;
 pub mod vocabulary;
 
+pub use packs::DEFAULT_PACK_SLUG;
+
 pub use replacements::{
     apply_replacements, NewReplacementRule, ReplacementRepository, ReplacementRule,
     SqliteReplacementRepository,
