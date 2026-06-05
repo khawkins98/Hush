@@ -318,6 +318,7 @@ Read once at process / session construction. Mid-session changes do not take eff
 | `HUSH_VAD_DISABLE` | unset | Set to `1` to force `NoopVad` everywhere (always-speech, no gating). Use for A/B comparison or debug. (#974) |
 | `HUSH_VAD_TRACE` | unset | Set to `1` to log per-feed Silero max-probability and each gate suppress/allow/flush decision at INFO (so they land in the default file log without `RUST_LOG=debug`). Diagnostic for "why did this hallucination pass the gate?" (#974 follow-up) |
 | `HUSH_WHISPER_NO_SPEECH_THOLD` | `0.6` | whisper.cpp silence-discard threshold: a segment is dropped when its no-speech probability exceeds this *and* its avg logprob is low. **Lower → more aggressive** silence filtering. Default matches whisper.cpp's built-in (behavior-neutral until tuned). Range `[0.0, 1.0]`. (#974 follow-up) |
+| `HUSH_ALLOW_READONLY_LAUNCH` | unset | macOS dev/QA only. Set to `1` to bypass the read-only-volume guard that otherwise shows a "move to Applications" alert and quits when Hush is launched from a mounted DMG or via App Translocation (permissions can't persist from a read-only volume). |
 
 For the in-process tunables that aren't env-driven (inference thread count, model selection, diarization toggle), see the hot-swap slots in the trait-seam pattern section above — those flow through Settings.
 

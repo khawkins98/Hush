@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **macOS: Hush now refuses to run from the disk image.** Launching it
+  straight from the mounted `.dmg` (or via Gatekeeper App Translocation) is a
+  read-only volume where microphone and keyboard permissions silently can't
+  persist — the source of most "permissions don't stick" confusion. Hush now
+  detects this, shows a "drag me to Applications and reopen" alert, and quits.
+  Installed copies are unaffected.
+
 ### Changed
 
 - **New default configuration.** Out of the box (and for anyone who hasn't
