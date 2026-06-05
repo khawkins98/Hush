@@ -143,11 +143,11 @@ npm run test:e2e
 # Real app runtime (fast iteration)
 npm run tauri dev
 
-# macOS permission / TCC smoke path
-npm run tauri:bundle
+# macOS permission / TCC smoke path (drag to ~/Applications from the DMG)
+npm run tauri:dmg
 ```
 
-Use `tauri:bundle` — not the raw dev binary — for any claim about macOS permission prompts or bundle-identity behaviour.
+Use `tauri:dmg` (installed via drag-to-~/Applications) — not the raw dev binary — for any claim about macOS permission prompts or bundle-identity behaviour. (`tauri:bundle` was retired 2026-06-05.)
 
 ---
 

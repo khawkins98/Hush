@@ -23,7 +23,6 @@
     "dev-reset:keep": "bash scripts/dev-reset.sh --keep-app-state",
     "memwatch": "bash scripts/memwatch.sh",
     "tauri": "tauri",
-    "tauri:bundle": "bash scripts/tauri-bundle-macos.sh",
     "tauri:dmg": "bash scripts/tauri-dmg-macos.sh",
     "prepare": "git config core.hooksPath .githooks || true"
   },

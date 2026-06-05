@@ -33,19 +33,19 @@ cd src-tauri && cargo tauri dev --no-default-features
 # diarization stack without paying whisper.cpp compile cost.
 cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx
 
-# macOS-only: build a debug .app bundle and open it. Use this for
-# smoke-testing anything that depends on macOS treating Hush as a
-# proper app — Microphone / Input Monitoring TCC prompts in
-# particular. The bare `cargo tauri dev` binary has no .app wrapper
-# and doesn't register reliably with TCC (see "macOS TCC dev-binary
-# quirk" below). Slow: 30 s – 2 min, not a hot-iteration tool.
-npm run tauri:bundle
-
-# macOS-only: build a release DMG for local distribution testing.
-# Automatically ejects any stale Hush DMG mounts left by previous
-# failed builds (the root cause of "failed to run bundle_dmg.sh"
-# errors — not a macOS 26 version-parsing bug as previously noted).
-# DMG lands at src-tauri/target/release/bundle/dmg/*.dmg.
+# macOS-only: build a release DMG and open it for install. THE canonical
+# path for anything that depends on macOS treating Hush as a proper app —
+# Microphone / Input Monitoring TCC prompts in particular. Dragging the
+# .app from the mounted DMG to ~/Applications is what makes TCC reliable:
+# Finder sets the quarantine xattr, and the app strips it + exec-restarts
+# on first launch (lib.rs::handle_quarantine_strip) to establish a clean
+# TCC identity — the exact codepath real users hit. (The retired
+# `tauri:bundle` cp'd the app in place, so it never ran that path and
+# tested the wrong thing; see "macOS TCC testing" below.) Automatically
+# ejects stale Hush DMG mounts left by previous builds. Slow: full
+# release compile (5–10 min), so it's a smoke-test tool, not hot-iteration
+# (use `npm run tauri dev` for that). DMG lands at
+# src-tauri/target/release/bundle/dmg/*.dmg.
 npm run tauri:dmg
 
 # Regenerate the DMG installer background PNG from its SVG source.
@@ -182,24 +182,24 @@ CI does not run a real Tauri runtime. A panic at app boot (plugin init, capabili
 - `src-tauri/src/app_menu/` (native macOS menu — a malformed `MenuBuilder` chain panics during `setup`).
 - Anything that adds or removes a `.plugin(...)` call
 
-## macOS TCC dev-binary quirk
+## macOS TCC testing
 
 **The one canonical workflow for TCC / permission testing:**
 
-    npm run dev-reset    # REQUIRED when testing IM from scratch — see note below
-    npm run tauri:bundle # build → re-sign → install to ~/Applications/Hush.app → launch
+    npm run dev-reset  # REQUIRED when testing IM from scratch — see note below
+    npm run tauri:dmg  # build release DMG → opens in Finder
+    # then drag Hush.app from the mounted DMG → ~/Applications, and open it
 
-`tauri:bundle` builds a debug `.app`, re-signs it so TCC uses the stable bundle ID (`io.github.khawkins98.hush`), and installs it to `~/Applications/Hush.app` — a standard macOS app location that TCC treats identically to `/Applications`. This is as reliable as a DMG install without requiring a full release compile (which can take 5–10 min).
+Dragging from the DMG is load-bearing: Finder sets the `com.apple.quarantine` xattr, and on first launch the app strips it and **exec-restarts** (`lib.rs::handle_quarantine_strip`) to establish a clean TCC identity. That restart is the exact codepath real users hit — so testing this way validates the real permission flow, not an approximation.
 
-Use `npm run tauri dev` for fast UI/Rust iteration — it can't test TCC reliably. Use `npm run tauri:dmg` only when you need a distributable release artifact.
+**Why `tauri:bundle` was retired (2026-06-05).** The old `tauri:bundle` `cp -R`'d a debug `.app` into `~/Applications` and `open`'d it. Because `cp` never sets the quarantine xattr, that path **never ran the quarantine-strip-exec-restart** — so it exercised a *different* startup codepath than any real install, making it both flaky and misleading as a TCC smoke test. `tauri:dmg` does the job reliably and tests the real install UX; the speed edge `tauri:bundle` had is covered by `npm run tauri dev` (which can't test TCC, and that's fine — you don't TCC-test every iteration). See `learnings.md` 2026-06-05.
+
+Use `npm run tauri dev` for fast UI/Rust iteration — it can't test TCC reliably (unsigned binary; TCC attributes it to the parent terminal).
 
 **`dev-reset` is required when testing Input Monitoring from a clean state.**  
 `npm run dev-reset` runs a nuclear `tccutil reset ListenEvent` (no bundle ID) that clears all IM grants for the user — necessary because TCC entries created during quarantine or by ad-hoc cdhash don't match the plain bundle-ID-scoped reset. It also removes *both* `~/Applications/Hush.app` and `/Applications/Hush.app`. The `/Applications` removal is critical: old DMG installs from before the re-signing fix carry a linker-signed codesign identifier (`hush-<hash>`) instead of `io.github.khawkins98.hush`. TCC uses the **codesign identifier** (not `CFBundleIdentifier`) to key permission rows, so the two installs have completely separate TCC universes and running both produces a confusing split where one shows Denied and the other shows NotDetermined. See `learnings.md` 2026-05-13 "Linker-signed vs re-signed TCC identity".
 
-**Why `cargo tauri dev` and the raw debug binary don't work for TCC:**  
-`cargo tauri dev` produces an unsigned binary. TCC attributes it to the parent terminal, and permission flows in general are unreliable without a real `.app` bundle. Even `cargo tauri build --debug` leaves a linker-signed binary with a hash-based identifier (`hush-<hash>`), not `io.github.khawkins98.hush` — `tauri:bundle` fixes this automatically with `codesign --force --deep --sign -`. See `learnings.md` 2026-05-04 for the full investigation.
-
-Stale `Hush.app` rows after rebuilds are recovered by manually removing them with `−` in System Settings → Privacy, then running `npm run dev-reset`, then `npm run tauri:bundle`.
+Stale `Hush.app` rows after rebuilds are recovered by manually removing them with `−` in System Settings → Privacy, then running `npm run dev-reset`, then `npm run tauri:dmg`.
 
 The full troubleshooting guide lives in [`docs/macos-permissions.md`](./docs/macos-permissions.md).
 

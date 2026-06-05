@@ -60,8 +60,7 @@ Subsequent runs are incremental.
 | Iterate on UI or Rust logic with the real backend — the normal dev loop | `npm run tauri dev` |
 | Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
 | Diarizer only (no whisper compile cost) | `cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx` |
-| Test Microphone / Input Monitoring TCC permission prompts | `npm run tauri:bundle` (macOS only) |
-| Build a release `.dmg` to smoke-test the installer | `npm run tauri:dmg` (macOS only) |
+| Test Microphone / Input Monitoring TCC prompts, or the installer experience | `npm run tauri:dmg` (macOS only) → drag to ~/Applications |
 | Run Rust unit tests | `cd src-tauri && cargo test --lib` |
 | Run frontend unit tests (Vitest) | `npm run test:unit` |
 | Run frontend type check | `npm run check` |
@@ -109,16 +108,17 @@ cd src-tauri && cargo tauri dev --no-default-features
 # stack without paying the whisper.cpp compile cost.
 cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx
 
-# macOS-only: build a debug .app bundle and open it. Use this for
-# smoke-testing anything that depends on macOS treating Hush as a proper
-# app — Microphone / Input Monitoring TCC prompts in particular. The bare
-# `cargo tauri dev` binary doesn't register reliably with TCC (see below).
-# Slow: 30 s – 2 min. Not a hot-iteration tool.
-npm run tauri:bundle
-
-# macOS-only: clean up stale DMG volumes then build the release .app + .dmg.
-# Use when you want to test the installer experience (drag-to-Applications,
-# Gatekeeper prompt). Not needed for normal feature work.
+# macOS-only: clean up stale DMG volumes, build the release .app + .dmg,
+# and open the DMG in Finder. THE canonical path for anything that depends
+# on macOS treating Hush as a proper app — Microphone / Input Monitoring
+# TCC prompts in particular — and for the installer experience
+# (drag-to-Applications, Gatekeeper). Dragging from the DMG sets the
+# quarantine xattr, which the app strips + exec-restarts on first launch
+# to get a clean TCC identity — the real user flow. Slow: full release
+# compile (5–10 min), so it's a smoke-test tool, not hot-iteration (use
+# `npm run tauri dev` for that, though it can't test TCC). The former
+# `tauri:bundle` shortcut was retired 2026-06-05 — it skipped the
+# quarantine/exec-restart path and tested a codepath users never hit.
 npm run tauri:dmg
 
 # Rust unit tests.
@@ -190,8 +190,9 @@ npm run dev-reset
 # app state. Kills processes, resets TCC grants (current + legacy bundle IDs),
 # removes app installs (to avoid stale codesign-identity TCC rows). PRESERVES:
 # settings, dictionary, replacements, prefs plist, caches, autostart, history,
-# downloaded models. After running, `npm run tauri:bundle` re-installs the
-# bundle and the permission flow tests on top of your real working state.
+# downloaded models. After running, `npm run tauri:dmg` (drag to
+# ~/Applications) re-installs and the permission flow tests on top of your
+# real working state.
 npm run dev-reset:keep
 
 # Memory diagnostics — sample the running Hush process's RSS + physical
@@ -221,13 +222,14 @@ cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings
 
 `cargo tauri dev` produces an **unsigned** binary. macOS TCC attributes it to the parent terminal process, so Microphone and Input Monitoring permissions work inconsistently and may not persist across rebuilds. **Screen Recording is no longer required** (system audio uses the CoreAudio process-tap backend as of v0.5.0, not ScreenCaptureKit).
 
-For anything that requires a real signed `.app` bundle — permission prompts, TCC identity testing, first-run onboarding — build the bundle:
+For anything that requires a real signed `.app` bundle — permission prompts, TCC identity testing, first-run onboarding — build the release DMG and install from it:
 
 ```bash
-npm run tauri:bundle
+npm run tauri:dmg
+# then drag Hush.app from the mounted DMG → ~/Applications, and open it
 ```
 
-This produces a proper `.app` that TCC treats like a user-installed app. It's slow (30 s – 2 min), so use it deliberately rather than as your default loop.
+Dragging from the DMG sets the `com.apple.quarantine` xattr; on first launch the app strips it and exec-restarts to establish a clean TCC identity (the same flow real users get). It's a full release compile (5–10 min), so use it deliberately rather than as your default loop. (The former `tauri:bundle` shortcut was retired 2026-06-05 — it `cp`'d the app in place, never setting quarantine, so it skipped that exec-restart and tested a codepath users never hit. See `learnings.md` 2026-06-05.)
 
 If macOS shows stale "Hush" rows in System Settings → Privacy & Security after rebuilding: Settings → Permissions → Reset permissions inside Hush, remove the stale row in System Settings, then relaunch.
 
@@ -245,7 +247,7 @@ If you only need to re-test the permission flow itself and want to keep your dic
 npm run dev-reset:keep
 ```
 
-This still kills processes, resets TCC grants, and removes app installs (so a re-installed bundle doesn't carry a stale codesign-identity TCC row — see `learnings.md` 2026-05-13). But it preserves everything else, so you can run `npm run tauri:bundle` after and test the permission flow on top of your real working state.
+This still kills processes, resets TCC grants, and removes app installs (so a re-installed bundle doesn't carry a stale codesign-identity TCC row — see `learnings.md` 2026-05-13). But it preserves everything else, so you can run `npm run tauri:dmg` (drag to ~/Applications) after and test the permission flow on top of your real working state.
 
 Full recovery recipes: [`docs/macos-permissions.md`](./macos-permissions.md).
 
@@ -389,7 +391,12 @@ grep -h "recreating WhisperState" ~/Library/Logs/io.github.khawkins98.hush/hush.
 When meeting mode transcribes nothing, the logs distinguish three failure modes. First, enable debug logging:
 
 ```bash
-RUST_LOG=hush=debug npm run tauri:bundle && open ~/Applications/Hush.app
+# Build + install via the DMG (drag to ~/Applications), then launch with
+# debug logging. RUST_LOG is read by the app at startup regardless of how
+# it's launched; set it for the GUI launch via launchctl so it survives
+# the quarantine-strip exec-restart:
+launchctl setenv RUST_LOG hush=debug
+open ~/Applications/Hush.app
 ```
 
 Then start a meeting session and watch the console output (Tauri dev console, in-app Debug tab, or `tail -f ~/Library/Logs/io.github.khawkins98.hush/hush.log.$(date +%F)`). You should see lines like:
@@ -408,7 +415,7 @@ meeting pump: inference tick  utterances=0 elapsed_ms=1
 
 ... and every tick shows `elapsed_ms` near 0 with no `"streaming tick: inference ran"` lines from `streaming.rs`.
 
-**Means:** The ring buffer is empty. The audio capture source isn't pushing samples. Check ScreenCaptureKit permissions (`npm run tauri:bundle` first) and microphone TCC grants.
+**Means:** The ring buffer is empty. The audio capture source isn't pushing samples. Check ScreenCaptureKit permissions (install via `npm run tauri:dmg` → drag to ~/Applications first) and microphone TCC grants.
 
 ### Failure mode 2 — Whisper no-speech filtering
 
