@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Meeting transcripts: stray `.com` / `.org` / lone-punctuation lines from
+  Whisper are now dropped.** These are silence/low-information confabulations
+  (often looped — one report had `.org,` twelve times in a row); a final whose
+  *entire* text is a bare URL TLD or pure punctuation is discarded. Real
+  speech that merely contains a URL ("visit example.com") is untouched. This
+  complements the looped-sentence dedup — those were full sentences; these are
+  short fragments that slipped under that guard's word floor. (#974 follow-up)
+
 - **Meeting transcripts: looped sentences from Whisper are no longer
   duplicated.** On low-information audio (silent screen-shares, hold music)
   Whisper's decoder can loop a single sentence many times; these now collapse

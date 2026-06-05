@@ -202,6 +202,54 @@ fn is_repeat_final(prev: Option<&str>, candidate: &str) -> bool {
     normalize_for_repeat(prev) == norm_candidate
 }
 
+/// Top-level domains that Whisper confabulates on low-information audio
+/// (#974 follow-up 2). A *leading-dot* TLD ("`.com`", "`.org`") is never
+/// real speech — it's a URL-fragment hallucination — so a final whose
+/// entire text is one of these is dropped. The leading dot is required
+/// (see [`is_hallucination_fragment`]), which is what makes even the
+/// word-like entries ("co", "me", "us") safe: nobody dictates "`.us`".
+const HALLUCINATION_TLDS: &[&str] = &[
+    "com", "org", "net", "edu", "gov", "io", "info", "biz", "co", "ai", "app", "dev", "xyz", "me",
+    "tv", "uk", "us",
+];
+
+/// Whether a committed final's text is a known Whisper silence-/low-info
+/// confabulation that should be dropped outright (#974 follow-up 2).
+/// Matches the **entire** trimmed text only — never a substring — so a
+/// real sentence that merely contains a URL ("visit example.com today")
+/// is untouched. Two shapes:
+///
+/// 1. Pure punctuation / whitespace — a lone "`.`", "`...`", "`,`".
+/// 2. A leading-dot bare TLD with optional trailing punctuation —
+///    "`.com`", "`.org,`", "`.com.`".
+///
+/// These are exactly the fragments that slip past the repetition guard
+/// (they're below its word floor) AND appear as one-off junk; the field
+/// reports showed "`.org,`" × 12 and scattered "`.com`" lines.
+fn is_hallucination_fragment(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return true;
+    }
+    // (1) No alphanumeric content — a lone "." / "..." / "…" / "," or
+    //     any symbol-only fragment. Broader than ASCII punctuation so
+    //     Unicode ellipsis/dashes are caught; safe because no real
+    //     transcript final is entirely non-alphanumeric.
+    if t.chars().all(|c| !c.is_alphanumeric()) {
+        return true;
+    }
+    // (2) Leading-dot bare TLD (+ optional trailing punctuation).
+    if let Some(rest) = t.strip_prefix('.') {
+        let core = rest
+            .trim_end_matches(|c: char| c.is_ascii_punctuation())
+            .to_ascii_lowercase();
+        if HALLUCINATION_TLDS.contains(&core.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Policy state machine. Owns a rolling buffer of mono 16 kHz PCM,
 /// triggers inference at the configured cadence, and splits the
 /// returned segments into finals + partial per the commit-tail rule.
@@ -441,6 +489,21 @@ impl SlidingWindowState {
                 // previous tick (whisper re-emitted it as part of the
                 // same window).
                 if abs_end_ms <= self.committed_until_ms {
+                    continue;
+                }
+                // Junk-fragment guard (#974 follow-up 2): drop a final
+                // whose entire text is a known silence confabulation
+                // (".com", ".org,", lone punctuation). These slip past
+                // the repetition guard below — they're one word, under
+                // its floor — and appear both looped and one-off. Whole-
+                // string match only, so real text containing a URL is
+                // untouched. Advance the high-water mark so the range
+                // isn't re-evaluated; don't touch `last_committed_text`.
+                if is_hallucination_fragment(text) {
+                    self.committed_until_ms = abs_end_ms;
+                    if tracing::enabled!(tracing::Level::DEBUG) {
+                        tracing::debug!(text, "streaming: dropped junk-fragment final (#974 fu2)");
+                    }
                     continue;
                 }
                 // Repetition guard (#974 follow-up): drop a final that
@@ -1475,6 +1538,42 @@ mod tests {
     #[test]
     fn repeat_guard_no_prior_is_never_a_repeat() {
         assert!(!is_repeat_final(None, "any text at all here goes"));
+    }
+
+    #[test]
+    fn junk_fragment_drops_bare_tlds_from_field_reports() {
+        // The exact strings from the field reports.
+        for s in [
+            ".com", ".org", ".org,", ".com.", ".com,", " .org ", ".io", ".net",
+        ] {
+            assert!(is_hallucination_fragment(s), "{s:?} should be dropped");
+        }
+    }
+
+    #[test]
+    fn junk_fragment_drops_pure_punctuation() {
+        for s in [".", "...", ",", " . ", "?!", "…"] {
+            assert!(is_hallucination_fragment(s), "{s:?} should be dropped");
+        }
+    }
+
+    #[test]
+    fn junk_fragment_keeps_real_speech() {
+        // None of these may be dropped — including short real utterances
+        // and real sentences that merely *contain* a URL or a TLD word.
+        for s in [
+            "OK.",
+            "Yes.",
+            "Thank you.",
+            "Very good.",
+            "visit example.com today",
+            "the org chart is ready",
+            "I work in comms",
+            "dot com boom",
+            "Union Embassy here.",
+        ] {
+            assert!(!is_hallucination_fragment(s), "{s:?} must be kept");
+        }
     }
 
     #[test]
