@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Meeting transcripts: looped sentences from Whisper are no longer
+  duplicated.** On low-information audio (silent screen-shares, hold music)
+  Whisper's decoder can loop a single sentence many times; these now collapse
+  to one line. The guard only applies to substantial repeated text, so a
+  presenter genuinely repeating a short phrase ("next.", "yes") is never
+  suppressed. (#974 follow-up)
+
+### Added
+
+- **Tunable silence-discard threshold** via `HUSH_WHISPER_NO_SPEECH_THOLD`
+  (default `0.6`, matching whisper.cpp's built-in — behavior-neutral until
+  set). Lower values filter more aggressively; the lever for the `.com` /
+  `.org` confabulations that compressed call audio (Teams/Zoom) provokes. (#974 follow-up)
+- **VAD gate decision tracing** via `HUSH_VAD_TRACE=1` — logs the Silero
+  speech probability per audio feed and each gate suppress/allow/flush
+  decision, so a real meeting reveals exactly why a given hallucination
+  passed the gate. Diagnostic only; off by default. (#974 follow-up)
+
 ## [0.13.0] - 2026-06-04
 
 v0.13.0 is the memory-stability release. Long meetings used to balloon the

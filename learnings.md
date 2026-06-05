@@ -32,6 +32,50 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-06-05 — VAD hallucination follow-up: the gate is content-blind, and there's a separate repetition class
+
+A user still got silence-hallucinations on a Teams call after the #974 VAD
+gate shipped (v0.12.0): `.com` / `.org` / `.` fragments **and** a full
+sentence ("So, I'm going to go ahead and take a look at the slide.") looped
+~7× and scattered across diarized speakers 1–4. Investigation (`NoopVad`
+ruled out — `vad: loaded SileroVad` confirmed in the startup log; the
+session's `#533 diagnostic` showed 830 finals / **0 blank_finals**, i.e. the
+junk all committed as "real").
+
+**Two distinct root causes, only one of which the VAD gate ever addressed:**
+
+1. **The VAD gate is a content-blind recency gate** — threshold 0.5, 1.5 s
+   hangover, *identical for mic and system-audio*, no inspection of the
+   window it admits. A single frame of compressed Teams audio crossing 0.5
+   opens the gate for the next 1.5 s; the gate-close flush then runs one
+   Whisper pass on a window *ending in silence* and commits it as permanent
+   final. `no_speech_thold` was never explicitly set (relied on whisper.cpp's
+   0.6 default, which the codebase itself notes is defeated by Opus/AAC
+   call-audio artefacts).
+2. **No anti-repetition logic existed anywhere.** Whisper's decoder loops on
+   low-information audio, emitting the same sentence as N consecutive finals
+   with *advancing* timestamps — so `committed_until_ms` (a time-range
+   high-water mark, not a text check) never caught them. The VAD gate was
+   never going to fix this; it's a separate transcript-layer concern.
+
+**Key diagnostic gap that shaped the fix:** the gate logged *nothing* about
+its decisions, so existing logs could prove the junk passed through but not
+*which* mechanism produced each piece. You cannot tune a threshold you can't
+observe. So this round is deliberately split: ship the unambiguous fix
+(repetition dedup) + the knobs and instrumentation, and *defer* the threshold
+values until a real meeting under `HUSH_VAD_TRACE=1` shows where the
+compressed-audio probabilities actually sit. Guessing 0.5→0.6 blind risks
+dropping quiet real speech.
+
+**Shipped:** consecutive-final repetition dedup in `streaming.rs`
+(`is_repeat_final`, guarded by a 4-word floor so legit "next." / "yes yes"
+repeats survive); `no_speech_thold` exposed as `HUSH_WHISPER_NO_SPEECH_THOLD`
+(default 0.6, behavior-neutral); `HUSH_VAD_TRACE=1` logging per-feed Silero
+max-prob + each gate decision at INFO. **Deliberately not shipped:** a
+`.com`/`.org` denylist (a taste/denylist call better made once the
+instrumentation shows whether lowering `no_speech_thold` already catches
+them) and any default-threshold change (evidence-gated).
+
 ## 2026-06-01 (webview) — #986: log:event streaming into a hidden window leaks via WKWebView evaluateJavaScript
 
 Once the mimalloc leak (#985) was fixed, the dominant remaining meeting-time
