@@ -310,7 +310,7 @@ fi
 # whose codesign identifier is `hush-<hash>` (not `io.github.khawkins98.hush`).
 # TCC keys ListenEvent/Microphone/etc rows to the codesign identifier, so a
 # linker-signed /Applications/Hush.app carries separate TCC rows from the
-# re-signed binaries produced by tauri:bundle / tauri:dmg. If the old install
+# re-signed binary produced by tauri:dmg. If the old install
 # is still present it creates a confusing "two binaries with different permission
 # states" situation — one app sees Denied, the other sees NotDetermined — and
 # macOS may auto-focus or single-instance-redirect to the wrong one.
@@ -328,7 +328,7 @@ echo ""
 if [ "$keep_app_state" -eq 1 ]; then
   echo "[dev-reset] done (--keep-app-state). TCC permissions cleared + app installs removed."
   echo "            Your Hush settings, dictionary, replacements, prefs, caches, and"
-  echo "            autostart are intact. Re-install Hush.app (tauri:bundle / tauri:dmg)"
+  echo "            autostart are intact. Re-install Hush.app (npm run tauri:dmg)"
   echo "            and test the permission flow on top of your real state."
 else
   echo "[dev-reset] done. Next launch of Hush will behave as a first-ever install."

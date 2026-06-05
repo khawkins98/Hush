@@ -39,15 +39,12 @@ For the full command reference — which command to run when, macOS TCC quirks, 
 | Fast UI / layout work — browser + mock data, no backend | `npm run dev` → http://localhost:1420 |
 | Iterate on UI or Rust logic with the real backend — the normal dev loop | `npm run tauri dev` |
 | Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
-| Test Microphone / Input Monitoring TCC permission prompts | `npm run tauri:bundle` (macOS only) |
-| Build a release `.dmg` to smoke-test the installer locally | `npm run tauri:dmg` (macOS only) |
+| Test Microphone / Input Monitoring TCC prompts, or the installer experience | `npm run tauri:dmg` (macOS only) → drag to ~/Applications |
 | Run Rust unit tests | `cd src-tauri && cargo test --lib` |
 | Run frontend type check | `npm run check` |
 | Run frontend e2e tests | `npm run test:e2e` |
 
-**`npm run tauri dev` vs `tauri:bundle`:** The dev binary is unsigned; macOS TCC attributes mic/keyboard access to the parent terminal, so those permissions behave differently than in a real app. `tauri:bundle` produces a proper `.app` that TCC treats like a user-installed app. Use it when verifying permission flows or system-audio capture — not as your day-to-day iteration tool (it's 30 s–2 min per build).
-
-**`tauri:dmg`:** Only needed when you want to test the installer experience (drag-to-Applications, Gatekeeper prompt, app-opens-from-Downloads). Not needed for normal feature work.
+**`npm run tauri dev` vs `tauri:dmg`:** The dev binary is unsigned; macOS TCC attributes mic/keyboard access to the parent terminal, so those permissions behave differently than in a real app. `tauri:dmg` builds a release DMG you drag to `~/Applications` — Finder sets the quarantine xattr and the app strips it + exec-restarts on first launch, the same flow real users get. Use it when verifying permission flows, system-audio capture, or the install experience (drag-to-Applications, Gatekeeper). It's a full release compile (5–10 min), so it's a smoke-test tool, not your day-to-day loop — use `npm run tauri dev` for that. (The former `tauri:bundle` shortcut was retired 2026-06-05: it skipped the quarantine/exec-restart path, so it tested a codepath users never hit.)
 
 ---
 

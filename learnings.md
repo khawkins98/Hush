@@ -32,6 +32,41 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-06-05 — Retired `tauri:bundle`: it skipped the quarantine/exec-restart, so it tested the wrong codepath
+
+`npm run tauri:bundle` (the debug-`.app` → `cp -R` to `~/Applications` → `open`
+shortcut, #152) was documented for years as *the* canonical TCC-testing path,
+but in practice it produced installs whose permissions didn't behave like real
+ones, while `tauri:dmg` worked. Investigation found why — and it isn't the
+codesign identifier (empirically tested: `codesign --force --deep --sign -` on
+a `.app` with a clean `CFBundleIdentifier` derives `io.github.khawkins98.hush`
+with or without an explicit `--identifier`, so the two scripts' signing was
+equivalent).
+
+**The real difference: quarantine, and the exec-restart it triggers.** The DMG
+flow has the user drag from the mounted DMG → Finder sets the
+`com.apple.quarantine` xattr → on first launch the app runs
+`lib.rs::handle_quarantine_strip`, strips the xattr, and **`exec()`-restarts**
+to establish a clean TCC identity (the 2026-05-13 quarantine-mismatch fix). The
+bundle flow `cp -R`'d the app — and **`cp` never sets quarantine** — so
+`handle_quarantine_strip` found nothing, never restarted, and the app ran a
+*different* startup codepath than any real install. So `tauri:bundle` wasn't
+just occasionally flaky; it was structurally testing the wrong thing, and a
+"pass" there told you nothing about the real permission flow.
+
+**Decision: retire it rather than fix it.** Its only advantage was speed
+(debug build, no DMG packaging), but fast iteration is already served by
+`npm run tauri dev` (which can't test TCC — and you don't TCC-test every
+iteration). `tauri:dmg` does the job reliably *and* exercises the real install
+UX (drag, Gatekeeper, quarantine-strip-restart), so it's a strictly better
+smoke test. Keeping a second, misleading path cost real time this session
+alone (wrong-app-relaunch race #987, split TCC universes, stale rows). Deleted
+`scripts/tauri-bundle-macos.sh` + the npm alias; repointed all active docs to
+`tauri:dmg`; #987 closed as obsolete. Historical CHANGELOG/learnings entries
+left intact (append-only). **Lesson: a TCC smoke test that doesn't reproduce
+the quarantine xattr is testing a fiction — the exec-restart path only fires on
+quarantined launches.**
+
 ## 2026-06-05 — VAD hallucination follow-up: the gate is content-blind, and there's a separate repetition class
 
 A user still got silence-hallucinations on a Teams call after the #974 VAD

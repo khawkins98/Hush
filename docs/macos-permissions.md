@@ -23,7 +23,7 @@ Don't want PTT? Turn **Push-to-talk enabled** off in Settings → General → Ho
 
 ## Why dev builds are flaky for permissions
 
-macOS's TCC (Transparency, Consent, and Control) database keys grants to a specific code-signing identity + bundle ID. A signed `Hush.app` from `npm run tauri:bundle` registers under `io.github.khawkins98.hush` and gives you the most realistic permission flow. The `cargo tauri dev` / `npm run tauri dev` path runs an unsigned debug binary, and TCC behaviour gets unpredictable:
+macOS's TCC (Transparency, Consent, and Control) database keys grants to a specific code-signing identity + bundle ID. A signed `Hush.app` installed from `npm run tauri:dmg` (drag to `~/Applications`) registers under `io.github.khawkins98.hush` and gives you the most realistic permission flow — Finder sets the quarantine xattr and the app strips it + exec-restarts to a clean TCC identity on first launch. The `cargo tauri dev` / `npm run tauri dev` path runs an unsigned debug binary, and TCC behaviour gets unpredictable:
 
 - The grant may bind to a binary hash that changes on the next rebuild.
 - The first prompt may attribute to **Terminal**, iTerm, your IDE, or another parent process instead of Hush.
@@ -82,11 +82,11 @@ The first time you run `cargo tauri dev`, the macOS prompt shows up — but the 
 **Fix:**
 
 1. Deny the misattributed prompt. Don't give Terminal microphone or Input Monitoring access just to work around a dev-binary quirk.
-2. Build a signed bundle once:
+2. Build + install a signed bundle once:
    ```sh
-   npm run tauri:bundle
+   npm run tauri:dmg   # then drag Hush.app → ~/Applications
    ```
-3. Launch the bundled app and grant the prompt there under the real Hush identity (`io.github.khawkins98.hush`).
+3. Launch the installed app and grant the prompt there under the real Hush identity (`io.github.khawkins98.hush`).
 4. If later dev runs drift back into a stale state, use the reset recipes above.
 
 ---
@@ -123,9 +123,9 @@ When the active build's identity differs from the row that's currently enabled, 
 3. Run:
    ```sh
    npm run dev-reset
-   npm run tauri:bundle
+   npm run tauri:dmg   # then drag Hush.app → ~/Applications
    ```
-4. Grant Microphone when the bundled app first records.
+4. Grant Microphone when the installed app first records.
 5. If you use PTT, go to Settings → General → Hotkeys and enable / re-enable it so Input Monitoring prompts under the freshly bundled app identity.
 
 If the rows refuse to disappear from the UI even after `tccutil reset`, manual `−` removal in System Settings is the authoritative fix.
