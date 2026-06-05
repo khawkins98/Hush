@@ -519,6 +519,70 @@ fn handle_quarantine_strip() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Whether `path` lives on a read-only mounted volume (macOS).
+///
+/// `statfs(2)`'s `MNT_RDONLY` flag is the robust signal: it catches both
+/// a mounted `.dmg` (read-only HFS/APFS image) **and** Gatekeeper App
+/// Translocation (a quarantined app run from a random read-only
+/// `/private/var/folders/…` path). A `/Volumes/` path-prefix check would
+/// miss translocation. Installed apps live on the read-write data volume
+/// (`/Applications`, `~/Applications`), so they return `false`.
+///
+/// Extracted from [`running_from_readonly_volume`] so the flag logic is
+/// unit-testable against a known path without depending on `current_exe`.
+#[cfg(target_os = "macos")]
+fn is_path_on_readonly_volume(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt as _;
+    let Ok(cpath) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `statfs` writes into a zeroed `libc::statfs` we own; `cpath`
+    // is a valid NUL-terminated C string that outlives the call.
+    let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(cpath.as_ptr(), &mut buf) } != 0 {
+        return false; // statfs failed → don't block; fail open.
+    }
+    (buf.f_flags & libc::MNT_RDONLY as u32) != 0
+}
+
+/// Whether *this* app bundle is running from a read-only volume — i.e.
+/// straight from the mounted DMG, or via App Translocation. Either way
+/// the quarantine-strip-and-restart in [`handle_quarantine_strip`] can't
+/// write to the volume, so TCC grants never stick — the install must be
+/// dragged to Applications first.
+#[cfg(target_os = "macos")]
+fn running_from_readonly_volume() -> bool {
+    match std::env::current_exe() {
+        Ok(exe) => is_path_on_readonly_volume(&exe),
+        Err(_) => false,
+    }
+}
+
+/// Show a native "move me to Applications" alert and quit. Called at the
+/// very top of [`run`] when [`running_from_readonly_volume`] is true, so
+/// the user never reaches the broken-permissions state of running from a
+/// DMG. Uses `osascript` because this fires before Tauri/AppKit is up.
+/// Best-effort dialog; the process exits regardless so it can never run
+/// from the read-only volume.
+///
+/// Bypass with `HUSH_ALLOW_READONLY_LAUNCH=1` (dev/QA only — for poking
+/// at the DMG's contents without being bounced).
+#[cfg(target_os = "macos")]
+fn warn_and_quit_readonly_volume() -> ! {
+    tracing::warn!(
+        "launched from a read-only volume (DMG / translocation); permissions can't \
+         persist here — prompting the user to move to Applications, then quitting"
+    );
+    let script = r#"display alert "Move Hush to Applications" message "Hush is running from a disk image, where macOS won't let microphone and keyboard permissions stick.
+
+Drag Hush into your Applications folder, then open it from there." as critical buttons {"Quit"} default button "Quit""#;
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status();
+    std::process::exit(0);
+}
+
 /// Wire all window-level setup: hide-on-close for main/debug,
 /// macOS drag enablement for menu-bar/hud, zoom-button removal for
 /// main, background-launch hide + Accessory policy, and LaunchAgent
@@ -791,6 +855,22 @@ pub fn run() {
     // (`cargo tauri dev`-restart-cycle) do not panic.
     let debug_log = crate::debug_log::DebugLogState::new();
     let _file_log_guard = init_tracing(debug_log.clone());
+
+    // Bounce a read-only-volume launch (DMG / App Translocation) before
+    // anything spins up. Running from there can't strip quarantine /
+    // establish a clean TCC identity, so mic + keyboard permissions
+    // silently never stick — the install has to be dragged to
+    // Applications first. Shows a native alert and quits. Bypass for
+    // dev/QA with HUSH_ALLOW_READONLY_LAUNCH=1.
+    #[cfg(target_os = "macos")]
+    if running_from_readonly_volume()
+        && !matches!(
+            std::env::var("HUSH_ALLOW_READONLY_LAUNCH").as_deref(),
+            Ok("1")
+        )
+    {
+        warn_and_quit_readonly_volume();
+    }
 
     // Tune mimalloc for purge-on-free so whisper.cpp's per-inference
     // scratch churn doesn't accumulate as compressed dirty pages
@@ -1416,6 +1496,35 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readonly_volume_detection_distinguishes_system_from_data() {
+        // The sealed system volume root is read-only on macOS 11+ (SSV);
+        // the temp dir lives on the read-write data volume.
+        assert!(
+            is_path_on_readonly_volume(std::path::Path::new("/")),
+            "/ (sealed system volume) must read as read-only"
+        );
+        assert!(
+            !is_path_on_readonly_volume(&std::env::temp_dir()),
+            "temp dir (data volume) must read as read-write"
+        );
+    }
+
+    #[test]
+    fn readonly_volume_detection_fails_open_for_bad_path() {
+        // A statfs failure must NOT block launch — fail open to false.
+        assert!(!is_path_on_readonly_volume(std::path::Path::new(
+            "/no/such/hush/path/zzzz"
+        )));
+    }
+
+    #[test]
+    fn test_binary_is_not_flagged_as_readonly_launch() {
+        // The test binary runs from target/… on the data volume, so the
+        // guard must not consider this a DMG/translocation launch.
+        assert!(!running_from_readonly_volume());
+    }
 
     #[test]
     fn is_background_launch_recognises_flag() {

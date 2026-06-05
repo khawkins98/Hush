@@ -32,6 +32,37 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-06-05 — Read-only-volume launch guard: bounce DMG / translocated launches before they break TCC
+
+Running Hush straight from the mounted `.dmg` is the single biggest source of
+"permissions don't stick" confusion. The mechanism: the DMG is a **read-only**
+volume, so `handle_quarantine_strip`'s `xattr` removal + `exec()`-restart
+can't write to it → the clean TCC identity is never established → mic / Input
+Monitoring grants silently fail. Same for **Gatekeeper App Translocation**
+(macOS runs a quarantined app from a random read-only `/private/var/folders/…`
+path). New guard at the top of `run()` detects this and shows a native
+"drag me to Applications" alert, then quits.
+
+**Two non-obvious calls:**
+- **`statfs` `MNT_RDONLY`, not a `/Volumes/` path check.** The flag is the
+  robust signal because it catches *both* the DMG mount *and* translocation
+  (whose path isn't under `/Volumes/`). A path-prefix check would miss the
+  translocation case entirely. Installed copies live on the read-write data
+  volume (`/Applications`, `~/Applications`) → flag false → no bounce. On
+  macOS 11+ the sealed system volume `/` reads as read-only, which gives a
+  portable positive unit-test case (and temp dir / the test binary give the
+  negative).
+- **`osascript` for the alert, not `NSAlert`.** The guard fires before Tauri /
+  AppKit is initialised, so a native `NSAlert` has no running `NSApplication`
+  to attach to. `osascript -e 'display alert …'` shows a real dialog from a
+  cold process and blocks until dismissed.
+
+Chose **warn-and-quit** over LetsMove-style auto-relocate: the correct install
+is a drag-to-Applications anyway, and warn-and-quit has zero self-copy /
+existing-install / translocation-original-path edge cases. Bypass for dev/QA
+with `HUSH_ALLOW_READONLY_LAUNCH=1`. This is the structural fix the retired
+`tauri:bundle` was a workaround for — see the 2026-06-05 retirement entry.
+
 ## 2026-06-05 — Retired `tauri:bundle`: it skipped the quarantine/exec-restart, so it tested the wrong codepath
 
 `npm run tauri:bundle` (the debug-`.app` → `cp -R` to `~/Applications` → `open`
