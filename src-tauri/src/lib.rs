@@ -1081,6 +1081,8 @@ pub fn run() {
             ipc::commands::settings::set_meeting_autostart_mode,
             ipc::commands::settings::get_diarization_enabled,
             ipc::commands::settings::set_diarization_enabled,
+            ipc::commands::settings::get_diarizer_threshold,
+            ipc::commands::settings::set_diarizer_threshold,
             ipc::commands::settings::get_inference_threads,
             ipc::commands::settings::set_inference_threads,
             ipc::commands::settings::get_mic_gain_db,

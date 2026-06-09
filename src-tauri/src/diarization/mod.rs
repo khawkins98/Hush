@@ -110,6 +110,10 @@ pub trait Diarize: Send + Sync {
     fn session_centroids(&self) -> Vec<(usize, Vec<f32>, usize)> {
         Vec::new()
     }
+
+    /// Update the active cosine-distance threshold used by the diarizer.
+    /// Default no-op for stateless / threshold-less impls.
+    fn set_distance_threshold(&self, _threshold: f32) {}
 }
 
 /// Fallback impl. Leaves `speaker_label` as it is so the pump's
@@ -203,6 +207,11 @@ impl Diarize for FlagGatedDiarizer {
     fn session_centroids(&self) -> Vec<(usize, Vec<f32>, usize)> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.session_centroids()
+    }
+
+    fn set_distance_threshold(&self, threshold: f32) {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        inner.set_distance_threshold(threshold);
     }
 }
 

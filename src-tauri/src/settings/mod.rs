@@ -123,6 +123,11 @@ pub mod keys {
     /// single session; speaker identity persists embeddings indefinitely.
     pub const SPEAKER_IDENTITY_ENABLED: &str = "speaker_identity_enabled";
 
+    /// Diarizer cosine-distance threshold. Stored as an `f32` string
+    /// literal in `[0.0, 2.0]` (e.g. `"0.5"`). Lower values split
+    /// speakers more aggressively; higher values merge more.
+    pub const DIARIZER_THRESHOLD: &str = "diarizer_threshold";
+
     /// Whisper inference thread count (#255). Stored as the
     /// integer literal in decimal (e.g. `"4"`); parsed back via
     /// `i32::from_str` and clamped to `[MIN_INFERENCE_THREADS,

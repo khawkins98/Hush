@@ -231,6 +231,59 @@ pub(crate) async fn set_diarization_enabled_inner(
         .map_err(|e| IpcError::Settings(format!("{e:#}")))
 }
 
+/// Read the live diarizer threshold (`[0.0, 2.0]`).
+#[tauri::command]
+pub fn get_diarizer_threshold(state: State<'_, AppState>) -> IpcResult<f32> {
+    Ok(f32::from_bits(
+        state
+            .runtime_flags
+            .diarizer_threshold
+            .load(std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
+/// Persist and apply the diarizer threshold. Applies immediately to the
+/// active diarizer instance (if present), so current sessions pick it up on
+/// the next utterance without restart.
+#[tauri::command]
+pub async fn set_diarizer_threshold(state: State<'_, AppState>, threshold: f32) -> IpcResult<()> {
+    set_diarizer_threshold_inner(&state, threshold).await
+}
+
+pub(crate) async fn set_diarizer_threshold_inner(
+    state: &AppState,
+    threshold: f32,
+) -> IpcResult<()> {
+    if !threshold.is_finite() {
+        return Err(IpcError::Settings(
+            "diarizer threshold must be a finite number".to_owned(),
+        ));
+    }
+    let clamped = threshold.clamp(0.0, 2.0);
+    state
+        .runtime_flags
+        .diarizer_threshold
+        .store(clamped.to_bits(), std::sync::atomic::Ordering::Relaxed);
+
+    {
+        let diarizer = state
+            .inference
+            .diarize_slot
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        diarizer.set_distance_threshold(clamped);
+    }
+
+    state
+        .settings
+        .set(
+            crate::settings::keys::DIARIZER_THRESHOLD,
+            &clamped.to_string(),
+        )
+        .await
+        .map_err(|e| IpcError::Settings(format!("{e:#}")))
+}
+
 /// Read the live inference thread count (#255). Settings →
 /// General reads this on mount so the slider renders the
 /// persisted value rather than the cross-platform default.

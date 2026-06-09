@@ -240,18 +240,11 @@ impl Drop for SessionClusterState {
     }
 }
 
-/// Resolve the diarizer's cosine-distance threshold, honouring an
-/// optional `HUSH_DIARIZER_THRESHOLD` env-var override (#316). Falls
-/// back to [`DEFAULT_DISTANCE_THRESHOLD`] when the var is unset or
-/// can't be parsed as an `f32` in the valid range `[0.0, 2.0]`.
-///
-/// Read once at `OnnxDiarizer::new` so a mid-session env-var toggle
-/// can't change behaviour partway through. Exposed as a tuning knob
-/// for users hitting the multi-speaker chaining issue documented in
-/// #316; lower values create more clusters (e.g. `0.3` for very
-/// aggressive splitting on short-utterance calls), higher values
-/// merge speakers (e.g. `0.6` to revert to the pre-#316 default).
-fn resolve_distance_threshold() -> f32 {
+/// Resolve the diarizer's cosine-distance threshold, honouring an optional
+/// `HUSH_DIARIZER_THRESHOLD` env-var override (#316). Falls back to
+/// [`DEFAULT_DISTANCE_THRESHOLD`] when the var is unset or can't be parsed
+/// as an `f32` in the valid range `[0.0, 2.0]`.
+fn resolve_distance_threshold_from_env() -> f32 {
     match std::env::var("HUSH_DIARIZER_THRESHOLD") {
         Ok(raw) => match raw.parse::<f32>() {
             Ok(v) if (0.0..=2.0).contains(&v) => v,
@@ -304,14 +297,23 @@ impl OnnxDiarizer {
     /// inference. Fails if the file doesn't exist, its SHA-256
     /// doesn't match the catalog, or tract cannot parse/optimize it.
     pub fn new(model_path: impl AsRef<Path>) -> Result<Self> {
+        Self::new_with_threshold(model_path, None)
+    }
+
+    /// Same as [`Self::new`], but allows an explicit threshold override.
+    /// `None` falls back to `HUSH_DIARIZER_THRESHOLD` / default.
+    pub fn new_with_threshold(
+        model_path: impl AsRef<Path>,
+        threshold_override: Option<f32>,
+    ) -> Result<Self> {
         let model = build_tract_model(model_path.as_ref())?;
 
-        let threshold = resolve_distance_threshold();
+        let threshold = threshold_override.unwrap_or_else(resolve_distance_threshold_from_env);
         if (threshold - DEFAULT_DISTANCE_THRESHOLD).abs() > f32::EPSILON {
             tracing::info!(
                 threshold,
                 default_threshold = DEFAULT_DISTANCE_THRESHOLD,
-                "OnnxDiarizer: using HUSH_DIARIZER_THRESHOLD override"
+                "OnnxDiarizer: using non-default distance threshold"
             );
         }
         Ok(Self {
@@ -432,6 +434,15 @@ impl Diarize for OnnxDiarizer {
             .enumerate()
             .map(|(id, (centroid, count))| (id, centroid.clone(), *count))
             .collect()
+    }
+
+    fn set_distance_threshold(&self, threshold: f32) {
+        let mut clusters = self.clusters.lock().unwrap_or_else(|e| e.into_inner());
+        clusters.distance_threshold = threshold.clamp(0.0, 2.0);
+        tracing::info!(
+            threshold = clusters.distance_threshold,
+            "OnnxDiarizer: updated distance threshold"
+        );
     }
 }
 

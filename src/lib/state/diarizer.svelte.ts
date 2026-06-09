@@ -12,6 +12,10 @@ const DIARIZER_MODEL_ID = "wespeaker-resnet34-lm";
 let diarizationEnabled = $state(false);
 let diarizationBusy = $state(false);
 let diarizationError = $state<string | null>(null);
+let diarizerThreshold = $state(0.4);
+let diarizerThresholdDisplay = $state(0.4);
+let diarizerThresholdBusy = $state(false);
+let diarizerThresholdError = $state<string | null>(null);
 
 let diarizerModelStatus = $state<DiarizerModelStatus | null>(null);
 let diarizerDownloadBusy = $state(false);
@@ -36,6 +40,18 @@ export const diarizer = {
   },
   get diarizationError() {
     return diarizationError;
+  },
+  get diarizerThreshold() {
+    return diarizerThreshold;
+  },
+  get diarizerThresholdDisplay() {
+    return diarizerThresholdDisplay;
+  },
+  get diarizerThresholdBusy() {
+    return diarizerThresholdBusy;
+  },
+  get diarizerThresholdError() {
+    return diarizerThresholdError;
   },
   get diarizerModelStatus() {
     return diarizerModelStatus;
@@ -114,6 +130,39 @@ export const diarizer = {
     } catch (e) {
       diarizationError = "Couldn't read diarization setting.";
       console.warn("[hush] get_diarization_enabled failed", e);
+    }
+  },
+
+  async loadDiarizerThreshold(): Promise<void> {
+    try {
+      diarizerThreshold = await invoke<number>("get_diarizer_threshold");
+      diarizerThresholdDisplay = diarizerThreshold;
+      diarizerThresholdError = null;
+    } catch (e) {
+      diarizerThresholdError = "Couldn't read speaker-threshold setting.";
+      console.warn("[hush] get_diarizer_threshold failed", e);
+    }
+  },
+
+  onDiarizerThresholdInput(e: Event) {
+    const next = Number((e.target as HTMLInputElement).value);
+    if (Number.isFinite(next)) diarizerThresholdDisplay = next;
+  },
+
+  async onDiarizerThresholdChange(e: Event): Promise<void> {
+    const next = Number((e.target as HTMLInputElement).value);
+    if (!Number.isFinite(next)) return;
+    diarizerThresholdBusy = true;
+    diarizerThresholdError = null;
+    try {
+      await invoke("set_diarizer_threshold", { threshold: next });
+      diarizerThreshold = next;
+      diarizerThresholdDisplay = next;
+    } catch (err) {
+      diarizerThresholdError = formatErrorMessage(err);
+      await diarizer.loadDiarizerThreshold();
+    } finally {
+      diarizerThresholdBusy = false;
     }
   },
 

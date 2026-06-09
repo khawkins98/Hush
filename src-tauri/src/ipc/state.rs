@@ -381,6 +381,12 @@ pub struct RuntimeFlags {
     /// consent scope (biometric data, indefinitely persisted). Default
     /// false; opt-in required.
     pub speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Live diarizer cosine-distance threshold (`[0.0, 2.0]`), shared
+    /// with Settings → Meeting → Speakers. Stored as `AtomicU32`
+    /// containing f32 bits (`AtomicF32` is not in std). A settings
+    /// write updates this atomic and the active diarizer in-process,
+    /// so threshold changes apply on the next utterance without restart.
+    pub diarizer_threshold: Arc<std::sync::atomic::AtomicU32>,
     /// Whisper inference thread count (#255). Settings → General
     /// slider writes through the `set_inference_threads` IPC; the
     /// loaded `WhisperTranscription` shares this same Arc via
@@ -518,6 +524,17 @@ pub(crate) fn parse_mic_gain_db_setting(raw: Option<String>) -> f32 {
         .clamp(0.0, 20.0)
 }
 
+/// Parse and clamp the persisted diarizer threshold setting.
+/// Falls back to [`crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD`]
+/// when absent / unparseable.
+pub(crate) fn parse_diarizer_threshold_setting(raw: Option<String>) -> f32 {
+    raw.as_deref()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD)
+        .clamp(0.0, 2.0)
+}
+
 /// Build the "inner" diarizer for the FlagGatedDiarizer (#111).
 ///
 /// When the `diarization-onnx` feature is built in AND the wespeaker
@@ -529,13 +546,19 @@ pub(crate) fn parse_mic_gain_db_setting(raw: Option<String>) -> f32 {
 ///
 /// Errors loading the model are logged at `warn` level and treated
 /// as "fall back to Noop" — same as missing-file.
-fn build_diarizer_inner(_models_dir: &Path) -> Arc<dyn crate::diarization::Diarize> {
+fn build_diarizer_inner(
+    _models_dir: &Path,
+    threshold: f32,
+) -> Arc<dyn crate::diarization::Diarize> {
     #[cfg(feature = "diarization-onnx")]
     {
         let model_path =
             _models_dir.join(crate::diarization::catalog::WESPEAKER_RESNET34_LM_FILENAME);
         if model_path.exists() {
-            match crate::diarization::onnx::OnnxDiarizer::new(&model_path) {
+            match crate::diarization::onnx::OnnxDiarizer::new_with_threshold(
+                &model_path,
+                Some(threshold),
+            ) {
                 Ok(d) => {
                     tracing::info!(
                         path = %model_path.display(),
@@ -785,6 +808,13 @@ impl AppState {
         let diarization_enabled_arc = Arc::new(std::sync::atomic::AtomicBool::new(
             diarization_enabled_initial,
         ));
+        let diarizer_threshold_initial = parse_diarizer_threshold_setting(
+            Self::startup_setting(settings.as_ref(), crate::settings::keys::DIARIZER_THRESHOLD)
+                .await,
+        );
+        let diarizer_threshold_arc = Arc::new(std::sync::atomic::AtomicU32::new(
+            diarizer_threshold_initial.to_bits(),
+        ));
         let speaker_identity_enabled_initial = matches!(
             Self::startup_setting(
                 settings.as_ref(),
@@ -802,7 +832,7 @@ impl AppState {
         // again into the IPC `download_diarizer_model` writer so a
         // post-download swap propagates to the meeting pump on the
         // next tick — no restart needed.
-        let diarize_inner_initial = build_diarizer_inner(&models_dir);
+        let diarize_inner_initial = build_diarizer_inner(&models_dir, diarizer_threshold_initial);
         record_phase("diarizer init");
         // Bundled Silero VAD (#974). Loaded once at startup, mints a
         // fresh per-stream session at each `start_stream` site. If the
@@ -958,6 +988,7 @@ impl AppState {
             .sound_cue_complete_enabled(sound_cue_complete_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
             .diarization_enabled_arc(diarization_enabled_arc)
+            .diarizer_threshold_arc(diarizer_threshold_arc)
             .speaker_identity_enabled_arc(speaker_identity_enabled_arc)
             .diarize_slot(diarize_slot)
             .inference_threads_arc(inference_threads_arc)

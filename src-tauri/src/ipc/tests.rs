@@ -13,7 +13,7 @@ use super::pipeline::{
 };
 use super::state::{
     decode_autostart_mode, encode_autostart_mode, parse_diarization_enabled_setting,
-    parse_hud_enabled_setting,
+    parse_diarizer_threshold_setting, parse_hud_enabled_setting,
 };
 use super::*;
 use crate::audio::{AudioCapture, AudioDevice, CaptureFormat, CapturedAudio};
@@ -696,6 +696,21 @@ fn parse_diarization_enabled_setting_handles_all_branches() {
 }
 
 #[test]
+fn parse_diarizer_threshold_setting_clamps_and_defaults() {
+    assert_eq!(
+        parse_diarizer_threshold_setting(None),
+        crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD
+    );
+    assert_eq!(parse_diarizer_threshold_setting(Some("0.5".into())), 0.5);
+    assert_eq!(parse_diarizer_threshold_setting(Some("-1".into())), 0.0);
+    assert_eq!(parse_diarizer_threshold_setting(Some("99".into())), 2.0);
+    assert_eq!(
+        parse_diarizer_threshold_setting(Some("garbage".into())),
+        crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD
+    );
+}
+
+#[test]
 fn autostart_mode_round_trips_through_atomic_encoding() {
     use crate::meeting::MeetingAutostartMode;
     // Every defined variant must encode + decode back to itself.
@@ -1252,6 +1267,41 @@ async fn diarization_enabled_round_trips_through_atomic_and_settings_row() {
         Some("false"),
         "settings row persisted as 'false'"
     );
+}
+
+#[tokio::test]
+async fn diarizer_threshold_round_trips_through_atomic_and_settings_row() {
+    use super::commands::settings::set_diarizer_threshold_inner;
+    let state = mock_state();
+
+    set_diarizer_threshold_inner(&state, 0.55).await.unwrap();
+    let stored = f32::from_bits(
+        state
+            .runtime_flags
+            .diarizer_threshold
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
+    assert!((stored - 0.55).abs() < 1e-6, "atomic should reflect 0.55");
+    assert_eq!(
+        state
+            .settings
+            .get(crate::settings::keys::DIARIZER_THRESHOLD)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("0.55"),
+        "settings row persisted as stringified threshold"
+    );
+
+    // Clamp behaviour: values above range are persisted as 2.0.
+    set_diarizer_threshold_inner(&state, 9.0).await.unwrap();
+    let stored = f32::from_bits(
+        state
+            .runtime_flags
+            .diarizer_threshold
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
+    assert!((stored - 2.0).abs() < 1e-6, "value should clamp to 2.0");
 }
 
 #[tokio::test]

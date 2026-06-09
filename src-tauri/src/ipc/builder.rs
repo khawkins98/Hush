@@ -83,6 +83,7 @@ pub struct AppStateBuilder {
     meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
     diarization_enabled: Option<bool>,
     speaker_identity_enabled: Option<bool>,
+    diarizer_threshold: Option<f32>,
     /// Pre-built `Arc<AtomicBool>` for the diarization-enabled
     /// flag. Set via [`AppStateBuilder::diarization_enabled_arc`]
     /// when the production wiring (`build_default`) needs to
@@ -92,6 +93,7 @@ pub struct AppStateBuilder {
     /// [`Self::diarization_enabled`].
     diarization_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
     speaker_identity_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
+    diarizer_threshold_arc: Option<Arc<std::sync::atomic::AtomicU32>>,
     /// Pre-built [`crate::diarization::DiarizeSlot`] for hot-swap
     /// support (#301). Set via
     /// [`AppStateBuilder::diarize_slot`] when the production
@@ -273,6 +275,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn diarizer_threshold(mut self, threshold: f32) -> Self {
+        self.diarizer_threshold = Some(threshold);
+        self
+    }
+
     /// Set the pre-built `Arc<AtomicBool>` that the FlagGatedDiarizer
     /// already holds. The AppState's `diarization_enabled` field
     /// becomes that same Arc, so the IPC `set_diarization_enabled`
@@ -284,6 +291,11 @@ impl AppStateBuilder {
 
     pub fn speaker_identity_enabled_arc(mut self, arc: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.speaker_identity_enabled_arc = Some(arc);
+        self
+    }
+
+    pub fn diarizer_threshold_arc(mut self, arc: Arc<std::sync::atomic::AtomicU32>) -> Self {
+        self.diarizer_threshold_arc = Some(arc);
         self
     }
 
@@ -481,6 +493,13 @@ impl AppStateBuilder {
                 speaker_identity_enabled: self.speaker_identity_enabled_arc.unwrap_or_else(|| {
                     Arc::new(std::sync::atomic::AtomicBool::new(
                         self.speaker_identity_enabled.unwrap_or(false),
+                    ))
+                }),
+                diarizer_threshold: self.diarizer_threshold_arc.unwrap_or_else(|| {
+                    Arc::new(std::sync::atomic::AtomicU32::new(
+                        self.diarizer_threshold
+                            .unwrap_or(crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD)
+                            .to_bits(),
                     ))
                 }),
                 inference_threads: self

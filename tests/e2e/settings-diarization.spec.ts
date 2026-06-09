@@ -82,6 +82,41 @@ test.describe("settings window — Speakers (#302)", () => {
     await expect(toggle).toBeEnabled();
   });
 
+  test("threshold slider round-trips the persisted value and saves changes", async ({
+    page,
+  }) => {
+    const calls: Array<{ threshold: number }> = [];
+    await page.exposeFunction("__hush_record_set_diarizer_threshold", (args: unknown) => {
+      calls.push(args as { threshold: number });
+    });
+    await installMocks(page, {
+      get_diarizer_threshold: () => 0.55,
+      set_diarizer_threshold: (args) => {
+        const { threshold } = (args ?? {}) as { threshold: number };
+        (
+          window as unknown as {
+            __hush_record_set_diarizer_threshold: (a: { threshold: number }) => void;
+          }
+        ).__hush_record_set_diarizer_threshold({ threshold });
+        return undefined;
+      },
+    });
+
+    await page.goto("/");
+    await page.locator(`[data-testid="sidebar-nav-settings"]`).click();
+    await page.locator('[data-testid="settings-tab-meeting"]').click();
+
+    const slider = page.locator('[data-testid="settings-diarizer-threshold-slider"]');
+    const value = page.locator('[data-testid="settings-diarizer-threshold-value"]');
+    await expect(slider).toHaveValue("0.55");
+    await expect(value).toHaveText("0.55");
+
+    await slider.fill("0.6");
+    await expect(value).toHaveText("0.60");
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]).toEqual({ threshold: 0.6 });
+  });
+
   test("set-failure surfaces an error and snaps the toggle back", async ({
     page,
   }) => {

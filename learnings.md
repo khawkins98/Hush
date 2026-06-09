@@ -34,6 +34,26 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ## 2026-06-05 — Read-only-volume launch guard: bounce DMG / translocated launches before they break TCC
 
+## 2026-06-09 — Diarizer threshold moved from env-var-only tuning into live Settings UI
+
+Voice-fingerprinting quality debugging exposed a practical ops gap: the
+`HUSH_DIARIZER_THRESHOLD` env var existed, but users couldn't tune it without a
+terminal + app relaunch, which made in-call iteration painful and obscured
+whether over-segmentation was a model issue or just threshold calibration.
+
+The fix adds a Settings → Meeting → Speakers slider backed by a persisted
+`diarizer_threshold` setting and new IPC get/set commands. The non-obvious part:
+the setting is not just persisted for next launch — `set_diarizer_threshold`
+also updates the live diarizer slot in-process, so the current meeting picks up
+the new threshold on the next utterance with no restart. This required adding a
+`set_distance_threshold` seam method on `Diarize` and forwarding through
+`FlagGatedDiarizer` to `OnnxDiarizer`.
+
+`HUSH_DIARIZER_THRESHOLD` remains as a fallback for environments that configure
+behavior via env, but Settings now has precedence whenever a value is saved.
+
+## 2026-06-05 — Read-only-volume launch guard: bounce DMG / translocated launches before they break TCC
+
 Running Hush straight from the mounted `.dmg` is the single biggest source of
 "permissions don't stick" confusion. The mechanism: the DMG is a **read-only**
 volume, so `handle_quarantine_strip`'s `xattr` removal + `exec()`-restart

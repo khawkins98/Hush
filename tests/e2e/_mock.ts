@@ -120,6 +120,8 @@ export async function installMocks(
       // exercise the toggle override per-test.
       get_diarization_enabled: () => false,
       set_diarization_enabled: () => undefined,
+      get_diarizer_threshold: () => 0.4,
+      set_diarizer_threshold: () => undefined,
       // Cross-session speaker identity toggle + CRUD (#667).
       // Default mirrors the backend's opt-in-off state and empty store.
       get_speaker_identity_enabled: () => false,
