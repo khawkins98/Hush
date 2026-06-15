@@ -355,7 +355,7 @@ The `models/` directory under `<app-data>/` holds the GGUF whisper checkpoints +
 | `hotkey/` | `tauri-plugin-global-shortcut` for toggle; pinned `fufesou/rdev` for PTT |
 | `hud/` | Recording HUD pill (drag, dismiss, level meter) |
 | `ipc/` | `AppState`, `AppStateBuilder`, `IpcError`, production startup helpers, Tauri event emitters, and command handlers split by domain (`dictation/`, `meeting`, `models`, `permissions`, `ptt`, `system`, etc.) |
-| `meeting/` | `SessionManager`, streaming pump, lifecycle, recovery, event emission, app classifier, per-app overrides, repository, and macOS CoreAudio event-driven auto-start (`autostart.rs`, `mic_camera_monitor.rs`) |
+| `meeting/` | `SessionManager`, streaming pump, lifecycle, recovery, event emission, app classifier, per-app overrides, repository, macOS CoreAudio event-driven auto-start (`autostart.rs`, `mic_camera_monitor.rs`), and call-end detection (`call_end_detector.rs` — `CallEndSignal` trait, `evaluate_call_end_state` pure state machine, background poll task) |
 | `permissions/` | Cross-platform permission state. `permissions/macos.rs` does programmatic TCC reads via AVFoundation / CoreGraphics / IOKit; `permissions/mod.rs` is the home for future Linux / Windows impls. Renamed from `macos_perms/` in #597. |
 | `repository.rs` | Generic CRUD supertrait used by vocabulary / replacements / meetings |
 | `settings/` | Settings repository plus string/JSON codec helpers |

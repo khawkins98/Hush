@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Meeting lifecycle UX — countdown, stop button, and call-end detection (#1001).**
+  Three improvements to the meeting recording flow:
+  - *Pre-recording countdown.* When auto-detection fires, a 3-second countdown pill
+    appears with a draining progress bar. A "Cancel auto-recording" button cancels
+    just that instance without disabling auto-start globally.
+  - *Stop button on HUD.* The recording overlay now shows a ■ stop button. Clicking
+    reveals an inline "Stop recording? / Keep recording" confirmation — no modal dialog.
+  - *Call-end detection.* A multi-signal state machine watches for signs that a meeting
+    call has ended while the app stays open (the common case: Zoom call ends, Zoom stays
+    running). When two signals agree for 30 s, or one signal holds for 120 s, the HUD
+    prompts "Your call has likely ended" with Stop now / Keep recording. "Keep recording"
+    suppresses re-prompting for the session. Signals: mic HAL activity
+    (`kAudioDevicePropertyDeviceIsRunningSomewhere`, macOS), system-audio RMS
+    (60-second rolling window), and Whisper consecutive-silence tick count.
+
 - **macOS: Hush now refuses to run from the disk image.** Launching it
   straight from the mounted `.dmg` (or via Gatekeeper App Translocation) is a
   read-only volume where microphone and keyboard permissions silently can't
