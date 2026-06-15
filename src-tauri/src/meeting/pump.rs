@@ -194,19 +194,15 @@ pub(super) struct PumpContext {
     /// end of the pump to gate the centroid → identity resolution.
     pub speaker_identity_enabled: Arc<AtomicBool>,
     /// f32-as-bits RMS of the system-audio tap, written each drain by
-    /// the pump's tick_inference. Zero when no system-audio source is
+    /// the pump's tick_drain_sources. Zero when no system-audio source is
     /// active. Read by the call-end detector's SystemAudioRmsSignal.
     /// Shared Arc from `RuntimeFlags::system_audio_level`.
-    // Written by Task 5 (tick_inference); allow until that lands.
-    #[allow(dead_code)]
     pub system_audio_level: Arc<AtomicU32>,
     /// Consecutive meeting-pump inference ticks producing no real speech
     /// (all BLANK_AUDIO or empty finals). Incremented on all-blank
     /// whisper finals; reset to 0 on any real utterance. Written by
     /// tick_inference; read by the call-end detector.
     /// Shared Arc from `RuntimeFlags::whisper_consecutive_empty_ticks`.
-    // Written by Task 5 (tick_inference); allow until that lands.
-    #[allow(dead_code)]
     pub whisper_consecutive_empty_ticks: Arc<AtomicU32>,
 }
 
@@ -468,6 +464,14 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // handler sees `ended_at` already set in the DB.
     crate::meeting::events::emit_meeting_session_ended(ctx.event_emitter.as_ref(), ctx.session_id);
 
+    // Clear the call-end detector's atomics so stale values from this
+    // session are not misread if a new session starts before the shared
+    // Arcs are reassigned (belt-and-braces; the detector checks the
+    // session-active flag first, but zero is the safe neutral value).
+    ctx.system_audio_level.store(0, Ordering::Relaxed);
+    ctx.whisper_consecutive_empty_ticks
+        .store(0, Ordering::Relaxed);
+
     tracing::info!(session_id = ctx.session_id, "meeting pump: stopped");
 }
 
@@ -562,6 +566,15 @@ fn tick_drain_sources(
                 );
                 tick_formats[i] = Some(format);
                 state.last_known_formats[i] = Some(format);
+                // Snapshot the system-audio RMS level for the call-end detector.
+                // Written as f32 bits into an AtomicU32 (transmute-safe); the
+                // detector reads it with Relaxed — no happens-before needed.
+                // Only system audio is written; mic RMS is not used by the detector.
+                if matches!(ctx.sources[i], AudioSource::SystemAudio) {
+                    let level = handle.current_level();
+                    ctx.system_audio_level
+                        .store(level.to_bits(), Ordering::Relaxed);
+                }
                 // Log first-drain RMS once per source (#533 diagnostic).
                 // Near-zero RMS = device opened but producing silence;
                 // non-zero = audio flowing, so any 0-utterance result
@@ -799,6 +812,11 @@ async fn tick_inference(
     // would either require interior mutability on each slot
     // or unsafe pointer arithmetic; the indexed loop is the
     // clearest shape for this pattern.
+    //
+    // Track whether any source produced real speech across ALL sources this
+    // tick. Updated in the per-source loop; applied to the call-end detector
+    // atomic after the loop so the last-source-wins problem is avoided.
+    let mut tick_had_real_speech = false;
     #[allow(clippy::needless_range_loop)]
     for i in 0..ctx.sources.len() {
         // Skip sources without a streaming session — drained
@@ -986,6 +1004,17 @@ async fn tick_inference(
             .filter(|u| u.is_final && (u.text == "[BLANK_AUDIO]" || u.text.trim().is_empty()))
             .count() as u64;
 
+        // Update the tick-level real-speech flag for the call-end detector.
+        // A "real" final is one that is not BLANK_AUDIO and has non-whitespace
+        // text after trimming. We aggregate across all sources so a single
+        // real final from any source resets the consecutive-empty counter.
+        if utterances
+            .iter()
+            .any(|u| u.is_final && u.text != "[BLANK_AUDIO]" && !u.text.trim().is_empty())
+        {
+            tick_had_real_speech = true;
+        }
+
         // Apply post-transcription replacement rules to final utterances (#913).
         // Partials are live-updating text the user sees before finalisation;
         // applying rules to partials would cause flicker. Only finals are
@@ -1009,6 +1038,18 @@ async fn tick_inference(
             utterances,
             audio,
         });
+    }
+
+    // Update the call-end detector's consecutive-empty-ticks counter once,
+    // after all sources have been processed. Resetting on any real speech and
+    // incrementing on a fully-silent tick avoids the last-source-wins problem
+    // that would occur if the atomic were updated inside the per-source loop.
+    if tick_had_real_speech {
+        ctx.whisper_consecutive_empty_ticks
+            .store(0, Ordering::Relaxed);
+    } else {
+        ctx.whisper_consecutive_empty_ticks
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 
