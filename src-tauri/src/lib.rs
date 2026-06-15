@@ -1119,6 +1119,7 @@ pub fn run() {
             ipc::commands::meeting::meeting_active_session,
             ipc::commands::meeting::meeting_start_manual,
             ipc::commands::meeting::meeting_stop_manual,
+            ipc::commands::meeting::meeting_cancel_pending,
             ipc::commands::meeting::meeting_app_override_list,
             ipc::commands::meeting::meeting_app_override_upsert,
             ipc::commands::meeting::meeting_app_override_set_profile,
@@ -1379,6 +1380,47 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
             MicStateOutcome::Start { app_name } => {
                 session_emitted = true;
 
+                // Show a 3-second pending countdown before auto-starting.
+                // The user can click "Don't record" to cancel this instance
+                // without disabling auto-start globally.
+                let cancelled = if state
+                    .runtime_flags
+                    .hud_enabled
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    let ends_at_ms = crate::hud::now_unix_ms() + 3000;
+                    crate::hud::show_async(&app);
+                    if let Err(e) = crate::hud::set_state(
+                        &app,
+                        crate::hud::HudState::Pending { ends_at_ms },
+                    ) {
+                        tracing::warn!(error = ?e, "emit hud:state(pending) failed");
+                    }
+                    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+                    *state.runtime_flags.pending_cancel.lock().unwrap() = Some(tx);
+                    let was_cancelled = tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => false,
+                        _ = rx => true,
+                    };
+                    *state.runtime_flags.pending_cancel.lock().unwrap() = None;
+                    if was_cancelled {
+                        crate::hud::hide_async(&app);
+                        tracing::info!(app_name = %app_name, "auto-start cancelled by user during countdown");
+                    }
+                    was_cancelled
+                } else {
+                    false
+                };
+
+                if cancelled {
+                    session_emitted = false;
+                } else {
+                // Mark as auto-started before starting so the call-end detector ignores it.
+                state
+                    .runtime_flags
+                    .session_is_auto
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+
                 let mic_source = audio::AudioSource::default_microphone();
                 // Try mic + system-audio first. If system-audio tap fails
                 // (permission denied, CoreAudio already in use, SCK helper
@@ -1465,6 +1507,7 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                         }
                     }
                 }
+                } // end else (not cancelled)
             }
             MicStateOutcome::AutoStop => {
                 // Mic went quiet while we hold an auto-started session.

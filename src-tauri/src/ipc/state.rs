@@ -409,6 +409,29 @@ pub struct RuntimeFlags {
     /// → General to show a "path is stale" warning row (#317).
     /// Cleared when `retry_autostart_registration` succeeds.
     pub autostart_path_stale: Arc<std::sync::atomic::AtomicBool>,
+    /// Cancellation slot for the auto-start pending countdown.
+    /// `meeting_cancel_pending` takes the Sender from the Mutex and sends ()
+    /// to abort the 3-second wait in `run_meeting_detection_task`.
+    /// std::sync::Mutex (not tokio) because the lock is never held across
+    /// an await point — acquired, used, and released synchronously.
+    pub pending_cancel: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    /// f32-as-bits RMS of the system-audio tap, written by the meeting
+    /// pump after each drain of the system-audio source. Zero when no
+    /// tap session is active. Read by call-end detector's SystemAudioRmsSignal.
+    ///
+    /// macOS: sourced from CoreAudioTapSession::current_level().
+    /// Linux/Windows future: a platform adapter writes the same Arc.
+    pub system_audio_level: Arc<std::sync::atomic::AtomicU32>,
+    /// Consecutive meeting-pump inference ticks producing no real speech
+    /// (all BLANK_AUDIO or empty finals). Reset to 0 on any real utterance.
+    /// Written by pump::tick_inference; read by call-end detector.
+    /// Platform-agnostic.
+    pub whisper_consecutive_empty_ticks: Arc<std::sync::atomic::AtomicU32>,
+    /// True while the active meeting session was started by auto-detection.
+    /// False for manually-started sessions (meeting_start_manual IPC).
+    /// The call-end detector only activates when this is false — auto-started
+    /// sessions already have AutoStop via evaluate_mic_state.
+    pub session_is_auto: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Encode [`crate::meeting::MeetingAutostartMode`] into the
@@ -548,7 +571,7 @@ pub(crate) fn parse_diarizer_threshold_setting(raw: Option<String>) -> f32 {
 /// as "fall back to Noop" — same as missing-file.
 fn build_diarizer_inner(
     _models_dir: &Path,
-    threshold: f32,
+    _threshold: f32,
 ) -> Arc<dyn crate::diarization::Diarize> {
     #[cfg(feature = "diarization-onnx")]
     {
@@ -557,7 +580,7 @@ fn build_diarizer_inner(
         if model_path.exists() {
             match crate::diarization::onnx::OnnxDiarizer::new_with_threshold(
                 &model_path,
-                Some(threshold),
+                Some(_threshold),
             ) {
                 Ok(d) => {
                     tracing::info!(

@@ -509,6 +509,12 @@ impl AppStateBuilder {
                     .mic_gain_db_arc
                     .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU32::new(0f32.to_bits()))),
                 autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                pending_cancel: Arc::new(std::sync::Mutex::new(None)),
+                system_audio_level: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                whisper_consecutive_empty_ticks: Arc::new(
+                    std::sync::atomic::AtomicU32::new(0),
+                ),
+                session_is_auto: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             startup_timings: self.startup_timings.unwrap_or_default(),
             hotkey_toggle_error: Mutex::new(None),
