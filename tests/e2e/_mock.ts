@@ -1,3 +1,7 @@
+// Backend-only events (no IPC mock needed):
+//   "meeting:call-may-have-ended" — emit via page.evaluate(() => window.__tauri_internals?.postMessage({...}))
+//   "meeting:call-end-cancelled"  — same
+
 // Default mock state for Playwright e2e tests. Test specs import
 // `installMocks(page)` from here and pass per-test overrides on top
 // of the defaults.

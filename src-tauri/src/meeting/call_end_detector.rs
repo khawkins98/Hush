@@ -413,6 +413,154 @@ impl CallEndSignal for WhisperSilenceSignal {
     }
 }
 
+// ── Background task ───────────────────────────────────────────────────────────
+
+/// Poll interval in seconds. 5 s gives ±5 s jitter on 30–120 s thresholds,
+/// which is irrelevant to UX. Cheap: three atomic reads per tick.
+const POLL_INTERVAL_SECS: u64 = 5;
+
+/// Spawn as a parallel task alongside `run_meeting_detection_task` in lib.rs.
+///
+/// Only activates when `session_is_auto` is false (manual sessions). Auto-
+/// started sessions already have `AutoStop` via `evaluate_mic_state`.
+///
+/// macOS: spawned unconditionally; `MicHalSignal` is compiled only on macOS.
+/// Linux/Windows: the two platform-agnostic signals still run; prompting is
+/// less reliable without `MicHalSignal` but still useful.
+pub async fn run_call_end_detector_task(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    use tokio::time::{interval, Duration};
+
+    use tauri::Manager as _;
+    let state = app.state::<crate::ipc::AppState>();
+
+    #[cfg(target_os = "macos")]
+    let mic_signal: Option<Arc<dyn CallEndSignal>> = {
+        use crate::meeting::mic_camera_monitor::MicCameraMonitor;
+        Some(Arc::new(MicHalSignal::new(Arc::new(
+            MicCameraMonitor::new(),
+        ))))
+    };
+
+    let mut signals: Vec<Arc<dyn CallEndSignal>> = vec![
+        Arc::new(SystemAudioRmsSignal::new(
+            Arc::clone(&state.runtime_flags.system_audio_level),
+            POLL_INTERVAL_SECS,
+        )),
+        Arc::new(WhisperSilenceSignal::new(Arc::clone(
+            &state.runtime_flags.whisper_consecutive_empty_ticks,
+        ))),
+    ];
+    #[cfg(target_os = "macos")]
+    if let Some(sig) = mic_signal {
+        signals.insert(0, sig);
+    }
+
+    let thresholds = CallEndThresholds::default();
+    let mut detector_state = CallEndState::default();
+    let mut ticker = interval(Duration::from_secs(POLL_INTERVAL_SECS));
+
+    loop {
+        ticker.tick().await;
+
+        // Only activate for manually-started sessions.
+        let session_is_manual = !state.runtime_flags.session_is_auto.load(Ordering::Relaxed);
+
+        // Gather readings from all signals.
+        let readings: Vec<SignalReading> = signals.iter().map(|s| s.poll()).collect();
+        let any_reversal = readings.iter().any(|r| r.is_reversal);
+
+        // Map signal names to flags for CallEndInputs.
+        let mut mic_inactive = false;
+        let mut system_audio_quiet = false;
+        let mut whisper_silent = false;
+        for (signal, reading) in signals.iter().zip(readings.iter()) {
+            if reading.strength >= 1.0 {
+                match signal.name() {
+                    "mic-hal" => mic_inactive = true,
+                    "system-audio-rms" => system_audio_quiet = true,
+                    "whisper-silence" => whisper_silent = true,
+                    _ => {}
+                }
+            }
+        }
+
+        let inputs = CallEndInputs {
+            mic_inactive,
+            system_audio_quiet,
+            whisper_silent,
+            session_is_manual,
+            any_reversal,
+        };
+
+        let transition =
+            evaluate_call_end_state(&detector_state, &inputs, Instant::now(), &thresholds);
+
+        match transition {
+            CallEndTransition::Stay => {}
+            CallEndTransition::EnterSuspected { signals: sigs } => {
+                tracing::debug!(
+                    mic = sigs.mic_inactive,
+                    audio = sigs.system_audio_quiet,
+                    whisper = sigs.whisper_silent,
+                    "call-end detector: entering Suspected"
+                );
+                detector_state = CallEndState::Suspected {
+                    since: Instant::now(),
+                    signals: sigs,
+                };
+            }
+            CallEndTransition::EnterConfident => {
+                let active_count = [mic_inactive, system_audio_quiet, whisper_silent]
+                    .iter()
+                    .filter(|&&b| b)
+                    .count();
+                let confidence = if active_count >= 2 { "high" } else { "medium" };
+
+                // Build a human-readable summary for the HUD tooltip.
+                let mut parts = Vec::new();
+                if mic_inactive {
+                    parts.push("mic inactive");
+                }
+                if system_audio_quiet {
+                    parts.push("system audio quiet");
+                }
+                if whisper_silent {
+                    parts.push("no speech detected");
+                }
+                let signal_summary = parts.join(" + ");
+
+                tracing::info!(
+                    confidence,
+                    signal_summary,
+                    "call-end detector: emitting event"
+                );
+
+                crate::meeting::events::emit_call_may_have_ended(
+                    &app,
+                    crate::meeting::events::CallMayHaveEndedPayload {
+                        confidence,
+                        signal_summary,
+                    },
+                );
+
+                detector_state = CallEndState::Confident {
+                    since: Instant::now(),
+                };
+            }
+            CallEndTransition::Reset => {
+                if matches!(detector_state, CallEndState::Confident { .. }) {
+                    tracing::debug!("call-end detector: reversal — emitting call-end-cancelled");
+                    crate::meeting::events::emit_call_end_cancelled(&app);
+                } else if matches!(detector_state, CallEndState::Suspected { .. }) {
+                    tracing::debug!("call-end detector: reversal — resetting to Monitoring");
+                }
+                detector_state = CallEndState::Monitoring;
+            }
+        }
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

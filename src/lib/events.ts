@@ -157,4 +157,15 @@ export const Events = {
   /// itself landed on the clipboard; this warns the user that the
   /// meeting session log is missing that utterance. Payload: `{ error }`.
   DictationMeetingAppendFailed: "dictation:meeting-append-failed",
+  /// Backend (call-end detector task) → all windows: one or more signals suggest
+  /// the meeting call may have ended while the recording session is still active.
+  /// Payload is `{ confidence: "high" | "medium"; signalSummary: string }`.
+  /// The HUD shows a "Did your call end?" prompt; the main window shows a banner.
+  /// Cancelled by `CallEndCancelled` if a reversal signal arrives (mic goes active
+  /// again, loud audio spike, real speech detected).
+  CallMayHaveEnded: "meeting:call-may-have-ended",
+  /// Backend (call-end detector task) → all windows: a reversal signal arrived
+  /// after `CallMayHaveEnded` was emitted — the call appears to have resumed.
+  /// Payload: none (`()`). Dismisses the HUD prompt and the main-window banner.
+  CallEndCancelled: "meeting:call-end-cancelled",
 } as const;

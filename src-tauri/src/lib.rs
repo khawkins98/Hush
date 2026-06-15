@@ -786,6 +786,17 @@ fn spawn_background_tasks(handle: tauri::AppHandle, state: &ipc::AppState) {
             run_meeting_detection_task(handle_for_detection).await;
         });
     }
+
+    // Call-end detector: prompts the user to stop recording when signals suggest
+    // the meeting call has ended (mic inactive, system audio quiet, Whisper silent).
+    // Spawned unconditionally — MicHalSignal is compiled only on macOS but the
+    // other two signals are platform-agnostic.
+    {
+        let handle_for_ced = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::meeting::call_end_detector::run_call_end_detector_task(handle_for_ced).await;
+        });
+    }
 }
 
 /// Register the global toggle hotkey and the PTT rdev listener.

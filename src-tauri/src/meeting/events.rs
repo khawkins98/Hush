@@ -254,3 +254,44 @@ pub(super) fn emit_audio_device_restored(
         },
     );
 }
+
+// ── Call-end detector events ──────────────────────────────────────────────────
+
+/// Payload for [`emit_call_may_have_ended`]. Emitted by the call-end detector
+/// background task when confidence thresholds are reached.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CallMayHaveEndedPayload {
+    /// `"high"` when two or more signals agree (promoted after 30 s).
+    /// `"medium"` when a single signal held for 120 s (virtual device path).
+    pub confidence: &'static str,
+    /// Human-readable summary for the HUD tooltip and log.
+    /// Example: `"mic inactive + system audio quiet"`
+    pub signal_summary: String,
+}
+
+/// Emits `"meeting:call-may-have-ended"` to all windows via [`tauri::AppHandle`].
+///
+/// Uses `AppHandle` directly (not `EventEmitter`) because the call-end detector
+/// background task receives an owned `AppHandle`, not a trait object.
+pub fn emit_call_may_have_ended<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    payload: CallMayHaveEndedPayload,
+) {
+    use tauri::Emitter as _;
+    if let Err(e) = app.emit("meeting:call-may-have-ended", &payload) {
+        tracing::warn!(error = ?e, "emit meeting:call-may-have-ended failed");
+    }
+}
+
+/// Emits `"meeting:call-end-cancelled"` to all windows via [`tauri::AppHandle`].
+///
+/// Fired when a reversal signal (mic active, loud audio, real speech) arrives
+/// after the detector already emitted `call-may-have-ended`, so the HUD can
+/// dismiss its prompt.
+pub fn emit_call_end_cancelled<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri::Emitter as _;
+    if let Err(e) = app.emit("meeting:call-end-cancelled", ()) {
+        tracing::warn!(error = ?e, "emit meeting:call-end-cancelled failed");
+    }
+}
