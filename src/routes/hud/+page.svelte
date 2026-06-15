@@ -36,9 +36,10 @@
   // present on Pending transitions. Processing and Done transitions
   // omit both.
   type HudStatePayload = {
-    state: "recording" | "processing" | "done" | "pending";
+    state: "recording" | "processing" | "done" | "pending" | "call-may-have-ended";
     startedAtMs?: number;
     endsAtMs?: number;
+    confidence?: "high" | "medium";
   };
 
   // HUD lifecycle state (#291). Backend emits `hud:state` with
@@ -55,10 +56,19 @@
   // requestAnimationFrame, and the rAF loop never recovers when the
   // window becomes visible, leaving the bars permanently frozen at
   // the silence floor.
-  let hudState = $state<"recording" | "processing" | "done" | "pending" | null>(null);
+  let hudState = $state<"recording" | "processing" | "done" | "pending" | "call-may-have-ended" | null>(null);
 
   // True while the inline "Stop recording?" confirmation is shown.
   let confirmingStop = $state(false);
+
+  // Call-end detector state. `callEndConfidence` is set when the backend
+  // emits `call-may-have-ended`; `prevHudState` tracks what state to
+  // restore if the user clicks "Keep recording"; `sessionCallEndSuppressed`
+  // is set for the rest of the session once the user explicitly opts to
+  // keep recording — prevents the same session from re-prompting.
+  let callEndConfidence = $state<"high" | "medium" | null>(null);
+  let prevHudState = $state<"recording" | null>(null);
+  let sessionCallEndSuppressed = $state(false);
 
   // Timer handle for the "done" → auto-dismiss sequence (#669).
   // Cancelled if a new recording starts before the timer fires.
@@ -132,6 +142,7 @@
 
   let unlistenState: UnlistenFn | null = null;
   let unlistenProgress: UnlistenFn | null = null;
+  let unlistenCallEndCancelled: UnlistenFn | null = null;
   let raf: number | undefined;
 
   onMount(async () => {
@@ -148,6 +159,15 @@
       (event) => {
         const payload = event.payload;
         const next = payload?.state;
+        // Handle call-may-have-ended before the main state switch — it
+        // doesn't follow the same clear/reset sequence as the other states.
+        if (next === "call-may-have-ended") {
+          if (sessionCallEndSuppressed) return;
+          callEndConfidence = payload.confidence ?? "high";
+          prevHudState = hudState === "recording" ? "recording" : null;
+          hudState = "call-may-have-ended";
+          return;
+        }
         if (next === "recording" || next === "processing" || next === "done" || next === "pending") {
           // Cancel any pending done-dismiss timer when state changes.
           if (doneTimer !== null) {
@@ -194,6 +214,10 @@
             // a fresh timestamp on every Recording transition;
             // missing field is a defensive fallback.
             confirmingStop = false;
+            // A fresh Recording transition starts a new session — allow
+            // call-end prompts to fire again.
+            sessionCallEndSuppressed = false;
+            callEndConfidence = null;
             recordingStartedAt = payload.startedAtMs ?? Date.now();
             elapsedLabel = "0:00";
             // Reset progress from previous cycle so we don't show
@@ -211,6 +235,16 @@
       },
     );
 
+    // When a reversal signal arrives (mic goes active again, loud audio
+    // spike, real speech detected) the backend fires CallEndCancelled.
+    // Dismiss the call-end prompt and restore the previous state.
+    unlistenCallEndCancelled = await listen(Events.CallEndCancelled, () => {
+      if (hudState === "call-may-have-ended") {
+        hudState = prevHudState ?? "recording";
+        callEndConfidence = null;
+      }
+    });
+
     raf = requestAnimationFrame(tick);
   });
 
@@ -219,6 +253,8 @@
     unlistenState = null;
     unlistenProgress?.();
     unlistenProgress = null;
+    unlistenCallEndCancelled?.();
+    unlistenCallEndCancelled = null;
     if (doneTimer !== null) {
       clearTimeout(doneTimer);
       doneTimer = null;
@@ -384,7 +420,43 @@
       <polyline points="2.5,8.5 6.5,12.5 13.5,3.5" />
     </svg>
   {/if}
-  {#if hudState === "recording" && confirmingStop}
+  {#if hudState === "call-may-have-ended"}
+    <!--
+      Call-end prompt: shown when the backend's call-end detector fires
+      with high or medium confidence. The user can stop the recording
+      immediately ("Stop now") or keep recording ("Keep recording" —
+      suppresses further prompts for this session). Fits inside the
+      existing pill; no new background layer needed.
+    -->
+    <span class="hud-call-end-prompt" data-tauri-drag-region="false">
+      <span class="hud-call-end-label">
+        {callEndConfidence === "high"
+          ? "Your call has likely ended"
+          : "Your call may be winding down"}
+      </span>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--stop"
+        data-tauri-drag-region="false"
+        onclick={async () => {
+          try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
+          await dismiss();
+        }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Stop now</button>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--keep"
+        data-tauri-drag-region="false"
+        onclick={() => {
+          sessionCallEndSuppressed = true;
+          hudState = prevHudState ?? "recording";
+          callEndConfidence = null;
+        }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Keep recording</button>
+    </span>
+  {:else if hudState === "recording" && confirmingStop}
     <span class="hud-confirm-stop" data-tauri-drag-region="false">
       <span class="hud-confirm-label">Stop recording?</span>
       <button
@@ -502,6 +574,22 @@
     flex-shrink: 0;
   }
   .hud-stop:hover { opacity: 1; }
+
+  .hud-call-end-prompt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .hud-call-end-label {
+    font-size: 11px;
+    opacity: 0.85;
+    white-space: nowrap;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   .hud-confirm-stop {
     display: flex;
