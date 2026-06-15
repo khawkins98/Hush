@@ -8,10 +8,11 @@
 //! # Architecture
 //!
 //! A `CallEndSignal` trait abstracts each observable signal. Three concrete
-//! implementations cover the available macOS signals:
-//! - `MicHalSignal` — CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`
-//! - `SystemAudioRmsSignal` — RMS of the system-audio tap (rolling window)
-//! - `WhisperSilenceSignal` — consecutive empty Whisper inference ticks
+//! implementations cover the call-end signals (`MicHalSignal` is macOS-only;
+//! the other two are platform-agnostic):
+//! - `MicHalSignal` — CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere` (macOS)
+//! - `SystemAudioRmsSignal` — RMS of the system-audio tap, rolling window (all platforms)
+//! - `WhisperSilenceSignal` — consecutive empty Whisper inference ticks (all platforms)
 //!
 //! `evaluate_call_end_state` is a pure function over explicit enum inputs/outputs,
 //! following the `evaluate_mic_state` pattern from `mic_camera_monitor.rs`.
@@ -499,7 +500,7 @@ pub async fn run_call_end_detector_task(app: tauri::AppHandle) {
         match transition {
             CallEndTransition::Stay => {}
             CallEndTransition::EnterSuspected { signals: sigs } => {
-                tracing::debug!(
+                tracing::info!(
                     mic = sigs.mic_inactive,
                     audio = sigs.system_audio_quiet,
                     whisper = sigs.whisper_silent,

@@ -18,10 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reveals an inline "Stop recording? / Keep recording" confirmation — no modal dialog.
   - *Call-end detection.* A multi-signal state machine watches for signs that a meeting
     call has ended while the app stays open (the common case: Zoom call ends, Zoom stays
-    running). When two signals agree for 30 s, or one signal holds for 120 s, the HUD
-    prompts "Your call has likely ended" with Stop now / Keep recording. "Keep recording"
-    suppresses re-prompting for the session. Signals: mic HAL activity
-    (`kAudioDevicePropertyDeviceIsRunningSomewhere`, macOS), system-audio RMS
+    running). Only activates for manually-started sessions — auto-started sessions already
+    have `AutoStop` via mic-state detection. When two signals agree for 30 s, or one
+    signal holds for 120 s, the HUD prompts "Your call has likely ended" with Stop now /
+    Keep recording. "Keep recording" suppresses re-prompting for the session. Signals: mic
+    HAL activity (`kAudioDevicePropertyDeviceIsRunningSomewhere`, macOS), system-audio RMS
     (60-second rolling window), and Whisper consecutive-silence tick count.
 
 - **macOS: Hush now refuses to run from the disk image.** Launching it

@@ -3150,6 +3150,8 @@ The UI was re-keyed from v0.9.0's dark navy theme to a light theme matching the 
 
 **Three concrete signals.** `MicHalSignal` (`#[cfg(target_os = "macos")]`, HAL `kAudioDevicePropertyDeviceIsRunningSomewhere`), `SystemAudioRmsSignal` (platform-agnostic, reads `Arc<AtomicU32>` written by pump — 60 s rolling window), `WhisperSilenceSignal` (platform-agnostic, reads `Arc<AtomicU32>` consecutive-empty-ticks written by pump). The two platform-agnostic signals run on Linux/Windows future; only `MicHalSignal` is macOS-gated.
 
+**`session_is_auto` guard — manual sessions only.** The detector only fires when `session_is_auto` is false. Auto-started sessions already have `AutoStop` via `evaluate_mic_state`; adding a second "call ended" prompt would be redundant and confusing. The guard is read on every poll tick (not cached) so a session that transitions from auto to manual would re-arm — but currently no such transition exists.
+
 **Per-session suppression, not global toggle.** "Keep recording" sets `sessionCallEndSuppressed` in the HUD for the duration of the session. It does not disable the detector globally — that would require IPC and state plumbing for a rare edge case. The detector continues polling; the HUD just ignores new `call-may-have-ended` events until the next recording state reset.
 
 **`WhisperSilenceSignal` cold-start reversal.** The atomic initialises to 0. `ticks == 0` is treated as a reversal ("real speech just arrived"). This means the very first poll fires a reversal, keeping the state machine in Monitoring until the pump's first inference tick increments the counter. This is conservative — it prevents false-positives during startup — and intentional.

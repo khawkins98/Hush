@@ -36,7 +36,10 @@
   // Call-end detector banner. Set when the backend emits
   // `meeting:call-may-have-ended`; cleared on `meeting:call-end-cancelled`
   // or when the user dismisses/acts on the banner manually.
+  // `callEndBannerSuppressed` mirrors the HUD's `sessionCallEndSuppressed`:
+  // once the user dismisses the banner, the event is ignored for this session.
   let callEndBanner = $state<{ confidence: "high" | "medium" } | null>(null);
+  let callEndBannerSuppressed = $state(false);
   let _unlistenCallMayHaveEnded: UnlistenFn | null = null;
   let _unlistenCallEndCancelled: UnlistenFn | null = null;
 
@@ -93,11 +96,14 @@
     _unlistenCallMayHaveEnded = await listen<CallMayHaveEndedPayload>(
       Events.CallMayHaveEnded,
       (event) => {
-        callEndBanner = { confidence: event.payload.confidence };
+        if (!callEndBannerSuppressed) {
+          callEndBanner = { confidence: event.payload.confidence };
+        }
       },
     );
     _unlistenCallEndCancelled = await listen(Events.CallEndCancelled, () => {
       callEndBanner = null;
+      callEndBannerSuppressed = false; // re-arm for next call cycle
     });
   });
 
@@ -259,15 +265,16 @@
       type="button"
       class="call-end-banner-btn call-end-banner-btn--stop"
       onclick={async () => {
-        try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
         callEndBanner = null;
+        callEndBannerSuppressed = true;
+        try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
       }}
     >Stop recording</button>
     <button
       type="button"
       class="call-end-banner-dismiss"
       aria-label="Dismiss"
-      onclick={() => { callEndBanner = null; }}
+      onclick={() => { callEndBanner = null; callEndBannerSuppressed = true; }}
     >✕</button>
   </div>
   {/if}

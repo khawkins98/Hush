@@ -399,6 +399,11 @@
         data-testid="hud-countdown-bar"
       ></div>
     {/if}
+    <!-- Screen-reader announcement for the countdown. Announced once on entry
+         via aria-live="assertive"; the "Don't record" button is the action. -->
+    <span class="sr-only" aria-live="assertive" aria-atomic="true">
+      {#if hudState === "pending"}Recording will start in 3 seconds. Activate Don't record to cancel.{/if}
+    </span>
   {:else if hudState === "done"}
     <!--
       Done state (#669): a brief green check glyph replaces the
@@ -502,7 +507,7 @@
         await dismiss();
       }}
       ondblclick={(e) => e.stopPropagation()}
-    >Cancel</button>
+    >Don't record</button>
   {/if}
   <button
     type="button"
