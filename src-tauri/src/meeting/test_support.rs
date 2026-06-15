@@ -651,6 +651,8 @@ pub(super) async fn build_tail_pump_context(
         audio_released_tx: None,
         speaker_store: Arc::new(crate::speakers::MemSpeakerStore),
         speaker_identity_enabled: Arc::new(AtomicBool::new(false)),
+        system_audio_level: Arc::new(AtomicU32::new(0)),
+        whisper_consecutive_empty_ticks: Arc::new(AtomicU32::new(0)),
     };
 
     (ctx, repo, fed_lens)

@@ -37,6 +37,7 @@
 pub mod app_overrides;
 pub mod audio_buffer;
 pub mod autostart;
+pub mod call_end_detector;
 pub mod classifier;
 pub mod events;
 pub mod export;
