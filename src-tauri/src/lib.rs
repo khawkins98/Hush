@@ -1390,10 +1390,9 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                 {
                     let ends_at_ms = crate::hud::now_unix_ms() + 3000;
                     crate::hud::show_async(&app);
-                    if let Err(e) = crate::hud::set_state(
-                        &app,
-                        crate::hud::HudState::Pending { ends_at_ms },
-                    ) {
+                    if let Err(e) =
+                        crate::hud::set_state(&app, crate::hud::HudState::Pending { ends_at_ms })
+                    {
                         tracing::warn!(error = ?e, "emit hud:state(pending) failed");
                     }
                     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -1415,98 +1414,98 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                 if cancelled {
                     session_emitted = false;
                 } else {
-                // Mark as auto-started before starting so the call-end detector ignores it.
-                state
-                    .runtime_flags
-                    .session_is_auto
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-
-                let mic_source = audio::AudioSource::default_microphone();
-                // Try mic + system-audio first. If system-audio tap fails
-                // (permission denied, CoreAudio already in use, SCK helper
-                // not running) degrade to mic-only so the user at least
-                // gets partial transcription rather than a silent failure
-                // (#807).
-                let full_sources = vec![mic_source, audio::AudioSource::SystemAudio];
-
-                // Snapshot the window title for the persisted session row.
-                let app_title = active_win_pos_rs::get_active_window()
-                    .ok()
-                    .map(|w| w.title.trim().to_owned())
-                    .filter(|t| !t.is_empty());
-
-                // Load vocabulary prompt + replacement rules at auto-start
-                // time (#913). Same snapshot semantics as the manual path in
-                // `meeting_start_manual`: if the user edits their dictionary
-                // mid-session the change takes effect on the next session.
-                let vocab_prompt =
-                    crate::ipc::commands::dictation::load_vocabulary_prompt(&state).await;
-                let replacement_rules = std::sync::Arc::new(
-                    crate::ipc::commands::dictation::load_replacement_rules(&state).await,
-                );
-                let dict_opts = crate::meeting::SessionDictOpts {
-                    vocab_prompt,
-                    replacement_rules,
-                };
-
-                let start_result = state
-                    .meeting_manager
-                    .start_manual(
-                        full_sources,
-                        Some(app_name.clone()),
-                        app_title.clone(),
-                        dict_opts.clone(),
-                    )
-                    .await;
-                let start_result = if start_result.is_err() {
-                    tracing::warn!(
-                        app_name,
-                        "auto-start with system-audio failed, retrying mic-only"
-                    );
-                    let mic_only = vec![audio::AudioSource::default_microphone()];
+                    // Mark as auto-started before starting so the call-end detector ignores it.
                     state
-                        .meeting_manager
-                        .start_manual(mic_only, Some(app_name.clone()), app_title, dict_opts)
-                        .await
-                } else {
-                    start_result
-                };
-
-                if let Err(e) = start_result {
-                    tracing::warn!(
-                        app_name,
-                        error = ?e,
-                        "auto-start meeting session failed"
-                    );
-                    // Don't hold `session_emitted = true` on failure —
-                    // the next HAL event should retry.
-                    session_emitted = false;
-                } else {
-                    tracing::info!(app_name, "auto-started meeting session");
-                    // Show the recording HUD — the session-started event
-                    // (emitted by SessionManager::start_manual) tells the
-                    // frontend to refresh, but the HUD is Tauri/window-
-                    // specific so it must be driven here rather than inside
-                    // the manager. Same logic as `meeting_start_manual`.
-                    if state
                         .runtime_flags
-                        .hud_enabled
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                    {
-                        crate::hud::show_async(&app);
-                        if let Err(e) = crate::hud::set_state(
-                            &app,
-                            crate::hud::HudState::Recording {
-                                started_at_ms: crate::hud::now_unix_ms(),
-                            },
-                        ) {
-                            tracing::warn!(
-                                error = ?e,
-                                "emit hud:state(recording) failed for auto-start"
-                            );
+                        .session_is_auto
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                    let mic_source = audio::AudioSource::default_microphone();
+                    // Try mic + system-audio first. If system-audio tap fails
+                    // (permission denied, CoreAudio already in use, SCK helper
+                    // not running) degrade to mic-only so the user at least
+                    // gets partial transcription rather than a silent failure
+                    // (#807).
+                    let full_sources = vec![mic_source, audio::AudioSource::SystemAudio];
+
+                    // Snapshot the window title for the persisted session row.
+                    let app_title = active_win_pos_rs::get_active_window()
+                        .ok()
+                        .map(|w| w.title.trim().to_owned())
+                        .filter(|t| !t.is_empty());
+
+                    // Load vocabulary prompt + replacement rules at auto-start
+                    // time (#913). Same snapshot semantics as the manual path in
+                    // `meeting_start_manual`: if the user edits their dictionary
+                    // mid-session the change takes effect on the next session.
+                    let vocab_prompt =
+                        crate::ipc::commands::dictation::load_vocabulary_prompt(&state).await;
+                    let replacement_rules = std::sync::Arc::new(
+                        crate::ipc::commands::dictation::load_replacement_rules(&state).await,
+                    );
+                    let dict_opts = crate::meeting::SessionDictOpts {
+                        vocab_prompt,
+                        replacement_rules,
+                    };
+
+                    let start_result = state
+                        .meeting_manager
+                        .start_manual(
+                            full_sources,
+                            Some(app_name.clone()),
+                            app_title.clone(),
+                            dict_opts.clone(),
+                        )
+                        .await;
+                    let start_result = if start_result.is_err() {
+                        tracing::warn!(
+                            app_name,
+                            "auto-start with system-audio failed, retrying mic-only"
+                        );
+                        let mic_only = vec![audio::AudioSource::default_microphone()];
+                        state
+                            .meeting_manager
+                            .start_manual(mic_only, Some(app_name.clone()), app_title, dict_opts)
+                            .await
+                    } else {
+                        start_result
+                    };
+
+                    if let Err(e) = start_result {
+                        tracing::warn!(
+                            app_name,
+                            error = ?e,
+                            "auto-start meeting session failed"
+                        );
+                        // Don't hold `session_emitted = true` on failure —
+                        // the next HAL event should retry.
+                        session_emitted = false;
+                    } else {
+                        tracing::info!(app_name, "auto-started meeting session");
+                        // Show the recording HUD — the session-started event
+                        // (emitted by SessionManager::start_manual) tells the
+                        // frontend to refresh, but the HUD is Tauri/window-
+                        // specific so it must be driven here rather than inside
+                        // the manager. Same logic as `meeting_start_manual`.
+                        if state
+                            .runtime_flags
+                            .hud_enabled
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            crate::hud::show_async(&app);
+                            if let Err(e) = crate::hud::set_state(
+                                &app,
+                                crate::hud::HudState::Recording {
+                                    started_at_ms: crate::hud::now_unix_ms(),
+                                },
+                            ) {
+                                tracing::warn!(
+                                    error = ?e,
+                                    "emit hud:state(recording) failed for auto-start"
+                                );
+                            }
                         }
                     }
-                }
                 } // end else (not cancelled)
             }
             MicStateOutcome::AutoStop => {

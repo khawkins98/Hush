@@ -511,9 +511,7 @@ impl AppStateBuilder {
                 autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 pending_cancel: Arc::new(std::sync::Mutex::new(None)),
                 system_audio_level: Arc::new(std::sync::atomic::AtomicU32::new(0)),
-                whisper_consecutive_empty_ticks: Arc::new(
-                    std::sync::atomic::AtomicU32::new(0),
-                ),
+                whisper_consecutive_empty_ticks: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 session_is_auto: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             startup_timings: self.startup_timings.unwrap_or_default(),

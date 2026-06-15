@@ -769,9 +769,7 @@ pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> 
 /// Cancel the 3-second auto-start countdown. One-shot: only suppresses the
 /// current pending instance. If no countdown is active, this is a no-op.
 #[tauri::command]
-pub async fn meeting_cancel_pending(
-    state: State<'_, AppState>,
-) -> IpcResult<()> {
+pub async fn meeting_cancel_pending(state: State<'_, AppState>) -> IpcResult<()> {
     if let Some(tx) = state.runtime_flags.pending_cancel.lock().unwrap().take() {
         let _ = tx.send(());
     }
