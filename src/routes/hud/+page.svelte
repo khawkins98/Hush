@@ -72,6 +72,13 @@
   let pendingEndsAtMs = $state<number | null>(null);
   let pendingTick = $state(0);
   let pendingRaf: number | undefined;
+  // Derived progress [0,1] for the countdown bar. `pendingTick` is the reactive
+  // dependency that forces re-evaluation on each rAF frame.
+  let pendingProgress = $derived(
+    pendingTick >= 0 && pendingEndsAtMs !== null
+      ? Math.max(0, Math.min(1, (pendingEndsAtMs - Date.now()) / 3000))
+      : 1
+  );
 
   // Transcription progress 0–100, set while hudState === "processing" (#566).
   // Reset to null on each new recording cycle so back-to-back dictations
@@ -345,16 +352,13 @@
       Pending state: a draining orange progress bar shows how much
       time remains before auto-recording starts. Progress = fraction
       of the 3-second countdown window remaining (1 = full, 0 = empty).
-      `pendingTick` is incremented each rAF frame so Svelte re-evaluates
-      `Date.now()` on every frame — without it the bar would only update
-      when some other reactive dependency changed.
+      `pendingProgress` (a $derived that reads `pendingTick`) is the reactive
+      dependency that forces re-evaluation on every rAF frame.
     -->
     {#if pendingEndsAtMs !== null}
-      {@const _tick = pendingTick}
-      {@const progress = Math.max(0, Math.min(1, (pendingEndsAtMs - Date.now()) / 3000))}
       <div
         class="hud-countdown-bar"
-        style="--progress: {progress}"
+        style="--progress: {pendingProgress}"
         role="presentation"
         data-testid="hud-countdown-bar"
       ></div>
