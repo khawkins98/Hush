@@ -120,6 +120,14 @@ pub struct SessionManager {
     /// Whether speaker identity resolution is enabled. Shared Arc
     /// from `RuntimeFlags::speaker_identity_enabled`.
     pub(super) speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// f32-as-bits RMS of the system-audio tap. Shared Arc from
+    /// `RuntimeFlags::system_audio_level`; passed to `PumpContext`
+    /// at session start so the call-end detector can read it.
+    pub(super) system_audio_level: Arc<AtomicU32>,
+    /// Consecutive pump ticks producing no real speech. Shared Arc from
+    /// `RuntimeFlags::whisper_consecutive_empty_ticks`; passed to
+    /// `PumpContext` at session start so the call-end detector can read it.
+    pub(super) whisper_consecutive_empty_ticks: Arc<AtomicU32>,
     /// Single in-flight background finalization (whisper tail flush +
     /// diarize + speaker-identity + DB close + emit-ended) parked here
     /// by `stop_manual` once the pump confirms audio is released. At
@@ -241,6 +249,8 @@ impl SessionManager {
         mic_gain_db: Arc<AtomicU32>,
         speaker_store: Arc<dyn crate::speakers::SpeakerStore>,
         speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
+        system_audio_level: Arc<AtomicU32>,
+        whisper_consecutive_empty_ticks: Arc<AtomicU32>,
     ) -> Self {
         Self {
             repo,
@@ -256,6 +266,8 @@ impl SessionManager {
             mic_gain_db,
             speaker_store,
             speaker_identity_enabled,
+            system_audio_level,
+            whisper_consecutive_empty_ticks,
             finalizing: Mutex::new(None),
         }
     }

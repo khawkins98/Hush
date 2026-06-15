@@ -881,6 +881,11 @@ impl AppState {
                 Arc::clone(&diarize_slot),
                 Arc::clone(&diarize_fallback),
             ));
+        // Create the call-end-detector signal arcs here so they can be
+        // shared with the meeting pump (`PumpContext`) AND stored in
+        // `RuntimeFlags` via the builder — both sides hold the same Arc.
+        let system_audio_level_arc = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let whisper_consecutive_empty_ticks_arc = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
@@ -892,6 +897,8 @@ impl AppState {
             Arc::clone(&mic_gain_db_arc),
             Arc::clone(&speakers),
             Arc::clone(&speaker_identity_enabled_arc),
+            Arc::clone(&system_audio_level_arc),
+            Arc::clone(&whisper_consecutive_empty_ticks_arc),
         ));
 
         // Restore the user's persisted PTT combo, if any. Falls back
@@ -1016,6 +1023,8 @@ impl AppState {
             .diarize_slot(diarize_slot)
             .inference_threads_arc(inference_threads_arc)
             .mic_gain_db_arc(mic_gain_db_arc)
+            .system_audio_level_arc(system_audio_level_arc)
+            .whisper_consecutive_empty_ticks_arc(whisper_consecutive_empty_ticks_arc)
             .debug_log(debug_log)
             .startup_timings(startup_timings)
             .build();

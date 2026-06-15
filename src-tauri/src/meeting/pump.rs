@@ -193,6 +193,21 @@ pub(super) struct PumpContext {
     /// Arc from `RuntimeFlags::speaker_identity_enabled`. Read at the
     /// end of the pump to gate the centroid → identity resolution.
     pub speaker_identity_enabled: Arc<AtomicBool>,
+    /// f32-as-bits RMS of the system-audio tap, written each drain by
+    /// the pump's tick_inference. Zero when no system-audio source is
+    /// active. Read by the call-end detector's SystemAudioRmsSignal.
+    /// Shared Arc from `RuntimeFlags::system_audio_level`.
+    // Written by Task 5 (tick_inference); allow until that lands.
+    #[allow(dead_code)]
+    pub system_audio_level: Arc<AtomicU32>,
+    /// Consecutive meeting-pump inference ticks producing no real speech
+    /// (all BLANK_AUDIO or empty finals). Incremented on all-blank
+    /// whisper finals; reset to 0 on any real utterance. Written by
+    /// tick_inference; read by the call-end detector.
+    /// Shared Arc from `RuntimeFlags::whisper_consecutive_empty_ticks`.
+    // Written by Task 5 (tick_inference); allow until that lands.
+    #[allow(dead_code)]
+    pub whisper_consecutive_empty_ticks: Arc<AtomicU32>,
 }
 
 /// Per-tick mutable working state for [`run_pump`]. Bundled so the
