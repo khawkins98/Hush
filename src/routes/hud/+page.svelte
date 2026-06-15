@@ -114,6 +114,8 @@
             doneTimer = null;
           }
           hudState = next;
+          // Any non-recording transition clears the stop confirmation strip.
+          if (next !== "recording") confirmingStop = false;
           if (next === "done") {
             // Auto-dismiss after 1.5 s so the user sees "Copied!" before
             // the HUD disappears (#669). A new recording cancels this.
