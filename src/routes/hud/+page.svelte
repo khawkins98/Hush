@@ -32,11 +32,13 @@
 
   // Wire shape mirrors `HudStatePayload` in `src-tauri/src/hud/mod.rs`
   // (camelCase per `serde(rename_all = "camelCase")`). `startedAtMs`
-  // is only present on Recording transitions; Processing and Done
-  // transitions omit it.
+  // is only present on Recording transitions; `endsAtMs` is only
+  // present on Pending transitions. Processing and Done transitions
+  // omit both.
   type HudStatePayload = {
-    state: "recording" | "processing" | "done";
+    state: "recording" | "processing" | "done" | "pending";
     startedAtMs?: number;
+    endsAtMs?: number;
   };
 
   // HUD lifecycle state (#291). Backend emits `hud:state` with
@@ -53,7 +55,7 @@
   // requestAnimationFrame, and the rAF loop never recovers when the
   // window becomes visible, leaving the bars permanently frozen at
   // the silence floor.
-  let hudState = $state<"recording" | "processing" | "done" | null>(null);
+  let hudState = $state<"recording" | "processing" | "done" | "pending" | null>(null);
 
   // True while the inline "Stop recording?" confirmation is shown.
   let confirmingStop = $state(false);
@@ -61,6 +63,15 @@
   // Timer handle for the "done" → auto-dismiss sequence (#669).
   // Cancelled if a new recording starts before the timer fires.
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Pending countdown state. `pendingEndsAtMs` is set when the backend emits
+  // `hud:state === "pending"` and cleared on any other transition. `pendingTick`
+  // is incremented each rAF frame while pending so the progress bar expression
+  // re-evaluates on every frame — Svelte 5 won't re-run a template expression
+  // unless a reactive dependency changes, and `Date.now()` alone isn't reactive.
+  let pendingEndsAtMs = $state<number | null>(null);
+  let pendingTick = $state(0);
+  let pendingRaf: number | undefined;
 
   // Transcription progress 0–100, set while hudState === "processing" (#566).
   // Reset to null on each new recording cycle so back-to-back dictations
@@ -89,6 +100,29 @@
   // `audio:level` listener that previously lived here moved into
   // `AudioWaveform.svelte` along with the rest of the waveform
   // logic in #411 phase B.
+  // Drive the countdown bar animation while in pending state. The effect
+  // starts/stops the rAF loop automatically when `hudState` changes.
+  $effect(() => {
+    if (hudState === "pending") {
+      const loop = () => {
+        pendingTick += 1;
+        pendingRaf = requestAnimationFrame(loop);
+      };
+      pendingRaf = requestAnimationFrame(loop);
+    } else {
+      if (pendingRaf !== undefined) {
+        cancelAnimationFrame(pendingRaf);
+        pendingRaf = undefined;
+      }
+    }
+    return () => {
+      if (pendingRaf !== undefined) {
+        cancelAnimationFrame(pendingRaf);
+        pendingRaf = undefined;
+      }
+    };
+  });
+
   let unlistenState: UnlistenFn | null = null;
   let unlistenProgress: UnlistenFn | null = null;
   let raf: number | undefined;
@@ -107,15 +141,19 @@
       (event) => {
         const payload = event.payload;
         const next = payload?.state;
-        if (next === "recording" || next === "processing" || next === "done") {
+        if (next === "recording" || next === "processing" || next === "done" || next === "pending") {
           // Cancel any pending done-dismiss timer when state changes.
           if (doneTimer !== null) {
             clearTimeout(doneTimer);
             doneTimer = null;
           }
           hudState = next;
-          // Any non-recording transition clears the stop confirmation strip.
+          // Any non-recording/non-pending transition clears the stop confirmation strip.
           if (next !== "recording") confirmingStop = false;
+          // Clear pending countdown unless we're entering pending state.
+          if (next !== "pending") {
+            pendingEndsAtMs = null;
+          }
           if (next === "done") {
             // Auto-dismiss after 1.5 s so the user sees "Copied!" before
             // the HUD disappears (#669). A new recording cancels this.
@@ -137,6 +175,10 @@
             // driven by `active={hudState === "recording"}` on the
             // AudioWaveform component below.
             recordingStartedAt = null;
+          } else if (next === "pending") {
+            // Pending — set the countdown end time from the backend payload.
+            // `pendingTick` drives re-evaluation via the rAF $effect above.
+            pendingEndsAtMs = payload.endsAtMs ?? (Date.now() + 3000);
           } else {
             // Recording — anchor the timer to the backend-supplied
             // `startedAtMs` (#481). The persistent HUD page can
@@ -233,7 +275,9 @@
       : "Processing transcription"
     : hudState === "done"
       ? "Copied to clipboard"
-      : "Recording in progress"}
+      : hudState === "pending"
+        ? "Meeting detected, recording will start soon"
+        : "Recording in progress"}
   ondblclick={raiseMainWindow}
 >
   <!--
@@ -263,7 +307,9 @@
         : "Processing…"
       : hudState === "done"
         ? "Copied!"
-        : "Recording"}
+        : hudState === "pending"
+          ? "Meeting detected"
+          : "Recording"}
   </span>
   {#if hudState === "recording"}
     <span class="hud-elapsed" data-testid="hud-elapsed" aria-hidden="true">
@@ -294,6 +340,25 @@
     <div class="hud-shimmer" role="presentation">
       <div class="hud-shimmer-fill"></div>
     </div>
+  {:else if hudState === "pending"}
+    <!--
+      Pending state: a draining orange progress bar shows how much
+      time remains before auto-recording starts. Progress = fraction
+      of the 3-second countdown window remaining (1 = full, 0 = empty).
+      `pendingTick` is incremented each rAF frame so Svelte re-evaluates
+      `Date.now()` on every frame — without it the bar would only update
+      when some other reactive dependency changed.
+    -->
+    {#if pendingEndsAtMs !== null}
+      {@const _tick = pendingTick}
+      {@const progress = Math.max(0, Math.min(1, (pendingEndsAtMs - Date.now()) / 3000))}
+      <div
+        class="hud-countdown-bar"
+        style="--progress: {progress}"
+        role="presentation"
+        data-testid="hud-countdown-bar"
+      ></div>
+    {/if}
   {:else if hudState === "done"}
     <!--
       Done state (#669): a brief green check glyph replaces the
@@ -348,6 +413,20 @@
         <rect x="2" y="2" width="8" height="8" fill="currentColor" rx="1" />
       </svg>
     </button>
+  {/if}
+  {#if hudState === "pending"}
+    <button
+      type="button"
+      class="hud-cancel-pending"
+      aria-label="Cancel auto-recording"
+      title="Cancel auto-recording"
+      data-tauri-drag-region="false"
+      onclick={async () => {
+        try { await invoke("meeting_cancel_pending"); } catch { /* best-effort */ }
+        await dismiss();
+      }}
+      ondblclick={(e) => e.stopPropagation()}
+    >Cancel</button>
   {/if}
   <button
     type="button"
@@ -553,6 +632,36 @@
   @media (prefers-reduced-motion: reduce) {
     .hud-shimmer-fill { animation: none; background-position: 50% 0; }
   }
+
+  /* Pending: draining orange bar showing countdown to auto-recording. */
+  .hud-countdown-bar {
+    width: calc(var(--progress, 1) * 60px);
+    height: 3px;
+    background: #f49e17;
+    border-radius: 2px;
+    flex-shrink: 0;
+    transition: none; /* rAF-driven — no CSS transition needed */
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hud-countdown-bar {
+      /* Show a static half-width bar instead of animating */
+      width: 30px;
+    }
+  }
+
+  /* Cancel button shown in pending state */
+  .hud-cancel-pending {
+    font-size: 11px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    padding: 2px 8px;
+    background: rgba(255,255,255,0.15);
+    color: #f5efe8;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+  }
+  .hud-cancel-pending:hover { opacity: 0.85; }
 
   /* Done: green dot + check. HUD-local green, tuned for the dark pill —
      the light-theme --success-text (#2f7a35) would be too dark here. */
