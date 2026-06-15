@@ -55,6 +55,9 @@
   // the silence floor.
   let hudState = $state<"recording" | "processing" | "done" | null>(null);
 
+  // True while the inline "Stop recording?" confirmation is shown.
+  let confirmingStop = $state(false);
+
   // Timer handle for the "done" → auto-dismiss sequence (#669).
   // Cancelled if a new recording starts before the timer fires.
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
@@ -139,6 +142,7 @@
             // here drifts across cycles. The Rust path always sends
             // a fresh timestamp on every Recording transition;
             // missing field is a defensive fallback.
+            confirmingStop = false;
             recordingStartedAt = payload.startedAtMs ?? Date.now();
             elapsedLabel = "0:00";
             // Reset progress from previous cycle so we don't show
@@ -179,6 +183,7 @@
   // dismiss is a one-session opt-out: the next dictation/meeting
   // start will re-show the HUD on its own.
   async function dismiss() {
+    confirmingStop = false;
     try {
       await getCurrentWebviewWindow().hide();
     } catch {
@@ -308,6 +313,40 @@
       <polyline points="2.5,8.5 6.5,12.5 13.5,3.5" />
     </svg>
   {/if}
+  {#if hudState === "recording" && confirmingStop}
+    <span class="hud-confirm-stop" data-tauri-drag-region="false">
+      <span class="hud-confirm-label">Stop recording?</span>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--stop"
+        onclick={async () => {
+          try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
+          await dismiss();
+        }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Stop</button>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--keep"
+        onclick={() => { confirmingStop = false; }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Keep recording</button>
+    </span>
+  {:else if hudState === "recording"}
+    <button
+      type="button"
+      class="hud-stop"
+      aria-label="Stop recording"
+      title="Stop recording"
+      data-tauri-drag-region="false"
+      onclick={() => { confirmingStop = true; }}
+      ondblclick={(e) => e.stopPropagation()}
+    >
+      <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+        <rect x="2" y="2" width="8" height="8" fill="currentColor" rx="1" />
+      </svg>
+    </button>
+  {/if}
   <button
     type="button"
     class="hud-dismiss"
@@ -315,6 +354,7 @@
     title="Hide overlay"
     onclick={dismiss}
     ondblclick={(e) => e.stopPropagation()}
+    data-tauri-drag-region="false"
   >
     <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
       <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
@@ -359,6 +399,53 @@
   .hud-root:active {
     cursor: grabbing;
   }
+
+  .hud-stop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: #f87171;
+    cursor: pointer;
+    padding: 0;
+    opacity: 0.75;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+  }
+  .hud-stop:hover { opacity: 1; }
+
+  .hud-confirm-stop {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .hud-confirm-label {
+    font-size: 11px;
+    opacity: 0.85;
+    white-space: nowrap;
+  }
+  .hud-confirm-btn {
+    font-size: 11px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    padding: 2px 8px;
+    transition: opacity 0.15s;
+  }
+  .hud-confirm-btn--stop {
+    background: #f87171;
+    color: #1a1a1a;
+  }
+  .hud-confirm-btn--keep {
+    background: rgba(255,255,255,0.15);
+    color: #f5efe8;
+  }
+  .hud-confirm-btn:hover { opacity: 0.85; }
 
   .hud-dismiss {
     margin-left: auto;

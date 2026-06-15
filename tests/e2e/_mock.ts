@@ -431,6 +431,7 @@ export async function installMocks(
         name: null,
       }),
       meeting_stop_manual: () => undefined,
+      meeting_cancel_pending: () => undefined,
 
       // ---- Phase E (#112) per-app classifier overrides ----
       // Empty list by default so the Meeting tab renders the "no
