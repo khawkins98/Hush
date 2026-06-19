@@ -1,3 +1,7 @@
+// Backend-only events (no IPC mock needed):
+//   "meeting:call-may-have-ended" — emit via page.evaluate(() => window.__tauri_internals?.postMessage({...}))
+//   "meeting:call-end-cancelled"  — same
+
 // Default mock state for Playwright e2e tests. Test specs import
 // `installMocks(page)` from here and pass per-test overrides on top
 // of the defaults.
@@ -120,6 +124,8 @@ export async function installMocks(
       // exercise the toggle override per-test.
       get_diarization_enabled: () => false,
       set_diarization_enabled: () => undefined,
+      get_diarizer_threshold: () => 0.4,
+      set_diarizer_threshold: () => undefined,
       // Cross-session speaker identity toggle + CRUD (#667).
       // Default mirrors the backend's opt-in-off state and empty store.
       get_speaker_identity_enabled: () => false,
@@ -429,6 +435,7 @@ export async function installMocks(
         name: null,
       }),
       meeting_stop_manual: () => undefined,
+      meeting_cancel_pending: () => undefined,
 
       // ---- Phase E (#112) per-app classifier overrides ----
       // Empty list by default so the Meeting tab renders the "no

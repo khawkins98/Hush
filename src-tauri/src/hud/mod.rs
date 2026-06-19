@@ -288,6 +288,11 @@ pub fn hide_async<R: Runtime>(app: &AppHandle<R>) {
 /// switch apps and paste before the clipboard had been written.
 #[derive(Debug, Clone, Copy)]
 pub enum HudState {
+    /// Auto-detection has fired; recording will begin in ~3 s unless the
+    /// user clicks "Don't record". `ends_at_ms` is the Unix-ms timestamp
+    /// when the countdown expires so the frontend can animate a draining
+    /// progress bar without a separate tick event.
+    Pending { ends_at_ms: u64 },
     /// Audio capture is active. Pulsing dot + level meter. The
     /// `started_at_ms` field is the Unix-ms timestamp the backend
     /// captured at the moment it considered the recording started;
@@ -302,15 +307,21 @@ pub enum HudState {
     /// (~1.5 s) so the user sees a clear "safe to paste" signal
     /// before the HUD disappears (#669).
     Done,
+    /// The call-end detector reached confidence threshold. Prompt
+    /// the user to stop recording. `confidence` is "high" (two or
+    /// more signals agree) or "medium" (one signal held for 120 s).
+    CallMayHaveEnded { confidence: &'static str },
 }
 
 impl HudState {
     /// Wire-format state string the frontend matches on.
     fn state_str(self) -> &'static str {
         match self {
+            HudState::Pending { .. } => "pending",
             HudState::Recording { .. } => "recording",
             HudState::Processing => "processing",
             HudState::Done => "done",
+            HudState::CallMayHaveEnded { .. } => "call-may-have-ended",
         }
     }
 }
@@ -327,6 +338,9 @@ impl HudState {
 #[serde(rename_all = "camelCase")]
 struct HudStatePayload {
     state: &'static str,
+    /// Unix-ms when the pending countdown ends. Only for Pending state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ends_at_ms: Option<u64>,
     /// Unix-ms timestamp captured by the backend at the moment the
     /// recording started. Only populated for the Recording state.
     /// `None` for Processing — the frontend keeps the existing
@@ -334,6 +348,9 @@ struct HudStatePayload {
     /// transcription completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     started_at_ms: Option<u64>,
+    /// Confidence for call-may-have-ended. "high" or "medium".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<&'static str>,
 }
 
 /// Tell the HUD to render a particular lifecycle state. Emits the
@@ -344,13 +361,31 @@ struct HudStatePayload {
 /// hot path.
 pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: HudState) -> Result<()> {
     use tauri::Emitter as _;
-    let started_at_ms = match state {
-        HudState::Recording { started_at_ms } => Some(started_at_ms),
-        HudState::Processing | HudState::Done => None,
-    };
-    let payload = HudStatePayload {
-        state: state.state_str(),
-        started_at_ms,
+    let payload = match state {
+        HudState::Pending { ends_at_ms } => HudStatePayload {
+            state: state.state_str(),
+            ends_at_ms: Some(ends_at_ms),
+            started_at_ms: None,
+            confidence: None,
+        },
+        HudState::Recording { started_at_ms } => HudStatePayload {
+            state: state.state_str(),
+            ends_at_ms: None,
+            started_at_ms: Some(started_at_ms),
+            confidence: None,
+        },
+        HudState::Processing | HudState::Done => HudStatePayload {
+            state: state.state_str(),
+            ends_at_ms: None,
+            started_at_ms: None,
+            confidence: None,
+        },
+        HudState::CallMayHaveEnded { confidence } => HudStatePayload {
+            state: state.state_str(),
+            ends_at_ms: None,
+            started_at_ms: None,
+            confidence: Some(confidence),
+        },
     };
     app.emit("hud:state", &payload).context("emit hud:state")?;
     Ok(())

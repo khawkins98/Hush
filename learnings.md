@@ -34,6 +34,26 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ## 2026-06-05 — Read-only-volume launch guard: bounce DMG / translocated launches before they break TCC
 
+## 2026-06-09 — Diarizer threshold moved from env-var-only tuning into live Settings UI
+
+Voice-fingerprinting quality debugging exposed a practical ops gap: the
+`HUSH_DIARIZER_THRESHOLD` env var existed, but users couldn't tune it without a
+terminal + app relaunch, which made in-call iteration painful and obscured
+whether over-segmentation was a model issue or just threshold calibration.
+
+The fix adds a Settings → Meeting → Speakers slider backed by a persisted
+`diarizer_threshold` setting and new IPC get/set commands. The non-obvious part:
+the setting is not just persisted for next launch — `set_diarizer_threshold`
+also updates the live diarizer slot in-process, so the current meeting picks up
+the new threshold on the next utterance with no restart. This required adding a
+`set_distance_threshold` seam method on `Diarize` and forwarding through
+`FlagGatedDiarizer` to `OnnxDiarizer`.
+
+`HUSH_DIARIZER_THRESHOLD` remains as a fallback for environments that configure
+behavior via env, but Settings now has precedence whenever a value is saved.
+
+## 2026-06-05 — Read-only-volume launch guard: bounce DMG / translocated launches before they break TCC
+
 Running Hush straight from the mounted `.dmg` is the single biggest source of
 "permissions don't stick" confusion. The mechanism: the DMG is a **read-only**
 volume, so `handle_quarantine_strip`'s `xattr` removal + `exec()`-restart
@@ -3117,3 +3137,21 @@ The UI was re-keyed from v0.9.0's dark navy theme to a light theme matching the 
 **`.kh-button` presses on `:hover`/`:active`, never on `:focus`.** The hard-shadow button's "press" is a `translate()` + reduced shadow. Sharing that with `:focus-visible` made any programmatically-focused button render pressed at rest — the first-run modal autofocuses its first Allow button, so it looked broken on open. Focus draws the outline only; hover/active do the motion. (Also `@media (prefers-reduced-motion)` drops the translate.)
 
 **Recursive is self-hosted, not the Google CDN** — to honour the offline/no-telemetry promise. Latin + Latin-ext subset woff2 in `static/fonts/`; the casual sans + mono axes are driven via `font-variation-settings` (see `src/app.css`). The brand-decision detail (final palette is `#f49e17` orange, not the lighter `#ffb81c`; purple `#563d82` links; the human/machine type split) lives in the brand-palette memory; this entry is just the load-bearing engineering calls.
+
+## 2026-06-15 — Call-end detection: weighted scorer rejected in favour of pure state machine
+
+**Context.** #1001 adds call-end detection to prompt the user when their meeting call ends while the meeting app stays open. Early design proposed a weighted scorer (each signal contributes a score weight; emit when total exceeds threshold). During design review the weighted approach was rejected in favour of a pure state machine.
+
+**Why the weighted scorer lost.** Hyperparameters drift silently as signal reliability varies across audio setups (virtual audio pipelines, Krisp, Bluetooth). A score of 0.7 is opaque — "which signals are hot?" isn't answered without additional logging. Testing requires synthetic floating-point fixtures. The existing codebase has one precedent for this kind of decision: `evaluate_mic_state()` in `mic_camera_monitor.rs` — a pure function over explicit enum inputs/outputs with injected `Instant`, fully unit-tested with no async runtime. The call-end detector follows the same pattern.
+
+**Design: `evaluate_call_end_state` pure function.** `Monitoring → Suspected { since, signals } → Confident { since }`. Two threshold paths: ≥2 signals for 30 s (high confidence), or 1 signal for 120 s (medium confidence, virtual-pipeline fallback). A reversal from any signal (mic goes active, loud audio spike, Whisper produces real speech) resets to Monitoring immediately. The `Confident` state re-arms to Monitoring right after the event fires — the detector is ready for the next call segment.
+
+**`CallEndSignal` trait.** `name() -> &'static str` + `poll() -> SignalReading { strength: f32, is_reversal: bool }`. `strength` is 0.0 or 1.0 today; f32 is kept so future weighted extensions don't require a trait change. New signals extend without touching the state machine.
+
+**Three concrete signals.** `MicHalSignal` (`#[cfg(target_os = "macos")]`, HAL `kAudioDevicePropertyDeviceIsRunningSomewhere`), `SystemAudioRmsSignal` (platform-agnostic, reads `Arc<AtomicU32>` written by pump — 60 s rolling window), `WhisperSilenceSignal` (platform-agnostic, reads `Arc<AtomicU32>` consecutive-empty-ticks written by pump). The two platform-agnostic signals run on Linux/Windows future; only `MicHalSignal` is macOS-gated.
+
+**`session_is_auto` guard — manual sessions only.** The detector only fires when `session_is_auto` is false. Auto-started sessions already have `AutoStop` via `evaluate_mic_state`; adding a second "call ended" prompt would be redundant and confusing. The guard is read on every poll tick (not cached) so a session that transitions from auto to manual would re-arm — but currently no such transition exists.
+
+**Per-session suppression, not global toggle.** "Keep recording" sets `sessionCallEndSuppressed` in the HUD for the duration of the session. It does not disable the detector globally — that would require IPC and state plumbing for a rare edge case. The detector continues polling; the HUD just ignores new `call-may-have-ended` events until the next recording state reset.
+
+**`WhisperSilenceSignal` cold-start reversal.** The atomic initialises to 0. `ticks == 0` is treated as a reversal ("real speech just arrived"). This means the very first poll fires a reversal, keeping the state machine in Monitoring until the pump's first inference tick increments the counter. This is conservative — it prevents false-positives during startup — and intentional.

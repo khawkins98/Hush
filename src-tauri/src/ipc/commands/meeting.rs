@@ -412,6 +412,12 @@ pub async fn meeting_start_manual(
     let sources = sanitise_meeting_sources(sources)
         .map_err(|e| IpcError::MeetingSessions(format!("start_manual: {e:#}")))?;
 
+    // Mark as manually started so the call-end detector activates for this session.
+    state
+        .runtime_flags
+        .session_is_auto
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
     // Pre-flight: fail fast if no transcription model is loaded (#898).
     // Mirrors the dictation path (dictation/pipeline.rs:54) — same guard,
     // same error variant. Runs before opening any audio handles so the user
@@ -636,6 +642,12 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
     //     are still live for dictation, so skip the pointless rebuild.
     let had_active = state.meeting_manager.has_active_session();
 
+    // Clear the auto-session flag when any session ends.
+    state
+        .runtime_flags
+        .session_is_auto
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
     let stop_result = state
         .meeting_manager
         .stop_manual()
@@ -752,6 +764,16 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
 #[tauri::command]
 pub async fn meeting_stop_manual(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
     stop_meeting_and_rebuild_transcriber(&app, &state).await
+}
+
+/// Cancel the 3-second auto-start countdown. One-shot: only suppresses the
+/// current pending instance. If no countdown is active, this is a no-op.
+#[tauri::command]
+pub async fn meeting_cancel_pending(state: State<'_, AppState>) -> IpcResult<()> {
+    if let Some(tx) = state.runtime_flags.pending_cancel.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

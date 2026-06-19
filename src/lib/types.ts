@@ -44,6 +44,13 @@ export type DictationResult = {
   /// degenerate; never seen in practice.
   durationMs: number | null;
 };
+/// Payload for the `Events.CallMayHaveEnded` Tauri event.
+/// Mirrors `CallMayHaveEndedPayload` in `src-tauri/src/meeting/events.rs`.
+export interface CallMayHaveEndedPayload {
+  confidence: "high" | "medium";
+  signalSummary: string;
+}
+
 export type KnownIpcError =
   | { kind: "audio"; message: string }
   | { kind: "audio-device-lost"; message: string }

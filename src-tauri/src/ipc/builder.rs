@@ -83,6 +83,7 @@ pub struct AppStateBuilder {
     meeting_autostart_mode: Option<crate::meeting::MeetingAutostartMode>,
     diarization_enabled: Option<bool>,
     speaker_identity_enabled: Option<bool>,
+    diarizer_threshold: Option<f32>,
     /// Pre-built `Arc<AtomicBool>` for the diarization-enabled
     /// flag. Set via [`AppStateBuilder::diarization_enabled_arc`]
     /// when the production wiring (`build_default`) needs to
@@ -92,6 +93,7 @@ pub struct AppStateBuilder {
     /// [`Self::diarization_enabled`].
     diarization_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
     speaker_identity_enabled_arc: Option<Arc<std::sync::atomic::AtomicBool>>,
+    diarizer_threshold_arc: Option<Arc<std::sync::atomic::AtomicU32>>,
     /// Pre-built [`crate::diarization::DiarizeSlot`] for hot-swap
     /// support (#301). Set via
     /// [`AppStateBuilder::diarize_slot`] when the production
@@ -114,6 +116,18 @@ pub struct AppStateBuilder {
     /// with the IPC writer and the meeting pump. When unset,
     /// `build` constructs a fresh Arc at 0.0 dB — fine for tests.
     mic_gain_db_arc: Option<Arc<std::sync::atomic::AtomicU32>>,
+    /// Pre-built Arc for the system-audio-level signal. Set via
+    /// [`AppStateBuilder::system_audio_level_arc`] when `build_default`
+    /// wants to share the same Arc with the meeting pump's `PumpContext`
+    /// and the call-end detector. When unset, `build` constructs a fresh
+    /// Arc at 0 — fine for tests.
+    system_audio_level_arc: Option<Arc<std::sync::atomic::AtomicU32>>,
+    /// Pre-built Arc for the whisper-consecutive-empty-ticks counter.
+    /// Set via [`AppStateBuilder::whisper_consecutive_empty_ticks_arc`]
+    /// when `build_default` wants to share the same Arc with the meeting
+    /// pump's `PumpContext` and the call-end detector. When unset,
+    /// `build` constructs a fresh Arc at 0 — fine for tests.
+    whisper_consecutive_empty_ticks_arc: Option<Arc<std::sync::atomic::AtomicU32>>,
     /// Debug log state (#532). Set via
     /// [`AppStateBuilder::debug_log`] when `run()` wires the
     /// tracing layer. When unset, `build` constructs a new
@@ -273,6 +287,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn diarizer_threshold(mut self, threshold: f32) -> Self {
+        self.diarizer_threshold = Some(threshold);
+        self
+    }
+
     /// Set the pre-built `Arc<AtomicBool>` that the FlagGatedDiarizer
     /// already holds. The AppState's `diarization_enabled` field
     /// becomes that same Arc, so the IPC `set_diarization_enabled`
@@ -284,6 +303,11 @@ impl AppStateBuilder {
 
     pub fn speaker_identity_enabled_arc(mut self, arc: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.speaker_identity_enabled_arc = Some(arc);
+        self
+    }
+
+    pub fn diarizer_threshold_arc(mut self, arc: Arc<std::sync::atomic::AtomicU32>) -> Self {
+        self.diarizer_threshold_arc = Some(arc);
         self
     }
 
@@ -304,6 +328,23 @@ impl AppStateBuilder {
     /// and the meeting pump all read/write through the same atomic.
     pub fn mic_gain_db_arc(mut self, arc: Arc<std::sync::atomic::AtomicU32>) -> Self {
         self.mic_gain_db_arc = Some(arc);
+        self
+    }
+
+    /// Share the system-audio-level atomic with the meeting pump and the
+    /// call-end detector so all three hold the same `Arc`.
+    pub fn system_audio_level_arc(mut self, arc: Arc<std::sync::atomic::AtomicU32>) -> Self {
+        self.system_audio_level_arc = Some(arc);
+        self
+    }
+
+    /// Share the whisper-consecutive-empty-ticks atomic with the meeting
+    /// pump and the call-end detector so all three hold the same `Arc`.
+    pub fn whisper_consecutive_empty_ticks_arc(
+        mut self,
+        arc: Arc<std::sync::atomic::AtomicU32>,
+    ) -> Self {
+        self.whisper_consecutive_empty_ticks_arc = Some(arc);
         self
     }
 
@@ -483,6 +524,13 @@ impl AppStateBuilder {
                         self.speaker_identity_enabled.unwrap_or(false),
                     ))
                 }),
+                diarizer_threshold: self.diarizer_threshold_arc.unwrap_or_else(|| {
+                    Arc::new(std::sync::atomic::AtomicU32::new(
+                        self.diarizer_threshold
+                            .unwrap_or(crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD)
+                            .to_bits(),
+                    ))
+                }),
                 inference_threads: self
                     .inference_threads_arc
                     .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicI32::new(4))),
@@ -490,6 +538,14 @@ impl AppStateBuilder {
                     .mic_gain_db_arc
                     .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU32::new(0f32.to_bits()))),
                 autostart_path_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                pending_cancel: Arc::new(std::sync::Mutex::new(None)),
+                system_audio_level: self
+                    .system_audio_level_arc
+                    .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU32::new(0))),
+                whisper_consecutive_empty_ticks: self
+                    .whisper_consecutive_empty_ticks_arc
+                    .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU32::new(0))),
+                session_is_auto: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             startup_timings: self.startup_timings.unwrap_or_default(),
             hotkey_toggle_error: Mutex::new(None),

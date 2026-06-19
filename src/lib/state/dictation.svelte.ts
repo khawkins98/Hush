@@ -71,7 +71,12 @@ let appProfileNotice = $state<string | null>(null);
 // used internally so the previous timer can be cancelled when a new notice
 // arrives. Plain let is sufficient; $state would fire unnecessary updates.
 let appProfileNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+// Recording-limit timers: warn at 9 min, auto-stop at 10 min.
+let recordingLimitWarnTimer: ReturnType<typeof setTimeout> | null = null;
+let recordingLimitStopTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPermissionsDialogIntro = $state<string | null>(null);
+// True from 9:00 to 10:00 of a recording — drives pulsing-red UI warning.
+let recordingLimitWarning = $state(false);
 
 let recording = $derived(phase.tag === "recording");
 let busy = $derived(
@@ -171,6 +176,9 @@ export const dictation = {
   set pendingPermissionsDialogIntro(val: string | null) {
     pendingPermissionsDialogIntro = val;
   },
+  get recordingLimitWarning() {
+    return recordingLimitWarning;
+  },
   // ---- derived model helpers ----
   get noModelInstalled() {
     return noModelInstalled;
@@ -250,6 +258,7 @@ export const dictation = {
     try {
       await invoke("start_dictation", { source: audio.selectedAsAudioSource() });
       phase = { tag: "recording", mode: "dictation", meetingId: null, startedAtMs: Date.now() };
+      _armRecordingLimitTimers();
     } catch (e) {
       error = formatErrorDisplay(e);
       phase = { tag: "idle" };
@@ -289,6 +298,7 @@ export const dictation = {
         startedAtMs: Date.now(),
       };
       meeting.activeId = session.id;
+      _armRecordingLimitTimers();
     } catch (e) {
       error = formatErrorDisplay(e);
       if (isMultiSource && isPermissionShapedError(e)) {
@@ -300,6 +310,7 @@ export const dictation = {
     }
   },
   async stop(trailingMs = 0) {
+    _clearRecordingLimitTimers();
     // Backend/event-initiated meeting session: dictation phase stayed "idle"
     // throughout (only meeting.activeId was set, not phase). Delegate to
     // meeting.stopSession() — no dictation phase transition needed.
@@ -416,8 +427,46 @@ export const dictation = {
       clearTimeout(appProfileNoticeTimer);
       appProfileNoticeTimer = null;
     }
+    _clearRecordingLimitTimers();
   },
 };
+
+// ---------------------------------------------------------------------------
+// Recording-limit timers
+// ---------------------------------------------------------------------------
+// Warn at 9 min (pulsing-red UI), auto-stop at 10 min with an error notice.
+// Both timers are armed once per recording and cleared as soon as the user
+// stops manually or when cleanup() is called.
+
+const RECORDING_WARN_MS = 9 * 60 * 1000;
+const RECORDING_LIMIT_MS = 10 * 60 * 1000;
+
+function _armRecordingLimitTimers(): void {
+  _clearRecordingLimitTimers();
+  recordingLimitWarnTimer = setTimeout(() => {
+    recordingLimitWarning = true;
+  }, RECORDING_WARN_MS);
+  recordingLimitStopTimer = setTimeout(() => {
+    recordingLimitWarning = false;
+    error = {
+      headline: "Recording stopped — 10-minute limit reached",
+      hint: "Hush keeps the last 10 minutes of audio. If this was a mistake, start a new recording.",
+    };
+    void dictation.stop();
+  }, RECORDING_LIMIT_MS);
+}
+
+function _clearRecordingLimitTimers(): void {
+  recordingLimitWarning = false;
+  if (recordingLimitWarnTimer !== null) {
+    clearTimeout(recordingLimitWarnTimer);
+    recordingLimitWarnTimer = null;
+  }
+  if (recordingLimitStopTimer !== null) {
+    clearTimeout(recordingLimitStopTimer);
+    recordingLimitStopTimer = null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Private stop helpers — called only from dictation.stop()

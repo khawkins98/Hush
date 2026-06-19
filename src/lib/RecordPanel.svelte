@@ -60,6 +60,9 @@
     /// #990). `null` for auto-detected meetings — those resolve their
     /// start from `meetingActiveDetail.session.startedAt` instead.
     recordingStartedAtMs?: number | null;
+    /// True from 9–10 min of continuous recording — drives a faster
+    /// pulse animation to warn the user the limit is near.
+    recordingLimitWarning?: boolean;
     /// Left adjunct slot — audio source picker. Optional so the
     /// component still renders standalone in the test harness or
     /// any future minimal surface.
@@ -85,6 +88,7 @@
     meetingActiveDetail = null,
     meetingOnlyActive = false,
     recordingStartedAtMs = null,
+    recordingLimitWarning = false,
     leftAdjunct,
     rightAdjunct,
   }: Props = $props();
@@ -227,18 +231,20 @@
   <div class="record-waveform">
     <AudioWaveform mode={waveformMode} metering />
   </div>
-  {#if transcribing && transcriptionProgress !== null}
+  {#if transcribing}
     <!--
-      Thin progress bar shown while whisper.cpp is running (#566).
-      Only visible once the backend has fired at least one progress
-      tick so we don't flash a 0% bar on very short clips where
-      inference finishes before the first event arrives.
+      Stage 1 (loading model): indeterminate sweep animation.
+      Stage 2 (decoding): determinate fill driven by whisper.cpp progress.
     -->
     <div class="transcription-progress-bar" aria-hidden="true">
-      <div
-        class="transcription-progress-fill"
-        style="width: {transcriptionProgress}%"
-      ></div>
+      {#if transcriptionProgress !== null}
+        <div
+          class="transcription-progress-fill"
+          style="width: {transcriptionProgress}%"
+        ></div>
+      {:else}
+        <div class="transcription-progress-indeterminate"></div>
+      {/if}
     </div>
   {/if}
 
@@ -294,7 +300,7 @@
         </button>
       {:else}
         <button
-          class="record-btn recording"
+          class={`record-btn recording${recordingLimitWarning ? " recording-limit-warn" : ""}`}
           onclick={onStop}
           disabled={busy}
           aria-label={meetingOnlyActive ? "Stop meeting recording" : "Stop recording and transcribe"}
@@ -343,6 +349,8 @@
         >
       {/if}
       {meetingOnlyActive ? "— press Stop" : "— release hotkey or press Stop"}
+    {:else if transcribing}
+      {transcriptionProgress !== null ? "Transcribing… (2 of 2)" : "Loading model… (1 of 2)"}
     {:else if busy}
       Processing…
     {:else if hudDone}
@@ -601,6 +609,22 @@
     }
   }
 
+  @keyframes recording-limit-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(216, 58, 58, 0.7);
+    }
+    50% {
+      box-shadow: 0 0 0 16px rgba(216, 58, 58, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(216, 58, 58, 0);
+    }
+  }
+
+  .record-btn.recording-limit-warn {
+    animation: recording-limit-pulse 0.8s ease-out infinite;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .record-btn,
     .record-btn:hover:not(:disabled),
@@ -653,9 +677,9 @@
     }
   }
 
-  /* Thin progress bar shown under the waveform while whisper.cpp
-     is running (#566). Only rendered once the first progress tick
-     arrives so very short clips don't flash a 0% bar. */
+  /* Thin progress bar shown under the waveform during transcription.
+     Stage 1 (model loading): indeterminate sweep.
+     Stage 2 (decoding): determinate fill from whisper.cpp progress. */
   .transcription-progress-bar {
     width: 100%;
     height: 3px;
@@ -669,5 +693,16 @@
     background: var(--accent, #f49e17);
     border-radius: 2px;
     transition: width 0.3s ease;
+  }
+  .transcription-progress-indeterminate {
+    height: 100%;
+    width: 40%;
+    background: var(--accent, #f49e17);
+    border-radius: 2px;
+    animation: progress-sweep 1.4s ease-in-out infinite;
+  }
+  @keyframes progress-sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
   }
 </style>

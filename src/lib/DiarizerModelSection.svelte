@@ -27,6 +27,7 @@
   onMount(async () => {
     void Promise.all([
       diarizer.loadDiarizationEnabled(),
+      diarizer.loadDiarizerThreshold(),
       diarizer.loadDiarizerModelStatus(),
       diarizer.loadSpeakerIdentityEnabled(),
     ]);
@@ -252,6 +253,36 @@
     <p class="settings-error">{diarizer.diarizationError}</p>
   {/if}
 
+  <label class="slider-row diarizer-threshold-row">
+    <span class="toggle-name">Speaker split sensitivity</span>
+    <span class="toggle-desc">
+      Lower values split speakers more aggressively; higher values merge more.
+      Changes apply to the current meeting on the next utterance.
+    </span>
+    <div class="threshold-controls">
+      <input
+        type="range"
+        min="0"
+        max="2"
+        step="0.01"
+        value={diarizer.diarizerThresholdDisplay}
+        data-testid="settings-diarizer-threshold-slider"
+        disabled={diarizer.diarizerThresholdBusy}
+        oninput={diarizer.onDiarizerThresholdInput}
+        onchange={diarizer.onDiarizerThresholdChange}
+      />
+      <span class="threshold-value" data-testid="settings-diarizer-threshold-value">
+        {diarizer.diarizerThresholdDisplay.toFixed(2)}
+      </span>
+    </div>
+  </label>
+  <p class="toggle-desc threshold-hint">
+    No restart required. Defaults to 0.40.
+  </p>
+  {#if diarizer.diarizerThresholdError}
+    <p class="settings-error">{diarizer.diarizerThresholdError}</p>
+  {/if}
+
   <!--
     Speaker identity toggle (#667). Only meaningful when diarization
     is on — we need speaker labels before we can build cross-session
@@ -431,6 +462,32 @@
   }
   .speaker-identity-toggle-row .toggle-desc {
     font-size: 0.8rem;
+  }
+
+  .diarizer-threshold-row {
+    margin-top: 0.55rem;
+  }
+
+  .threshold-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .threshold-controls input[type="range"] {
+    flex: 1;
+  }
+
+  .threshold-value {
+    min-width: 3.2rem;
+    text-align: right;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+  }
+
+  .threshold-hint {
+    margin: 0.4rem 0 0;
   }
 
 </style>

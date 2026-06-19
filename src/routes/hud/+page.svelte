@@ -32,11 +32,14 @@
 
   // Wire shape mirrors `HudStatePayload` in `src-tauri/src/hud/mod.rs`
   // (camelCase per `serde(rename_all = "camelCase")`). `startedAtMs`
-  // is only present on Recording transitions; Processing and Done
-  // transitions omit it.
+  // is only present on Recording transitions; `endsAtMs` is only
+  // present on Pending transitions. Processing and Done transitions
+  // omit both.
   type HudStatePayload = {
-    state: "recording" | "processing" | "done";
+    state: "recording" | "processing" | "done" | "pending" | "call-may-have-ended";
     startedAtMs?: number;
+    endsAtMs?: number;
+    confidence?: "high" | "medium";
   };
 
   // HUD lifecycle state (#291). Backend emits `hud:state` with
@@ -53,11 +56,39 @@
   // requestAnimationFrame, and the rAF loop never recovers when the
   // window becomes visible, leaving the bars permanently frozen at
   // the silence floor.
-  let hudState = $state<"recording" | "processing" | "done" | null>(null);
+  let hudState = $state<"recording" | "processing" | "done" | "pending" | "call-may-have-ended" | null>(null);
+
+  // True while the inline "Stop recording?" confirmation is shown.
+  let confirmingStop = $state(false);
+
+  // Call-end detector state. `callEndConfidence` is set when the backend
+  // emits `call-may-have-ended`; `prevHudState` tracks what state to
+  // restore if the user clicks "Keep recording"; `sessionCallEndSuppressed`
+  // is set for the rest of the session once the user explicitly opts to
+  // keep recording — prevents the same session from re-prompting.
+  let callEndConfidence = $state<"high" | "medium" | null>(null);
+  let prevHudState = $state<"recording" | null>(null);
+  let sessionCallEndSuppressed = $state(false);
 
   // Timer handle for the "done" → auto-dismiss sequence (#669).
   // Cancelled if a new recording starts before the timer fires.
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Pending countdown state. `pendingEndsAtMs` is set when the backend emits
+  // `hud:state === "pending"` and cleared on any other transition. `pendingTick`
+  // is incremented each rAF frame while pending so the progress bar expression
+  // re-evaluates on every frame — Svelte 5 won't re-run a template expression
+  // unless a reactive dependency changes, and `Date.now()` alone isn't reactive.
+  let pendingEndsAtMs = $state<number | null>(null);
+  let pendingTick = $state(0);
+  let pendingRaf: number | undefined;
+  // Derived progress [0,1] for the countdown bar. `pendingTick` is the reactive
+  // dependency that forces re-evaluation on each rAF frame.
+  let pendingProgress = $derived(
+    pendingTick >= 0 && pendingEndsAtMs !== null
+      ? Math.max(0, Math.min(1, (pendingEndsAtMs - Date.now()) / 3000))
+      : 1
+  );
 
   // Transcription progress 0–100, set while hudState === "processing" (#566).
   // Reset to null on each new recording cycle so back-to-back dictations
@@ -86,8 +117,32 @@
   // `audio:level` listener that previously lived here moved into
   // `AudioWaveform.svelte` along with the rest of the waveform
   // logic in #411 phase B.
+  // Drive the countdown bar animation while in pending state. The effect
+  // starts/stops the rAF loop automatically when `hudState` changes.
+  $effect(() => {
+    if (hudState === "pending") {
+      const loop = () => {
+        pendingTick += 1;
+        pendingRaf = requestAnimationFrame(loop);
+      };
+      pendingRaf = requestAnimationFrame(loop);
+    } else {
+      if (pendingRaf !== undefined) {
+        cancelAnimationFrame(pendingRaf);
+        pendingRaf = undefined;
+      }
+    }
+    return () => {
+      if (pendingRaf !== undefined) {
+        cancelAnimationFrame(pendingRaf);
+        pendingRaf = undefined;
+      }
+    };
+  });
+
   let unlistenState: UnlistenFn | null = null;
   let unlistenProgress: UnlistenFn | null = null;
+  let unlistenCallEndCancelled: UnlistenFn | null = null;
   let raf: number | undefined;
 
   onMount(async () => {
@@ -104,13 +159,28 @@
       (event) => {
         const payload = event.payload;
         const next = payload?.state;
-        if (next === "recording" || next === "processing" || next === "done") {
+        // Handle call-may-have-ended before the main state switch — it
+        // doesn't follow the same clear/reset sequence as the other states.
+        if (next === "call-may-have-ended") {
+          if (sessionCallEndSuppressed) return;
+          callEndConfidence = payload.confidence ?? "high";
+          prevHudState = hudState === "recording" ? "recording" : null;
+          hudState = "call-may-have-ended";
+          return;
+        }
+        if (next === "recording" || next === "processing" || next === "done" || next === "pending") {
           // Cancel any pending done-dismiss timer when state changes.
           if (doneTimer !== null) {
             clearTimeout(doneTimer);
             doneTimer = null;
           }
           hudState = next;
+          // Any non-recording/non-pending transition clears the stop confirmation strip.
+          if (next !== "recording") confirmingStop = false;
+          // Clear pending countdown unless we're entering pending state.
+          if (next !== "pending") {
+            pendingEndsAtMs = null;
+          }
           if (next === "done") {
             // Auto-dismiss after 1.5 s so the user sees "Copied!" before
             // the HUD disappears (#669). A new recording cancels this.
@@ -132,6 +202,10 @@
             // driven by `active={hudState === "recording"}` on the
             // AudioWaveform component below.
             recordingStartedAt = null;
+          } else if (next === "pending") {
+            // Pending — set the countdown end time from the backend payload.
+            // `pendingTick` drives re-evaluation via the rAF $effect above.
+            pendingEndsAtMs = payload.endsAtMs ?? (Date.now() + 3000);
           } else {
             // Recording — anchor the timer to the backend-supplied
             // `startedAtMs` (#481). The persistent HUD page can
@@ -139,6 +213,11 @@
             // here drifts across cycles. The Rust path always sends
             // a fresh timestamp on every Recording transition;
             // missing field is a defensive fallback.
+            confirmingStop = false;
+            // A fresh Recording transition starts a new session — allow
+            // call-end prompts to fire again.
+            sessionCallEndSuppressed = false;
+            callEndConfidence = null;
             recordingStartedAt = payload.startedAtMs ?? Date.now();
             elapsedLabel = "0:00";
             // Reset progress from previous cycle so we don't show
@@ -156,6 +235,16 @@
       },
     );
 
+    // When a reversal signal arrives (mic goes active again, loud audio
+    // spike, real speech detected) the backend fires CallEndCancelled.
+    // Dismiss the call-end prompt and restore the previous state.
+    unlistenCallEndCancelled = await listen(Events.CallEndCancelled, () => {
+      if (hudState === "call-may-have-ended") {
+        hudState = prevHudState ?? "recording";
+        callEndConfidence = null;
+      }
+    });
+
     raf = requestAnimationFrame(tick);
   });
 
@@ -164,6 +253,8 @@
     unlistenState = null;
     unlistenProgress?.();
     unlistenProgress = null;
+    unlistenCallEndCancelled?.();
+    unlistenCallEndCancelled = null;
     if (doneTimer !== null) {
       clearTimeout(doneTimer);
       doneTimer = null;
@@ -179,6 +270,7 @@
   // dismiss is a one-session opt-out: the next dictation/meeting
   // start will re-show the HUD on its own.
   async function dismiss() {
+    confirmingStop = false;
     try {
       await getCurrentWebviewWindow().hide();
     } catch {
@@ -222,11 +314,13 @@
   aria-live="polite"
   aria-label={hudState === "processing"
     ? transcriptionProgress !== null
-      ? `Processing transcription ${transcriptionProgress}%`
-      : "Processing transcription"
+      ? "Transcribing (step 2 of 2)"
+      : "Loading model (step 1 of 2)"
     : hudState === "done"
       ? "Copied to clipboard"
-      : "Recording in progress"}
+      : hudState === "pending"
+        ? "Meeting detected, recording will start soon"
+        : "Recording in progress"}
   ondblclick={raiseMainWindow}
 >
   <!--
@@ -252,11 +346,13 @@
   <span class="hud-label">
     {hudState === "processing"
       ? transcriptionProgress !== null
-        ? `Processing… ${transcriptionProgress}%`
-        : "Processing…"
+        ? "Transcribing… (2/2)"
+        : "Loading model… (1/2)"
       : hudState === "done"
         ? "Copied!"
-        : "Recording"}
+        : hudState === "pending"
+          ? "Meeting detected"
+          : "Recording"}
   </span>
   {#if hudState === "recording"}
     <span class="hud-elapsed" data-testid="hud-elapsed" aria-hidden="true">
@@ -287,6 +383,27 @@
     <div class="hud-shimmer" role="presentation">
       <div class="hud-shimmer-fill"></div>
     </div>
+  {:else if hudState === "pending"}
+    <!--
+      Pending state: a draining orange progress bar shows how much
+      time remains before auto-recording starts. Progress = fraction
+      of the 3-second countdown window remaining (1 = full, 0 = empty).
+      `pendingProgress` (a $derived that reads `pendingTick`) is the reactive
+      dependency that forces re-evaluation on every rAF frame.
+    -->
+    {#if pendingEndsAtMs !== null}
+      <div
+        class="hud-countdown-bar"
+        style="--progress: {pendingProgress}"
+        role="presentation"
+        data-testid="hud-countdown-bar"
+      ></div>
+    {/if}
+    <!-- Screen-reader announcement for the countdown. Announced once on entry
+         via aria-live="assertive"; the "Don't record" button is the action. -->
+    <span class="sr-only" aria-live="assertive" aria-atomic="true">
+      {#if hudState === "pending"}Recording will start in 3 seconds. Activate Don't record to cancel.{/if}
+    </span>
   {:else if hudState === "done"}
     <!--
       Done state (#669): a brief green check glyph replaces the
@@ -308,6 +425,90 @@
       <polyline points="2.5,8.5 6.5,12.5 13.5,3.5" />
     </svg>
   {/if}
+  {#if hudState === "call-may-have-ended"}
+    <!--
+      Call-end prompt: shown when the backend's call-end detector fires
+      with high or medium confidence. The user can stop the recording
+      immediately ("Stop now") or keep recording ("Keep recording" —
+      suppresses further prompts for this session). Fits inside the
+      existing pill; no new background layer needed.
+    -->
+    <span class="hud-call-end-prompt" data-tauri-drag-region="false">
+      <span class="hud-call-end-label">
+        {callEndConfidence === "high"
+          ? "Your call has likely ended"
+          : "Your call may be winding down"}
+      </span>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--stop"
+        data-tauri-drag-region="false"
+        onclick={async () => {
+          try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
+          await dismiss();
+        }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Stop now</button>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--keep"
+        data-tauri-drag-region="false"
+        onclick={() => {
+          sessionCallEndSuppressed = true;
+          hudState = prevHudState ?? "recording";
+          callEndConfidence = null;
+        }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Keep recording</button>
+    </span>
+  {:else if hudState === "recording" && confirmingStop}
+    <span class="hud-confirm-stop" data-tauri-drag-region="false">
+      <span class="hud-confirm-label">Stop recording?</span>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--stop"
+        onclick={async () => {
+          try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
+          await dismiss();
+        }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Stop</button>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--keep"
+        onclick={() => { confirmingStop = false; }}
+        ondblclick={(e) => e.stopPropagation()}
+      >Keep recording</button>
+    </span>
+  {:else if hudState === "recording"}
+    <button
+      type="button"
+      class="hud-stop"
+      aria-label="Stop recording"
+      title="Stop recording"
+      data-tauri-drag-region="false"
+      onclick={() => { confirmingStop = true; }}
+      ondblclick={(e) => e.stopPropagation()}
+    >
+      <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+        <rect x="2" y="2" width="8" height="8" fill="currentColor" rx="1" />
+      </svg>
+    </button>
+  {/if}
+  {#if hudState === "pending"}
+    <button
+      type="button"
+      class="hud-cancel-pending"
+      aria-label="Cancel auto-recording"
+      title="Cancel auto-recording"
+      data-tauri-drag-region="false"
+      onclick={async () => {
+        try { await invoke("meeting_cancel_pending"); } catch { /* best-effort */ }
+        await dismiss();
+      }}
+      ondblclick={(e) => e.stopPropagation()}
+    >Don't record</button>
+  {/if}
   <button
     type="button"
     class="hud-dismiss"
@@ -315,6 +516,7 @@
     title="Hide overlay"
     onclick={dismiss}
     ondblclick={(e) => e.stopPropagation()}
+    data-tauri-drag-region="false"
   >
     <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
       <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
@@ -359,6 +561,69 @@
   .hud-root:active {
     cursor: grabbing;
   }
+
+  .hud-stop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: #f87171;
+    cursor: pointer;
+    padding: 0;
+    opacity: 0.75;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+  }
+  .hud-stop:hover { opacity: 1; }
+
+  .hud-call-end-prompt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .hud-call-end-label {
+    font-size: 11px;
+    opacity: 0.85;
+    white-space: nowrap;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .hud-confirm-stop {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .hud-confirm-label {
+    font-size: 11px;
+    opacity: 0.85;
+    white-space: nowrap;
+  }
+  .hud-confirm-btn {
+    font-size: 11px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    padding: 2px 8px;
+    transition: opacity 0.15s;
+  }
+  .hud-confirm-btn--stop {
+    background: #f87171;
+    color: #1a1a1a;
+  }
+  .hud-confirm-btn--keep {
+    background: rgba(255,255,255,0.15);
+    color: #f5efe8;
+  }
+  .hud-confirm-btn:hover { opacity: 0.85; }
 
   .hud-dismiss {
     margin-left: auto;
@@ -464,6 +729,36 @@
   @media (prefers-reduced-motion: reduce) {
     .hud-shimmer-fill { animation: none; background-position: 50% 0; }
   }
+
+  /* Pending: draining orange bar showing countdown to auto-recording. */
+  .hud-countdown-bar {
+    width: calc(var(--progress, 1) * 60px);
+    height: 3px;
+    background: #f49e17;
+    border-radius: 2px;
+    flex-shrink: 0;
+    transition: none; /* rAF-driven — no CSS transition needed */
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hud-countdown-bar {
+      /* Show a static half-width bar instead of animating */
+      width: 30px;
+    }
+  }
+
+  /* Cancel button shown in pending state */
+  .hud-cancel-pending {
+    font-size: 11px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    padding: 2px 8px;
+    background: rgba(255,255,255,0.15);
+    color: #f5efe8;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+  }
+  .hud-cancel-pending:hover { opacity: 0.85; }
 
   /* Done: green dot + check. HUD-local green, tuned for the dark pill —
      the light-theme --success-text (#2f7a35) would be too dark here. */

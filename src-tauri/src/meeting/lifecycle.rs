@@ -437,6 +437,8 @@ impl SessionManager {
             audio_released_tx: Some(audio_released_tx),
             speaker_store: Arc::clone(&self.speaker_store),
             speaker_identity_enabled: Arc::clone(&self.speaker_identity_enabled),
+            system_audio_level: Arc::clone(&self.system_audio_level),
+            whisper_consecutive_empty_ticks: Arc::clone(&self.whisper_consecutive_empty_ticks),
         }));
 
         // Commit Active. The slot has been Opening since the start

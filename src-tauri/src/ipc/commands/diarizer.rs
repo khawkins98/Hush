@@ -176,6 +176,7 @@ pub async fn download_diarizer_model(
             downloads: std::sync::Arc::clone(&state.models.downloads),
             http: state.http.clone(),
             diarize_slot: std::sync::Arc::clone(&state.inference.diarize_slot),
+            diarizer_threshold: std::sync::Arc::clone(&state.runtime_flags.diarizer_threshold),
             models_dir: state.models.models_dir.clone(),
         },
         model,
@@ -196,6 +197,7 @@ pub(crate) struct DiarizerDownloadDeps {
     >,
     pub http: reqwest::Client,
     pub diarize_slot: crate::diarization::DiarizeSlot,
+    pub diarizer_threshold: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub models_dir: std::path::PathBuf,
 }
 
@@ -263,6 +265,7 @@ pub(crate) async fn download_diarizer_model_inner(
     let http = deps.http.clone();
     let dest_for_task = dest.clone();
     let diarize_slot = std::sync::Arc::clone(&deps.diarize_slot);
+    let diarizer_threshold = std::sync::Arc::clone(&deps.diarizer_threshold);
 
     tauri::async_runtime::spawn(async move {
         let emitter_for_progress = std::sync::Arc::clone(&emitter_for_task);
@@ -315,7 +318,9 @@ pub(crate) async fn download_diarizer_model_inner(
                 // function) and emit `model:download-failed` with
                 // the load error, so the UI surfaces it the same
                 // way as a network or SHA-mismatch failure.
-                match swap_diarizer_after_download(&diarize_slot, &dest_for_task) {
+                let threshold =
+                    f32::from_bits(diarizer_threshold.load(std::sync::atomic::Ordering::Relaxed));
+                match swap_diarizer_after_download(&diarize_slot, &dest_for_task, threshold) {
                     Ok(()) => {
                         emitter_for_task.emit(
                             "model:download-done",
@@ -380,10 +385,14 @@ pub(crate) async fn download_diarizer_model_inner(
 pub(crate) fn swap_diarizer_after_download(
     slot: &crate::diarization::DiarizeSlot,
     model_path: &std::path::Path,
+    threshold: f32,
 ) -> anyhow::Result<()> {
     #[cfg(feature = "diarization-onnx")]
     {
-        let onnx = crate::diarization::onnx::OnnxDiarizer::new(model_path)?;
+        let onnx = crate::diarization::onnx::OnnxDiarizer::new_with_threshold(
+            model_path,
+            Some(threshold.clamp(0.0, 2.0)),
+        )?;
         let mut guard = slot
             .write()
             .map_err(|e| anyhow::anyhow!("slot poisoned: {e}"))?;
@@ -394,6 +403,7 @@ pub(crate) fn swap_diarizer_after_download(
     {
         let _ = slot;
         let _ = model_path;
+        let _ = threshold;
         Err(anyhow::anyhow!(
             "diarization-onnx feature not enabled in this build"
         ))
@@ -447,7 +457,7 @@ mod tests {
         let slot: crate::diarization::DiarizeSlot =
             std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::clone(&sentinel)));
 
-        let res = super::swap_diarizer_after_download(&slot, &path);
+        let res = super::swap_diarizer_after_download(&slot, &path, 0.4);
         assert!(res.is_err(), "swap should reject a non-wespeaker file");
 
         let guard = slot.read().expect("slot read");
@@ -569,6 +579,9 @@ mod tests {
             diarize_slot: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
                 crate::diarization::NoopDiarizer,
             ))),
+            diarizer_threshold: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+                0.4f32.to_bits(),
+            )),
             models_dir,
         }
     }

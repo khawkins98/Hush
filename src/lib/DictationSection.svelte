@@ -116,6 +116,7 @@
     meetingActiveDetail={meeting.activeDetail}
     meetingOnlyActive={dictation.meetingOnlyActive}
     recordingStartedAtMs={dictation.startedAtMs}
+    recordingLimitWarning={dictation.recordingLimitWarning}
     {onStart}
     {onStop}
     onOpenPermissions={onOpenPermissionsTab}

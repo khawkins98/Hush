@@ -381,6 +381,12 @@ pub struct RuntimeFlags {
     /// consent scope (biometric data, indefinitely persisted). Default
     /// false; opt-in required.
     pub speaker_identity_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Live diarizer cosine-distance threshold (`[0.0, 2.0]`), shared
+    /// with Settings → Meeting → Speakers. Stored as `AtomicU32`
+    /// containing f32 bits (`AtomicF32` is not in std). A settings
+    /// write updates this atomic and the active diarizer in-process,
+    /// so threshold changes apply on the next utterance without restart.
+    pub diarizer_threshold: Arc<std::sync::atomic::AtomicU32>,
     /// Whisper inference thread count (#255). Settings → General
     /// slider writes through the `set_inference_threads` IPC; the
     /// loaded `WhisperTranscription` shares this same Arc via
@@ -403,6 +409,29 @@ pub struct RuntimeFlags {
     /// → General to show a "path is stale" warning row (#317).
     /// Cleared when `retry_autostart_registration` succeeds.
     pub autostart_path_stale: Arc<std::sync::atomic::AtomicBool>,
+    /// Cancellation slot for the auto-start pending countdown.
+    /// `meeting_cancel_pending` takes the Sender from the Mutex and sends ()
+    /// to abort the 3-second wait in `run_meeting_detection_task`.
+    /// std::sync::Mutex (not tokio) because the lock is never held across
+    /// an await point — acquired, used, and released synchronously.
+    pub pending_cancel: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    /// f32-as-bits RMS of the system-audio tap, written by the meeting
+    /// pump after each drain of the system-audio source. Zero when no
+    /// tap session is active. Read by call-end detector's SystemAudioRmsSignal.
+    ///
+    /// macOS: sourced from CoreAudioTapSession::current_level().
+    /// Linux/Windows future: a platform adapter writes the same Arc.
+    pub system_audio_level: Arc<std::sync::atomic::AtomicU32>,
+    /// Consecutive meeting-pump inference ticks producing no real speech
+    /// (all BLANK_AUDIO or empty finals). Reset to 0 on any real utterance.
+    /// Written by pump::tick_inference; read by call-end detector.
+    /// Platform-agnostic.
+    pub whisper_consecutive_empty_ticks: Arc<std::sync::atomic::AtomicU32>,
+    /// True while the active meeting session was started by auto-detection.
+    /// False for manually-started sessions (meeting_start_manual IPC).
+    /// The call-end detector only activates when this is false — auto-started
+    /// sessions already have AutoStop via evaluate_mic_state.
+    pub session_is_auto: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Encode [`crate::meeting::MeetingAutostartMode`] into the
@@ -518,6 +547,17 @@ pub(crate) fn parse_mic_gain_db_setting(raw: Option<String>) -> f32 {
         .clamp(0.0, 20.0)
 }
 
+/// Parse and clamp the persisted diarizer threshold setting.
+/// Falls back to [`crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD`]
+/// when absent / unparseable.
+pub(crate) fn parse_diarizer_threshold_setting(raw: Option<String>) -> f32 {
+    raw.as_deref()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(crate::diarization::cluster::DEFAULT_DISTANCE_THRESHOLD)
+        .clamp(0.0, 2.0)
+}
+
 /// Build the "inner" diarizer for the FlagGatedDiarizer (#111).
 ///
 /// When the `diarization-onnx` feature is built in AND the wespeaker
@@ -529,13 +569,19 @@ pub(crate) fn parse_mic_gain_db_setting(raw: Option<String>) -> f32 {
 ///
 /// Errors loading the model are logged at `warn` level and treated
 /// as "fall back to Noop" — same as missing-file.
-fn build_diarizer_inner(_models_dir: &Path) -> Arc<dyn crate::diarization::Diarize> {
+fn build_diarizer_inner(
+    _models_dir: &Path,
+    _threshold: f32,
+) -> Arc<dyn crate::diarization::Diarize> {
     #[cfg(feature = "diarization-onnx")]
     {
         let model_path =
             _models_dir.join(crate::diarization::catalog::WESPEAKER_RESNET34_LM_FILENAME);
         if model_path.exists() {
-            match crate::diarization::onnx::OnnxDiarizer::new(&model_path) {
+            match crate::diarization::onnx::OnnxDiarizer::new_with_threshold(
+                &model_path,
+                Some(_threshold),
+            ) {
                 Ok(d) => {
                     tracing::info!(
                         path = %model_path.display(),
@@ -785,6 +831,13 @@ impl AppState {
         let diarization_enabled_arc = Arc::new(std::sync::atomic::AtomicBool::new(
             diarization_enabled_initial,
         ));
+        let diarizer_threshold_initial = parse_diarizer_threshold_setting(
+            Self::startup_setting(settings.as_ref(), crate::settings::keys::DIARIZER_THRESHOLD)
+                .await,
+        );
+        let diarizer_threshold_arc = Arc::new(std::sync::atomic::AtomicU32::new(
+            diarizer_threshold_initial.to_bits(),
+        ));
         let speaker_identity_enabled_initial = matches!(
             Self::startup_setting(
                 settings.as_ref(),
@@ -802,7 +855,7 @@ impl AppState {
         // again into the IPC `download_diarizer_model` writer so a
         // post-download swap propagates to the meeting pump on the
         // next tick — no restart needed.
-        let diarize_inner_initial = build_diarizer_inner(&models_dir);
+        let diarize_inner_initial = build_diarizer_inner(&models_dir, diarizer_threshold_initial);
         record_phase("diarizer init");
         // Bundled Silero VAD (#974). Loaded once at startup, mints a
         // fresh per-stream session at each `start_stream` site. If the
@@ -828,6 +881,11 @@ impl AppState {
                 Arc::clone(&diarize_slot),
                 Arc::clone(&diarize_fallback),
             ));
+        // Create the call-end-detector signal arcs here so they can be
+        // shared with the meeting pump (`PumpContext`) AND stored in
+        // `RuntimeFlags` via the builder — both sides hold the same Arc.
+        let system_audio_level_arc = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let whisper_consecutive_empty_ticks_arc = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let meeting_manager = Arc::new(crate::meeting::SessionManager::new(
             Arc::clone(&meetings),
             Arc::clone(&audio),
@@ -839,6 +897,8 @@ impl AppState {
             Arc::clone(&mic_gain_db_arc),
             Arc::clone(&speakers),
             Arc::clone(&speaker_identity_enabled_arc),
+            Arc::clone(&system_audio_level_arc),
+            Arc::clone(&whisper_consecutive_empty_ticks_arc),
         ));
 
         // Restore the user's persisted PTT combo, if any. Falls back
@@ -958,10 +1018,13 @@ impl AppState {
             .sound_cue_complete_enabled(sound_cue_complete_enabled)
             .meeting_autostart_mode(meeting_autostart_mode)
             .diarization_enabled_arc(diarization_enabled_arc)
+            .diarizer_threshold_arc(diarizer_threshold_arc)
             .speaker_identity_enabled_arc(speaker_identity_enabled_arc)
             .diarize_slot(diarize_slot)
             .inference_threads_arc(inference_threads_arc)
             .mic_gain_db_arc(mic_gain_db_arc)
+            .system_audio_level_arc(system_audio_level_arc)
+            .whisper_consecutive_empty_ticks_arc(whisper_consecutive_empty_ticks_arc)
             .debug_log(debug_log)
             .startup_timings(startup_timings)
             .build();

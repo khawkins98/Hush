@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { emit } from "@tauri-apps/api/event";
+  import { invoke } from "@tauri-apps/api/core";
+  import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { onDestroy, onMount } from "svelte";
   import { backOut, cubicIn } from "svelte/easing";
   import { fade, fly } from "svelte/transition";
 
@@ -14,6 +16,7 @@
   import MeetingSection from "$lib/MeetingSection.svelte";
   import PermissionHealthSection from "$lib/PermissionHealthSection.svelte";
   import { Events } from "$lib/events";
+  import type { CallMayHaveEndedPayload } from "$lib/types";
   import { motionDuration } from "$lib/motion";
   import { audio } from "$lib/state/audio.svelte";
   import { dictation, TRAILING_SILENCE_MS } from "$lib/state/dictation.svelte";
@@ -29,6 +32,16 @@
   // existing handlers and state. The palette component itself is a
   // presentational leaf — see lib/CommandPalette.svelte.
   let paletteOpen = $state(false);
+
+  // Call-end detector banner. Set when the backend emits
+  // `meeting:call-may-have-ended`; cleared on `meeting:call-end-cancelled`
+  // or when the user dismisses/acts on the banner manually.
+  // `callEndBannerSuppressed` mirrors the HUD's `sessionCallEndSuppressed`:
+  // once the user dismisses the banner, the event is ignored for this session.
+  let callEndBanner = $state<{ confidence: "high" | "medium" } | null>(null);
+  let callEndBannerSuppressed = $state(false);
+  let _unlistenCallMayHaveEnded: UnlistenFn | null = null;
+  let _unlistenCallEndCancelled: UnlistenFn | null = null;
 
   // Platform check used to pick the right modifier glyph in the
   // shortcut hint (Right ⌘ on macOS, Right Ctrl elsewhere).
@@ -78,6 +91,28 @@
   function onSearchInput(e: Event) {
     history.setSearchQuery((e.target as HTMLInputElement).value);
   }
+
+  onMount(async () => {
+    _unlistenCallMayHaveEnded = await listen<CallMayHaveEndedPayload>(
+      Events.CallMayHaveEnded,
+      (event) => {
+        if (!callEndBannerSuppressed) {
+          callEndBanner = { confidence: event.payload.confidence };
+        }
+      },
+    );
+    _unlistenCallEndCancelled = await listen(Events.CallEndCancelled, () => {
+      callEndBanner = null;
+      callEndBannerSuppressed = false; // re-arm for next call cycle
+    });
+  });
+
+  onDestroy(() => {
+    _unlistenCallMayHaveEnded?.();
+    _unlistenCallMayHaveEnded = null;
+    _unlistenCallEndCancelled?.();
+    _unlistenCallEndCancelled = null;
+  });
 </script>
 
 <AppLifecycle
@@ -207,6 +242,39 @@
       class="source-failed-banner-dismiss"
       aria-label="Dismiss"
       onclick={() => (meeting.tailDroppedNotice = null)}
+    >✕</button>
+  </div>
+  {/if}
+  <!--
+    Call-end detector banner. Shown when the backend's call-end
+    detector fires with high or medium confidence — the call appears
+    to have ended while the session is still active. The user can
+    stop the recording or dismiss (ignoring the hint for now).
+    Cleared automatically by `CallEndCancelled` if a reversal signal
+    arrives (mic goes active again, loud audio spike, real speech
+    detected).
+  -->
+  {#if callEndBanner}
+  <div class="call-end-banner" role="alert" data-testid="call-end-banner">
+    <span class="call-end-banner-text">
+      {callEndBanner.confidence === "high"
+        ? "Your call has likely ended."
+        : "Your call may be winding down."}
+    </span>
+    <button
+      type="button"
+      class="call-end-banner-btn call-end-banner-btn--stop"
+      onclick={async () => {
+        callEndBanner = null;
+        callEndBannerSuppressed = true;
+        try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
+      }}
+    >Stop recording</button>
+    <button
+      type="button"
+      class="call-end-banner-dismiss"
+      aria-label="Dismiss"
+      onclick={() => { callEndBanner = null; callEndBannerSuppressed = true; }}
     >✕</button>
   </div>
   {/if}
@@ -468,6 +536,84 @@
 }
 
 .stale-perm-banner-dismiss:hover {
+  background-color: var(--accent-subtle);
+}
+
+/* Call-end detector banner. Uses the same base style as the
+   other alert banners but with an amber/orange accent to signal
+   "advisory" rather than "error". */
+.call-end-banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem 0.6rem 2.2rem;
+  margin: 0.75rem 0 0;
+  background-color: var(--bg-surface);
+  border: 3px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+.call-end-banner::before {
+  content: "CALL";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-family: var(--font-mono);
+  font-variation-settings: "MONO" 1, "CASL" 1, "slnt" -10, "CRSV" 0, "wght" 800;
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+}
+
+.call-end-banner-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.call-end-banner-btn {
+  padding: 0.25em 0.7em;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  transition: background-color 0.1s;
+}
+
+.call-end-banner-btn--stop {
+  border: 1px solid var(--warning-border);
+  background-color: var(--bg-surface);
+  color: var(--warning-text);
+}
+.call-end-banner-btn--stop:hover {
+  background-color: var(--accent-subtle);
+}
+
+.call-end-banner-dismiss {
+  padding: 0.2em 0.5em;
+  font-size: 0.78rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--warning-text);
+  border-radius: 4px;
+  font-family: inherit;
+  transition: background-color 0.1s;
+}
+.call-end-banner-dismiss:hover {
   background-color: var(--accent-subtle);
 }
 

@@ -134,6 +134,8 @@ impl SessionManager {
             Arc::new(AtomicU32::new(0f32.to_bits())),
             Arc::new(crate::speakers::MemSpeakerStore),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(AtomicU32::new(0)),
+            Arc::new(AtomicU32::new(0)),
         )
     }
 }
@@ -274,6 +276,8 @@ pub(super) async fn fresh_manager_no_transcriber() -> SessionManager {
         Arc::new(AtomicU32::new(0f32.to_bits())),
         Arc::new(crate::speakers::MemSpeakerStore),
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(AtomicU32::new(0)),
+        Arc::new(AtomicU32::new(0)),
     )
 }
 
@@ -299,6 +303,8 @@ pub(super) fn manager_with_repo(repo: Arc<dyn MeetingSessionRepository>) -> Sess
         Arc::new(AtomicU32::new(0f32.to_bits())),
         Arc::new(crate::speakers::MemSpeakerStore),
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(AtomicU32::new(0)),
+        Arc::new(AtomicU32::new(0)),
     )
 }
 
@@ -410,6 +416,8 @@ pub(crate) fn manager_with_slow_finish_parts(
         Arc::new(AtomicU32::new(0f32.to_bits())),
         Arc::new(crate::speakers::MemSpeakerStore),
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(AtomicU32::new(0)),
+        Arc::new(AtomicU32::new(0)),
     )
 }
 
@@ -643,6 +651,8 @@ pub(super) async fn build_tail_pump_context(
         audio_released_tx: None,
         speaker_store: Arc::new(crate::speakers::MemSpeakerStore),
         speaker_identity_enabled: Arc::new(AtomicBool::new(false)),
+        system_audio_level: Arc::new(AtomicU32::new(0)),
+        whisper_consecutive_empty_ticks: Arc::new(AtomicU32::new(0)),
     };
 
     (ctx, repo, fed_lens)
