@@ -72,16 +72,18 @@ pub use format::{apply_mic_gain, downmix_to_mono};
 /// process, and the tail of a long dictation is preserved rather than
 /// the head.
 ///
-/// Sized for ~2 minutes of 48 kHz stereo audio = `48_000 * 2 * 120`
-/// = 11.5M samples ≈ 46 MB. The meeting pump's normal-case window is
-/// 10 s (drained then), so this cap is purely defensive — under the
-/// typical drain-then-transcribe cycle it's never hit. A long-form
-/// dictation session up to 2 minutes is also fine; anything past that
-/// keeps the most-recent 2 minutes and discards older audio.
+/// Sized for ~10 minutes of 48 kHz stereo audio = `48_000 * 2 * 600`
+/// = 57.6M samples ≈ 230 MB worst-case (only reached if the user holds
+/// PTT or the Record button for the full 10 minutes without releasing).
+/// The meeting pump's normal-case window is 10 s (drained then), so
+/// this cap is purely defensive — under the typical drain-then-transcribe
+/// cycle it's never hit. The frontend auto-stops dictation at 10 min and
+/// warns at 9 min; anything that slips past that keeps the most-recent
+/// 10 minutes and discards older audio.
 ///
 /// The cap is the same for both the cpal mic path and the macOS
 /// CoreAudio tap path; both back into circular deques the callbacks push into.
-pub(super) const MAX_BUFFER_FRAMES: usize = 48_000 * 2 * 120;
+pub(super) const MAX_BUFFER_FRAMES: usize = 48_000 * 2 * 600;
 
 use std::collections::VecDeque;
 use std::sync::Mutex;

@@ -60,6 +60,9 @@
     /// #990). `null` for auto-detected meetings — those resolve their
     /// start from `meetingActiveDetail.session.startedAt` instead.
     recordingStartedAtMs?: number | null;
+    /// True from 9–10 min of continuous recording — drives a faster
+    /// pulse animation to warn the user the limit is near.
+    recordingLimitWarning?: boolean;
     /// Left adjunct slot — audio source picker. Optional so the
     /// component still renders standalone in the test harness or
     /// any future minimal surface.
@@ -85,6 +88,7 @@
     meetingActiveDetail = null,
     meetingOnlyActive = false,
     recordingStartedAtMs = null,
+    recordingLimitWarning = false,
     leftAdjunct,
     rightAdjunct,
   }: Props = $props();
@@ -294,7 +298,7 @@
         </button>
       {:else}
         <button
-          class="record-btn recording"
+          class={`record-btn recording${recordingLimitWarning ? " recording-limit-warn" : ""}`}
           onclick={onStop}
           disabled={busy}
           aria-label={meetingOnlyActive ? "Stop meeting recording" : "Stop recording and transcribe"}
@@ -599,6 +603,22 @@
     100% {
       box-shadow: 0 0 0 0 rgba(216, 58, 58, 0);
     }
+  }
+
+  @keyframes recording-limit-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(216, 58, 58, 0.7);
+    }
+    50% {
+      box-shadow: 0 0 0 16px rgba(216, 58, 58, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(216, 58, 58, 0);
+    }
+  }
+
+  .record-btn.recording-limit-warn {
+    animation: recording-limit-pulse 0.8s ease-out infinite;
   }
 
   @media (prefers-reduced-motion: reduce) {
