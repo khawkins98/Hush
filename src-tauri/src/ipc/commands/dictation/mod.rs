@@ -77,6 +77,7 @@ pub fn start_dictation(
     source: Option<AudioSource>,
 ) -> IpcResult<()> {
     let source = source.unwrap_or_else(AudioSource::default_microphone);
+    tracing::info!(source = ?source, "dictation: recording started");
     start_dictation_inner(&state, source)?;
     if state
         .runtime_flags
@@ -250,6 +251,11 @@ pub async fn stop_dictation(
         .saturating_mul(1000)
         .checked_div(format.sample_rate as u64 * format.channels.max(1) as u64)
         .map(|ms| ms as i64);
+    tracing::info!(
+        duration_ms = ?duration_ms,
+        model = transcriber.model_label(),
+        "dictation: recording stopped (1/3 — loading model)"
+    );
 
     // Short-press shortcut (#197): when the recording is too brief
     // to contain real speech, skip whisper inference and return a
@@ -288,6 +294,7 @@ pub async fn stop_dictation(
         None => true,
     };
     if too_short {
+        tracing::info!(duration_ms = ?duration_ms, "dictation: skipped — recording too short");
         let foreground = take_foreground_snapshot(&state)?;
         // Hide the Processing HUD on the too-short path —
         // there's no transcription happening, so the Processing
@@ -333,6 +340,9 @@ pub async fn stop_dictation(
     // inference so the Arc<AppHandle> isn't held longer than needed.
     let app_clone = app.clone();
     transcriber.set_progress_hook(Some(Arc::new(move |progress: i32| {
+        if progress == 0 {
+            tracing::info!("dictation: transcribing (2/3 — whisper decoding started)");
+        }
         if let Err(e) = app_clone.emit("transcription:progress", progress) {
             tracing::warn!(error = ?e, "emit transcription:progress failed");
         }
@@ -391,6 +401,10 @@ pub async fn stop_dictation(
                 .to_owned(),
         ));
     }
+    tracing::info!(
+        words = raw_text.split_whitespace().count(),
+        "dictation: transcription complete (3/3 — applying replacements)"
+    );
     let rules = load_replacement_rules(&state).await;
     // Strip whisper.cpp's bracket sentinels (`[BLANK_AUDIO]`, `[NOISE]`,
     // …) before applying replacements + the clipboard write. The
@@ -403,6 +417,11 @@ pub async fn stop_dictation(
     let text = apply_replacements(&stripped, &rules);
 
     write_to_clipboard(&app, &text)?;
+    tracing::info!(
+        chars = text.chars().count(),
+        words = text.split_whitespace().count(),
+        "dictation: done — text on clipboard"
+    );
     fire_ready_notification(&app);
     // Transition the HUD to the "Done" state so the user sees a
     // green "Copied!" confirmation before the HUD self-dismisses
