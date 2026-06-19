@@ -443,6 +443,7 @@ pub async fn run_call_end_detector_task(app: tauri::AppHandle) {
         ))))
     };
 
+    #[allow(unused_mut)]
     let mut signals: Vec<Arc<dyn CallEndSignal>> = vec![
         Arc::new(SystemAudioRmsSignal::new(
             Arc::clone(&state.runtime_flags.system_audio_level),
