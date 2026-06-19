@@ -231,18 +231,20 @@
   <div class="record-waveform">
     <AudioWaveform mode={waveformMode} metering />
   </div>
-  {#if transcribing && transcriptionProgress !== null}
+  {#if transcribing}
     <!--
-      Thin progress bar shown while whisper.cpp is running (#566).
-      Only visible once the backend has fired at least one progress
-      tick so we don't flash a 0% bar on very short clips where
-      inference finishes before the first event arrives.
+      Stage 1 (loading model): indeterminate sweep animation.
+      Stage 2 (decoding): determinate fill driven by whisper.cpp progress.
     -->
     <div class="transcription-progress-bar" aria-hidden="true">
-      <div
-        class="transcription-progress-fill"
-        style="width: {transcriptionProgress}%"
-      ></div>
+      {#if transcriptionProgress !== null}
+        <div
+          class="transcription-progress-fill"
+          style="width: {transcriptionProgress}%"
+        ></div>
+      {:else}
+        <div class="transcription-progress-indeterminate"></div>
+      {/if}
     </div>
   {/if}
 
@@ -347,6 +349,8 @@
         >
       {/if}
       {meetingOnlyActive ? "— press Stop" : "— release hotkey or press Stop"}
+    {:else if transcribing}
+      {transcriptionProgress !== null ? "Transcribing… (2 of 2)" : "Loading model… (1 of 2)"}
     {:else if busy}
       Processing…
     {:else if hudDone}
@@ -673,9 +677,9 @@
     }
   }
 
-  /* Thin progress bar shown under the waveform while whisper.cpp
-     is running (#566). Only rendered once the first progress tick
-     arrives so very short clips don't flash a 0% bar. */
+  /* Thin progress bar shown under the waveform during transcription.
+     Stage 1 (model loading): indeterminate sweep.
+     Stage 2 (decoding): determinate fill from whisper.cpp progress. */
   .transcription-progress-bar {
     width: 100%;
     height: 3px;
@@ -689,5 +693,16 @@
     background: var(--accent, #f49e17);
     border-radius: 2px;
     transition: width 0.3s ease;
+  }
+  .transcription-progress-indeterminate {
+    height: 100%;
+    width: 40%;
+    background: var(--accent, #f49e17);
+    border-radius: 2px;
+    animation: progress-sweep 1.4s ease-in-out infinite;
+  }
+  @keyframes progress-sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
   }
 </style>

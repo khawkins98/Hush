@@ -314,8 +314,8 @@
   aria-live="polite"
   aria-label={hudState === "processing"
     ? transcriptionProgress !== null
-      ? `Processing transcription ${transcriptionProgress}%`
-      : "Processing transcription"
+      ? "Transcribing (step 2 of 2)"
+      : "Loading model (step 1 of 2)"
     : hudState === "done"
       ? "Copied to clipboard"
       : hudState === "pending"
@@ -346,8 +346,8 @@
   <span class="hud-label">
     {hudState === "processing"
       ? transcriptionProgress !== null
-        ? `Processing… ${transcriptionProgress}%`
-        : "Processing…"
+        ? "Transcribing… (2/2)"
+        : "Loading model… (1/2)"
       : hudState === "done"
         ? "Copied!"
         : hudState === "pending"
