@@ -35,7 +35,9 @@ The audio never leaves your machine, and never lands on disk — it's processed 
 
 ## How it compares
 
-"Free?" and "Open source?" are split on purpose — they're often conflated, but a free tier on closed-source SaaS is the vendor's to revoke, while an OSS license is yours to fork.
+"Free?" and "Open source?" are split on purpose — they're often conflated, but a free tier on closed-source SaaS is the vendor's to revoke, while an OSS license is yours to fork. The split also catches the middle ground: *source-available* licences like BSL let you read and build the code without granting open-source rights.
+
+**Snapshot, surveyed 2026-07-28.** This space has matured fast — local ASR got good enough that "private meeting notes" stopped being a research project, and the field went from a handful of dictation tools to a crowded mix of dictation apps, meeting recorders, and hybrids. Treat this table as a dated sample of the notable options, not a census. Corrections and additions by PR are welcome.
 
 |  | Local? | Dictation? | Meetings? | Free? | Open source? | Platforms |
 |---|---|---|---|---|---|---|
@@ -43,14 +45,17 @@ The audio never leaves your machine, and never lands on disk — it's processed 
 | [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ✅ | ✅ | ✅ auto-detect Zoom / Teams | ✅ local unlimited; cloud tier: 2k words/wk free, $8/mo Pro | ✅ MIT | macOS · Linux · Windows |
 | [Whispering](https://github.com/EpicenterHQ/epicenter) | ✅ | ✅ | — | ✅ | ✅ AGPLv3 | macOS · Linux · Windows |
 | [Buzz](https://github.com/chidiwilliams/buzz) | ✅ | partial (live mic, no PTT into other apps) | file import only | ✅ | ✅ MIT | macOS · Linux · Windows |
-| [Meetily](https://meetily.ai) | ✅ | — | ✅ system audio, no bot | ✅ | ✅ MIT | macOS · Linux · Windows |
+| [Meetily](https://meetily.ai) | ✅ | — | ✅ system audio, no bot; diarization + Ollama summaries | ✅ | ✅ MIT | macOS · Windows |
 | [VoiceInk](https://github.com/Beingpax/VoiceInk) | ✅ | ✅ | — | ✅ | ✅ | macOS only |
+| [Detto](https://github.com/Gremble-io/Detto) | ✅ | ✅ hotkey | ✅ mic + system audio, channel-separated | ✅ source-available | — BSL 1.1 (converts to MIT 2030-05-12) | macOS only (Apple Silicon) |
 | [MacWhisper](https://goodsnooze.gumroad.com/l/macwhisper) | ✅ | ✅ | partial (file import) | freemium | — | macOS only |
 | [Superwhisper](https://superwhisper.com) | ✅ | ✅ | ✅ free tier ([Meeting Transcription](https://superwhisper.com/meeting-transcription)) | freemium | — | macOS · Windows · iOS |
 | [Granola](https://www.granola.ai) | cloud LLM | — | ✅ | freemium | — | macOS · Windows |
 | [Otter](https://otter.ai) / [Fireflies](https://fireflies.ai) / [Fathom](https://fathom.video) | — | — | ✅ (cloud bot or web) | freemium | — | web |
 
-The cross-platform OSS rows are the real competition. [OpenWhispr](https://github.com/OpenWhispr/openwhispr) is the closest — local dictation + meetings on the same three OSes — though its builds bundle an optional cloud tier (local stays unlimited; cloud caps at 2k words/week free). What sets Hush apart: dictation and parallel-source meeting capture in one app, one whisper.cpp load, one searchable history, with a privacy posture you can verify (below). The closest macOS app, [VoiceInk](https://github.com/Beingpax/VoiceInk), is what inspired Hush — see [Acknowledgements](#acknowledgements).
+The cross-platform OSS rows are the real competition. [OpenWhispr](https://github.com/OpenWhispr/openwhispr) is the closest — local dictation + meetings on the same three OSes — though its builds bundle an optional cloud tier (local stays unlimited; cloud caps at 2k words/week free). What sets Hush apart: dictation and parallel-source meeting capture in one app, one whisper.cpp load, one searchable history, with a privacy posture you can verify (below).
+
+The two nearest macOS-only apps are worth a look on their own merits, and Hush owes both a debt. [VoiceInk](https://github.com/Beingpax/VoiceInk) is what inspired Hush in the first place. [Detto](https://github.com/Gremble-io/Detto) takes the same local-first premise somewhere different — Obsidian-vault-native markdown output, pre-call client briefings, and Parakeet on the Neural Engine instead of Whisper — and a couple of its design choices directly improved Hush. See [Acknowledgements](#acknowledgements) for what and how.
 
 ---
 
@@ -123,6 +128,17 @@ This isn't Electron with a mic icon: four native windows, each with its own capa
 Hush is a behavioural reimplementation of [VoiceInk](https://github.com/Beingpax/VoiceInk) by [Pax](https://github.com/Beingpax) — a fantastic macOS-native dictation app that solved the local-whisper-with-good-UX problem first. Hush takes the same product concept, adds meeting capture as a peer feature, and ships cross-platform.
 
 **No VoiceInk source code was copied or referenced** at any point during development. Design was derived from VoiceInk's public README and observable runtime behaviour — see [`hush-prd.md`](./hush-prd.md) §13.8 for the full reasoning. If you like Hush, [VoiceInk](https://github.com/Beingpax/VoiceInk) deserves a look too.
+
+### Detto and GrembleVoice
+
+[Detto](https://github.com/Gremble-io/Detto) by [Jason Craik](https://github.com/Gremble-io) prompted a design review of Hush's transcription pipeline in July 2026. Two ideas came out of it:
+
+- **Channel-based speaker separation.** Detto labels mic audio "You" and system audio "Them" and never runs the mic through a diarizer. Hush adopted the underlying insight — the capture device is ground truth for the local talker, so feeding it to an embedding matcher can only disagree with what you already know — in [#1003](https://github.com/khawkins98/Hush/issues/1003).
+- **On-device LLM refinement**, and Detto's two-phase design for it (emit immediately, refine in the background). Not yet built in Hush; the design is written up in [#1004](https://github.com/khawkins98/Hush/issues/1004).
+
+**No Detto source code was read or used.** Both ideas came from Detto's public README and `ARCHITECTURE.md`, which are unusually generous documents. Detto is [BSL 1.1](https://github.com/Gremble-io/Detto/blob/main/LICENSE) — source-available, not open source, and incompatible with Hush's Apache 2.0 until it converts to MIT on 2030-05-12 — so its code could not have been reused even had we wanted to. The same don't-read-the-source discipline Hush applies to VoiceInk applies here, for the same reason: Detto is a near neighbour, and the distance is worth keeping visible.
+
+[GrembleVoice](https://github.com/Gremble-io/gremble-voice), Detto's speech engine, is a separate package under **Apache 2.0** — the same licence as Hush, and genuinely reusable. It isn't in the comparison table above because it's a Swift library rather than an app. Nothing from it has been ported yet (Hush's backend is Rust), but it's a legitimate reference for anyone working on the ASR or diarization layers.
 
 ---
 

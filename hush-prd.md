@@ -58,3 +58,17 @@ The following are recognised as valuable but explicitly out of scope for v1. Eac
 - CONTRIBUTING explains the black-box discipline so new contributors do not accidentally taint the project.
 - Module-level code comments cite VoiceInk where the inspiration is direct and specific (see `CONTRIBUTING.md` §Code comments).
 - The first CHANGELOG entry records the project's origin: "Initial release. Hush is a behavioural reimplementation of VoiceInk (github.com/Beingpax/VoiceInk). No source code copied or referenced."
+
+### 13.8.1 Extending the discipline to other comparable apps
+
+**Decision (2026-07-28).** The don't-read-the-source rule is not specific to VoiceInk. It applies to any app occupying the same product space that we study for design ideas. The reasoning in §13.8 — that resemblance becomes arguable once someone has read the upstream — gets *stronger*, not weaker, the closer a competitor is in platform, feature set, and timing.
+
+**Detto** ([github.com/Gremble-io/Detto](https://github.com/Gremble-io/Detto)) is the first app this was applied to beyond VoiceInk. Assessed 2026-07-28 during a comparison of transcription approaches:
+
+- **Licence: BSL 1.1**, converting to MIT on 2030-05-12. Notably this is *source-available, not open source*, and its derivative-works clause is incompatible with Apache-2.0 — so unlike GPLv3 VoiceInk (where the barrier is copyleft), here the barrier is that any derivative would have to ship under BSL. Code reuse is impossible until 2030 regardless of discipline.
+- **BSL explicitly permits reading**, unlike an unlicensed repo. So the no-reading rule here is *our* hygiene choice, not a licence requirement. We apply it anyway, because Detto is a nearer neighbour than VoiceInk — same platform, same feature pairing, same period — and the cost of keeping the distance visible is low.
+- Design input came from Detto's public README and `ARCHITECTURE.md`. Those yielded channel-based speaker separation (#1003, shipped) and the two-phase LLM refinement design (#1004, not built).
+
+**Exception: GrembleVoice** ([github.com/Gremble-io/gremble-voice](https://github.com/Gremble-io/gremble-voice)), Detto's speech engine, is a separate package under **Apache-2.0** — the same licence Hush carries. It is safe to read, study, and port from, subject to normal Apache-2.0 attribution (retain the copyright notice; add a NOTICE entry). It is Swift, so nothing lifts directly into a Rust backend, but algorithms and design are fair game. This distinction matters: *the licence attaches to the repository, not to the vendor.* Check each one.
+
+**Generalised rule.** Before taking design input from a comparable app: check the licence of the specific repository, record it here, default to reading public docs rather than source, and note in the attribution section what was taken and where it landed.
