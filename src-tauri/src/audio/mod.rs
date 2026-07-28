@@ -217,11 +217,25 @@ impl AudioSource {
     /// re-discovering the bug.
     pub fn speaker_tag(&self) -> &'static str {
         match self {
-            AudioSource::Microphone(_) => "mic",
+            AudioSource::Microphone(_) => LOCAL_SPEAKER_TAG,
             AudioSource::SystemAudio => "system",
         }
     }
 }
+
+/// Speaker tag for audio captured from a local microphone.
+///
+/// This is the one speaker attribution we have ground truth for: audio
+/// arriving on the local mic is the local user, and no embedding
+/// comparison can improve on knowing which physical device carried it.
+/// `meeting::pump::diarize_and_dispatch_merged` uses this to keep mic
+/// utterances out of the diarizer's cluster state entirely, so the
+/// 1-NN matcher only ever sees the remote stream.
+///
+/// The frontend maps this tag to "You" (`HistoryMeetingRow.svelte`),
+/// which is why the exclusion needs no separate label vocabulary — an
+/// undiarized mic utterance already falls through to the right copy.
+pub const LOCAL_SPEAKER_TAG: &str = "mic";
 
 /// Frontend-facing listing of one audio source the user can pick from.
 ///

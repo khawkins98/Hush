@@ -1239,10 +1239,17 @@ mod tests {
         // The whole point of #206: pre-fix the diarizer ran twice
         // (once per source), each time over its own per-source
         // chronological slice. Post-fix it runs ONCE over the
-        // merged-and-sorted batch — so a mic utterance at t=100
-        // followed by a system utterance at t=200 is what the
-        // diarizer sees, regardless of how the pump assembled the
-        // tick buckets.
+        // merged-and-sorted batch, regardless of how the pump
+        // assembled the tick buckets.
+        //
+        // Post-#1003 this is exercised with two *local* buckets. The
+        // mic-exclusion rule only engages when there's a remote source
+        // to fall back on, so an all-local session still diarizes every
+        // bucket — which makes it the surviving multi-bucket case where
+        // the merge-sort guarantee is observable. (A mic+system session
+        // now feeds the diarizer only the system slice, so it can't
+        // demonstrate cross-bucket ordering.) The ordering logic under
+        // test is unchanged; only the scenario that reaches it is.
         let mgr = fresh_manager().await;
         let session = mgr
             .start_manual(
@@ -1260,30 +1267,30 @@ mod tests {
         });
         let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
 
-        // Mic finals at t=200 and t=400; system finals at t=100 and
-        // t=300. The pump assembles buckets in source order
-        // (mic-first then system), so the merge step has to
-        // re-order chronologically.
-        let mic_bucket = TickBucket {
+        // Two local mic devices (two people sharing a room). Bucket A
+        // holds finals at t=200 and t=400, bucket B at t=100 and t=300.
+        // The pump assembles buckets in source order, so the merge step
+        // has to re-order chronologically.
+        let bucket_a = TickBucket {
             source_label: "mic".to_owned(),
             utterances: vec![
-                make_final("mic-200", 200, 280, "mic"),
-                make_final("mic-400", 400, 480, "mic"),
+                make_final("a-200", 200, 280, "mic"),
+                make_final("a-400", 400, 480, "mic"),
             ],
             audio: vec![Vec::new(), Vec::new()],
         };
-        let sys_bucket = TickBucket {
-            source_label: "system".to_owned(),
+        let bucket_b = TickBucket {
+            source_label: "mic".to_owned(),
             utterances: vec![
-                make_final("sys-100", 100, 180, "system"),
-                make_final("sys-300", 300, 380, "system"),
+                make_final("b-100", 100, 180, "mic"),
+                make_final("b-300", 300, 380, "mic"),
             ],
             audio: vec![Vec::new(), Vec::new()],
         };
 
         diarize_and_dispatch_merged(
             session.id,
-            vec![mic_bucket, sys_bucket],
+            vec![bucket_a, bucket_b],
             &recorder_dyn,
             &mgr.partials,
             &mgr.repo,
@@ -1371,29 +1378,32 @@ mod tests {
         let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
 
         // Two source buckets, distinct audio sizes per utterance so
-        // the assertion is unambiguous.
-        let mic_bucket = TickBucket {
+        // the assertion is unambiguous. Both are local mics: the
+        // #1003 exclusion only engages when a remote source exists,
+        // so an all-local session still routes every chunk to the
+        // diarizer — which is what keeps the ordering observable here.
+        let bucket_a = TickBucket {
             source_label: "mic".to_owned(),
             utterances: vec![
-                make_final("mic-200", 200, 280, "mic"),
-                make_final("mic-400", 400, 480, "mic"),
+                make_final("a-200", 200, 280, "mic"),
+                make_final("a-400", 400, 480, "mic"),
             ],
             // 200 and 400 samples respectively — distinct from the
-            // system bucket so we can verify ordering.
+            // other bucket so we can verify ordering.
             audio: vec![vec![0.0; 200], vec![0.0; 400]],
         };
-        let sys_bucket = TickBucket {
-            source_label: "system".to_owned(),
+        let bucket_b = TickBucket {
+            source_label: "mic".to_owned(),
             utterances: vec![
-                make_final("sys-100", 100, 180, "system"),
-                make_final("sys-300", 300, 380, "system"),
+                make_final("b-100", 100, 180, "mic"),
+                make_final("b-300", 300, 380, "mic"),
             ],
             audio: vec![vec![0.0; 100], vec![0.0; 300]],
         };
 
         diarize_and_dispatch_merged(
             session.id,
-            vec![mic_bucket, sys_bucket],
+            vec![bucket_a, bucket_b],
             &recorder_dyn,
             &mgr.partials,
             &mgr.repo,
@@ -1402,8 +1412,8 @@ mod tests {
         .await;
 
         // The diarizer received audio chunks in chronological order
-        // (sys-100 → mic-200 → sys-300 → mic-400), so the recorded
-        // lengths must be [100, 200, 300, 400].
+        // (b-100 → a-200 → b-300 → a-400), so the recorded lengths
+        // must be [100, 200, 300, 400].
         let lens = recorder.seen_audio_lens.lock().unwrap().clone();
         assert_eq!(
             lens,
@@ -1420,11 +1430,12 @@ mod tests {
         // still runs (just without signal); source-only labels
         // stand. This is the "we'd rather degrade than crash" path.
         //
-        // Uses two buckets (mic + system) so the single-source
-        // guard from #369 doesn't kick in — that guard
-        // intentionally skips the diarizer for single-source input,
-        // which would otherwise mask the length-mismatch behaviour
-        // this test pins.
+        // Uses two buckets so the single-source guard from #369
+        // doesn't kick in — that guard intentionally skips the
+        // diarizer for single-source input, which would otherwise
+        // mask the length-mismatch behaviour this test pins. Both
+        // buckets are local mics so the #1003 exclusion also stays
+        // out of the way and every chunk reaches the diarizer.
         let mgr = fresh_manager().await;
         let session = mgr
             .start_manual(
@@ -1442,11 +1453,11 @@ mod tests {
         });
         let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
 
-        // Mic bucket has 2 utterances but only 1 audio chunk — the
+        // Bucket A has 2 utterances but only 1 audio chunk — the
         // mismatch should trigger the fallback to empty chunks for
-        // those two utterances. System bucket is well-formed so the
+        // those two utterances. Bucket B is well-formed so the
         // multi-source path runs the diarizer.
-        let mic_bucket = TickBucket {
+        let bucket_a = TickBucket {
             source_label: "mic".to_owned(),
             utterances: vec![
                 make_final("a", 100, 200, "mic"),
@@ -1454,15 +1465,15 @@ mod tests {
             ],
             audio: vec![vec![0.0; 50]],
         };
-        let sys_bucket = TickBucket {
-            source_label: "system".to_owned(),
-            utterances: vec![make_final("s", 250, 350, "system")],
+        let bucket_b = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![make_final("s", 250, 350, "mic")],
             audio: vec![vec![0.0; 75]],
         };
 
         diarize_and_dispatch_merged(
             session.id,
-            vec![mic_bucket, sys_bucket],
+            vec![bucket_a, bucket_b],
             &recorder_dyn,
             &mgr.partials,
             &mgr.repo,
@@ -1470,10 +1481,9 @@ mod tests {
         )
         .await;
 
-        // Chronological order: mic-100 (empty fallback), sys-250
-        // (75), mic-300 (empty fallback). Two zeros from the
-        // mismatched mic bucket, one 75 from the well-formed
-        // system bucket.
+        // Chronological order: a-100 (empty fallback), b-250 (75),
+        // a-300 (empty fallback). Two zeros from the mismatched
+        // bucket, one 75 from the well-formed one.
         let lens = recorder.seen_audio_lens.lock().unwrap().clone();
         assert_eq!(
             lens,
@@ -1573,17 +1583,20 @@ mod tests {
 
         let mic_bucket = TickBucket {
             source_label: "mic".to_owned(),
-            // One final + one partial.
-            utterances: vec![
-                make_final("hello", 100, 200, "mic"),
-                make_partial("partial revision", 300, 400, "mic"),
-            ],
-            audio: vec![vec![0.0; 100], vec![0.0; 100]],
+            utterances: vec![make_final("hello", 100, 200, "mic")],
+            audio: vec![vec![0.0; 100]],
         };
+        // The partial lives on the *system* bucket so this test still
+        // proves the #800 partial-skip after #1003 started excluding
+        // mic utterances wholesale — otherwise a regression in the
+        // partial filter would hide behind the mic exclusion.
         let sys_bucket = TickBucket {
             source_label: "system".to_owned(),
-            utterances: vec![make_final("world", 150, 250, "system")],
-            audio: vec![vec![0.0; 100]],
+            utterances: vec![
+                make_final("world", 150, 250, "system"),
+                make_partial("partial revision", 350, 400, "system"),
+            ],
+            audio: vec![vec![0.0; 100], vec![0.0; 100]],
         };
 
         diarize_and_dispatch_merged(
@@ -1596,18 +1609,158 @@ mod tests {
         )
         .await;
 
-        // Diarizer only saw the two finals' start times, not the partial.
+        // Diarizer saw only the system final: the system partial is
+        // filtered by #800, the mic final by #1003.
         let seen = recorder.seen_starts.lock().unwrap().clone();
         assert_eq!(
             seen,
-            vec![100, 150],
-            "diarizer must only see finals, not partials; saw {:?}",
+            vec![150],
+            "diarizer must only see remote finals, not partials; saw {:?}",
             seen
         );
 
         // Only finals landed in the DB.
         let persisted = mgr.repo.list_utterances(session.id).await.unwrap();
         assert_eq!(persisted.len(), 2, "only 2 finals should be persisted");
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_excludes_local_mic_from_diarizer() {
+        // #1003 channel-based speaker separation. The capture device is
+        // ground truth for the local talker, so mic utterances never
+        // reach the diarizer: they can't be mislabelled as a remote
+        // participant, and their embeddings can't widen a remote cluster
+        // (the 1-NN chaining drift tracked in #316).
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(
+                vec![AudioSource::default_microphone(), AudioSource::SystemAudio],
+                None,
+                None,
+                Default::default(),
+            )
+            .await
+            .unwrap();
+
+        let recorder = Arc::new(RecordingDiarizer {
+            seen_starts: Mutex::new(Vec::new()),
+            seen_audio_lens: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+
+        let mic_bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![
+                make_final("local-100", 100, 180, "mic"),
+                make_final("local-300", 300, 380, "mic"),
+            ],
+            audio: vec![vec![0.0; 100], vec![0.0; 100]],
+        };
+        let sys_bucket = TickBucket {
+            source_label: "system".to_owned(),
+            utterances: vec![
+                make_final("remote-200", 200, 280, "system"),
+                make_final("remote-400", 400, 480, "system"),
+            ],
+            audio: vec![vec![0.0; 100], vec![0.0; 100]],
+        };
+
+        diarize_and_dispatch_merged(
+            session.id,
+            vec![mic_bucket, sys_bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+            &crate::events::NoopEventEmitter,
+        )
+        .await;
+
+        // Diarizer saw the remote stream only — the mic finals at t=100
+        // and t=300 were withheld.
+        let seen = recorder.seen_starts.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![200, 400],
+            "diarizer must only see remote-source finals; saw {:?}",
+            seen
+        );
+
+        // RecordingDiarizer stamps everything it labels as "Speaker A".
+        // Mic utterances must NOT carry that — they fall through to the
+        // "mic" source tag, which the frontend renders as "You".
+        let persisted = mgr.repo.list_utterances(session.id).await.unwrap();
+        assert_eq!(persisted.len(), 4);
+        for u in &persisted {
+            let expected = if u.text.starts_with("local-") {
+                "mic"
+            } else {
+                "Speaker A"
+            };
+            assert_eq!(
+                u.speaker_label.as_deref(),
+                Some(expected),
+                "utterance {:?} should be labelled {expected}",
+                u.text
+            );
+        }
+
+        mgr.stop_manual().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_diarizes_all_local_sessions() {
+        // The #1003 exclusion is guarded on there being a remote source.
+        // Two mic devices (two people in one room) carry different
+        // speakers on channels that both say "local", so the channel
+        // tells us nothing and the diarizer must still run over
+        // everything — otherwise both talkers collapse to "You".
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(
+                vec![AudioSource::default_microphone()],
+                None,
+                None,
+                Default::default(),
+            )
+            .await
+            .unwrap();
+
+        let recorder = Arc::new(RecordingDiarizer {
+            seen_starts: Mutex::new(Vec::new()),
+            seen_audio_lens: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+
+        let bucket_a = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![make_final("a", 100, 180, "mic")],
+            audio: vec![vec![0.0; 100]],
+        };
+        let bucket_b = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![make_final("b", 200, 280, "mic")],
+            audio: vec![vec![0.0; 100]],
+        };
+
+        diarize_and_dispatch_merged(
+            session.id,
+            vec![bucket_a, bucket_b],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+            &crate::events::NoopEventEmitter,
+        )
+        .await;
+
+        let seen = recorder.seen_starts.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![100, 200],
+            "all-local sessions must still diarize every source; saw {:?}",
+            seen
+        );
 
         mgr.stop_manual().await.unwrap();
     }

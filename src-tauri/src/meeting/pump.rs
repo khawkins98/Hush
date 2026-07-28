@@ -1373,10 +1373,49 @@ pub(super) async fn diarize_and_dispatch_merged(
         // drift. Extract finals by index, run label_utterances, then copy
         // labels back. dispatch_utterances handles the source-tag fall-
         // through for any unlabelled partials.
+        //
+        // Channel-based local-speaker exclusion (#1003): mic-sourced
+        // utterances never reach the diarizer. The capture device already
+        // tells us the local user produced them — that's ground truth, and
+        // running them through a cosine-distance matcher can only degrade
+        // it. Two concrete failure modes this removes:
+        //
+        //   1. A mic utterance getting assigned to a remote cluster (or
+        //      vice versa), mislabelling the user as a call participant.
+        //   2. Mic embeddings widening the remote clusters they chain into,
+        //      which is the 1-NN drift risk tracked in #316 — the local
+        //      talker is the most frequent speaker in most sessions, so
+        //      they contribute the most chaining pressure.
+        //
+        // The diarizer now only ever sees the remote stream, where it does
+        // the job it's actually good at: separating multiple participants
+        // sharing one Zoom/Teams mixdown. Excluded mic finals fall through
+        // to the `"mic"` source tag in `dispatch_utterances`, which the
+        // frontend renders as "You".
+        //
+        // Guarded on there being a remote source to diarize. An all-local
+        // session (two mic devices — two people in one room) still needs
+        // real diarization, because there the channel tells us nothing
+        // useful: both streams are "a local mic" but carry different
+        // speakers. Excluding every source would collapse them both to
+        // "You". So the exclusion only applies when it has something to
+        // fall back on.
+        let has_remote_source = source_labels
+            .iter()
+            .any(|l| l != crate::audio::LOCAL_SPEAKER_TAG);
         let final_idxs: Vec<usize> = chronological
             .iter()
             .enumerate()
-            .filter_map(|(i, u)| if u.is_final { Some(i) } else { None })
+            .filter_map(|(i, u)| {
+                if !u.is_final {
+                    return None;
+                }
+                let is_local = source_labels[bucket_indices[i]] == crate::audio::LOCAL_SPEAKER_TAG;
+                if has_remote_source && is_local {
+                    return None;
+                }
+                Some(i)
+            })
             .collect();
         if !final_idxs.is_empty() {
             let mut final_utts: Vec<Utterance> = final_idxs
