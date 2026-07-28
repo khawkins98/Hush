@@ -154,6 +154,23 @@ tract-onnx = { version = "0.22.1", optional = true }
 # because `diarization::features` is the sole consumer.
 realfft = { version = "3.5", optional = true }
 
+# Parakeet ASR engine (#521). Wraps NVIDIA's Parakeet ONNX exports —
+# CTC, TDT, and the cache-aware streaming variants — over ONNX Runtime.
+#
+# ORT is back, deliberately and narrowly. #641 removed `ort` from the
+# DIARIZER because ORT's Apple Silicon prebuilts dispatch through Metal
+# Performance Shaders even on the CPU EP, growing IOAccelerator ~1.25
+# GB/min. That finding stands and `diarization/onnx.rs` stays on tract.
+# But tract cannot load the Parakeet graphs at all (`Pad` with an
+# omitted optional input; see learnings.md 2026-07-28), so for THIS
+# model the choice is ORT or nothing.
+#
+# Mitigations: `coreml` is NOT enabled (it is opt-in upstream, and its
+# author reports it unstable for these models); we take the CPU EP.
+# Whether that is enough is an empirical question — the memwatch gate
+# in #521 is the acceptance criterion, not this comment.
+parakeet-rs = { version = "0.3", optional = true }
+
 # SQLite persistence
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 
@@ -256,7 +273,7 @@ diarization-onnx = ["dep:tract-onnx", "dep:realfft"]
 # with this feature but no downloaded model behaves exactly like one
 # without it: the catalog entry renders, the engine reports itself
 # unavailable until the files land.
-parakeet = ["dep:tract-onnx"]
+parakeet = ["dep:parakeet-rs"]
 
 # Exposes deterministic test helpers: [`audio::file_source::WavFileAudioCapture`]
 # (WAV-backed AudioCapture/AudioSession for meeting-pump integration tests)

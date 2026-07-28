@@ -32,7 +32,45 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-07-28 (later) — Parakeet works via `parakeet-rs` + ORT, and ORT does *not* leak here
+
+Supersedes the "blocked" conclusion in the entry immediately below. That entry's *findings* still hold — tract genuinely cannot load these graphs — but its framing ("Parakeet is blocked") was too narrow, because it treated ORT as unavailable. Re-reading #641 showed that was never true.
+
+**#641 banned ORT's prebuilts, not ONNX Runtime.** Verbatim from the 2026-05-08 entry: *"There is no opt-out knob **in the prebuilt binaries** — you'd need to build ORT from source with Metal disabled."* That is a statement about a specific distribution, and the `CLAUDE.md` note derived from it is scoped to `diarization/onnx.rs`, where tract works fine and there is no reason to revisit.
+
+**[`parakeet-rs`](https://github.com/altunenes/parakeet-rs)** (MIT, actively maintained) wraps the Parakeet family over ORT. Dropped in and working end-to-end the same afternoon tract was ruled out. Measured on `tests/fixtures/jfk.wav`, debug build, CPU EP, `coreml` feature off:
+
+| | fp32 | int8 |
+|---|---|---|
+| On disk | ~2.5 GB | **639 MB** |
+| Load | 3.3 s | **1.4 s** |
+| Steady-state inference (11 s audio) | **520 ms** (21× realtime) | 804 ms (13.7× realtime) |
+| Footprint after load | 2220 MB | **1478 MB** |
+| Footprint after 300 inferences | 2299 MB | 1548 MB |
+
+Transcript is verbatim correct on both, **with punctuation and capitalisation already applied**:
+
+> "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."
+
+**The memory result is the important one.** 300 inferences = 55 minutes of audio processed:
+
+- Physical footprint **flat**: 1550 MB at iteration 10 → 1548 MB at iteration 300.
+- IOAccelerator regions **constant** (25 for int8, 38 for fp32); resident bytes went *down* (1.6 G → 1.2 G).
+- RSS went down too (1678 MB → 1297 MB).
+
+IOAccelerator regions *do* exist — ORT is touching the GPU path — but they are a bounded, one-time cost paid at model load, not the unbounded ~1.25 GB/min growth #641 measured against wespeaker. **Presence of IOAccelerator is not the bug; unbounded growth is.** The 2026-05-08 entry conflated the two, and that conflation is what made Parakeet look impossible for three months.
+
+**Lesson worth generalising: a dependency ban recorded from one measurement should name what was measured.** "ORT leaks" became folklore that closed off an entire engine family. "ORT's Apple Silicon *prebuilts* grew IOAccelerator unboundedly *for the wespeaker model in 2026-05*" is the actual finding, and it invites re-measurement instead of foreclosing it. Re-measuring cost about an hour.
+
+**Trade-off for the picker:** int8 is the better default (4× smaller download, 750 MB less resident) and fp32 is the speed option. Both are comfortably real-time. Note ~1.5 GB resident is still substantial — comparable to Whisper large — so this is a genuine choice, not a free win.
+
+**Secondary finding: this may partly obsolete #1004.** Parakeet already emits correct casing and punctuation, which is most of what the LLM-refinement issue exists to fix. The `Nemotron` streaming variants go further (drop disfluencies). Evaluate those before committing to a second inference stack and a 2 GB LLM download.
+
+**Still unverified:** none of this is wired into the meeting pump. The soak is a tight inference loop, not a real session with audio capture, diarization, and the HUD running. `npm run memwatch` on a real meeting remains the acceptance gate.
+
 ## 2026-07-28 — Parakeet on tract-onnx is blocked by `Pad` with an omitted optional input
+
+> **Superseded by the entry above.** The technical findings here are accurate and still worth keeping — tract cannot load these graphs — but "Parakeet is blocked" was the wrong conclusion. The answer was to change runtime, not to change model.
 
 Measured while spiking Parakeet TDT 0.6B v3 as a second ASR engine
 (#521). Conclusion up front: **`tract-onnx` cannot load the published
