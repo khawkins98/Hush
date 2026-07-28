@@ -154,6 +154,53 @@ tract-onnx = { version = "0.22.1", optional = true }
 # because `diarization::features` is the sole consumer.
 realfft = { version = "3.5", optional = true }
 
+# Parakeet ASR engine (#521). Wraps NVIDIA's Parakeet ONNX exports —
+# CTC, TDT, and the cache-aware streaming variants — over ONNX Runtime.
+#
+# ORT is back, deliberately and narrowly. #641 removed `ort` from the
+# DIARIZER because ORT's Apple Silicon prebuilts dispatch through Metal
+# Performance Shaders even on the CPU EP, growing IOAccelerator ~1.25
+# GB/min. That finding stands and `diarization/onnx.rs` stays on tract.
+# But tract cannot load the Parakeet graphs at all (`Pad` with an
+# omitted optional input; see learnings.md 2026-07-28), so for THIS
+# model the choice is ORT or nothing.
+#
+# What actually justifies this is a MEASUREMENT, not a config knob.
+# Be precise about that, because it is easy to talk yourself into a
+# false sense of safety here:
+#
+#   - Leaving `coreml` off is NOT a mitigation for #641. #641's finding
+#     was MPS dispatch *on the CPU EP*, in the prebuilts, with no
+#     opt-out. Disabling CoreML is orthogonal to that mechanism.
+#   - We take these prebuilts via `download-binaries` — i.e. the same
+#     class of artifact #641 named. #641 identified a from-source build
+#     with Metal disabled as the escape hatch and did not take it.
+#
+# The evidence is `parakeet::tests::memory_soak_over_many_inferences`:
+# 300 inferences (~55 min of audio) with physical footprint flat at
+# ~1548 MB and IOAccelerator region count constant. That falsifies
+# "unbounded growth" for THIS model and THIS usage — one long-lived
+# session — and nothing broader. #641 measured wespeaker on rc.12 with
+# many short sessions; this is Parakeet on rc.13. Re-measure before
+# generalising, and re-measure after any ORT bump.
+parakeet-rs = { version = "0.3", optional = true }
+
+# Explicit exact pin on the ONNX Runtime bindings that `parakeet-rs`
+# pulls in transitively (it asks for `^2.0.0-rc.13`, which would let a
+# routine `cargo update` move to a later RC unreviewed).
+#
+# Declared here for three reasons: the version is load-bearing for the
+# memory result above; pre-#641 `ort` was exact-pinned and that
+# discipline should survive its return; and the `supply-chain-pins` CI
+# job only inspects dep-table lines in THIS file, so a transitive RC
+# would otherwise be invisible to it. See `learnings.md` →
+# "Supply-chain pins" before bumping.
+#
+# Features are deliberately minimal — feature unification means
+# `parakeet-rs`'s own `ort/default` still applies; this entry exists to
+# pin the version, not to shrink the build.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray"], optional = true }
+
 # SQLite persistence
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 
@@ -243,6 +290,18 @@ whisper = ["dep:whisper-rs"]
 # model file. UI-only contributors can opt out with
 # `--no-default-features` for a faster build.
 diarization-onnx = ["dep:tract-onnx", "dep:realfft"]
+
+# Parakeet TDT 0.6B v3 ASR engine (#521). Pulls in `parakeet-rs`, and
+# through it `ort` + the ONNX Runtime prebuilts — NOT `tract-onnx`.
+# The diarizer stays on tract; see the `parakeet-rs` dependency entry
+# above for why this one differs and what was measured before allowing
+# it back.
+#
+# Off by default, and deliberately so on two counts: it is a second
+# full ASR stack (~36 extra crates, ~45 MB of vendored runtime, and a
+# build-time binary download), and the model is a separate ~670 MB
+# fetch. A default build pulls none of it — verified via `cargo tree`.
+parakeet = ["dep:parakeet-rs", "dep:ort"]
 
 # Exposes deterministic test helpers: [`audio::file_source::WavFileAudioCapture`]
 # (WAV-backed AudioCapture/AudioSession for meeting-pump integration tests)

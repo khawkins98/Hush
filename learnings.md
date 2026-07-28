@@ -32,6 +32,182 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-07-28 (latest) — #641 re-tested: the ORT leak was rc.12-specific and is gone on rc.13
+
+The entry below reversed #641 for Parakeet on the strength of a soak, while explicitly declining to generalise: different model, different runtime version, different session lifetime, three variables moved at once. This closes that gap by holding the model fixed and re-running #641's own workload.
+
+`diarization::ort_probe` (test-only, `#[ignore]`d, gated on `parakeet`) loads **the same wespeaker ResNet34-LM model #641 measured**, on ORT **rc.13**, 200 inferences, in both session shapes:
+
+| | single long-lived session | session recreated every 25 (#642's shape) |
+|---|---|---|
+| Footprint start → end | 69 MB → **68 MB** | 102 MB → 106 MB |
+| IOAccelerator regions | **7, constant** | **7, constant** |
+| IOAccelerator virtual | **260.5 MB, constant** | **260.5 MB, constant** |
+| IOAccelerator resident | 66.0 → **65.1 MB** (down) | 99.7 → 102.8 MB |
+
+**#641 measured ~1.25 GB/min of growth and 96 IOAccelerator regions totalling 9 GB virtual over five minutes on this exact model.** Here: 7 regions, 260.5 MB virtual, no growth trend in either mode. That is not a marginal improvement, it is the absence of the phenomenon.
+
+So the leak was **`ort` rc.12-specific** (or fixed upstream between rc.12 and rc.13). It was never inherent to ONNX Runtime, to the CPU EP, or to the wespeaker model.
+
+**What this changes:**
+
+- The Parakeet memory result is **not** model- or workload-specific after all. The caveats recorded in the entry below were appropriate when written, and are now resolved by measurement rather than argument.
+- **ORT's GPU execution providers become worth evaluating.** CoreML / WebGPU were off-limits while the CPU EP itself was suspect; they are the obvious next lever if Parakeet needs to be faster than its current 13.7–21× realtime. (`parakeet-rs`'s author reports CoreML unstable for these models, so WebGPU is the likelier candidate.)
+- The `#642` periodic-session-recreation mitigation is now pure cost. It is dead code for us anyway — the diarizer no longer uses ORT — but note the recreation mode is the *only* one showing any drift here (~4 MB across 8 rebuilds), so recreating sessions is mildly counterproductive rather than protective.
+
+**What this does not change:** the diarizer stays on `tract-onnx`. It works, it is pure Rust, and it saves ~45 MB of binary. "We could move it back" is not a reason to.
+
+**Limits.** 200 inferences on one machine, debug build, synthetic mel features. Content does not affect allocator behaviour, and against a 1.25 GB/min baseline the absence of growth is unambiguous — but this is one measurement, not a guarantee across future ORT releases. The exact pin and the re-measure-on-bump rule in "Supply-chain pins" stand.
+
+**The meta-lesson, now with a number attached.** #641's conclusion was correct for its time and became wrong silently, as upstream moved. Nothing in the repo would ever have told us — a ban records a decision, not an expiry. Cost to re-test: about an hour, using a harness already written for something else. Worth asking, for any dependency ban older than a few releases: *has anyone checked lately?*
+
+## 2026-07-28 (later) — Parakeet works via `parakeet-rs` + ORT, and ORT does *not* leak here
+
+Supersedes the "blocked" conclusion in the entry immediately below. That entry's *findings* still hold — tract genuinely cannot load these graphs — but its conclusion ("Parakeet is blocked") was wrong, because it treated ORT as permanently unavailable.
+
+**The justification is a measurement, not a re-reading of #641.** Stating this plainly because the first draft of this entry got it backwards, and a code review caught it:
+
+> ~~#641 banned ORT's prebuilts, not ONNX Runtime — "no opt-out knob **in the prebuilt binaries**" is a statement about a distribution.~~
+
+That reading does not survive contact with what #641 actually says. Its remediation list includes *"**Build ORT without GPU support.** Drop `download-binaries`, build from source with cmake configured to disable Metal / CoreML providers entirely. Cost: significant build infrastructure change. **Not done.**"* — so the from-source build was the escape hatch #641 identified and **declined**. And the sentence quoted above sits under the heading "What ORT is actually doing on Apple Silicon (**no opt-out**)", i.e. it was explaining why ORT could not be salvaged, not scoping a narrow ban. The entry one day earlier is blunter still: *"Reintroducing `ort` is not a route."*
+
+This branch takes the **prebuilts** — precisely the artifact #641 named. So: ORT is back in defiance of #641's conclusion, not because of a loophole in it. What licenses that is new evidence, and only that.
+
+**The evidence.** 300 inferences ≈ 55 minutes of audio, physical footprint flat (1550 MB → 1548 MB), IOAccelerator region count constant, RSS declining. That directly falsifies "unbounded ~1.25 GB/min" **for this model and this usage**. Two limits on how far it generalises, both real:
+
+- #641 measured `ort` **rc.12** with wespeaker; this is **rc.13** with Parakeet. Different prebuilt. This does not retroactively exonerate rc.12, and an ORT bump could regress it — hence the exact pin and the re-measure requirement in "Supply-chain pins".
+- Workload shape differs materially. wespeaker ran many short sessions with periodic `Session` recreation; Parakeet is one long-lived session. "ORT doesn't leak" is **not** established in general — only here.
+
+**[`parakeet-rs`](https://github.com/altunenes/parakeet-rs)** (MIT, actively maintained) wraps the Parakeet family over ORT. Dropped in and working end-to-end the same afternoon tract was ruled out. Measured on `tests/fixtures/jfk.wav`, debug build, CPU EP, `coreml` feature off:
+
+| | fp32 | int8 |
+|---|---|---|
+| On disk | ~2.5 GB | **670 MB** (639 MiB) |
+| Load | 3.3 s | **1.4 s** |
+| Steady-state inference (11 s audio) | **520 ms** (21× realtime) | 804 ms (13.7× realtime) |
+| Footprint after load | 2220 MB | **1478 MB** |
+| Footprint after 300 inferences | 2299 MB | 1548 MB |
+
+Transcript is verbatim correct on both, **with punctuation and capitalisation already applied**:
+
+> "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."
+
+**The memory result is the important one.** 300 inferences = 55 minutes of audio processed:
+
+- Physical footprint rises ~70 MB over the first ~10 inferences (1478 MB after load → 1550 MB), then **plateaus**: 1550 MB at iteration 10 → 1548 MB at iteration 300.
+- IOAccelerator regions **constant** (25 for int8, 38 for fp32); resident bytes went *down* (1.6 G → 1.2 G).
+- RSS went down too (1678 MB → 1297 MB).
+
+IOAccelerator regions *do* exist — ORT is touching the GPU path — but they are a bounded, one-time cost paid at model load, not the unbounded ~1.25 GB/min growth #641 measured against wespeaker. **Presence of IOAccelerator is not the bug; unbounded growth is.** The 2026-05-08 entry conflated the two, and that conflation is what made Parakeet look impossible for three months.
+
+**Lesson worth generalising: a dependency ban recorded from one measurement should name what was measured.** #641 was thorough about the mechanism but recorded its conclusion as "ORT → tract", which compressed into folklore ("ORT leaks") that closed off an entire engine family for three months. Had it been filed as "ORT's Apple Silicon prebuilts grew IOAccelerator unboundedly *for wespeaker, on rc.12, in 2026-05*", the obvious next question — does that hold for a different model on a different RC? — would have been asked much sooner. Re-measuring cost about an hour.
+
+The corollary, learned the hard way in this very entry: **when you overturn a prior decision, do not reinterpret it into having agreed with you.** Say that it was reversed, on what new evidence, and what remains unresolved. The first draft here rewrote #641 as narrower than it was, which would have left the next reader with a *second* piece of folklore to untangle.
+
+**Trade-off for the picker:** int8 is the better default (4× smaller download, 750 MB less resident) and fp32 is the speed option. Both are comfortably real-time. Note ~1.5 GB resident is still substantial — comparable to Whisper large — so this is a genuine choice, not a free win.
+
+**Secondary finding: this may partly obsolete #1004.** Parakeet already emits correct casing and punctuation, which is most of what the LLM-refinement issue exists to fix. The `Nemotron` streaming variants go further (drop disfluencies). Evaluate those before committing to a second inference stack and a 2 GB LLM download.
+
+**Still unverified:** none of this is wired into the meeting pump. The soak is a tight inference loop, not a real session with audio capture, diarization, and the HUD running. `npm run memwatch` on a real meeting remains the acceptance gate.
+
+## 2026-07-28 — Parakeet on tract-onnx is blocked by `Pad` with an omitted optional input
+
+> **Superseded by the entry above.** The technical findings here are accurate and still worth keeping — tract cannot load these graphs — but "Parakeet is blocked" was the wrong conclusion. The answer was to change runtime, not to change model.
+
+Measured while spiking Parakeet TDT 0.6B v3 as a second ASR engine
+(#521). Conclusion up front: **`tract-onnx` cannot load the published
+Parakeet export**, and the blocker has nothing to do with quantization.
+
+Reproduce with `transcription::parakeet::tests::each_graph_loads_in_tract`
+against a real download. Three graphs, three unrelated failures:
+
+| Graph | int8 | fp32 |
+|---|---|---|
+| `nemo128.onnx` (preprocessor) | ✗ `STFT` | ✗ `STFT` (same file) |
+| `encoder-model*.onnx` | ✗ `Pad` | ✗ `Pad` |
+| `decoder_joint-model*.onnx` | ✗ `DynamicQuantizeLSTM` | ✓ loads |
+
+**The blocker is `Pad`.** The encoder omits `Pad`'s optional
+`constant_value` by passing `''` — the ONNX convention for "skip this
+input" (opset 17). tract discards empty-named inputs, its `Pad` rule
+then requires exactly 3, sees 2, and fails analysis. 48 nodes affected.
+Identical in fp32 and int8, so it is not a quantization artefact; it is
+tract not handling omitted optional inputs. There is no way around this
+from our side of the boundary.
+
+Two secondary findings, both worth knowing before someone retries:
+
+- **`STFT` (preprocessor)** — tract wants a rank-3 signal, the export
+  gives rank 2. Workaroundable by hand-rolling the 128-bin NeMo log-mel
+  in Rust. Note this is *not* a reuse of `diarization::features`: that
+  extractor is 80-bin for wespeaker. So the mel work #516 predicted
+  comes back after all, despite the export appearing to ship it.
+- **`DynamicQuantizeLSTM` (int8 decoder)** — a `com.microsoft` contrib
+  op, ORT-specific and never coming to tract. Moot, since the fp32
+  decoder is standard-domain.
+
+**The fp32 decoder needed pinned input facts to load at all.** Each of
+its inputs carries its own dynamic batch symbol
+(`targets_dynamic_axes_1`, `input_states_1_dynamic_axes_1`, …). tract's
+LSTM rule requires the state batch dim and sequence batch dim to unify
+and cannot prove two distinct symbols are equal. `with_input_fact` to
+concrete shapes replaces the symbols with literals and it discharges.
+Costs nothing here — greedy TDT decoding is one frame, one batch at a
+time by construction. Generalises: **a tract "impossible to unify
+Sym(a) with Sym(b)" failure usually means pin the inputs, not that the
+graph is unsupported.**
+
+**Download-size consequence.** Only the fp32 encoder is a candidate, so
+the ~670 MB figure comparable apps advertise for Parakeet does not
+apply to a tract-based Hush. Viable weights are ~2.5 GB — which
+materially weakens the "smaller and faster than Whisper" argument for
+adopting it.
+
+Routes forward, cheapest first: re-export from NeMo with tract-friendly
+ops (materialise the `Pad` constant, drop `STFT` and feed precomputed
+mel); patch tract for omitted optional inputs and rank-2 `STFT` (both
+spec-conformant, genuinely upstreamable); build-time graph surgery
+(fragile, re-breaks every model revision).
+
+**Reintroducing `ort` is not a route.** It loads all of this happily,
+which is precisely the trap #641 removed — ORT's Apple Silicon
+prebuilts dispatch through Metal Performance Shaders even on the CPU
+execution provider, causing unbounded IOAccelerator growth. A working
+Parakeet bought with a memory leak is not a trade worth making.
+
+## 2026-07-28 — Channel-based speaker separation: don't diarize what the capture device already told you
+
+The mic is ground truth. Audio arriving on the local capture device is
+the local user, and no cosine-distance matcher can improve on that — it
+can only disagree with it. Until #1003 the meeting pump merged mic and
+system utterances into one batch and ran the diarizer over all of it.
+
+Two failure modes that removes:
+
+1. A mic utterance assigned to a remote cluster (or the reverse),
+   mislabelling the user as a call participant.
+2. Mic embeddings widening the remote clusters they chain into — the
+   1-NN drift risk tracked in #316. The local talker is usually the
+   most frequent speaker in a session, so they contribute the most
+   chaining pressure of anyone.
+
+The diarizer now only sees the remote stream, doing the job it is
+actually good at: separating participants sharing one Zoom/Teams
+mixdown. Excluded mic finals fall through to the existing `"mic"`
+source tag, which the frontend already renders as "You" — so this
+needed no new label vocabulary, only the exclusion.
+
+**Guarded on a remote source existing.** An all-local session (two mic
+devices, two people in a room) must still diarize everything: there the
+channel distinguishes nothing, both streams are "a local mic", and
+excluding every source would collapse both talkers to "You".
+
+Worth re-checking the diarizer threshold after this lands. #633 dropped
+it to 0.4 partly because single-stream conference audio pulls cosine
+distances tighter than the wespeaker eval curve suggests; removing mic
+embeddings from the cluster state changes that input distribution, so
+the empirical basis for 0.4 should be re-measured rather than assumed.
+
 ## 2026-06-05 — Read-only-volume launch guard: bounce DMG / translocated launches before they break TCC
 
 ## 2026-06-09 — Diarizer threshold moved from env-var-only tuning into live Settings UI
@@ -1471,9 +1647,21 @@ Tauri 2's runtime auto-exits when the last webview window goes away. Hush's clos
 
 One production dep lives outside the "stable crates.io release" baseline. It is deliberate and has a documented exit condition. Don't bump without re-reading this section.
 
-~~### `ort = "=2.0.0-rc.12"` (exact pin, RC)~~ — **removed in #641 (tract migration)**
+### `ort = "=2.0.0-rc.13"` (exact pin, RC) — removed in #641, returned in #521 for Parakeet only
 
-`ort` and `ndarray` were exact-pinned to avoid RC-level API churn. Both have been removed; the diarizer now uses `tract-onnx = "0.22.1"` (current stable), which has no Metal/MPS dependency and uses a standard caret pin — no special bump policy required.
+History: `ort` and `ndarray` were exact-pinned to avoid RC-level API churn, then **removed in #641** when the diarizer migrated to `tract-onnx`. The diarizer's migration stands — `diarization/onnx.rs` uses tract and must keep doing so.
+
+`ort` came back in **#521**, scoped to the Parakeet ASR engine behind the off-by-default `parakeet` feature, because tract cannot load the Parakeet graphs at all (`Pad` with an omitted optional input — see the 2026-07-28 entries). It arrives transitively via `parakeet-rs`, which asks for `^2.0.0-rc.13`; we declare it explicitly with an exact pin anyway.
+
+**Why the explicit pin, when the dep is transitive:**
+
+1. The version is load-bearing for the memory result that justified allowing ORT back. #641 measured rc.12 with wespeaker; the exoneration measured **rc.13 with Parakeet**. Those are different prebuilts and different workloads.
+2. A caret on `parakeet-rs` would let a routine `cargo update` move the ORT RC with no review — exactly the churn the original pin existed to prevent.
+3. The `supply-chain-pins` CI job originally inspected **only dep-table lines in `Cargo.toml`**, so a transitive pre-release was invisible to it. That is how rc.13 first entered the tree unnoticed. A second CI step now scans `Cargo.lock` for pre-releases anywhere in the graph, with `ort` / `ort-sys` as the only allowlisted entries.
+
+**Bump-when policy.** Do **not** bump `ort` casually. An ORT bump changes the prebuilt binary whose memory behaviour is the entire basis for the reversal, so a bump requires re-running `parakeet::tests::memory_soak_over_many_inferences` and confirming physical footprint stays flat and the IOAccelerator region count stays constant. If it regresses, the fallback #641 identified and declined — building ORT from source with Metal disabled — becomes live again. Update the allowlists in `.github/workflows/ci.yml::supply-chain-pins` (both steps) in the same change.
+
+**Scope discipline.** ORT is permitted for Parakeet and nowhere else. If a future model can be served by tract, use tract.
 
 ### `rdev` git fork pin
 
