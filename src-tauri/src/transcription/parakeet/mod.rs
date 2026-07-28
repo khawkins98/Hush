@@ -35,36 +35,50 @@
 //!    quantization artefact. The preprocessor separately needs a rank-3
 //!    `STFT` and the export supplies rank 2. So the choice here is ORT
 //!    or no Parakeet.
-//! 2. **New measurement** — see below. #641 measured `ort` rc.12 with
-//!    wespeaker across many short sessions. This is rc.13 with Parakeet
-//!    in one long-lived session. Different prebuilt, different
-//!    workload, different result.
+//! 2. **New measurement** — see below. #641 measured `ort` **rc.12**;
+//!    this is **rc.13**, and a direct re-test of #641's own workload on
+//!    the new version shows the growth is simply gone. The ban was
+//!    correct when written and went stale as upstream moved.
 //!
 //! Leaving `parakeet-rs`'s `coreml` feature off is *not* a mitigation
 //! for #641's mechanism — that was MPS dispatch on the CPU EP, which
 //! CoreML being off does nothing about. It is off because upstream
-//! reports it unstable for these models. The memory result is the only
-//! thing standing between this engine and #641's conclusion.
+//! reports it unstable for these models. Measurement, not configuration,
+//! is what stands between this engine and #641's conclusion.
 //!
-//! ## Does ORT leak here? Measured: no
+//! ## Memory: measured, and the #641 growth is gone
 //!
 //! [`tests::memory_soak_over_many_inferences`], 300 inferences of the
 //! 11 s JFK fixture (≈55 minutes of audio), debug build, CPU EP:
 //!
-//! - Physical footprint **flat** — 1550 MB at iteration 10, 1548 MB at
-//!   iteration 300 (int8).
+//! - Physical footprint rises ~70 MB over the first ~10 inferences
+//!   (1478 MB after load → 1550 MB), then **plateaus**: 1550 MB at
+//!   iteration 10, 1548 MB at iteration 300 (int8).
 //! - IOAccelerator region count **constant** (25 int8 / 38 fp32);
 //!   resident bytes went *down* over the run.
-//! - RSS went down too.
+//! - RSS went down too (1678 → 1297 MB).
 //!
 //! IOAccelerator regions do exist — ORT touches the GPU path — but they
-//! are a bounded cost paid once at model load, not #641's unbounded
-//! ~1.25 GB/min growth. **Presence of IOAccelerator is not the bug;
-//! unbounded growth is.**
+//! are a bounded cost, not #641's unbounded ~1.25 GB/min growth.
+//! **Presence of IOAccelerator is not the bug; unbounded growth is.**
+//!
+//! **The general case was measured too.** [`crate::diarization::ort_probe`]
+//! re-runs #641's own workload — the same wespeaker model, both session
+//! shapes — on rc.13: 7 IOAccelerator regions, constant, no growth,
+//! against #641's 96 regions and ~1.25 GB/min. The leak was
+//! **rc.12-specific**, not inherent to ORT, the CPU EP, or any
+//! particular model. See `learnings.md` 2026-07-28 (latest).
+//!
+//! Consequence: ORT's **GPU execution providers are back on the table**
+//! if this engine ever needs to beat 13.7–21× realtime. They were
+//! off-limits only while the CPU EP itself was suspect. (`parakeet-rs`
+//! reports CoreML unstable for these models, so WebGPU is the likelier
+//! candidate.)
 //!
 //! Throughput on the same fixture: int8 ≈13.7× realtime, fp32 ≈21×.
-//! int8 is 639 MB on disk against fp32's ~2.5 GB and holds ~750 MB less
-//! resident, so it is the better default; fp32 is the speed option.
+//! The int8 set is 670 MB (639 MiB) on disk against fp32's ~2.5 GB, and
+//! holds ~750 MB less resident, so it is the better default; fp32 is
+//! the speed option.
 //!
 //! **Still on probation.** The soak is a tight inference loop, not a
 //! real session with capture, diarization, and the HUD running, and
@@ -76,7 +90,7 @@
 //!
 //! One directory holding either variant:
 //!
-//! - **int8** (recommended, 639 MB) — `encoder-model.int8.onnx`,
+//! - **int8** (recommended, 670 MB / 639 MiB) — `encoder-model.int8.onnx`,
 //!   `decoder_joint-model.int8.onnx`, `vocab.txt`
 //! - **fp32** (~2.5 GB) — `encoder-model.onnx`,
 //!   `encoder-model.onnx.data`, `decoder_joint-model.onnx`, `vocab.txt`
@@ -109,7 +123,7 @@ pub const SAMPLE_RATE_HZ: u32 = 16_000;
 /// own resolution order so our pre-flight check agrees with what the
 /// loader will actually pick.
 ///
-/// The int8 encoder is ~670 MB against fp32's ~2.5 GB (the latter also
+/// The int8 *set* is ~670 MB (639 MiB) against fp32's ~2.5 GB (the latter also
 /// needing an `encoder-model.onnx.data` sidecar, since it exceeds
 /// protobuf's 2 GB message limit). Both work under ORT.
 const ENCODER_CANDIDATES: &[&str] = &[

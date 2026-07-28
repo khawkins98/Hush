@@ -32,6 +32,35 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-07-28 (latest) — #641 re-tested: the ORT leak was rc.12-specific and is gone on rc.13
+
+The entry below reversed #641 for Parakeet on the strength of a soak, while explicitly declining to generalise: different model, different runtime version, different session lifetime, three variables moved at once. This closes that gap by holding the model fixed and re-running #641's own workload.
+
+`diarization::ort_probe` (test-only, `#[ignore]`d, gated on `parakeet`) loads **the same wespeaker ResNet34-LM model #641 measured**, on ORT **rc.13**, 200 inferences, in both session shapes:
+
+| | single long-lived session | session recreated every 25 (#642's shape) |
+|---|---|---|
+| Footprint start → end | 69 MB → **68 MB** | 102 MB → 106 MB |
+| IOAccelerator regions | **7, constant** | **7, constant** |
+| IOAccelerator virtual | **260.5 MB, constant** | **260.5 MB, constant** |
+| IOAccelerator resident | 66.0 → **65.1 MB** (down) | 99.7 → 102.8 MB |
+
+**#641 measured ~1.25 GB/min of growth and 96 IOAccelerator regions totalling 9 GB virtual over five minutes on this exact model.** Here: 7 regions, 260.5 MB virtual, no growth trend in either mode. That is not a marginal improvement, it is the absence of the phenomenon.
+
+So the leak was **`ort` rc.12-specific** (or fixed upstream between rc.12 and rc.13). It was never inherent to ONNX Runtime, to the CPU EP, or to the wespeaker model.
+
+**What this changes:**
+
+- The Parakeet memory result is **not** model- or workload-specific after all. The caveats recorded in the entry below were appropriate when written, and are now resolved by measurement rather than argument.
+- **ORT's GPU execution providers become worth evaluating.** CoreML / WebGPU were off-limits while the CPU EP itself was suspect; they are the obvious next lever if Parakeet needs to be faster than its current 13.7–21× realtime. (`parakeet-rs`'s author reports CoreML unstable for these models, so WebGPU is the likelier candidate.)
+- The `#642` periodic-session-recreation mitigation is now pure cost. It is dead code for us anyway — the diarizer no longer uses ORT — but note the recreation mode is the *only* one showing any drift here (~4 MB across 8 rebuilds), so recreating sessions is mildly counterproductive rather than protective.
+
+**What this does not change:** the diarizer stays on `tract-onnx`. It works, it is pure Rust, and it saves ~45 MB of binary. "We could move it back" is not a reason to.
+
+**Limits.** 200 inferences on one machine, debug build, synthetic mel features. Content does not affect allocator behaviour, and against a 1.25 GB/min baseline the absence of growth is unambiguous — but this is one measurement, not a guarantee across future ORT releases. The exact pin and the re-measure-on-bump rule in "Supply-chain pins" stand.
+
+**The meta-lesson, now with a number attached.** #641's conclusion was correct for its time and became wrong silently, as upstream moved. Nothing in the repo would ever have told us — a ban records a decision, not an expiry. Cost to re-test: about an hour, using a harness already written for something else. Worth asking, for any dependency ban older than a few releases: *has anyone checked lately?*
+
 ## 2026-07-28 (later) — Parakeet works via `parakeet-rs` + ORT, and ORT does *not* leak here
 
 Supersedes the "blocked" conclusion in the entry immediately below. That entry's *findings* still hold — tract genuinely cannot load these graphs — but its conclusion ("Parakeet is blocked") was wrong, because it treated ORT as permanently unavailable.
@@ -53,7 +82,7 @@ This branch takes the **prebuilts** — precisely the artifact #641 named. So: O
 
 | | fp32 | int8 |
 |---|---|---|
-| On disk | ~2.5 GB | **639 MB** |
+| On disk | ~2.5 GB | **670 MB** (639 MiB) |
 | Load | 3.3 s | **1.4 s** |
 | Steady-state inference (11 s audio) | **520 ms** (21× realtime) | 804 ms (13.7× realtime) |
 | Footprint after load | 2220 MB | **1478 MB** |
@@ -65,7 +94,7 @@ Transcript is verbatim correct on both, **with punctuation and capitalisation al
 
 **The memory result is the important one.** 300 inferences = 55 minutes of audio processed:
 
-- Physical footprint **flat**: 1550 MB at iteration 10 → 1548 MB at iteration 300.
+- Physical footprint rises ~70 MB over the first ~10 inferences (1478 MB after load → 1550 MB), then **plateaus**: 1550 MB at iteration 10 → 1548 MB at iteration 300.
 - IOAccelerator regions **constant** (25 for int8, 38 for fp32); resident bytes went *down* (1.6 G → 1.2 G).
 - RSS went down too (1678 MB → 1297 MB).
 

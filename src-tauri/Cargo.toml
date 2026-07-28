@@ -299,7 +299,7 @@ diarization-onnx = ["dep:tract-onnx", "dep:realfft"]
 #
 # Off by default, and deliberately so on two counts: it is a second
 # full ASR stack (~36 extra crates, ~45 MB of vendored runtime, and a
-# build-time binary download), and the model is a separate ~639 MB
+# build-time binary download), and the model is a separate ~670 MB
 # fetch. A default build pulls none of it — verified via `cargo tree`.
 parakeet = ["dep:parakeet-rs", "dep:ort"]
 
