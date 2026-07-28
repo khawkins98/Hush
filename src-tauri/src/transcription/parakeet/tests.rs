@@ -7,9 +7,26 @@
 //!   cargo test --lib --features parakeet parakeet:: -- --ignored --nocapture
 //! ```
 
+/// Per-test scratch directory, unique per process.
+///
+/// A fixed path under `temp_dir()` collides between concurrent
+/// `cargo test` runs and inherits leftovers from a panicked one, which
+/// makes these tests flake in ways that look like real failures.
+fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("hush-parakeet-{tag}-{}", std::process::id()))
+}
+
+// Note on coverage: `transcribe()` itself — the mutex handling, the
+// `to_vec()` copy, and the empty-input short circuit — is exercised
+// only by the `#[ignore]`d tests below, because a `ParakeetModel`
+// cannot be constructed without real ONNX files on disk. CI therefore
+// never runs it. Making that path unit-testable would mean injecting a
+// seam behind `ParakeetTDT`, which is worth doing when this engine is
+// wired into the pump and not before.
+
 #[test]
 fn files_present_rejects_an_incomplete_directory() {
-    let dir = std::env::temp_dir().join("hush-parakeet-files-present-test");
+    let dir = unique_temp_dir("files-present");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     assert!(
@@ -27,7 +44,41 @@ fn files_present_rejects_an_incomplete_directory() {
     );
 
     std::fs::write(dir.join("decoder_joint-model.onnx"), b"x").unwrap();
+    // Still not ready: the fp32 encoder needs its weights sidecar, and
+    // `files_present` must agree with `load` about that. Reporting
+    // "ready" here and then failing to load is worse than reporting
+    // "not ready" — a model picker would offer an entry that can't work.
+    assert!(
+        !super::ParakeetModel::files_present(&dir),
+        "fp32 encoder without its .onnx.data sidecar must not report as present"
+    );
+
+    std::fs::write(dir.join("encoder-model.onnx.data"), b"x").unwrap();
     assert!(super::ParakeetModel::files_present(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn files_present_and_load_agree_about_the_sidecar() {
+    // Pins the invariant directly: for any directory, `files_present`
+    // must not claim readiness that `load` will then reject. The fp32
+    // sidecar is the case where these two drifted apart.
+    let dir = unique_temp_dir("agree");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in [
+        "encoder-model.onnx",
+        "decoder_joint-model.onnx",
+        "vocab.txt",
+    ] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    let present = super::ParakeetModel::files_present(&dir);
+    let loads = super::ParakeetModel::load(&dir).is_ok();
+    assert!(
+        !present && !loads,
+        "files_present ({present}) must not disagree with load ({loads})"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -35,7 +86,7 @@ fn files_present_rejects_an_incomplete_directory() {
 fn files_present_accepts_the_int8_variant() {
     // int8 is a different file set entirely — ~670 MB vs ~2.5 GB — and
     // the picker must not reject it for lacking the fp32 names.
-    let dir = std::env::temp_dir().join("hush-parakeet-int8-test");
+    let dir = unique_temp_dir("int8");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for f in [
@@ -53,7 +104,7 @@ fn files_present_accepts_the_int8_variant() {
 fn load_rejects_fp32_encoder_without_its_weights_sidecar() {
     // fp32 exceeds protobuf's 2 GB limit so its weights live beside it.
     // Copying only the .onnx is an easy mistake with an opaque ORT error.
-    let dir = std::env::temp_dir().join("hush-parakeet-sidecar-test");
+    let dir = unique_temp_dir("sidecar");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for f in [
@@ -76,7 +127,7 @@ fn load_rejects_fp32_encoder_without_its_weights_sidecar() {
 
 #[test]
 fn load_names_the_missing_file() {
-    let dir = std::env::temp_dir().join("hush-parakeet-load-error-test");
+    let dir = unique_temp_dir("load-error");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // `map_err(|e| e)` rather than `unwrap_err()`: ParakeetModel wraps a
@@ -85,9 +136,12 @@ fn load_names_the_missing_file() {
         Ok(_) => panic!("load should fail on an empty directory"),
         Err(e) => e.to_string(),
     };
+    // Match the whole phrase, not just "encoder-model.onnx" — that is a
+    // substring of "encoder-model.int8.onnx" too, so a looser assertion
+    // would pass on almost any wrong-but-nonempty candidate list.
     assert!(
-        err.contains("encoder-model.onnx"),
-        "error should name the missing file, got: {err}"
+        err.contains("no encoder model found"),
+        "error should say which kind of model is missing, got: {err}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

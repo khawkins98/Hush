@@ -45,9 +45,9 @@ The audio never leaves your machine, and never lands on disk — it's processed 
 | [OpenWhispr](https://github.com/OpenWhispr/openwhispr) | ✅ | ✅ | ✅ auto-detect Zoom / Teams | ✅ local unlimited; cloud tier: 2k words/wk free, $8/mo Pro | ✅ MIT | macOS · Linux · Windows |
 | [Whispering](https://github.com/EpicenterHQ/epicenter) | ✅ | ✅ | — | ✅ | ✅ AGPLv3 | macOS · Linux · Windows |
 | [Buzz](https://github.com/chidiwilliams/buzz) | ✅ | partial (live mic, no PTT into other apps) | file import only | ✅ | ✅ MIT | macOS · Linux · Windows |
-| [Meetily](https://meetily.ai) | ✅ | — | ✅ system audio, no bot; diarization + Ollama summaries | ✅ | ✅ MIT | macOS · Windows |
-| [VoiceInk](https://github.com/Beingpax/VoiceInk) | ✅ | ✅ | — | ✅ | ✅ | macOS only |
-| [Detto](https://github.com/Gremble-io/Detto) | ✅ | ✅ hotkey | ✅ mic + system audio, channel-separated | ✅ source-available | — BSL 1.1 (converts to MIT 2030-05-12) | macOS only (Apple Silicon) |
+| [Meetily](https://meetily.ai) | ✅ | — | ✅ system audio, no bot; Ollama summaries | ✅ Community Edition; separate paid PRO tier | ✅ MIT | macOS · Linux · Windows |
+| [VoiceInk](https://github.com/Beingpax/VoiceInk) | ✅ | ✅ | — | ✅ | ✅ GPLv3 | macOS only |
+| [Detto](https://github.com/Gremble-io/Detto) | ✅ | ✅ hotkey | ✅ mic + system audio, channel-separated | ✅ personal + internal business use | — BSL 1.1 (converts to MIT 2030-05-12) | macOS only (Apple Silicon) |
 | [MacWhisper](https://goodsnooze.gumroad.com/l/macwhisper) | ✅ | ✅ | partial (file import) | freemium | — | macOS only |
 | [Superwhisper](https://superwhisper.com) | ✅ | ✅ | ✅ free tier ([Meeting Transcription](https://superwhisper.com/meeting-transcription)) | freemium | — | macOS · Windows · iOS |
 | [Granola](https://www.granola.ai) | cloud LLM | — | ✅ | freemium | — | macOS · Windows |
@@ -133,7 +133,7 @@ Hush is a behavioural reimplementation of [VoiceInk](https://github.com/Beingpax
 
 [Detto](https://github.com/Gremble-io/Detto) by [Jason Craik](https://github.com/Gremble-io) prompted a design review of Hush's transcription pipeline in July 2026. Two ideas came out of it:
 
-- **Channel-based speaker separation.** Detto labels mic audio "You" and system audio "Them" and never runs the mic through a diarizer. Hush adopted the underlying insight — the capture device is ground truth for the local talker, so feeding it to an embedding matcher can only disagree with what you already know — in [#1003](https://github.com/khawkins98/Hush/issues/1003).
+- **Channel-based speaker separation.** Detto labels mic audio "You" and system audio "Them" — separating speakers by capture channel rather than by voice embedding. Hush adopted the underlying insight: the capture device is ground truth for the local talker, so feeding it to an embedding matcher can only disagree with what you already know ([#1003](https://github.com/khawkins98/Hush/issues/1003)).
 - **On-device LLM refinement**, and Detto's two-phase design for it (emit immediately, refine in the background). Not yet built in Hush; the design is written up in [#1004](https://github.com/khawkins98/Hush/issues/1004).
 
 **No Detto source code was read or used.** Both ideas came from Detto's public README and `ARCHITECTURE.md`, which are unusually generous documents. Detto is [BSL 1.1](https://github.com/Gremble-io/Detto/blob/main/LICENSE) — source-available, not open source, and incompatible with Hush's Apache 2.0 until it converts to MIT on 2030-05-12 — so its code could not have been reused even had we wanted to. The same don't-read-the-source discipline Hush applies to VoiceInk applies here, for the same reason: Detto is a near neighbour, and the distance is worth keeping visible.

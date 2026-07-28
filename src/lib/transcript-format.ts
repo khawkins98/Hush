@@ -21,6 +21,34 @@ export interface UtteranceLike {
 }
 
 /**
+ * Map a backend speaker label to user-facing copy.
+ *
+ * The backend writes source-derived tags (`"mic"` / `"system"`) when
+ * the diarizer abstains, and model-derived ones (`"Speaker 1"`, or a
+ * resolved identity name) when it doesn't. Only the source-derived
+ * pair needs translating; everything else passes through.
+ *
+ * Shared rather than duplicated because #1003 made mixed vocabulary
+ * reachable in a single session: channel-based separation leaves mic
+ * utterances on the `"mic"` tag while remote ones still get
+ * `"Speaker N"`. Before that change a mic+system meeting had every
+ * source diarized, so the raw labels happened to be consistent and
+ * the live pane could get away with printing them verbatim. It can't
+ * now — without this the transcript and clipboard read
+ * `"mic: …"` / `"Speaker 1: …"` side by side.
+ */
+export function speakerDisplayLabel(label: string | null): string | null {
+  switch (label) {
+    case "mic":
+      return "You";
+    case "system":
+      return "Remote";
+    default:
+      return label;
+  }
+}
+
+/**
  * Decide whether speaker labels should be rendered for a session.
  * Returns `true` when at least two distinct non-empty speaker
  * labels are present in the utterance list.
@@ -50,10 +78,9 @@ export function joinUtterances(
   if (utterances.length === 0) return "";
   const showLabels = shouldShowSpeakerLabels(utterances);
   return utterances
-    .map((u) =>
-      showLabels && u.speakerLabel
-        ? `${u.speakerLabel}: ${u.text}`
-        : u.text,
-    )
+    .map((u) => {
+      const label = showLabels ? speakerDisplayLabel(u.speakerLabel) : null;
+      return label ? `${label}: ${u.text}` : u.text;
+    })
     .join(separator);
 }

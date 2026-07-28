@@ -34,9 +34,20 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ## 2026-07-28 (later) — Parakeet works via `parakeet-rs` + ORT, and ORT does *not* leak here
 
-Supersedes the "blocked" conclusion in the entry immediately below. That entry's *findings* still hold — tract genuinely cannot load these graphs — but its framing ("Parakeet is blocked") was too narrow, because it treated ORT as unavailable. Re-reading #641 showed that was never true.
+Supersedes the "blocked" conclusion in the entry immediately below. That entry's *findings* still hold — tract genuinely cannot load these graphs — but its conclusion ("Parakeet is blocked") was wrong, because it treated ORT as permanently unavailable.
 
-**#641 banned ORT's prebuilts, not ONNX Runtime.** Verbatim from the 2026-05-08 entry: *"There is no opt-out knob **in the prebuilt binaries** — you'd need to build ORT from source with Metal disabled."* That is a statement about a specific distribution, and the `CLAUDE.md` note derived from it is scoped to `diarization/onnx.rs`, where tract works fine and there is no reason to revisit.
+**The justification is a measurement, not a re-reading of #641.** Stating this plainly because the first draft of this entry got it backwards, and a code review caught it:
+
+> ~~#641 banned ORT's prebuilts, not ONNX Runtime — "no opt-out knob **in the prebuilt binaries**" is a statement about a distribution.~~
+
+That reading does not survive contact with what #641 actually says. Its remediation list includes *"**Build ORT without GPU support.** Drop `download-binaries`, build from source with cmake configured to disable Metal / CoreML providers entirely. Cost: significant build infrastructure change. **Not done.**"* — so the from-source build was the escape hatch #641 identified and **declined**. And the sentence quoted above sits under the heading "What ORT is actually doing on Apple Silicon (**no opt-out**)", i.e. it was explaining why ORT could not be salvaged, not scoping a narrow ban. The entry one day earlier is blunter still: *"Reintroducing `ort` is not a route."*
+
+This branch takes the **prebuilts** — precisely the artifact #641 named. So: ORT is back in defiance of #641's conclusion, not because of a loophole in it. What licenses that is new evidence, and only that.
+
+**The evidence.** 300 inferences ≈ 55 minutes of audio, physical footprint flat (1550 MB → 1548 MB), IOAccelerator region count constant, RSS declining. That directly falsifies "unbounded ~1.25 GB/min" **for this model and this usage**. Two limits on how far it generalises, both real:
+
+- #641 measured `ort` **rc.12** with wespeaker; this is **rc.13** with Parakeet. Different prebuilt. This does not retroactively exonerate rc.12, and an ORT bump could regress it — hence the exact pin and the re-measure requirement in "Supply-chain pins".
+- Workload shape differs materially. wespeaker ran many short sessions with periodic `Session` recreation; Parakeet is one long-lived session. "ORT doesn't leak" is **not** established in general — only here.
 
 **[`parakeet-rs`](https://github.com/altunenes/parakeet-rs)** (MIT, actively maintained) wraps the Parakeet family over ORT. Dropped in and working end-to-end the same afternoon tract was ruled out. Measured on `tests/fixtures/jfk.wav`, debug build, CPU EP, `coreml` feature off:
 
@@ -60,7 +71,9 @@ Transcript is verbatim correct on both, **with punctuation and capitalisation al
 
 IOAccelerator regions *do* exist — ORT is touching the GPU path — but they are a bounded, one-time cost paid at model load, not the unbounded ~1.25 GB/min growth #641 measured against wespeaker. **Presence of IOAccelerator is not the bug; unbounded growth is.** The 2026-05-08 entry conflated the two, and that conflation is what made Parakeet look impossible for three months.
 
-**Lesson worth generalising: a dependency ban recorded from one measurement should name what was measured.** "ORT leaks" became folklore that closed off an entire engine family. "ORT's Apple Silicon *prebuilts* grew IOAccelerator unboundedly *for the wespeaker model in 2026-05*" is the actual finding, and it invites re-measurement instead of foreclosing it. Re-measuring cost about an hour.
+**Lesson worth generalising: a dependency ban recorded from one measurement should name what was measured.** #641 was thorough about the mechanism but recorded its conclusion as "ORT → tract", which compressed into folklore ("ORT leaks") that closed off an entire engine family for three months. Had it been filed as "ORT's Apple Silicon prebuilts grew IOAccelerator unboundedly *for wespeaker, on rc.12, in 2026-05*", the obvious next question — does that hold for a different model on a different RC? — would have been asked much sooner. Re-measuring cost about an hour.
+
+The corollary, learned the hard way in this very entry: **when you overturn a prior decision, do not reinterpret it into having agreed with you.** Say that it was reversed, on what new evidence, and what remains unresolved. The first draft here rewrote #641 as narrower than it was, which would have left the next reader with a *second* piece of folklore to untangle.
 
 **Trade-off for the picker:** int8 is the better default (4× smaller download, 750 MB less resident) and fp32 is the speed option. Both are comfortably real-time. Note ~1.5 GB resident is still substantial — comparable to Whisper large — so this is a genuine choice, not a free win.
 
@@ -1605,9 +1618,21 @@ Tauri 2's runtime auto-exits when the last webview window goes away. Hush's clos
 
 One production dep lives outside the "stable crates.io release" baseline. It is deliberate and has a documented exit condition. Don't bump without re-reading this section.
 
-~~### `ort = "=2.0.0-rc.12"` (exact pin, RC)~~ — **removed in #641 (tract migration)**
+### `ort = "=2.0.0-rc.13"` (exact pin, RC) — removed in #641, returned in #521 for Parakeet only
 
-`ort` and `ndarray` were exact-pinned to avoid RC-level API churn. Both have been removed; the diarizer now uses `tract-onnx = "0.22.1"` (current stable), which has no Metal/MPS dependency and uses a standard caret pin — no special bump policy required.
+History: `ort` and `ndarray` were exact-pinned to avoid RC-level API churn, then **removed in #641** when the diarizer migrated to `tract-onnx`. The diarizer's migration stands — `diarization/onnx.rs` uses tract and must keep doing so.
+
+`ort` came back in **#521**, scoped to the Parakeet ASR engine behind the off-by-default `parakeet` feature, because tract cannot load the Parakeet graphs at all (`Pad` with an omitted optional input — see the 2026-07-28 entries). It arrives transitively via `parakeet-rs`, which asks for `^2.0.0-rc.13`; we declare it explicitly with an exact pin anyway.
+
+**Why the explicit pin, when the dep is transitive:**
+
+1. The version is load-bearing for the memory result that justified allowing ORT back. #641 measured rc.12 with wespeaker; the exoneration measured **rc.13 with Parakeet**. Those are different prebuilts and different workloads.
+2. A caret on `parakeet-rs` would let a routine `cargo update` move the ORT RC with no review — exactly the churn the original pin existed to prevent.
+3. The `supply-chain-pins` CI job originally inspected **only dep-table lines in `Cargo.toml`**, so a transitive pre-release was invisible to it. That is how rc.13 first entered the tree unnoticed. A second CI step now scans `Cargo.lock` for pre-releases anywhere in the graph, with `ort` / `ort-sys` as the only allowlisted entries.
+
+**Bump-when policy.** Do **not** bump `ort` casually. An ORT bump changes the prebuilt binary whose memory behaviour is the entire basis for the reversal, so a bump requires re-running `parakeet::tests::memory_soak_over_many_inferences` and confirming physical footprint stays flat and the IOAccelerator region count stays constant. If it regresses, the fallback #641 identified and declined — building ORT from source with Metal disabled — becomes live again. Update the allowlists in `.github/workflows/ci.yml::supply-chain-pins` (both steps) in the same change.
+
+**Scope discipline.** ORT is permitted for Parakeet and nowhere else. If a future model can be served by tract, use tract.
 
 ### `rdev` git fork pin
 

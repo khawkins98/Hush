@@ -229,8 +229,11 @@ impl AudioSource {
 /// arriving on the local mic is the local user, and no embedding
 /// comparison can improve on knowing which physical device carried it.
 /// `meeting::pump::diarize_and_dispatch_merged` uses this to keep mic
-/// utterances out of the diarizer's cluster state entirely, so the
-/// 1-NN matcher only ever sees the remote stream.
+/// utterances out of the diarizer's cluster state — **when the session
+/// also has a remote source**. An all-local session (two mic devices,
+/// two people in a room) still diarizes everything, because there the
+/// channel distinguishes nothing. See the `has_remote_source` guard in
+/// `pump.rs` for the full reasoning.
 ///
 /// The frontend maps this tag to "You" (`HistoryMeetingRow.svelte`),
 /// which is why the exclusion needs no separate label vocabulary — an

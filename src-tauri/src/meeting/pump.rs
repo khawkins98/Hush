@@ -1400,6 +1400,30 @@ pub(super) async fn diarize_and_dispatch_merged(
         // speakers. Excluding every source would collapse them both to
         // "You". So the exclusion only applies when it has something to
         // fall back on.
+        //
+        // KNOWN COST, accepted deliberately (#1006): "the mic is the
+        // local user" holds only when exactly ONE person uses that
+        // device. In a hybrid meeting — several people around one laptop
+        // plus remote participants — every in-room voice arrives on the
+        // mic channel and now collapses to "You", where the diarizer
+        // would previously have separated them. Speakerphone echo has the
+        // same shape. The trade is deliberate: 1:1 remote calls are the
+        // common case and get strictly better, while in-room separation
+        // was already unreliable (see the #633 threshold notes). If this
+        // turns out to matter in practice, the fix is per-channel cluster
+        // namespaces rather than reverting — the mic should still never
+        // be matched against a *remote* cluster.
+        //
+        // SECOND KNOWN COST (#1006): in a 1:1 call the diarizer now sees
+        // only the system bucket — a single remote talker. That is the
+        // input shape #369 documented as producing spurious Speaker A /
+        // Speaker B alternation, and the local user's embeddings are no
+        // longer there to anchor the matcher with a contrasting centroid.
+        // The #369 fast path above does not catch this, because it keys
+        // on bucket count (2) rather than on what survives the exclusion
+        // (1 bucket's worth). Watch for mid-call speaker splitting on 1:1
+        // meetings; if it appears, re-express that guard in terms of the
+        // post-exclusion input.
         let has_remote_source = source_labels
             .iter()
             .any(|l| l != crate::audio::LOCAL_SPEAKER_TAG);

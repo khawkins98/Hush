@@ -14,26 +14,37 @@
 //!
 //! ## Why ORT, after #641 removed it
 //!
-//! Narrowly and deliberately. #641 removed `ort` from the **diarizer**
-//! because ORT's Apple Silicon prebuilts dispatch through Metal
-//! Performance Shaders even on the CPU execution provider, growing
-//! IOAccelerator ~1.25 GB/min. That finding stands, and
-//! [`crate::diarization::onnx`] stays on `tract-onnx`.
+//! This **reverses** #641 for this engine. It is not a loophole in it,
+//! and the distinction matters if you are here to change something.
 //!
-//! It does not generalise to here, because **tract cannot load the
-//! Parakeet graphs at all.** Measured 2026-07-28: the encoder omits
-//! `Pad`'s optional `constant_value` by passing `''` (the ONNX
-//! convention for "skip this input"); tract discards empty-named
-//! inputs, then its `Pad` rule demands exactly 3, sees 2, and fails
-//! analysis across 48 nodes. Identical in fp32 and int8, so not a
-//! quantization artefact. The preprocessor additionally needs a rank-3
-//! `STFT` signal and the export supplies rank 2. Full detail in
-//! `learnings.md` 2026-07-28.
+//! #641 removed `ort` from the diarizer because ORT's Apple Silicon
+//! prebuilts dispatch through Metal Performance Shaders even on the CPU
+//! execution provider, growing IOAccelerator ~1.25 GB/min. It also
+//! considered building ORT from source with Metal disabled and recorded
+//! that as "Not done". We take the **prebuilts** — the same artifact it
+//! named. [`crate::diarization::onnx`] stays on `tract-onnx` and should.
 //!
-//! So for this model the choice is ORT or nothing. We take the CPU
-//! execution provider and leave `parakeet-rs`'s `coreml` feature off
-//! (it is opt-in upstream, and its author reports CoreML unstable for
-//! these models).
+//! Two things license the reversal, and neither is a reinterpretation
+//! of #641:
+//!
+//! 1. **tract cannot load these graphs at all.** The encoder omits
+//!    `Pad`'s optional `constant_value` by passing `''` (the ONNX
+//!    convention for "skip this input"); tract discards empty-named
+//!    inputs, then its `Pad` rule demands exactly 3, sees 2, and fails
+//!    analysis across 48 nodes — fp32 and int8 alike, so not a
+//!    quantization artefact. The preprocessor separately needs a rank-3
+//!    `STFT` and the export supplies rank 2. So the choice here is ORT
+//!    or no Parakeet.
+//! 2. **New measurement** — see below. #641 measured `ort` rc.12 with
+//!    wespeaker across many short sessions. This is rc.13 with Parakeet
+//!    in one long-lived session. Different prebuilt, different
+//!    workload, different result.
+//!
+//! Leaving `parakeet-rs`'s `coreml` feature off is *not* a mitigation
+//! for #641's mechanism — that was MPS dispatch on the CPU EP, which
+//! CoreML being off does nothing about. It is off because upstream
+//! reports it unstable for these models. The memory result is the only
+//! thing standing between this engine and #641's conclusion.
 //!
 //! ## Does ORT leak here? Measured: no
 //!
@@ -118,14 +129,38 @@ const DECODER_CANDIDATES: &[&str] = &[
 /// Vocabulary file. Not variant-dependent.
 const VOCAB_FILE: &str = "vocab.txt";
 
+/// The fp32 encoder exceeds protobuf's 2 GB message limit, so its
+/// weights live in a sidecar that must sit beside the `.onnx`. Copying
+/// only the `.onnx` is an easy mistake and the resulting ORT error is
+/// opaque, so both [`ParakeetModel::load`] and
+/// [`ParakeetModel::files_present`] check it here — they must agree.
+fn fp32_sidecar_ok(dir: &Path) -> bool {
+    !dir.join("encoder-model.onnx").is_file() || dir.join("encoder-model.onnx.data").is_file()
+}
+
+/// Compile-time proof that the model is safe to park in `AppState`
+/// behind an `Arc`, the way every other inference seam is.
+///
+/// Asserted now rather than at integration time: nothing uses this
+/// engine yet, so a `parakeet-rs` bump that introduced an `Rc` would
+/// compile cleanly here and only fail once someone wired it into the
+/// pump — a long way from the cause.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ParakeetModel>();
+};
+
 /// A loaded Parakeet TDT model.
 ///
 /// `ParakeetTDT::transcribe_samples` takes `&mut self` (the transducer
 /// carries decoder state), so the model sits behind a `Mutex`. That is
-/// the same shape as the shared `WhisperContext` — and the same
-/// caveat applies: holding this lock across an inference serialises
-/// callers, which is why concurrent meetings stay deferred. See
-/// `ARCHITECTURE.md`.
+/// the same shape as the shared `Arc<Mutex<WhisperContext>>`, and the
+/// same caveat would apply once this is wired into the pump: holding
+/// the lock across an inference serialises callers. Concurrent meetings
+/// are deferred today because of the Whisper context and the shared
+/// diarizer (see `ARCHITECTURE.md`) — not because of this engine, which
+/// nothing uses yet — but adopting Parakeet would not by itself lift
+/// that restriction.
 pub struct ParakeetModel {
     inner: Mutex<ParakeetTDT>,
     label: String,
@@ -151,12 +186,7 @@ impl ParakeetModel {
                 ));
             }
         }
-        // fp32 keeps its weights in a sidecar (the graph exceeds
-        // protobuf's 2 GB limit). Easy to miss when copying by hand, and
-        // the resulting ORT error is not obvious, so check it explicitly.
-        if dir.join("encoder-model.onnx").is_file()
-            && !dir.join("encoder-model.onnx.data").is_file()
-        {
+        if !fp32_sidecar_ok(dir) {
             return Err(anyhow!(
                 "parakeet: encoder-model.onnx is present but its weights sidecar \
                  encoder-model.onnx.data is missing from {}",
@@ -177,11 +207,17 @@ impl ParakeetModel {
 
     /// Whether a usable model (fp32 or int8) is present, without paying
     /// the load cost.
+    ///
+    /// Must agree with [`load`](Self::load)'s pre-flight checks — a
+    /// model picker that reports "ready" here and then fails to load is
+    /// worse than one that reports "not ready". Both go through
+    /// [`fp32_sidecar_ok`] for that reason.
     pub fn files_present(dir: impl AsRef<Path>) -> bool {
         let dir = dir.as_ref();
         [ENCODER_CANDIDATES, DECODER_CANDIDATES, &[VOCAB_FILE]]
             .iter()
             .all(|candidates| candidates.iter().any(|f| dir.join(f).is_file()))
+            && fp32_sidecar_ok(dir)
     }
 
     /// Catalog/display identifier for this backend.
@@ -197,10 +233,15 @@ impl ParakeetModel {
         if samples.is_empty() {
             return Ok(String::new());
         }
-        let mut guard = self
-            .inner
-            .lock()
-            .map_err(|_| anyhow!("parakeet: model mutex poisoned"))?;
+        // Recover from poisoning rather than failing forever. The guarded
+        // value is a model, not a structure with invariants a panic could
+        // have torn — and `parakeet-rs` has live panic paths (it indexes
+        // ORT session outputs by name, which panics on a graph whose
+        // output names differ from what it expects). Without
+        // `into_inner`, one such panic would make every later call in the
+        // process return "mutex poisoned", which is both unrecoverable
+        // and useless to the user.
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let result = guard
             // Takes an owned Vec — the transducer consumes the buffer.
             // One copy per call; negligible beside the inference.
