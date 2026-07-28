@@ -244,6 +244,20 @@ whisper = ["dep:whisper-rs"]
 # `--no-default-features` for a faster build.
 diarization-onnx = ["dep:tract-onnx", "dep:realfft"]
 
+# Parakeet TDT 0.6B v3 ASR engine (#521). Pulls in `tract-onnx` —
+# the SAME pure-Rust runtime the diarizer uses. Do NOT reintroduce
+# `ort` here: its Apple Silicon prebuilts dispatch through Metal
+# Performance Shaders even on the CPU execution provider, which is
+# what caused the unbounded IOAccelerator growth #641 removed.
+#
+# Off by default. The engine is opt-in at build time because it is a
+# second full ASR stack, and opt-in at runtime because the model is a
+# ~670 MB download the user chooses from the model picker. A build
+# with this feature but no downloaded model behaves exactly like one
+# without it: the catalog entry renders, the engine reports itself
+# unavailable until the files land.
+parakeet = ["dep:tract-onnx"]
+
 # Exposes deterministic test helpers: [`audio::file_source::WavFileAudioCapture`]
 # (WAV-backed AudioCapture/AudioSession for meeting-pump integration tests)
 # and enables the `hound` WAV-parsing dependency. Not included in default builds;

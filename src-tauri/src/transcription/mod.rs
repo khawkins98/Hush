@@ -53,6 +53,12 @@ pub mod download;
 pub mod resample;
 pub mod streaming;
 
+/// Parakeet TDT ASR engine (#521). Gated on the `parakeet` feature —
+/// see that module's header for why a second engine exists alongside
+/// Whisper rather than replacing it.
+#[cfg(feature = "parakeet")]
+pub mod parakeet;
+
 #[cfg(feature = "whisper")]
 pub mod whisper;
 

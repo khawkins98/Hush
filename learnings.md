@@ -32,6 +32,102 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-07-28 — Parakeet on tract-onnx is blocked by `Pad` with an omitted optional input
+
+Measured while spiking Parakeet TDT 0.6B v3 as a second ASR engine
+(#521). Conclusion up front: **`tract-onnx` cannot load the published
+Parakeet export**, and the blocker has nothing to do with quantization.
+
+Reproduce with `transcription::parakeet::tests::each_graph_loads_in_tract`
+against a real download. Three graphs, three unrelated failures:
+
+| Graph | int8 | fp32 |
+|---|---|---|
+| `nemo128.onnx` (preprocessor) | ✗ `STFT` | ✗ `STFT` (same file) |
+| `encoder-model*.onnx` | ✗ `Pad` | ✗ `Pad` |
+| `decoder_joint-model*.onnx` | ✗ `DynamicQuantizeLSTM` | ✓ loads |
+
+**The blocker is `Pad`.** The encoder omits `Pad`'s optional
+`constant_value` by passing `''` — the ONNX convention for "skip this
+input" (opset 17). tract discards empty-named inputs, its `Pad` rule
+then requires exactly 3, sees 2, and fails analysis. 48 nodes affected.
+Identical in fp32 and int8, so it is not a quantization artefact; it is
+tract not handling omitted optional inputs. There is no way around this
+from our side of the boundary.
+
+Two secondary findings, both worth knowing before someone retries:
+
+- **`STFT` (preprocessor)** — tract wants a rank-3 signal, the export
+  gives rank 2. Workaroundable by hand-rolling the 128-bin NeMo log-mel
+  in Rust. Note this is *not* a reuse of `diarization::features`: that
+  extractor is 80-bin for wespeaker. So the mel work #516 predicted
+  comes back after all, despite the export appearing to ship it.
+- **`DynamicQuantizeLSTM` (int8 decoder)** — a `com.microsoft` contrib
+  op, ORT-specific and never coming to tract. Moot, since the fp32
+  decoder is standard-domain.
+
+**The fp32 decoder needed pinned input facts to load at all.** Each of
+its inputs carries its own dynamic batch symbol
+(`targets_dynamic_axes_1`, `input_states_1_dynamic_axes_1`, …). tract's
+LSTM rule requires the state batch dim and sequence batch dim to unify
+and cannot prove two distinct symbols are equal. `with_input_fact` to
+concrete shapes replaces the symbols with literals and it discharges.
+Costs nothing here — greedy TDT decoding is one frame, one batch at a
+time by construction. Generalises: **a tract "impossible to unify
+Sym(a) with Sym(b)" failure usually means pin the inputs, not that the
+graph is unsupported.**
+
+**Download-size consequence.** Only the fp32 encoder is a candidate, so
+the ~670 MB figure comparable apps advertise for Parakeet does not
+apply to a tract-based Hush. Viable weights are ~2.5 GB — which
+materially weakens the "smaller and faster than Whisper" argument for
+adopting it.
+
+Routes forward, cheapest first: re-export from NeMo with tract-friendly
+ops (materialise the `Pad` constant, drop `STFT` and feed precomputed
+mel); patch tract for omitted optional inputs and rank-2 `STFT` (both
+spec-conformant, genuinely upstreamable); build-time graph surgery
+(fragile, re-breaks every model revision).
+
+**Reintroducing `ort` is not a route.** It loads all of this happily,
+which is precisely the trap #641 removed — ORT's Apple Silicon
+prebuilts dispatch through Metal Performance Shaders even on the CPU
+execution provider, causing unbounded IOAccelerator growth. A working
+Parakeet bought with a memory leak is not a trade worth making.
+
+## 2026-07-28 — Channel-based speaker separation: don't diarize what the capture device already told you
+
+The mic is ground truth. Audio arriving on the local capture device is
+the local user, and no cosine-distance matcher can improve on that — it
+can only disagree with it. Until #1003 the meeting pump merged mic and
+system utterances into one batch and ran the diarizer over all of it.
+
+Two failure modes that removes:
+
+1. A mic utterance assigned to a remote cluster (or the reverse),
+   mislabelling the user as a call participant.
+2. Mic embeddings widening the remote clusters they chain into — the
+   1-NN drift risk tracked in #316. The local talker is usually the
+   most frequent speaker in a session, so they contribute the most
+   chaining pressure of anyone.
+
+The diarizer now only sees the remote stream, doing the job it is
+actually good at: separating participants sharing one Zoom/Teams
+mixdown. Excluded mic finals fall through to the existing `"mic"`
+source tag, which the frontend already renders as "You" — so this
+needed no new label vocabulary, only the exclusion.
+
+**Guarded on a remote source existing.** An all-local session (two mic
+devices, two people in a room) must still diarize everything: there the
+channel distinguishes nothing, both streams are "a local mic", and
+excluding every source would collapse both talkers to "You".
+
+Worth re-checking the diarizer threshold after this lands. #633 dropped
+it to 0.4 partly because single-stream conference audio pulls cosine
+distances tighter than the wespeaker eval curve suggests; removing mic
+embeddings from the cluster state changes that input distribution, so
+the empirical basis for 0.4 should be re-measured rather than assumed.
+
 ## 2026-06-05 — Read-only-volume launch guard: bounce DMG / translocated launches before they break TCC
 
 ## 2026-06-09 — Diarizer threshold moved from env-var-only tuning into live Settings UI
