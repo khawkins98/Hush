@@ -435,51 +435,54 @@ impl AppStateBuilder {
                     .ok_or_else(|| anyhow::anyhow!("AppStateBuilder: models_dir not set"))?,
                 downloads: Arc::new(Mutex::new(HashMap::new())),
             },
-            http: reqwest::Client::builder()
-                // Whisper-large-v3 is ~3 GB; ten-minute timeout is on
-                // the optimistic side of "any reasonable home
-                // connection". Real fix is resumable downloads, but
-                // that's out of scope for this PR.
-                .timeout(std::time::Duration::from_secs(600))
-                .user_agent(concat!("hush/", env!("CARGO_PKG_VERSION")))
-                // Redirect policy is host-restricted, not just hop-
-                // capped. The default `Policy::default()` follows up
-                // to 10 redirects to *any* host — a BGP/DNS hijack of
-                // huggingface.co could redirect to an arbitrary server
-                // and we'd transfer bytes there before the SHA-256
-                // verification rejects them. SHA still catches a
-                // swapped file, but the bandwidth + latency leak to
-                // the attacker's host is avoidable.
-                //
-                // We allow up to four hops (HF's `/resolve/main/`
-                // typically goes huggingface.co → cdn-lfs.huggingface.co
-                // → a signed URL on the same CDN; four leaves headroom
-                // for a future re-architecture).
-                //
-                // Browser-like trust model (#258): a hop is allowed
-                // if EITHER its destination is on an HF host OR the
-                // immediately-previous URL was on an HF host. The
-                // second clause covers HF → S3-signed-URL chains
-                // that surface when HF routes large-file serving
-                // through a third-party CDN. Without it we'd reject
-                // the perfectly-legitimate "HF told us to fetch the
-                // file from this signed AWS URL" hop and the
-                // download dies with no clear user-facing reason.
-                //
-                // Only HTTPS is ever followed — an http:// hop from
-                // anywhere is rejected, including from an HF host.
-                // Defends against a downgrade attack via a
-                // (hypothetical) compromised HF redirect.
-                .redirect(reqwest::redirect::Policy::custom(
-                    |attempt| match redirect_decision(attempt.previous(), attempt.url()) {
-                        RedirectDecision::Follow => attempt.follow(),
-                        RedirectDecision::Stop(reason) => attempt.error(reason),
-                    },
-                ))
-                .build()
-                .map_err(|e| {
-                    anyhow::anyhow!("AppStateBuilder: reqwest client build failed: {e}")
-                })?,
+            http: {
+                crate::tls::ensure_crypto_provider();
+                reqwest::Client::builder()
+                    // Whisper-large-v3 is ~3 GB; ten-minute timeout is on
+                    // the optimistic side of "any reasonable home
+                    // connection". Real fix is resumable downloads, but
+                    // that's out of scope for this PR.
+                    .timeout(std::time::Duration::from_secs(600))
+                    .user_agent(concat!("hush/", env!("CARGO_PKG_VERSION")))
+                    // Redirect policy is host-restricted, not just hop-
+                    // capped. The default `Policy::default()` follows up
+                    // to 10 redirects to *any* host — a BGP/DNS hijack of
+                    // huggingface.co could redirect to an arbitrary server
+                    // and we'd transfer bytes there before the SHA-256
+                    // verification rejects them. SHA still catches a
+                    // swapped file, but the bandwidth + latency leak to
+                    // the attacker's host is avoidable.
+                    //
+                    // We allow up to four hops (HF's `/resolve/main/`
+                    // typically goes huggingface.co → cdn-lfs.huggingface.co
+                    // → a signed URL on the same CDN; four leaves headroom
+                    // for a future re-architecture).
+                    //
+                    // Browser-like trust model (#258): a hop is allowed
+                    // if EITHER its destination is on an HF host OR the
+                    // immediately-previous URL was on an HF host. The
+                    // second clause covers HF → S3-signed-URL chains
+                    // that surface when HF routes large-file serving
+                    // through a third-party CDN. Without it we'd reject
+                    // the perfectly-legitimate "HF told us to fetch the
+                    // file from this signed AWS URL" hop and the
+                    // download dies with no clear user-facing reason.
+                    //
+                    // Only HTTPS is ever followed — an http:// hop from
+                    // anywhere is rejected, including from an HF host.
+                    // Defends against a downgrade attack via a
+                    // (hypothetical) compromised HF redirect.
+                    .redirect(reqwest::redirect::Policy::custom(
+                        |attempt| match redirect_decision(attempt.previous(), attempt.url()) {
+                            RedirectDecision::Follow => attempt.follow(),
+                            RedirectDecision::Stop(reason) => attempt.error(reason),
+                        },
+                    ))
+                    .build()
+                    .map_err(|e| {
+                        anyhow::anyhow!("AppStateBuilder: reqwest client build failed: {e}")
+                    })?
+            },
             pending_foreground: Mutex::new(None),
             update_check: UpdateCheckCache {
                 last: Mutex::new(None),

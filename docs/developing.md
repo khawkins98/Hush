@@ -253,21 +253,6 @@ Full recovery recipes: [`docs/macos-permissions.md`](./macos-permissions.md).
 
 ---
 
-## ScreenCaptureKit Swift dylib workaround
-
-ScreenCaptureKit is an unconditional macOS build dependency (it's linked by the `screencapturekit` crate even though Hush no longer uses it for audio capture at runtime — system audio moved to a CoreAudio process tap in v0.5.0). The crate's build script links `libSwift_Concurrency` at runtime using baked-in rpaths (`/usr/lib/swift`, `/Library/Developer/CommandLineTools/.../swift-5.5/macosx`). On a dev machine where those paths don't resolve, `cargo test --lib` aborts with a missing-dylib error.
-
-Workaround:
-
-```bash
-DYLD_FALLBACK_LIBRARY_PATH=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx \
-  cargo test --lib
-```
-
-Production app bundles and CI (`macos-latest`) aren't affected — the shared dyld cache or the CommandLineTools path resolves the library automatically.
-
----
-
 ## Dev-launch smoke
 
 CI does not run a real Tauri runtime. A panic at app boot — plugin init, capability misconfiguration, `AppState::build_default` failure, a `tauri.conf.json` issue, or a missing rpath for a transitively-linked dylib — is **invisible to CI** and only surfaces when someone pulls the branch.

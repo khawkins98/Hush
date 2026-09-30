@@ -100,14 +100,16 @@ rodio = { version = "0.19", default-features = false, features = ["wav"] }
 # binary builds on macOS, Linux, and Windows. `stream` enables the
 # byte-stream API used for chunk-by-chunk progress events without
 # buffering the whole response.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "json"] }
+# Crypto backend for the rustls stack above (see `src/tls.rs` for why we
+# install it ourselves). Already in the tree via tauri-plugin-updater, so
+# this adds no new crate, only makes the dependency explicit.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 # SHA-256 verification for downloaded model files. Hand-rolled hashing
 # would be a security footgun; `sha2` is the well-vetted RustCrypto
-# implementation. Pinned to 0.10 (current stable line) rather than
-# tracking the 0.11 pre-release — pre-releases can have unstable APIs
-# and we don't need any 0.11-only features. See #256.
-sha2 = "0.10"
+# implementation. See #256.
+sha2 = "0.11"
 
 # Semantic-version comparison for the manual "Check for updates"
 # probe (#223). Compares the bundled `CARGO_PKG_VERSION` to the
@@ -228,7 +230,7 @@ hound = { version = "3.5", optional = true }
 async-trait = "0.1"
 
 # Foreground app detection
-active-win-pos-rs = "0.10"
+active-win-pos-rs = "0.11"
 
 # Push-to-talk key events (key-down / key-up). We pin to fufesou's
 # rdev fork because Narsil's upstream is incomplete on macOS 26+:
@@ -320,26 +322,12 @@ wiremock = "0.6"
 hound = "3.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# ScreenCaptureKit is the only sanctioned non-entitled path for
-# system-audio capture on consumer macOS — see #105 and §13.8 of the
-# PRD. Hush targets macOS 26+ only (memory: macos_support_window),
-# so we link unconditionally on macOS rather than gating behind a
-# feature flag. Pre-2026-04-27 the dep was opt-in via a
-# `screencapturekit` feature; that meant a default `npm run tauri
-# dev` shipped without SCK and the meeting panel's "Also record
-# system audio" checkbox stayed disabled, which the user (Ken) hit
-# in hands-on testing.
-screencapturekit = "1.5.4"
-# Direct dep of the same objc2 already pulled in transitively by
-# screencapturekit, used by `macos_perms` to call
+# Used by `permissions::macos` to call
 # `+[AVCaptureDevice authorizationStatusForMediaType:]` for the
 # Microphone TCC status read. CoreGraphics (Screen Recording) and
 # IOKit (Input Monitoring) are reached via plain `extern "C"` and
 # don't need a binding crate.
 objc2 = "0.6"
-# `NSString` constructor for the audio_cues `NSSound soundNamed:`
-# call (#292). Same family as `objc2` above; trivial dep weight.
-objc2-foundation = "0.3"
 # Used by `audio::core_audio_tap` to send SIGTERM to the tap binary
 # child process for clean shutdown.
 libc = "0.2"

@@ -33,6 +33,7 @@ pub mod permissions;
 pub mod repository;
 pub mod settings;
 pub mod speakers;
+pub mod tls;
 pub mod transcription;
 pub mod tray;
 pub mod updater;

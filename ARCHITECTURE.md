@@ -91,8 +91,6 @@ Two `InferenceState` fields carry cross-layer invariants worth flagging when adj
 - `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` (`inference.diarize_slot`) — wespeaker model download takes effect on the next pump tick.
 - `inference_threads: Arc<AtomicI32>` ([#255](https://github.com/khawkins98/Hush/issues/255)) — Settings → General slider value, shared between AppState and every loaded `WhisperTranscription` (both slots above) so a slider change takes effect on the next inference call without a model reload.
 
-On macOS, the `screencapturekit` crate is still linked **unconditionally** (no feature flag) for the permission-diagnostic path and its objc2 bindings, even though runtime system-audio capture moved to the CoreAudio process-tap backend in #588.
-
 ---
 
 ## Audio capture
