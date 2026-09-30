@@ -177,48 +177,6 @@ async fn load_whisper_model(
         .map_err(|e| anyhow::anyhow!("whisper model load task panicked: {e}"))?
 }
 
-/// Keep implicit-default users on the model they actually have.
-///
-/// With no explicit selection, the transcriber and the picker both follow
-/// the catalog's `is_default`. When that default moves (full Small → Small
-/// q8_0), a user who never picked a model would suddenly be pointed at a
-/// file that isn't on disk, and transcription would be unavailable. If
-/// the current default is missing but a previous default is present,
-/// persist the previous one as an explicit selection. Silent and
-/// one-shot: once a selection exists this never runs again, and a fresh
-/// install (nothing on disk) gets the new default as intended.
-pub(crate) async fn pin_legacy_default_if_needed(
-    settings: &dyn SettingsRepository,
-    models_dir: &Path,
-) {
-    use crate::settings::keys;
-    use crate::transcription::catalog;
-
-    if matches!(
-        settings.get(keys::SELECTED_MODEL_ID).await,
-        Ok(Some(_)) | Err(_)
-    ) {
-        return;
-    }
-    if models_dir.join(catalog::default_model().filename).exists() {
-        return;
-    }
-    let Some(legacy) = catalog::LEGACY_DEFAULT_IDS
-        .iter()
-        .filter_map(|id| catalog::find_by_id(id))
-        .find(|m| models_dir.join(&m.filename).exists())
-    else {
-        return;
-    };
-    match settings.set(keys::SELECTED_MODEL_ID, &legacy.id).await {
-        Ok(()) => tracing::info!(
-            model_id = %legacy.id,
-            "default model moved; pinned existing install to its downloaded legacy default"
-        ),
-        Err(e) => tracing::warn!(error = ?e, "failed to pin legacy default model"),
-    }
-}
-
 /// Resolve the active transcriber backend. Pulled out so a test or a
 /// future "reload model" command can call it without rebuilding the
 /// rest of `AppState`.
@@ -233,9 +191,6 @@ pub(crate) async fn build_transcriber(
     inference_threads: &Arc<AtomicI32>,
     mic_gain_db: &Arc<AtomicU32>,
 ) -> Option<Arc<dyn Transcribe>> {
-    // Before reading the selection, so the pinned id is what we load.
-    pin_legacy_default_if_needed(settings.as_ref(), models_dir).await;
-
     #[cfg(feature = "whisper")]
     {
         use crate::settings::keys;

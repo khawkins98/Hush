@@ -262,16 +262,6 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
     ]
 }
 
-/// Ids that were the catalog default in earlier releases, newest first.
-///
-/// A user who never picked a model explicitly follows `is_default`
-/// implicitly, so moving the default would silently point them at a file
-/// they haven't downloaded and leave transcription unavailable. On
-/// startup, `ipc::pipeline::pin_legacy_default_if_needed` pins such a
-/// user to the first legacy default whose file is on disk. Append here
-/// whenever `is_default` moves.
-pub const LEGACY_DEFAULT_IDS: &[&str] = &["whisper-small"];
-
 /// Look up a model by id. Returns `None` for unknown ids; callers
 /// should treat that as "selection setting points at a model we no
 /// longer recognise" and fall back to the default.
@@ -323,21 +313,7 @@ mod tests {
 
     #[test]
     fn default_model_is_compact_small() {
-        // Changing the default? Append the old id to LEGACY_DEFAULT_IDS
-        // so implicit-default users who only have the old file keep
-        // working (see `pipeline::pin_legacy_default_if_needed`).
         assert_eq!(default_model().id, "whisper-small-q8_0");
-    }
-
-    #[test]
-    fn legacy_defaults_are_in_catalog_and_not_current_default() {
-        for id in LEGACY_DEFAULT_IDS {
-            assert!(
-                find_by_id(id).is_some(),
-                "{id}: legacy default left the catalog"
-            );
-            assert_ne!(*id, default_model().id, "{id}: is still the default");
-        }
     }
 
     #[test]
