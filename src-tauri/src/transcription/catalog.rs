@@ -179,8 +179,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             size_mb: 264,
             speed_rating: 7,
             accuracy_rating: 8,
-            description: "Small, 8-bit quantized. Near-identical accuracy to Small at about half the download and memory.".into(),
-            is_default: false,
+            description: "Recommended default. Small, 8-bit quantized: near-identical accuracy to Small at about half the download and memory.".into(),
+            is_default: true,
             download_url: download_url_for("ggml-small-q8_0.bin"),
             sha256: "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f".into(),
         },
@@ -191,8 +191,8 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             size_mb: 466,
             speed_rating: 7,
             accuracy_rating: 8,
-            description: "Recommended default. Noticeably better accuracy for accents and technical vocabulary at near-real-time speed on Apple Silicon.".into(),
-            is_default: true,
+            description: "Full-precision Small. Noticeably better than Base on accents and technical vocabulary; the compact build is the same model at half the size.".into(),
+            is_default: false,
             download_url: download_url_for("ggml-small.bin"),
             sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b".into(),
         },
@@ -262,6 +262,16 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
     ]
 }
 
+/// Ids that were the catalog default in earlier releases, newest first.
+///
+/// A user who never picked a model explicitly follows `is_default`
+/// implicitly, so moving the default would silently point them at a file
+/// they haven't downloaded and leave transcription unavailable. On
+/// startup, `ipc::pipeline::pin_legacy_default_if_needed` pins such a
+/// user to the first legacy default whose file is on disk. Append here
+/// whenever `is_default` moves.
+pub const LEGACY_DEFAULT_IDS: &[&str] = &["whisper-small"];
+
 /// Look up a model by id. Returns `None` for unknown ids; callers
 /// should treat that as "selection setting points at a model we no
 /// longer recognise" and fall back to the default.
@@ -312,10 +322,22 @@ mod tests {
     }
 
     #[test]
-    fn default_model_is_whisper_small_per_prd() {
-        // PRD §6: "Default to `small` Q5_0". If we ever change the
-        // default this test reminds us to update the PRD too.
-        assert_eq!(default_model().id, "whisper-small");
+    fn default_model_is_compact_small() {
+        // Changing the default? Append the old id to LEGACY_DEFAULT_IDS
+        // so implicit-default users who only have the old file keep
+        // working (see `pipeline::pin_legacy_default_if_needed`).
+        assert_eq!(default_model().id, "whisper-small-q8_0");
+    }
+
+    #[test]
+    fn legacy_defaults_are_in_catalog_and_not_current_default() {
+        for id in LEGACY_DEFAULT_IDS {
+            assert!(
+                find_by_id(id).is_some(),
+                "{id}: legacy default left the catalog"
+            );
+            assert_ne!(*id, default_model().id, "{id}: is still the default");
+        }
     }
 
     #[test]

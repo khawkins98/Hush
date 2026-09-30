@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accuracy: **Turbo (compact)** at 874 MB and **Turbo (smallest)** at
   574 MB, versus 1.6 GB for Turbo; and **Small (compact)** at 264 MB,
   versus 488 MB for Small. They come from the same upstream source and use
-  the same checksum-verified download as the existing models.
+  the same checksum-verified download as the existing models. **Small (compact) is now the default** for new installs: half the
+  first-run download. Existing installs that never picked a model and
+  already have full Small keep using it; nothing is re-downloaded.
 
 - **Meeting transcripts: your own voice is no longer mistaken for a call
   participant (#1003, #1005).** Audio from your local microphone is now
