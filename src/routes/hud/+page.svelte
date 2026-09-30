@@ -827,6 +827,16 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   }
 
+  /* The waveform soaks up the pill's free width so short timers (0:02)
+     don't leave a dead gap before the controls; capped so its 14 bars
+     don't turn chunky, and floored so 1 h+ timers still fit. */
+  .hud-root :global(.audio-waveform) {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 48px;
+    max-width: 96px;
+  }
+
   /* Trailing controls sit flush right regardless of state. */
   .hud-stop,
   .hud-dismiss,

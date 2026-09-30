@@ -157,6 +157,26 @@
     // started, source-failed, append-failed) live in the meeting
     // state module since all three update only meeting state (#700).
     cleanupMeetingListeners = await meeting.initSessionListeners();
+    // A meeting started from the Transcribe page lives in the dictation
+    // phase machine too; when it's stopped from somewhere else (HUD ■,
+    // call-end prompt, auto-stop) the page must leave its Recording state.
+    const onMeetingCaptureEnded = (e: { payload: { sessionId: number } }) => {
+      void dictation.handleExternalMeetingStop(e.payload.sessionId);
+    };
+    const unlistenDictationFinalizing = await listen<{ sessionId: number }>(
+      Events.MeetingFinalizing,
+      onMeetingCaptureEnded,
+    );
+    const unlistenDictationEnded = await listen<{ sessionId: number }>(
+      Events.MeetingSessionEnded,
+      onMeetingCaptureEnded,
+    );
+    const cleanupSessionListeners = cleanupMeetingListeners;
+    cleanupMeetingListeners = () => {
+      cleanupSessionListeners?.();
+      unlistenDictationFinalizing();
+      unlistenDictationEnded();
+    };
 
     await Promise.all([
       dictation.loadSources(),

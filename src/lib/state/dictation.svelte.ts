@@ -361,6 +361,31 @@ export const dictation = {
       }
     }
   },
+  /**
+   * The backend finished capture for `sessionId` without going through
+   * `stop()` — the HUD's ■, the call-end prompt, or auto-stop all call
+   * `meeting_stop_manual` directly. Wired to `meeting:finalizing` /
+   * `meeting:session-ended` in AppLifecycle.
+   *
+   * Pre-fix, those events only cleared `meeting.activeId`; a meeting
+   * started from this page's Record button also lives in `phase`, which
+   * stayed `recording` — so the page kept a red Stop button and a running
+   * timer over a meeting that had already ended.
+   *
+   * A stop this page initiated is already in `stopping`/`transcribing`
+   * and is ignored here, as is any event for a different session.
+   */
+  async handleExternalMeetingStop(sessionId: number) {
+    if (phase.tag !== "recording" || phase.meetingId !== sessionId) return;
+    _clearRecordingLimitTimers();
+    const snapshot = {
+      mode: phase.mode,
+      meetingId: sessionId,
+      startedAtMs: phase.startedAtMs,
+    };
+    phase = { tag: "stopping", ...snapshot };
+    await _finishMeeting(snapshot);
+  },
   async refreshModels() {
     try {
       models = await invoke<ModelCard[]>("model_list");
@@ -507,12 +532,21 @@ const FINALIZATION_POLL_INTERVAL_MS = 200;
 // Transitions through transcribing while waiting for background
 // finalization to complete, then builds the clipboard/result block
 // from the fully-persisted transcript.
-async function _stopMeeting(snapshot: {
+type MeetingSnapshot = {
   mode: RecordMode;
   meetingId: number;
   startedAtMs: number;
-}): Promise<void> {
+};
+
+async function _stopMeeting(snapshot: MeetingSnapshot): Promise<void> {
   await invoke("meeting_stop_manual");
+  await _finishMeeting(snapshot);
+}
+
+// Post-stop half of the meeting lifecycle, shared by the page's own Stop
+// and by stops that happen elsewhere (HUD ■, call-end prompt, auto-stop)
+// — see `dictation.handleExternalMeetingStop`.
+async function _finishMeeting(snapshot: MeetingSnapshot): Promise<void> {
   // meeting_stop_manual now returns sub-second — before the background
   // tail finish() has persisted the last in-flight utterance(s). We
   // stay in `transcribing` and poll meeting_session_get until

@@ -389,11 +389,18 @@ button.ghost.danger.confirming {
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-.model-card.unavailable {
+/* Fade only the card body: the Download button in the footer is the
+   primary action for an unavailable model and shouldn't look disabled. */
+.model-card.unavailable .model-card-button {
   opacity: 0.55;
 }
 
-.model-card-button {
+/* Compound selector on purpose: the blanket `button:not(.kh-button)`
+   rule above is more specific than a bare `.model-card-button`, and
+   used to win — giving the card body inline-flex (name / stats /
+   description squeezed into one row), a border (a box inside the
+   card), and button padding. */
+.model-card .model-card-button {
   width: 100%;
   display: block;
   background: transparent;
@@ -404,6 +411,10 @@ button.ghost.danger.confirming {
   cursor: pointer;
   font: inherit;
   color: inherit;
+}
+
+.model-card .model-card-button:hover:not(:disabled) {
+  border-color: transparent;
 }
 
 .model-card-button:disabled {

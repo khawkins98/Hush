@@ -81,6 +81,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transcribe page no longer stays on "Recording" after a meeting is
+  stopped elsewhere.** A meeting started with the page's Record button and
+  then stopped from the overlay's ■, the "call ended?" prompt, or
+  auto-stop left the page showing a red Stop button and a running timer.
+  It now finishes the same way as its own Stop: transcribing, then the
+  result.
+- **Model picker cards render properly again.** A button style meant for
+  small buttons was also hitting each card's body, squeezing name, stats
+  and description into one cramped row inside a second border. Cards not
+  yet downloaded no longer fade their Download button.
+- **Recording overlay: no dead gap before ■.** The waveform now fills the
+  free space instead of leaving a gap at short timer values.
+
 - **Recording overlay: Stop is dependable, and you can see it working.**
   - Clicking ■ now shows *Stopping…* and then *Stopped · saving
     transcript* before the overlay closes. Previously the overlay vanished
