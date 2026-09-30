@@ -66,7 +66,7 @@ Subsequent runs are incremental.
 | Run frontend type check | `npm run check` |
 | Run frontend e2e tests (Playwright) | `npm run test:e2e` |
 | Kill stale dev server processes | `npm run dev-cleanup` |
-| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/dictionary/prefs/caches/autostart/app installs (preserves transcription history); add `--nuke-db` to also wipe history (macOS only) |
+| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/prefs/caches/autostart/app installs (preserves dictionary, replacements, vocab packs, and transcription history); add `--nuke-dictionary` / `--nuke-db` to also wipe those (macOS only) |
 | Re-test TCC permission flow without losing app state | `npm run dev-reset:keep` — TCC-focused reset: wipes TCC grants + removes app installs, but preserves settings, dictionary, replacements, prefs, caches, autostart, history (macOS only) |
 | Diagnose memory growth (RSS + physical footprint + per-region attribution) | `npm run memwatch` — see [`docs/memory-debugging.md`](./memory-debugging.md) (macOS only) |
 
@@ -239,7 +239,7 @@ To get back to a completely clean state for testing onboarding or first-run perm
 npm run dev-reset
 ```
 
-This wipes all TCC grants, settings, dictionary, preferences, and caches. Transcription history and meeting sessions are **preserved** by default. Pass `--nuke-db` to also wipe history. Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
+This wipes all TCC grants, settings, preferences, and caches. Your dictionary terms, text replacements, enabled vocabulary packs, transcription history, and meeting sessions are **preserved** by default. Pass `--nuke-dictionary` to also wipe the vocabulary, or `--nuke-db` to wipe history (deletes the whole database, vocabulary included). Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
 
 If you only need to re-test the permission flow itself and want to keep your dictionary, text replacements, window layout, and other settings intact, use the softer mode instead:
 

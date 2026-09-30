@@ -27,9 +27,25 @@ use super::{poisoned, IpcError, IpcResult, UPDATE_CHECK_TTL};
 /// a missing window or a `show()` / `set_focus()` failure logs a
 /// warning and returns Ok — the user can still reach the main
 /// window via the tray's "Show Hush" menu item.
+///
+/// `section` optionally routes the main window to a sidebar section
+/// via the same `menu:goto-section` event the native menu uses. The
+/// HUD passes `"dictation"`: raised mid-recording, the main window
+/// otherwise reopens on whatever screen it was last left on (often
+/// Settings or History), with no visible recording or Stop control.
+/// Only known section names are forwarded.
 #[tauri::command]
-pub fn show_main_window(app: AppHandle) -> IpcResult<()> {
-    use tauri::Manager as _;
+pub fn show_main_window(app: AppHandle, section: Option<String>) -> IpcResult<()> {
+    use tauri::{Emitter as _, Manager as _};
+    if let Some(section) = section.as_deref() {
+        if matches!(section, "dictation" | "history") {
+            if let Err(e) = app.emit("menu:goto-section", section) {
+                tracing::warn!(error = ?e, "show_main_window: goto-section emit failed");
+            }
+        } else {
+            tracing::warn!(section, "show_main_window: ignoring unknown section");
+        }
+    }
     let Some(window) = app.get_webview_window("main") else {
         tracing::warn!("show_main_window: main window not found");
         return Ok(());

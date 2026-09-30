@@ -71,11 +71,18 @@ pub const HUD_LABEL: &str = "hud";
 /// clipping the grip icon on the left and the dismiss button on
 /// the right inside the `border-radius: 999px` corners. 290 px
 /// fits "Recording 9:59:59" with normal padding to spare.
-const HUD_LOGICAL_WIDTH: f64 = 290.0;
+///
+/// Bumped 290 → 320 (and height 60 → 64) when the pill gained an 8 px
+/// transparent inset: the window is `shadow: false`, so the pill's own
+/// CSS drop shadow needs room inside the window bounds or it is clipped
+/// flat. The visible pill is 304 px wide; the extra width fits the
+/// inline stop confirmation without clipping.
+const HUD_LOGICAL_WIDTH: f64 = 320.0;
 
 /// Top + right margin from the screen edge. Matches the visual
 /// breathing room every other system HUD uses (Zoom, Discord, the
 /// macOS Recording Indicator). Logical pixels.
+/// Measured to the window edge; the visible pill sits 8 px further in.
 const HUD_MARGIN: f64 = 40.0;
 
 /// Make the HUD window visible. Best-effort: if the HUD window
@@ -298,7 +305,29 @@ pub enum HudState {
     /// captured at the moment it considered the recording started;
     /// the frontend anchors its elapsed-time counter to this so
     /// back-to-back sessions reset to 0:00 deterministically (#481).
-    Recording { started_at_ms: u64 },
+    ///
+    /// `kind` tells the HUD which controls apply: only a meeting can
+    /// be stopped from the pill. Dictation is owned by the main
+    /// window's hotkey state machine, and pre-fix the HUD's Stop
+    /// button called `meeting_stop_manual` during a dictation — the
+    /// HUD hid itself and the dictation kept recording.
+    Recording {
+        started_at_ms: u64,
+        kind: RecordingKind,
+    },
+    /// A meeting stop is in flight: the audio device is being
+    /// released. Shown instead of hiding the HUD up front so the user
+    /// sees that their Stop click registered.
+    Stopping,
+    /// The meeting's audio capture has stopped; the transcript tail is
+    /// finalizing in the background. The frontend self-dismisses after
+    /// a short confirmation window, mirroring [`HudState::Done`].
+    Stopped,
+    /// A meeting stop failed and the session is still capturing. The
+    /// frontend returns to its Recording render (keeping its own elapsed
+    /// anchor) and shows an inline error, so a failed stop never leaves
+    /// audio recording behind a hidden or "Stopping…" pill.
+    StopFailed,
     /// Audio capture stopped, transcription + clipboard write in
     /// flight. Static dot, "Processing…" label, no level meter.
     Processing,
@@ -319,6 +348,9 @@ impl HudState {
         match self {
             HudState::Pending { .. } => "pending",
             HudState::Recording { .. } => "recording",
+            HudState::Stopping => "stopping",
+            HudState::Stopped => "stopped",
+            HudState::StopFailed => "stop-failed",
             HudState::Processing => "processing",
             HudState::Done => "done",
             HudState::CallMayHaveEnded { .. } => "call-may-have-ended",
@@ -351,6 +383,25 @@ struct HudStatePayload {
     /// Confidence for call-may-have-ended. "high" or "medium".
     #[serde(skip_serializing_if = "Option::is_none")]
     confidence: Option<&'static str>,
+    /// `"dictation"` or `"meeting"`. Only for the Recording state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
+}
+
+/// What a [`HudState::Recording`] pill is recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingKind {
+    Dictation,
+    Meeting,
+}
+
+impl RecordingKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            RecordingKind::Dictation => "dictation",
+            RecordingKind::Meeting => "meeting",
+        }
+    }
 }
 
 /// Tell the HUD to render a particular lifecycle state. Emits the
@@ -361,30 +412,34 @@ struct HudStatePayload {
 /// hot path.
 pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: HudState) -> Result<()> {
     use tauri::Emitter as _;
+    let bare = HudStatePayload {
+        state: state.state_str(),
+        ends_at_ms: None,
+        started_at_ms: None,
+        confidence: None,
+        kind: None,
+    };
     let payload = match state {
         HudState::Pending { ends_at_ms } => HudStatePayload {
-            state: state.state_str(),
             ends_at_ms: Some(ends_at_ms),
-            started_at_ms: None,
-            confidence: None,
+            ..bare
         },
-        HudState::Recording { started_at_ms } => HudStatePayload {
-            state: state.state_str(),
-            ends_at_ms: None,
+        HudState::Recording {
+            started_at_ms,
+            kind,
+        } => HudStatePayload {
             started_at_ms: Some(started_at_ms),
-            confidence: None,
+            kind: Some(kind.as_str()),
+            ..bare
         },
-        HudState::Processing | HudState::Done => HudStatePayload {
-            state: state.state_str(),
-            ends_at_ms: None,
-            started_at_ms: None,
-            confidence: None,
-        },
+        HudState::Processing
+        | HudState::Done
+        | HudState::Stopping
+        | HudState::Stopped
+        | HudState::StopFailed => bare,
         HudState::CallMayHaveEnded { confidence } => HudStatePayload {
-            state: state.state_str(),
-            ends_at_ms: None,
-            started_at_ms: None,
             confidence: Some(confidence),
+            ..bare
         },
     };
     app.emit("hud:state", &payload).context("emit hud:state")?;

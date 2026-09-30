@@ -2,13 +2,21 @@ import { expect, test } from "@playwright/test";
 import { fireEvent, installMocks } from "./_mock";
 
 // Tests for the HUD call-may-have-ended prompt.
-// Drives `hud:state` and `meeting:call-end-cancelled` events through
-// the test seam and asserts the rendered prompt UI and IPC calls.
+// Drives `meeting:call-may-have-ended` (what the call-end detector really
+// emits — the HUD used to listen only for a `hud:state` form the backend
+// never sent) and `meeting:call-end-cancelled` through the test seam.
 
 // Helper: wait for the HUD page to finish mounting (dismiss button visible =
 // all `listen()` calls in onMount have fired, initialising the event bus).
+// The prompt only interrupts a live *meeting* recording, so every test
+// starts from one.
 async function waitForHudReady(page: Parameters<typeof fireEvent>[0]) {
   await page.locator("button.hud-dismiss").waitFor({ state: "visible" });
+  await fireEvent(page, "hud:state", {
+    state: "recording",
+    kind: "meeting",
+    startedAtMs: Date.now(),
+  });
 }
 
 test.describe("HUD call-may-have-ended prompt", () => {
@@ -17,13 +25,13 @@ test.describe("HUD call-may-have-ended prompt", () => {
     await page.goto("/hud");
     await waitForHudReady(page);
 
-    await fireEvent(page, "hud:state", {
-      state: "call-may-have-ended",
+    await fireEvent(page, "meeting:call-may-have-ended", {
       confidence: "high",
+      signalSummary: "mic inactive + system audio quiet",
     });
 
-    await expect(page.getByText("Your call has likely ended")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Stop now" })).toBeVisible();
+    await expect(page.getByText("Call ended?")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Keep recording" })).toBeVisible();
   });
 
@@ -32,13 +40,13 @@ test.describe("HUD call-may-have-ended prompt", () => {
     await page.goto("/hud");
     await waitForHudReady(page);
 
-    await fireEvent(page, "hud:state", {
-      state: "call-may-have-ended",
+    await fireEvent(page, "meeting:call-may-have-ended", {
       confidence: "medium",
+      signalSummary: "mic inactive + system audio quiet",
     });
 
-    await expect(page.getByText("Your call may be winding down")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Stop now" })).toBeVisible();
+    await expect(page.getByText("Call winding down?")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Keep recording" })).toBeVisible();
   });
 
@@ -49,21 +57,22 @@ test.describe("HUD call-may-have-ended prompt", () => {
 
     await fireEvent(page, "hud:state", {
       state: "recording",
+      kind: "meeting",
       startedAtMs: Date.now(),
     });
-    await fireEvent(page, "hud:state", {
-      state: "call-may-have-ended",
+    await fireEvent(page, "meeting:call-may-have-ended", {
       confidence: "high",
+      signalSummary: "mic inactive + system audio quiet",
     });
 
     await page.getByRole("button", { name: "Keep recording" }).click();
 
-    await expect(page.getByText("Your call has likely ended")).not.toBeVisible();
+    await expect(page.getByText("Call ended?")).not.toBeVisible();
     // Stop recording button should be back
     await expect(page.getByRole("button", { name: "Stop recording" })).toBeVisible();
   });
 
-  test("Stop now calls meeting_stop_manual", async ({ page }) => {
+  test("Stop calls meeting_stop_manual", async ({ page }) => {
     let stopped = false;
     await page.exposeFunction("__hush_on_call_end_stop", () => {
       stopped = true;
@@ -76,12 +85,12 @@ test.describe("HUD call-may-have-ended prompt", () => {
     await page.goto("/hud");
     await waitForHudReady(page);
 
-    await fireEvent(page, "hud:state", {
-      state: "call-may-have-ended",
+    await fireEvent(page, "meeting:call-may-have-ended", {
       confidence: "high",
+      signalSummary: "mic inactive + system audio quiet",
     });
 
-    await page.getByRole("button", { name: "Stop now" }).click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
 
     await expect(async () => {
       expect(stopped).toBe(true);
@@ -95,18 +104,19 @@ test.describe("HUD call-may-have-ended prompt", () => {
 
     await fireEvent(page, "hud:state", {
       state: "recording",
+      kind: "meeting",
       startedAtMs: Date.now(),
     });
-    await fireEvent(page, "hud:state", {
-      state: "call-may-have-ended",
+    await fireEvent(page, "meeting:call-may-have-ended", {
       confidence: "high",
+      signalSummary: "mic inactive + system audio quiet",
     });
 
-    await expect(page.getByText("Your call has likely ended")).toBeVisible();
+    await expect(page.getByText("Call ended?")).toBeVisible();
 
     await fireEvent(page, "meeting:call-end-cancelled", null);
 
-    await expect(page.getByText("Your call has likely ended")).not.toBeVisible();
+    await expect(page.getByText("Call ended?")).not.toBeVisible();
   });
 
   test("suppresses subsequent call-end prompts after Keep recording", async ({ page }) => {
@@ -116,20 +126,38 @@ test.describe("HUD call-may-have-ended prompt", () => {
 
     await fireEvent(page, "hud:state", {
       state: "recording",
+      kind: "meeting",
       startedAtMs: Date.now(),
     });
-    await fireEvent(page, "hud:state", {
-      state: "call-may-have-ended",
+    await fireEvent(page, "meeting:call-may-have-ended", {
       confidence: "high",
+      signalSummary: "mic inactive + system audio quiet",
     });
     await page.getByRole("button", { name: "Keep recording" }).click();
 
     // A second call-end event should be suppressed
-    await fireEvent(page, "hud:state", {
-      state: "call-may-have-ended",
+    await fireEvent(page, "meeting:call-may-have-ended", {
       confidence: "high",
+      signalSummary: "mic inactive + system audio quiet",
     });
 
-    await expect(page.getByText("Your call has likely ended")).not.toBeVisible();
+    await expect(page.getByText("Call ended?")).not.toBeVisible();
+  });
+
+  test("ignores call-end while a dictation is recording", async ({ page }) => {
+    await installMocks(page);
+    await page.goto("/hud");
+    await waitForHudReady(page);
+    await fireEvent(page, "hud:state", {
+      state: "recording",
+      kind: "dictation",
+      startedAtMs: Date.now(),
+    });
+    await fireEvent(page, "meeting:call-may-have-ended", {
+      confidence: "high",
+      signalSummary: "mic inactive + system audio quiet",
+    });
+    await page.waitForTimeout(200);
+    await expect(page.getByText("Call ended?")).toHaveCount(0);
   });
 });

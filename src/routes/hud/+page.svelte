@@ -35,12 +35,38 @@
   // is only present on Recording transitions; `endsAtMs` is only
   // present on Pending transitions. Processing and Done transitions
   // omit both.
+  type HudPhase =
+    | "recording"
+    | "processing"
+    | "done"
+    | "pending"
+    | "call-may-have-ended"
+    | "stopping"
+    | "stopped"
+    | "stop-failed";
   type HudStatePayload = {
-    state: "recording" | "processing" | "done" | "pending" | "call-may-have-ended";
+    state: HudPhase;
     startedAtMs?: number;
     endsAtMs?: number;
     confidence?: "high" | "medium";
+    kind?: "dictation" | "meeting";
   };
+
+  // How long the "Stopped" confirmation stays up before self-dismissing,
+  // and the ceiling on "Stopping…" if the backend's Stopped event never
+  // arrives (stop_manual's own audio-release timeout is 10 s).
+  const STOPPED_DISMISS_MS = 1800;
+  const STOPPING_FALLBACK_MS = 15_000;
+  // Confirm buttons ignore input for this long after appearing, so the
+  // second half of a double-click on ■ can't land on "Stop" (#1001
+  // follow-up). Rendered as `disabled` — Playwright waits for enabled.
+  const CONFIRM_ARM_MS = 300;
+  // A double-click on the pill raises the main window — but not when
+  // either click hit a control. The first click of a double-click on ■
+  // swaps the button for the confirm strip, so the second click lands on
+  // the pill and the dblclick bubbles to the root with no button in its
+  // path. Remembering the last control press closes that gap.
+  const CONTROL_DBLCLICK_GUARD_MS = 700;
 
   // HUD lifecycle state (#291). Backend emits `hud:state` with
   // `"recording"`, `"processing"`, or `"done"`. Recording renders
@@ -56,10 +82,43 @@
   // requestAnimationFrame, and the rAF loop never recovers when the
   // window becomes visible, leaving the bars permanently frozen at
   // the silence floor.
-  let hudState = $state<"recording" | "processing" | "done" | "pending" | "call-may-have-ended" | null>(null);
+  let hudState = $state<HudPhase | null>(null);
+
+  // What the current Recording pill is capturing. Only a meeting can be
+  // stopped from the HUD: dictation is owned by the main window's hotkey
+  // state machine, and pre-fix ■ called `meeting_stop_manual` during a
+  // dictation — the HUD hid and the dictation kept recording.
+  // Defaults to "dictation" so an unlabelled Recording fails closed (no ■)
+  // — the fail-open direction is exactly the bug described above.
+  let recordingKind = $state<"dictation" | "meeting">("dictation");
 
   // True while the inline "Stop recording?" confirmation is shown.
   let confirmingStop = $state(false);
+
+  // Confirm-strip arming (see CONFIRM_ARM_MS). Re-armed whenever a
+  // prompt appears.
+  let promptArmed = $state(false);
+  let armTimer: ReturnType<typeof setTimeout> | null = null;
+  function armPrompt() {
+    promptArmed = false;
+    if (armTimer !== null) clearTimeout(armTimer);
+    armTimer = setTimeout(() => {
+      armTimer = null;
+      promptArmed = true;
+    }, CONFIRM_ARM_MS);
+  }
+
+  // Shown inline for a few seconds when a stop attempt fails.
+  let stopError = $state<string | null>(null);
+  let stopErrorTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // -Infinity, not 0: performance.now() counts from page load, so a 0
+  // start would swallow any double-click in the first 700 ms.
+  let lastControlPressAt = Number.NEGATIVE_INFINITY;
+
+  // Elapsed-timer anchor saved when a stop begins, so a failed stop can
+  // resume the live counter instead of freezing it.
+  let startedAtBeforeStop: number | null = null;
 
   // Call-end detector state. `callEndConfidence` is set when the backend
   // emits `call-may-have-ended`; `prevHudState` tracks what state to
@@ -70,9 +129,22 @@
   let prevHudState = $state<"recording" | null>(null);
   let sessionCallEndSuppressed = $state(false);
 
-  // Timer handle for the "done" → auto-dismiss sequence (#669).
-  // Cancelled if a new recording starts before the timer fires.
+  // Timer handle for the "done"/"stopped" → auto-dismiss sequence
+  // (#669), and the "stopping" fallback. Cancelled on any state change.
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function hideAfter(ms: number) {
+    if (doneTimer !== null) clearTimeout(doneTimer);
+    doneTimer = setTimeout(async () => {
+      doneTimer = null;
+      try {
+        await getCurrentWebviewWindow().hide();
+      } catch {
+        // Non-fatal — the window will still be visible but won't
+        // block anything.
+      }
+    }, ms);
+  }
 
   // Pending countdown state. `pendingEndsAtMs` is set when the backend emits
   // `hud:state === "pending"` and cleared on any other transition. `pendingTick`
@@ -143,6 +215,7 @@
   let unlistenState: UnlistenFn | null = null;
   let unlistenProgress: UnlistenFn | null = null;
   let unlistenCallEndCancelled: UnlistenFn | null = null;
+  let unlistenCallMayHaveEnded: UnlistenFn | null = null;
   let raf: number | undefined;
 
   onMount(async () => {
@@ -162,13 +235,21 @@
         // Handle call-may-have-ended before the main state switch — it
         // doesn't follow the same clear/reset sequence as the other states.
         if (next === "call-may-have-ended") {
-          if (sessionCallEndSuppressed) return;
-          callEndConfidence = payload.confidence ?? "high";
-          prevHudState = hudState === "recording" ? "recording" : null;
-          hudState = "call-may-have-ended";
+          showCallEndPrompt(payload.confidence ?? "high");
           return;
         }
-        if (next === "recording" || next === "processing" || next === "done" || next === "pending") {
+        if (next === "stop-failed") {
+          resumeAfterFailedStop();
+          return;
+        }
+        if (
+          next === "recording"
+          || next === "processing"
+          || next === "done"
+          || next === "pending"
+          || next === "stopping"
+          || next === "stopped"
+        ) {
           // Cancel any pending done-dismiss timer when state changes.
           if (doneTimer !== null) {
             clearTimeout(doneTimer);
@@ -184,15 +265,16 @@
           if (next === "done") {
             // Auto-dismiss after 1.5 s so the user sees "Copied!" before
             // the HUD disappears (#669). A new recording cancels this.
-            doneTimer = setTimeout(async () => {
-              doneTimer = null;
-              try {
-                await getCurrentWebviewWindow().hide();
-              } catch {
-                // Non-fatal — the window will still be visible but won't
-                // block anything.
-              }
-            }, 1500);
+            hideAfter(1500);
+          } else if (next === "stopped") {
+            // Meeting audio released; the transcript tail keeps
+            // finalizing in the background. Confirm, then get out of the way.
+            recordingStartedAt = null;
+            hideAfter(STOPPED_DISMISS_MS);
+          } else if (next === "stopping") {
+            if (recordingStartedAt !== null) startedAtBeforeStop = recordingStartedAt;
+            recordingStartedAt = null;
+            hideAfter(STOPPING_FALLBACK_MS);
           } else if (next === "processing") {
             // Freeze the timer (don't reset) — the user still sees
             // the final duration of the just-finished capture during
@@ -214,6 +296,8 @@
             // a fresh timestamp on every Recording transition;
             // missing field is a defensive fallback.
             confirmingStop = false;
+            clearStopError();
+            recordingKind = payload.kind ?? "dictation";
             // A fresh Recording transition starts a new session — allow
             // call-end prompts to fire again.
             sessionCallEndSuppressed = false;
@@ -233,6 +317,15 @@
       (event) => {
         transcriptionProgress = event.payload;
       },
+    );
+
+    // The call-end detector broadcasts `meeting:call-may-have-ended`
+    // (meeting/events.rs); it never emits a `hud:state` for it. Pre-fix
+    // the HUD only handled the `hud:state` form, so its prompt never
+    // appeared in the real app — only the main window's banner did.
+    unlistenCallMayHaveEnded = await listen<{ confidence: "high" | "medium" }>(
+      Events.CallMayHaveEnded,
+      (event) => showCallEndPrompt(event.payload?.confidence ?? "high"),
     );
 
     // When a reversal signal arrives (mic goes active again, loud audio
@@ -255,13 +348,56 @@
     unlistenProgress = null;
     unlistenCallEndCancelled?.();
     unlistenCallEndCancelled = null;
+    unlistenCallMayHaveEnded?.();
+    unlistenCallMayHaveEnded = null;
     if (doneTimer !== null) {
       clearTimeout(doneTimer);
       doneTimer = null;
     }
+    if (armTimer !== null) {
+      clearTimeout(armTimer);
+      armTimer = null;
+    }
+    clearStopError();
     if (raf !== undefined) {
       cancelAnimationFrame(raf);
       raf = undefined;
+    }
+  });
+
+  let promptVisible = $derived(
+    hudState === "call-may-have-ended" || (hudState === "recording" && confirmingStop),
+  );
+
+  let label = $derived.by(() => {
+    switch (hudState) {
+      case "processing":
+        return transcriptionProgress !== null
+          ? `Transcribing… ${Math.round(transcriptionProgress)}%`
+          : "Processing…";
+      case "done":
+        return "Copied!";
+      case "pending":
+        return "Meeting detected";
+      case "stopping":
+        return "Stopping…";
+      case "stopped":
+        return "Stopped · saving transcript";
+      default:
+        return stopError ?? "Recording";
+    }
+  });
+
+  let ariaLabel = $derived.by(() => {
+    switch (hudState) {
+      case "pending":
+        return "Meeting detected, recording will start soon";
+      case "call-may-have-ended":
+        return "Your call may have ended";
+      case "recording":
+        return stopError ?? "Recording in progress";
+      default:
+        return label;
     }
   });
 
@@ -278,12 +414,92 @@
     }
   }
 
-  // Double-click the HUD pill to bring the main Hush window forward.
-  // Useful when the user wants to check history or settings without
-  // navigating away from whatever app they're dictating into.
-  async function raiseMainWindow() {
+  function clearStopError() {
+    if (stopErrorTimer !== null) {
+      clearTimeout(stopErrorTimer);
+      stopErrorTimer = null;
+    }
+    stopError = null;
+  }
+
+  // Only interrupt a live meeting recording: a prompt over "Stopping…",
+  // "Copied!" or a dictation pill would be wrong or would be hidden by
+  // that state's pending dismiss timer moments later.
+  function showCallEndPrompt(confidence: "high" | "medium") {
+    if (sessionCallEndSuppressed) return;
+    if (hudState !== "recording" || recordingKind !== "meeting") return;
+    confirmingStop = false;
+    callEndConfidence = confidence;
+    prevHudState = "recording";
+    hudState = "call-may-have-ended";
+    armPrompt();
+  }
+
+  function resumeAfterFailedStop() {
+    if (doneTimer !== null) {
+      clearTimeout(doneTimer);
+      doneTimer = null;
+    }
+    hudState = "recording";
+    recordingKind = "meeting";
+    recordingStartedAt = startedAtBeforeStop ?? Date.now();
+    clearStopError();
+    stopError = "Couldn't stop — try again";
+    stopErrorTimer = setTimeout(() => {
+      stopErrorTimer = null;
+      stopError = null;
+    }, 4000);
+  }
+
+  function beginConfirmStop() {
+    confirmingStop = true;
+    armPrompt();
+  }
+
+  // Stop the meeting from the HUD. Flips to "Stopping…" immediately so the
+  // click visibly registers; the backend then emits `stopped` (→ brief
+  // confirmation + self-dismiss). Pre-fix the HUD hid itself before the
+  // stop IPC resolved, so a failed stop was indistinguishable from a
+  // successful one.
+  async function stopMeeting() {
+    if (hudState === "stopping" || hudState === "stopped") return;
+    confirmingStop = false;
+    clearStopError();
+    hudState = "stopping";
+    startedAtBeforeStop = recordingStartedAt;
+    recordingStartedAt = null;
+    hideAfter(STOPPING_FALLBACK_MS);
     try {
-      await invoke("show_main_window");
+      await invoke("meeting_stop_manual");
+    } catch (e) {
+      // "No session active" means a concurrent stop (auto-stop, the main
+      // window) already won — nothing is recording, so just go away.
+      if (JSON.stringify(e ?? "").includes("no meeting session active")) {
+        hideAfter(0);
+        return;
+      }
+      // The backend also emits `stop-failed` when the session is still
+      // live; both paths land in the same idempotent resume.
+      resumeAfterFailedStop();
+    }
+  }
+
+  function noteControlPress(e: PointerEvent) {
+    if ((e.target as Element | null)?.closest("button")) {
+      lastControlPressAt = performance.now();
+    }
+  }
+
+  // Double-click the HUD pill to bring the main Hush window forward,
+  // routed to the Transcribe screen where the live recording and its
+  // Stop control are. Pre-fix the main window reopened on whatever
+  // section it was last left on (often Settings), so the user couldn't
+  // see whether their recording was still going.
+  async function raiseMainWindow(e: MouseEvent) {
+    if ((e.target as Element | null)?.closest("button, .hud-prompt")) return;
+    if (performance.now() - lastControlPressAt < CONTROL_DBLCLICK_GUARD_MS) return;
+    try {
+      await invoke("show_main_window", { section: "dictation" });
     } catch {
       // Best-effort — main window will still be accessible via tray.
     }
@@ -307,198 +523,170 @@
 -->
 <div
   class="hud-root"
-  class:hud-processing={hudState === "processing"}
-  class:hud-done={hudState === "done"}
+  class:hud-processing={hudState === "processing" || hudState === "stopping"}
+  class:hud-done={hudState === "done" || hudState === "stopped"}
+  class:hud-pending={hudState === "pending"}
+  class:hud-prompting={promptVisible}
   data-tauri-drag-region
   role="status"
   aria-live="polite"
-  aria-label={hudState === "processing"
-    ? transcriptionProgress !== null
-      ? "Transcribing (step 2 of 2)"
-      : "Loading model (step 1 of 2)"
-    : hudState === "done"
-      ? "Copied to clipboard"
-      : hudState === "pending"
-        ? "Meeting detected, recording will start soon"
-        : "Recording in progress"}
+  aria-label={ariaLabel}
+  onpointerdowncapture={noteControlPress}
   ondblclick={raiseMainWindow}
 >
-  <!--
-    Subtle 6-dot grip glyph at the leading edge. The whole pill is a
-    drag region (data-tauri-drag-region on the root), but without a
-    visual cue users can't tell — the grip dots are the standard
-    macOS / web idiom (see Finder sidebar, Notion blocks, draggable
-    list rows). aria-hidden because screen readers already get
-    "Recording in progress" from the root's aria-label and this is
-    pure visual affordance.
-  -->
-  <span class="hud-grip" aria-hidden="true">
-    <svg viewBox="0 0 6 12" width="6" height="12">
-      <circle cx="1.5" cy="2" r="0.9" fill="currentColor" />
-      <circle cx="4.5" cy="2" r="0.9" fill="currentColor" />
-      <circle cx="1.5" cy="6" r="0.9" fill="currentColor" />
-      <circle cx="4.5" cy="6" r="0.9" fill="currentColor" />
-      <circle cx="1.5" cy="10" r="0.9" fill="currentColor" />
-      <circle cx="4.5" cy="10" r="0.9" fill="currentColor" />
-    </svg>
-  </span>
+  {#if !promptVisible && hudState !== "pending"}
+    <!--
+      Subtle 6-dot grip glyph at the leading edge. The pill is a drag
+      region (data-tauri-drag-region on the root), but without a visual
+      cue users can't tell — the grip dots are the standard macOS / web
+      idiom. aria-hidden: pure visual affordance. Dropped while a prompt
+      is up so the prompt's buttons get the room.
+    -->
+    <span class="hud-grip" aria-hidden="true">
+      <svg viewBox="0 0 6 12" width="6" height="12">
+        <circle cx="1.5" cy="2" r="0.9" fill="currentColor" />
+        <circle cx="4.5" cy="2" r="0.9" fill="currentColor" />
+        <circle cx="1.5" cy="6" r="0.9" fill="currentColor" />
+        <circle cx="4.5" cy="6" r="0.9" fill="currentColor" />
+        <circle cx="1.5" cy="10" r="0.9" fill="currentColor" />
+        <circle cx="4.5" cy="10" r="0.9" fill="currentColor" />
+      </svg>
+    </span>
+  {/if}
   <span class="hud-dot"></span>
-  <span class="hud-label">
-    {hudState === "processing"
-      ? transcriptionProgress !== null
-        ? "Transcribing… (2/2)"
-        : "Loading model… (1/2)"
-      : hudState === "done"
-        ? "Copied!"
-        : hudState === "pending"
-          ? "Meeting detected"
-          : "Recording"}
-  </span>
-  {#if hudState === "recording"}
-    <span class="hud-elapsed" data-testid="hud-elapsed" aria-hidden="true">
-      {elapsedLabel}
-    </span>
-  {/if}
-  {#if hudState === "recording"}
-    <!--
-      Waveform visualiser (#362). The component owns its own
-      audio:level subscription, attack/release smoothing, and ring
-      buffer; we just gate it with `active` so the post-stop
-      shimmer doesn't flash the bars. Extracted to $lib in #411
-      phase B so the main window's recording status row can render
-      the same affordance.
-      Only mounted when hudState is explicitly "recording" (set by
-      the backend event) so the rAF loop starts in a visible window.
-    -->
-    <AudioWaveform mode="recording" levelScale={480} silenceFloorPct={15} />
-  {:else if hudState === "processing"}
-    <!--
-      Processing state: replace the level meter with a slim
-      shimmer bar — same width / position as the meter so the
-      pill doesn't reflow on transition. The shimmer reuses the
-      same gradient pattern as the Meeting panel's listening
-      pill so the visual idiom is consistent ("Hush is still
-      working but isn't capturing audio right now").
-    -->
-    <div class="hud-shimmer" role="presentation">
-      <div class="hud-shimmer-fill"></div>
-    </div>
-  {:else if hudState === "pending"}
-    <!--
-      Pending state: a draining orange progress bar shows how much
-      time remains before auto-recording starts. Progress = fraction
-      of the 3-second countdown window remaining (1 = full, 0 = empty).
-      `pendingProgress` (a $derived that reads `pendingTick`) is the reactive
-      dependency that forces re-evaluation on every rAF frame.
-    -->
-    {#if pendingEndsAtMs !== null}
-      <div
-        class="hud-countdown-bar"
-        style="--progress: {pendingProgress}"
-        role="presentation"
-        data-testid="hud-countdown-bar"
-      ></div>
-    {/if}
-    <!-- Screen-reader announcement for the countdown. Announced once on entry
-         via aria-live="assertive"; the "Don't record" button is the action. -->
-    <span class="sr-only" aria-live="assertive" aria-atomic="true">
-      {#if hudState === "pending"}Recording will start in 3 seconds. Activate Don't record to cancel.{/if}
-    </span>
-  {:else if hudState === "done"}
-    <!--
-      Done state (#669): a brief green check glyph replaces the
-      shimmer so the user gets a clear "safe to paste" signal
-      before the HUD self-dismisses.
-    -->
-    <svg
-      class="hud-done-check"
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <polyline points="2.5,8.5 6.5,12.5 13.5,3.5" />
-    </svg>
-  {/if}
+
   {#if hudState === "call-may-have-ended"}
     <!--
-      Call-end prompt: shown when the backend's call-end detector fires
-      with high or medium confidence. The user can stop the recording
-      immediately ("Stop now") or keep recording ("Keep recording" —
-      suppresses further prompts for this session). Fits inside the
-      existing pill; no new background layer needed.
+      Call-end prompt: shown when the backend's call-end detector fires.
+      "Stop" ends the meeting; "Keep recording" suppresses further
+      prompts for this session. Replaces the label/timer/waveform rather
+      than squeezing in beside them — the pill is too narrow for both.
     -->
-    <span class="hud-call-end-prompt" data-tauri-drag-region="false">
-      <span class="hud-call-end-label">
-        {callEndConfidence === "high"
+    <span class="hud-prompt" data-tauri-drag-region="false">
+      <span
+        class="hud-prompt-label"
+        title={callEndConfidence === "high"
           ? "Your call has likely ended"
           : "Your call may be winding down"}
+      >
+        {callEndConfidence === "high" ? "Call ended?" : "Call winding down?"}
       </span>
       <button
         type="button"
         class="hud-confirm-btn hud-confirm-btn--stop"
-        data-tauri-drag-region="false"
-        onclick={async () => {
-          try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
-          await dismiss();
-        }}
-        ondblclick={(e) => e.stopPropagation()}
-      >Stop now</button>
-      <button
-        type="button"
-        class="hud-confirm-btn hud-confirm-btn--keep"
-        data-tauri-drag-region="false"
-        onclick={() => {
-          sessionCallEndSuppressed = true;
-          hudState = prevHudState ?? "recording";
-          callEndConfidence = null;
-        }}
-        ondblclick={(e) => e.stopPropagation()}
-      >Keep recording</button>
-    </span>
-  {:else if hudState === "recording" && confirmingStop}
-    <span class="hud-confirm-stop" data-tauri-drag-region="false">
-      <span class="hud-confirm-label">Stop recording?</span>
-      <button
-        type="button"
-        class="hud-confirm-btn hud-confirm-btn--stop"
-        onclick={async () => {
-          try { await invoke("meeting_stop_manual"); } catch { /* best-effort */ }
-          await dismiss();
-        }}
-        ondblclick={(e) => e.stopPropagation()}
+        disabled={!promptArmed}
+        onclick={stopMeeting}
       >Stop</button>
       <button
         type="button"
         class="hud-confirm-btn hud-confirm-btn--keep"
-        onclick={() => { confirmingStop = false; }}
-        ondblclick={(e) => e.stopPropagation()}
+        disabled={!promptArmed}
+        onclick={() => {
+          sessionCallEndSuppressed = true;
+          hudState = prevHudState ?? "recording";
+          callEndConfidence = null;
+          clearStopError();
+        }}
       >Keep recording</button>
     </span>
-  {:else if hudState === "recording"}
+  {:else if hudState === "recording" && confirmingStop}
+    <span class="hud-prompt" data-tauri-drag-region="false">
+      <span class="hud-prompt-label">Stop recording?</span>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--stop"
+        disabled={!promptArmed}
+        onclick={stopMeeting}
+      >Stop</button>
+      <button
+        type="button"
+        class="hud-confirm-btn hud-confirm-btn--keep"
+        disabled={!promptArmed}
+        onclick={() => { confirmingStop = false; }}
+      >Keep recording</button>
+    </span>
+  {:else}
+    <span class="hud-label">{label}</span>
+    {#if hudState === "recording" && stopError === null}
+      <span class="hud-elapsed" data-testid="hud-elapsed" aria-hidden="true">
+        {elapsedLabel}
+      </span>
+      <!--
+        Waveform visualiser (#362). The component owns its own
+        audio:level subscription, attack/release smoothing, and ring
+        buffer. Only mounted when hudState is explicitly "recording"
+        (set by the backend event) so the rAF loop starts in a visible
+        window.
+      -->
+      <AudioWaveform mode="recording" levelScale={480} silenceFloorPct={15} />
+    {:else if hudState === "processing" || hudState === "stopping"}
+      <!--
+        Processing / stopping: a slim shimmer in the waveform's slot so
+        the pill doesn't reflow on transition ("Hush is still working
+        but isn't capturing audio right now").
+      -->
+      <div class="hud-shimmer" role="presentation">
+        <div class="hud-shimmer-fill"></div>
+      </div>
+    {:else if hudState === "pending"}
+      <!--
+        Draining orange bar: fraction of the 3-second countdown left
+        before auto-recording starts. `pendingProgress` reads
+        `pendingTick`, which forces re-evaluation every rAF frame.
+      -->
+      {#if pendingEndsAtMs !== null}
+        <div class="hud-countdown-track" role="presentation">
+          <div
+            class="hud-countdown-bar"
+            style="--progress: {pendingProgress}"
+            data-testid="hud-countdown-bar"
+          ></div>
+        </div>
+      {/if}
+      <!-- Announced once on entry; "Don't record" is the action. -->
+      <span class="sr-only" aria-live="assertive" aria-atomic="true">
+        Recording will start in 3 seconds. Activate Don't record to cancel.
+      </span>
+    {:else if hudState === "done" || hudState === "stopped"}
+      <!--
+        Done (#669) / stopped: a brief green check so the user gets a
+        clear "finished" signal before the HUD self-dismisses.
+      -->
+      <svg
+        class="hud-done-check"
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <polyline points="2.5,8.5 6.5,12.5 13.5,3.5" />
+      </svg>
+    {/if}
+  {/if}
+
+  {#if hudState === "recording" && !confirmingStop && recordingKind === "meeting"}
     <button
       type="button"
       class="hud-stop"
       aria-label="Stop recording"
       title="Stop recording"
       data-tauri-drag-region="false"
-      onclick={() => { confirmingStop = true; }}
-      ondblclick={(e) => e.stopPropagation()}
+      onclick={beginConfirmStop}
     >
       <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-        <rect x="2" y="2" width="8" height="8" fill="currentColor" rx="1" />
+        <rect x="2" y="2" width="8" height="8" fill="currentColor" rx="1.5" />
       </svg>
     </button>
   {/if}
   {#if hudState === "pending"}
     <button
       type="button"
-      class="hud-cancel-pending"
+      class="hud-confirm-btn hud-confirm-btn--keep"
       aria-label="Cancel auto-recording"
       title="Cancel auto-recording"
       data-tauri-drag-region="false"
@@ -506,152 +694,97 @@
         try { await invoke("meeting_cancel_pending"); } catch { /* best-effort */ }
         await dismiss();
       }}
-      ondblclick={(e) => e.stopPropagation()}
     >Don't record</button>
   {/if}
-  <button
-    type="button"
-    class="hud-dismiss"
-    aria-label="Hide recording overlay (recording continues)"
-    title="Hide overlay"
-    onclick={dismiss}
-    ondblclick={(e) => e.stopPropagation()}
-    data-tauri-drag-region="false"
-  >
-    <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-      <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-    </svg>
-  </button>
+  {#if !promptVisible && hudState !== "pending"}
+    <button
+      type="button"
+      class="hud-dismiss"
+      aria-label="Hide recording overlay (recording continues)"
+      title="Hide overlay"
+      onclick={dismiss}
+      data-tauri-drag-region="false"
+    >
+      <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+        <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      </svg>
+    </button>
+  {/if}
 </div>
 
 <style>
-  /* Transparent window — override the global body background. */
+  /* Transparent window — override the global body background. The HUD
+     window is `transparent: true` + `decorations: false`; without this
+     rule WebKit paints a white rectangle over the screen. Keep it. */
   :global(html), :global(body) {
     margin: 0;
     padding: 0;
-    background-color: transparent;
+    background-color: transparent !important;
     overflow: hidden;
     color: #f5efe8;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
 
+  /* The window is `shadow: false` and exactly the size in tauri.conf.json
+     (mirrored by HUD_LOGICAL_WIDTH in hud/mod.rs). Pre-fix the pill
+     filled it edge to edge, so its drop shadow was clipped flat at the
+     window bounds. The inset below is the shadow's room — keep it at
+     least the shadow's blur + offset. */
   .hud-root {
+    --hud-inset: 8px;
+    --audio-waveform-height: 20px;
+    --audio-waveform-width: 48px;
+    position: fixed;
+    inset: var(--hud-inset);
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 0.65rem;
-    height: 100vh;
-    width: 100vw;
+    gap: 8px;
     box-sizing: border-box;
-    padding: 0 0.65rem;
+    padding: 0 8px 0 12px;
     /* Neutral near-black pill, glassy — matches the app's dark canvas */
-    background-color: rgba(19, 18, 17, 0.88);
+    background-color: rgba(24, 22, 21, 0.9);
     border-radius: 999px;
-    border: 1px solid rgba(244, 158, 23, 0.28);
+    border: 1px solid rgba(244, 158, 23, 0.26);
     box-shadow:
-      0 4px 16px rgba(0, 0, 0, 0.45),
-      0 0 0 0.5px rgba(244, 158, 23, 0.12);
+      0 2px 6px rgba(0, 0, 0, 0.35),
+      0 1px 1.5px rgba(0, 0, 0, 0.3),
+      inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     user-select: none;
-    --audio-waveform-height: 24px;
+    -webkit-user-select: none;
+    white-space: nowrap;
     cursor: grab;
   }
   .hud-root:active {
     cursor: grabbing;
   }
+  .hud-root.hud-prompting,
+  .hud-root.hud-pending {
+    padding-left: 12px;
+    padding-right: 6px;
+  }
+  .hud-pending .hud-label {
+    font-size: 12px;
+  }
 
-  .hud-stop {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    border: none;
-    background: transparent;
-    color: #f87171;
-    cursor: pointer;
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
     padding: 0;
-    opacity: 0.75;
-    transition: opacity 0.15s;
-    flex-shrink: 0;
-  }
-  .hud-stop:hover { opacity: 1; }
-
-  .hud-call-end-prompt {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .hud-call-end-label {
-    font-size: 11px;
-    opacity: 0.85;
-    white-space: nowrap;
-    max-width: 180px;
+    margin: -1px;
     overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .hud-confirm-stop {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  .hud-confirm-label {
-    font-size: 11px;
-    opacity: 0.85;
+    clip: rect(0, 0, 0, 0);
     white-space: nowrap;
-  }
-  .hud-confirm-btn {
-    font-size: 11px;
-    border-radius: 10px;
-    border: none;
-    cursor: pointer;
-    padding: 2px 8px;
-    transition: opacity 0.15s;
-  }
-  .hud-confirm-btn--stop {
-    background: #f87171;
-    color: #1a1a1a;
-  }
-  .hud-confirm-btn--keep {
-    background: rgba(255,255,255,0.15);
-    color: #f5efe8;
-  }
-  .hud-confirm-btn:hover { opacity: 0.85; }
-
-  .hud-dismiss {
-    margin-left: auto;
-    padding: 0;
-    width: 18px;
-    height: 18px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background-color: rgba(255, 255, 255, 0.14);
-    color: rgba(255, 255, 255, 0.75);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: background-color 0.12s, color 0.12s;
-  }
-  .hud-dismiss:hover {
-    background-color: rgba(255, 255, 255, 0.28);
-    color: #ffffff;
-  }
-  .hud-dismiss:focus-visible {
-    outline: 2px solid rgba(244, 158, 23, 0.7);
-    outline-offset: 1px;
+    border: 0;
   }
 
   .hud-grip {
     display: inline-flex;
     align-items: center;
+    flex-shrink: 0;
     color: rgba(255, 255, 255, 0.25);
     transition: color 0.12s;
   }
@@ -660,42 +793,154 @@
   }
 
   .hud-dot {
-    width: 0.85rem;
-    height: 0.85rem;
+    width: 10px;
+    height: 10px;
     /* Never let the flex row compress the dot's width — once the elapsed
        timer grows to H:MM:SS (calls over an hour) the pill gets tight and
        a shrinkable dot renders as an ellipse (#989). */
     flex-shrink: 0;
     border-radius: 50%;
     background-color: #e85050;
-    box-shadow: 0 0 8px rgba(232, 80, 80, 0.6);
+    box-shadow: 0 0 6px rgba(232, 80, 80, 0.6);
     animation: hud-pulse 1.2s ease-in-out infinite;
   }
-
-  .hud-label {
-    font-size: 0.95rem;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-  }
-
-  .hud-elapsed {
-    font-size: 0.85rem;
-    font-weight: 500;
-    color: rgba(245, 239, 232, 0.72);
-    font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-    letter-spacing: 0.01em;
-  }
-
   @keyframes hud-pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.55; transform: scale(0.85); }
   }
-  @media (prefers-reduced-motion: reduce) {
-    .hud-dot { animation: none; }
+
+  .hud-label {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  /* Processing: dot turns orange (accent), shimmer replaces waveform */
+  .hud-elapsed {
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(245, 239, 232, 0.72);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  }
+
+  /* Trailing controls sit flush right regardless of state. */
+  .hud-stop,
+  .hud-dismiss,
+  .hud-root > .hud-confirm-btn {
+    flex-shrink: 0;
+  }
+  .hud-stop {
+    margin-left: auto;
+  }
+  .hud-stop + .hud-dismiss {
+    margin-left: 0;
+  }
+
+  /* ■ gets a real 26 px hit target with a visible ring — pre-fix it was a
+     faint 22 px glyph on a transparent background, easy to miss, and a
+     miss landed on the pill (drag region / double-click → main window). */
+  .hud-stop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: none;
+    background-color: rgba(248, 113, 113, 0.16);
+    color: #f87171;
+    cursor: pointer;
+    padding: 0;
+    transition: background-color 0.12s, color 0.12s;
+  }
+  .hud-stop:hover {
+    background-color: rgba(248, 113, 113, 0.3);
+    color: #fca5a5;
+  }
+
+  .hud-dismiss {
+    margin-left: auto;
+    padding: 0;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background-color: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.7);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color 0.12s, color 0.12s;
+  }
+  .hud-dismiss:hover {
+    background-color: rgba(255, 255, 255, 0.26);
+    color: #ffffff;
+  }
+
+  .hud-stop:focus-visible,
+  .hud-dismiss:focus-visible,
+  .hud-confirm-btn:focus-visible {
+    outline: 2px solid rgba(244, 158, 23, 0.7);
+    outline-offset: 1px;
+  }
+
+  /* Inline prompts (stop confirmation, call-end) replace the label, timer
+     and waveform — the pill can't fit both. */
+  .hud-prompt {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+  }
+  .hud-prompt-label {
+    font-size: 12px;
+    font-weight: 600;
+    margin-right: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hud-confirm-btn {
+    flex-shrink: 0;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 999px;
+    border: none;
+    cursor: pointer;
+    padding: 6px 9px;
+    transition: background-color 0.12s, opacity 0.12s;
+  }
+  .hud-confirm-btn:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+  .hud-confirm-btn--stop {
+    background: #f87171;
+    color: #1a1a1a;
+  }
+  .hud-confirm-btn--stop:hover:not(:disabled) {
+    background: #fb8f8f;
+  }
+  .hud-confirm-btn--keep {
+    background: rgba(255, 255, 255, 0.14);
+    color: #f5efe8;
+  }
+  .hud-confirm-btn--keep:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.24);
+  }
+  .hud-root > .hud-confirm-btn {
+    margin-left: auto;
+  }
+
+  /* Processing / stopping: dot turns orange (accent), shimmer replaces waveform */
   .hud-processing .hud-dot {
     animation: none;
     background-color: #f49e17;
@@ -703,8 +948,9 @@
   }
 
   .hud-shimmer {
-    width: 60px;
-    height: var(--audio-waveform-height, 16px);
+    flex-shrink: 0;
+    width: var(--audio-waveform-width);
+    height: 6px;
     background-color: rgba(255, 255, 255, 0.10);
     border-radius: 3px;
     overflow: hidden;
@@ -715,7 +961,7 @@
     background: linear-gradient(
       90deg,
       rgba(244, 158, 23, 0.1) 0%,
-      rgba(244, 158, 23, 0.55) 50%,
+      rgba(244, 158, 23, 0.7) 50%,
       rgba(244, 158, 23, 0.1) 100%
     );
     background-size: 200% 100%;
@@ -726,50 +972,47 @@
     0%   { background-position: 100% 0; }
     100% { background-position: -100% 0; }
   }
-  @media (prefers-reduced-motion: reduce) {
-    .hud-shimmer-fill { animation: none; background-position: 50% 0; }
-  }
 
-  /* Pending: draining orange bar showing countdown to auto-recording. */
+  /* Pending: nothing is being recorded yet, so the dot is orange, not
+     the red "recording" dot. Draining bar counts down to auto-start. */
+  .hud-pending .hud-dot {
+    background-color: #f49e17;
+    box-shadow: 0 0 6px rgba(244, 158, 23, 0.6);
+  }
+  .hud-countdown-track {
+    flex-shrink: 0;
+    width: 32px;
+    height: 4px;
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
   .hud-countdown-bar {
-    width: calc(var(--progress, 1) * 60px);
-    height: 3px;
+    width: calc(var(--progress, 1) * 100%);
+    height: 100%;
     background: #f49e17;
     border-radius: 2px;
-    flex-shrink: 0;
     transition: none; /* rAF-driven — no CSS transition needed */
   }
-  @media (prefers-reduced-motion: reduce) {
-    .hud-countdown-bar {
-      /* Show a static half-width bar instead of animating */
-      width: 30px;
-    }
-  }
 
-  /* Cancel button shown in pending state */
-  .hud-cancel-pending {
-    font-size: 11px;
-    border-radius: 10px;
-    border: none;
-    cursor: pointer;
-    padding: 2px 8px;
-    background: rgba(255,255,255,0.15);
-    color: #f5efe8;
-    transition: opacity 0.15s;
-    flex-shrink: 0;
-  }
-  .hud-cancel-pending:hover { opacity: 0.85; }
-
-  /* Done: green dot + check. HUD-local green, tuned for the dark pill —
-     the light-theme --success-text (#2f7a35) would be too dark here. */
+  /* Done / stopped: green dot + check. HUD-local green, tuned for the dark
+     pill — the light-theme --success-text (#2f7a35) would be too dark here. */
   .hud-done .hud-dot {
     animation: none;
     background-color: #74b06c;
     box-shadow: 0 0 6px rgba(116, 176, 108, 0.55);
   }
   .hud-done-check {
+    flex-shrink: 0;
     color: #74b06c;
     width: 16px;
     height: 16px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hud-dot { animation: none; }
+    .hud-shimmer-fill { animation: none; background-position: 50% 0; }
+    /* Show a static half-width bar instead of animating */
+    .hud-countdown-bar { width: 50%; }
   }
 </style>

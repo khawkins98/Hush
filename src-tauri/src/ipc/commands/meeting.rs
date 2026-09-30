@@ -503,6 +503,7 @@ pub async fn meeting_start_manual(
             &app,
             crate::hud::HudState::Recording {
                 started_at_ms: crate::hud::now_unix_ms(),
+                kind: crate::hud::RecordingKind::Meeting,
             },
         ) {
             tracing::warn!(error = ?e, "emit hud:state(recording) failed for meeting");
@@ -623,13 +624,6 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
     app: &AppHandle,
     state: &AppState,
 ) -> IpcResult<()> {
-    // Hide the HUD up front — the user (or auto-stop) expects the
-    // overlay gone now, not after the pump's final-chunk drain
-    // (which can take several seconds while whisper finishes the
-    // tail of the session). `hide_async` dispatches onto the main
-    // thread; same rationale as the start path (#476).
-    crate::hud::hide_async(app);
-
     // Check *before* calling stop_manual so we know whether a meeting pump
     // was involved. `stop_manual` returns as soon as the audio device is
     // released; the pump's tail finalization (flush, #667 identity
@@ -641,6 +635,18 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
     //   - "no meeting session active" → no pump ran, the transcribe slots
     //     are still live for dictation, so skip the pointless rebuild.
     let had_active = state.meeting_manager.has_active_session();
+
+    // Flip the HUD to "Stopping…" rather than hiding it up front. Pre-fix
+    // the pill vanished the instant Stop was clicked — before we knew
+    // whether the stop worked — so a failed stop looked identical to a
+    // successful one while the meeting kept recording. When no meeting
+    // is active the HUD is left alone: it may be showing a dictation,
+    // which this call must not clobber.
+    if had_active {
+        if let Err(e) = crate::hud::set_state(app, crate::hud::HudState::Stopping) {
+            tracing::warn!(error = ?e, "emit hud:state(stopping) failed");
+        }
+    }
 
     // Clear the auto-session flag when any session ends.
     state
@@ -655,6 +661,34 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
         .map_err(|e| IpcError::MeetingSessions(format!("stop_manual: {e:#}")));
 
     if had_active {
+        // `stop_manual` returns once the audio device is released, so
+        // "Stopped" is truthful here even though the transcript tail is
+        // still finalizing. The HUD page self-dismisses after a short
+        // confirmation. On failure, ask the manager again rather than
+        // assuming: most errors mean a concurrent stop already won (nothing
+        // is capturing → hide), but a poisoned session mutex can fail after
+        // cancel with the session state unknown. If a session still reads as
+        // active, return the pill to Recording with an error instead of
+        // hiding it — a hidden HUD over live capture is the exact bug this
+        // path exists to prevent. (`hide_async`: this is an async command
+        // on a tokio worker; AppKit window ops are main-thread-only, #476.)
+        let next = match &stop_result {
+            Ok(()) => Some(crate::hud::HudState::Stopped),
+            Err(_) if state.meeting_manager.has_active_session() => {
+                Some(crate::hud::HudState::StopFailed)
+            }
+            Err(_) => None,
+        };
+        match next {
+            Some(hud_state) => {
+                if let Err(e) = crate::hud::set_state(app, hud_state) {
+                    tracing::warn!(error = ?e, "emit hud:state after meeting stop failed");
+                    crate::hud::hide_async(app);
+                }
+            }
+            None => crate::hud::hide_async(app),
+        }
+
         // `stop_manual` returned the moment the audio device was released;
         // the pump's continuation (tail flush, speaker-identity resolution,
         // DB close) is parked in the manager's `finalizing` lane and STILL

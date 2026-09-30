@@ -99,10 +99,11 @@ npm run test:e2e:tauri
 npm run dev-cleanup
 
 # Full vanilla reset — kills processes AND wipes TCC grants, settings,
-# dictionary, preferences, caches, autostart, and app installs.
-# Transcription/meeting history preserved by default. Use before testing
-# onboarding or new-user flows.
-# Pass --nuke-db to also wipe history; --nuke-models to remove downloaded models;
+# preferences, caches, autostart, and app installs. Dictionary terms,
+# replacements, enabled vocab packs, and transcription/meeting history are
+# preserved by default. Use before testing onboarding or new-user flows.
+# Pass --nuke-dictionary to also wipe the vocabulary; --nuke-db to wipe the
+# whole DB (history included); --nuke-models to remove downloaded models;
 # --user <name> for another account.
 npm run dev-reset
 
