@@ -18,8 +18,11 @@
 -->
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import { timerScope } from "./timers";
   import "./settings-tab.css";
   import { ptt } from "./state/ptt.svelte";
+
+  const timers = timerScope();
 
   type Props = {
     isMacOS: boolean;
@@ -161,7 +164,7 @@
     // to remember).
     // Use a small timeout so multi-key chords with a tiny stagger
     // don't auto-commit prematurely.
-    setTimeout(() => {
+    timers.set(() => {
       if (!capturing) return;
       const stillHeld = anyCapturedKeyHeld();
       if (!stillHeld && captureBuffer.length > 0) {
@@ -226,6 +229,7 @@
   });
 
   onDestroy(() => {
+    timers.clearAll();
     window.removeEventListener("keydown", combinedDown);
     window.removeEventListener("keyup", combinedUp);
   });

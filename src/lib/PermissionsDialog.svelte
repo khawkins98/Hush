@@ -278,7 +278,7 @@
     font-weight: 600;
     transition: border-color 0.15s, background-color 0.15s;
   }
-  button:hover:not(:disabled) {
+  button:not(.kh-button):hover:not(:disabled) {
     border-color: var(--accent-hover);
   }
   button.ghost {

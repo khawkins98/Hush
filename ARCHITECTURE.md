@@ -73,7 +73,7 @@ The load-bearing seams:
 | Sub-struct / field | Fields | Purpose |
 |---|---|---|
 | `data: DataServices` | `history`, `replacements`, `vocabulary`, `meetings`, `overrides` | Repository seams for all persisted domain data |
-| `flags: RuntimeFlags` | `hud_visible`, `sound_cues`, `diarization_enabled`, `inference_in_progress`, `hotkey_toggle_error`, `recorder_active_sessions` | `AtomicBool`/`Mutex` runtime state shared between the IPC layer and background tasks |
+| `runtime_flags: RuntimeFlags` | `hud_enabled`, `sound_cues_enabled` (+ per-cue start/complete), `meeting_autostart_mode`, `diarization_enabled`, `speaker_identity_enabled`, `diarizer_threshold`, `inference_threads`, `mic_gain_db`, `autostart_path_stale`, `pending_cancel`, `system_audio_level`, `whisper_consecutive_empty_ticks`, `session_is_auto` | Atomics (and one `Mutex`) shared between the IPC layer and background tasks; settings-backed ones are read on the hot path without a DB round-trip |
 | `ptt: PttState` | `combo`, `active`, `spawned` | Push-to-talk hotkey combo, active flag, and listener task handle |
 | `update_check: UpdateCheckCache` | `last`, `inflight` | Manual update-check result cache + in-flight de-dup lock |
 | `inference: InferenceState` | `transcribe`, `transcribe_meeting`, `diarize`, `diarize_slot`, `vad`, `transcriber_generation` | Hot-swap slots for both transcription paths, the diarizer, and the VAD model; generation counter guards stale rebuild races |
@@ -83,7 +83,7 @@ The load-bearing seams:
 
 Two `InferenceState` fields carry cross-layer invariants worth flagging when adjacent code changes:
 - `transcriber_generation: Arc<AtomicU64>` — race guard for background transcriber rebuilds. Any async task that rebuilds a transcriber must snapshot/compare the generation before installing its result ([#801](https://github.com/khawkins98/Hush/issues/801)).
-- `hotkey_toggle_error` lives in `RuntimeFlags` and records the one-time startup result of `register_hotkeys`; the UI surfaces it via IPC. Don't re-diagnose by retrying from the frontend.
+- `hotkey_toggle_error` lives on `AppState` and records the one-time startup result of `register_hotkeys`; the UI surfaces it via IPC. Don't re-diagnose by retrying from the frontend.
 
 **Hot-swappable slots** (all in `InferenceState`):
 

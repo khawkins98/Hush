@@ -766,7 +766,7 @@ fn spawn_background_tasks(handle: tauri::AppHandle, state: &ipc::AppState) {
                 continue;
             }
             let level = audio.current_level();
-            if let Err(e) = handle_for_pump.emit("audio:level", level) {
+            if let Err(e) = handle_for_pump.emit(crate::events::names::AUDIO_LEVEL, level) {
                 // No listener attached yet (HUD window hidden) is not an
                 // error per se, but trace keeps it out of the default log.
                 tracing::trace!(error = ?e, "emit audio:level failed");
@@ -968,13 +968,6 @@ pub fn run() {
         // the prerequisite; this line is Step 4.
         //.plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        // External-URL opener (#322). Plain `<a target="_blank">`
-        // links do nothing in a Tauri 2 WebView — the shell
-        // plugin's `open()` call from a click handler delegates
-        // to the OS browser. Capabilities also need
-        // `shell:allow-open`; see `capabilities/default.json` +
-        // `capabilities/settings.json`.
-        .plugin(tauri_plugin_shell::init())
         // Platform detection (#272). Frontend uses `platform()`
         // from `@tauri-apps/plugin-os` to decide macOS-specific
         // UI affordances; replaces the deprecated
@@ -1307,6 +1300,14 @@ const PROFILE_AUTOACTIVATE_POLL_INTERVAL: std::time::Duration = std::time::Durat
 /// A `session_emitted` bool prevents duplicate starts within one
 /// mic-activation cycle (the HAL may re-fire while the session is starting
 /// up). Resets when the mic goes quiet.
+///
+/// `auto_start_declined` makes "Don't record" last for the rest of the
+/// call: without it, any later HAL change while the meeting app still
+/// holds the mic (headset plug, device re-check) restarted the countdown.
+/// Kept separate from `session_emitted` on purpose — that flag also marks
+/// a session as auto-started (eligible for `AutoStop`), so reusing it would
+/// auto-stop a meeting the user then started manually. Cleared, like
+/// `session_emitted`, when the mic goes quiet.
 #[cfg(target_os = "macos")]
 async fn run_meeting_detection_task(app: tauri::AppHandle) {
     use meeting::mic_camera_monitor::{evaluate_mic_state, MicCameraMonitor, MicStateOutcome};
@@ -1315,6 +1316,7 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
     let mut monitor = MicCameraMonitor::new();
 
     let mut session_emitted = false;
+    let mut auto_start_declined = false;
     // On the first iteration skip the wait so that if the mic is already
     // active when Hush launches (e.g. a Zoom call is already in progress)
     // we evaluate and auto-start immediately rather than waiting for the
@@ -1397,6 +1399,10 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
 
         match outcome {
             MicStateOutcome::Start { app_name } => {
+                if auto_start_declined {
+                    tracing::debug!(app_name = %app_name, "auto-start declined earlier this call; skipping");
+                    continue;
+                }
                 session_emitted = true;
 
                 // Show a 3-second pending countdown before auto-starting.
@@ -1432,6 +1438,7 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
 
                 if cancelled {
                     session_emitted = false;
+                    auto_start_declined = true;
                 } else {
                     // Mark as auto-started before starting so the call-end detector ignores it.
                     state
@@ -1539,6 +1546,7 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                 // as the manual Stop button so transcribers and diarizer
                 // are rebuilt in the background, ready for the next call.
                 session_emitted = false;
+                auto_start_declined = false;
                 tracing::info!("meeting detection: mic inactive — auto-stopping session");
                 if let Err(e) = crate::ipc::commands::meeting::stop_meeting_and_rebuild_transcriber(
                     &app, &state,
@@ -1553,8 +1561,9 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
             }
             MicStateOutcome::ResetSessionEmitted => {
                 // Mic went quiet — reset so the next activation can start
-                // a new session.
+                // a new session — and re-arm auto-start after a decline.
                 session_emitted = false;
+                auto_start_declined = false;
             }
             MicStateOutcome::Idle => {}
         }

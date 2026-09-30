@@ -2,7 +2,7 @@
 
 Browser-driven smoke tests for the Hush frontend. Drives the SvelteKit
 dev server in **mocked-Tauri mode** — `vite.config.js` swaps
-`@tauri-apps/api/{core,event,app}` + `plugin-shell` for the in-tree
+`@tauri-apps/api/{core,event,app}` for the in-tree
 stubs in `tests/e2e/setup/` when `HUSH_E2E=1` is set, so tests run in
 plain Chromium without Tauri's runtime.
 
@@ -42,7 +42,6 @@ tests/e2e/
     core-stub.ts          # replaces @tauri-apps/api/core (HUSH_E2E or HUSH_MOCK)
     event-stub.ts         # replaces @tauri-apps/api/event
     app-stub.ts           # replaces @tauri-apps/api/app
-    shell-stub.ts         # replaces @tauri-apps/plugin-shell
     mock-defaults.ts      # populated seed for `npm run dev` (HUSH_MOCK);
                           # no-ops under Playwright
   _mock.ts                # `installMocks(page, overrides?)` — default

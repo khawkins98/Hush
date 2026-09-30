@@ -39,7 +39,7 @@ pub fn show_main_window(app: AppHandle, section: Option<String>) -> IpcResult<()
     use tauri::{Emitter as _, Manager as _};
     if let Some(section) = section.as_deref() {
         if matches!(section, "dictation" | "history") {
-            if let Err(e) = app.emit("menu:goto-section", section) {
+            if let Err(e) = app.emit(crate::events::names::MENU_GOTO_SECTION, section) {
                 tracing::warn!(error = ?e, "show_main_window: goto-section emit failed");
             }
         } else {

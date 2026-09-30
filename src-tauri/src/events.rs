@@ -93,3 +93,20 @@ pub struct NoopEventEmitter;
 impl EventEmitter for NoopEventEmitter {
     fn emit_json(&self, _event: &str, _payload: serde_json::Value) {}
 }
+
+/// Wire names for events emitted with a bare `app.emit(...)`.
+///
+/// The frontend's counterpart is `src/lib/events.ts::Events`; keeping the
+/// Rust side in one place makes the four-place sync rule grep-checkable
+/// (`rg 'names::'` vs `Events.`). Domain modules with their own emit
+/// helpers (e.g. `meeting::events`) keep their constants there.
+pub mod names {
+    pub const AUDIO_LEVEL: &str = "audio:level";
+    pub const HOTKEY_TOGGLE: &str = "hotkey:toggle";
+    pub const HUD_STATE: &str = "hud:state";
+    pub const LOG_EVENT: &str = "log:event";
+    pub const MENU_GOTO_SECTION: &str = "menu:goto-section";
+    pub const SETTINGS_GOTO_TAB: &str = "settings:goto-tab";
+    pub const TRANSCRIPTION_PROGRESS: &str = "transcription:progress";
+    pub const UPDATER_RESULT: &str = "updater:result";
+}

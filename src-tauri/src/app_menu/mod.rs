@@ -182,7 +182,7 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 // the main window now. Emit `settings:goto-tab` and
                 // let the main window's listener flip its active
                 // section + tab.
-                if let Err(e) = app.emit("settings:goto-tab", "general") {
+                if let Err(e) = app.emit(crate::events::names::SETTINGS_GOTO_TAB, "general") {
                     tracing::error!(error = ?e, "menu: emit goto-tab(general)");
                 }
             }
@@ -191,7 +191,7 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 // #479 slice 3: emit goto-tab to the inline panel —
                 // the main window's listener flips its active
                 // section + tab.
-                if let Err(e) = app.emit("settings:goto-tab", "about") {
+                if let Err(e) = app.emit(crate::events::names::SETTINGS_GOTO_TAB, "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
             }
@@ -212,7 +212,7 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 // #479 slice 3: emit goto-tab to the inline panel —
                 // the main window's listener flips its active
                 // section + tab.
-                if let Err(e) = app.emit("settings:goto-tab", "about") {
+                if let Err(e) = app.emit(crate::events::names::SETTINGS_GOTO_TAB, "about") {
                     tracing::warn!(error = ?e, "menu: emit goto-tab(about)");
                 }
                 // Inflight guard — rapid double-clicks would
@@ -257,7 +257,9 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                         .await;
                         match result {
                             Ok(r) => {
-                                if let Err(e) = app_handle.emit("updater:result", &r) {
+                                if let Err(e) =
+                                    app_handle.emit(crate::events::names::UPDATER_RESULT, &r)
+                                {
                                     tracing::warn!(
                                         error = ?e,
                                         "menu check-for-updates: emit result failed"
@@ -320,7 +322,7 @@ fn build_and_set_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             }
             id if id.starts_with("goto-") => {
                 let section = id.trim_start_matches("goto-").to_owned();
-                if let Err(e) = app.emit("menu:goto-section", section) {
+                if let Err(e) = app.emit(crate::events::names::MENU_GOTO_SECTION, section) {
                     tracing::warn!(error = ?e, "menu: emit goto-section");
                 }
             }

@@ -17,8 +17,8 @@ const projectRoot = process.cwd();
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
-  // Mock-bus mode swaps the @tauri-apps/api/{core,event,app} +
-  // plugin-shell imports for in-tree stubs at `tests/e2e/setup/*-stub.ts`.
+  // Mock-bus mode swaps the @tauri-apps/api/{core,event,app} imports
+  // for in-tree stubs at `tests/e2e/setup/*-stub.ts`.
   // The stubs route through `window.__hush_e2e`, which is seeded with
   // populated fake data by `mock-defaults.ts` (or, under Playwright, by
   // each test's `installMocks`). Two entry points enable it:
@@ -45,14 +45,6 @@ export default defineConfig(async () => ({
           "@tauri-apps/api/app": path.resolve(
             projectRoot,
             "tests/e2e/setup/app-stub.ts",
-          ),
-          // External-URL opener (#322). The real plugin reaches
-          // `window.__TAURI_INTERNALS__`; the stub no-ops by
-          // default and routes through the mock bus for tests
-          // that want to assert the URL the user clicked.
-          "@tauri-apps/plugin-shell": path.resolve(
-            projectRoot,
-            "tests/e2e/setup/shell-stub.ts",
           ),
         },
       }

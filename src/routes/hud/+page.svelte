@@ -1,14 +1,17 @@
 <!--
   Recording HUD overlay. Loaded into the secondary `hud` Tauri
   window (label `hud`, configured in `tauri.conf.json`) — borderless,
-  transparent, always-on-top. The window is hidden by default and
-  shown/hidden by the backend `hud::show` / `hud::hide` calls in
-  the IPC commands' `start_dictation` / `stop_dictation` paths.
+  transparent, always-on-top, `shadow: false`. Hidden by default;
+  the backend shows it via `hud::show` on dictation / meeting start
+  and drives it with `hud:state` events (see `src-tauri/src/hud/mod.rs`).
 
-  Renders a pulsing red dot + the word "Recording" + a level-meter
-  bar driven by `audio:level` events. The backend pump (in
-  `lib.rs::run`) emits an RMS sample at ~30 Hz; the bar's width is
-  a simple amplification of that value, capped at 100 %.
+  States: pending (auto-start countdown + "Don't record"), recording
+  (dot, timer, `AudioWaveform` fed by `audio:level`; ■ for meetings
+  only), stopping / stopped (meeting stop feedback), processing / done
+  (dictation transcription → "Copied!"), plus a local call-end prompt
+  driven by `meeting:call-may-have-ended`. Inline prompts replace the
+  label/timer/waveform rather than squeezing in beside them. Double-click
+  raises the main window on the Transcribe screen.
 
   Why a separate route rather than reusing the main page in a
   different mode: the HUD's window config differs significantly
@@ -44,11 +47,12 @@
     | "stopping"
     | "stopped"
     | "stop-failed";
+  // "call-may-have-ended" is a local phase only — the backend never sends
+  // it as a `hud:state`; the prompt is driven by `meeting:call-may-have-ended`.
   type HudStatePayload = {
-    state: HudPhase;
+    state: Exclude<HudPhase, "call-may-have-ended">;
     startedAtMs?: number;
     endsAtMs?: number;
-    confidence?: "high" | "medium";
     kind?: "dictation" | "meeting";
   };
 
@@ -68,11 +72,11 @@
   // path. Remembering the last control press closes that gap.
   const CONTROL_DBLCLICK_GUARD_MS = 700;
 
-  // HUD lifecycle state (#291). Backend emits `hud:state` with
-  // `"recording"`, `"processing"`, or `"done"`. Recording renders
-  // the pulsing dot + waveform; Processing replaces the waveform
-  // with a shimmer; Done shows a green "Copied!" confirmation that
-  // self-dismisses after ~1.5 s (#669).
+  // HUD lifecycle state (#291). Backend emits `hud:state` for every
+  // phase except "call-may-have-ended" (local, see HudStatePayload).
+  // Recording renders the pulsing dot + waveform; Processing /
+  // Stopping replace the waveform with a shimmer; Done / Stopped show
+  // a green check that self-dismisses (#669).
   //
   // Defaults to `null` (no state yet) rather than `"recording"` so
   // AudioWaveform only mounts after the backend explicitly fires the
@@ -232,12 +236,6 @@
       (event) => {
         const payload = event.payload;
         const next = payload?.state;
-        // Handle call-may-have-ended before the main state switch — it
-        // doesn't follow the same clear/reset sequence as the other states.
-        if (next === "call-may-have-ended") {
-          showCallEndPrompt(payload.confidence ?? "high");
-          return;
-        }
         if (next === "stop-failed") {
           resumeAfterFailedStop();
           return;

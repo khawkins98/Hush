@@ -23,9 +23,10 @@
       autostartError = null;
     } catch (e) {
       autostartEnabled = false;
-      if (!import.meta.env.DEV) {
-        autostartError = "Couldn't read autostart state on this platform.";
-      }
+      // Not suppressed in dev any more: the "needs a signed bundle"
+      // explanation from #661 was really a missing capability grant
+      // (fixed in default.json), and hiding the error hid that bug.
+      autostartError = "Couldn't read autostart state on this platform.";
       console.warn("[hush] isAutostartEnabled failed", e);
     }
   }

@@ -96,7 +96,9 @@
     _unlistenCallMayHaveEnded = await listen<CallMayHaveEndedPayload>(
       Events.CallMayHaveEnded,
       (event) => {
-        if (!callEndBannerSuppressed) {
+        // Only meaningful over a live meeting — a late event after a stop
+        // from the HUD would otherwise show a prompt whose Stop does nothing.
+        if (!callEndBannerSuppressed && meeting.activeId !== null) {
           callEndBanner = { confidence: event.payload.confidence };
         }
       },
@@ -105,6 +107,20 @@
       callEndBanner = null;
       callEndBannerSuppressed = false; // re-arm for next call cycle
     });
+  });
+
+  // The banner and its suppression are per meeting session (mirrors the
+  // HUD's `sessionCallEndSuppressed`). Pre-fix the banner outlived a stop
+  // made elsewhere (HUD ■, auto-stop) and one dismissal suppressed it for
+  // every later meeting. Keyed on `meeting.activeId`: any change ends the
+  // old session's banner; a new id re-arms suppression.
+  let callEndSessionId: number | null = null;
+  $effect(() => {
+    const id = meeting.activeId;
+    if (id === callEndSessionId) return;
+    callEndSessionId = id;
+    callEndBanner = null;
+    callEndBannerSuppressed = false;
   });
 
   onDestroy(() => {

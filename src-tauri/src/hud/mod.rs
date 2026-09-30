@@ -1,57 +1,34 @@
 //! Recording HUD overlay — secondary Tauri window shown while
-//! dictation is active.
-//!
-//! Closes the scaffold half of #21. The level-meter half (cpal
-//! callbacks compute RMS, audio thread → Tauri event → frontend
-//! animates a bar) is the natural follow-up; this module ships the
-//! window-lifecycle plumbing only so the HUD can be toggled in
-//! response to start/stop without yet streaming any audio data.
+//! dictation or a meeting is recording.
 //!
 //! ## Why a second Tauri window
 //!
-//! PRD §9 lists "transparent floating HUD with level meter" as
-//! in-scope. The HUD's job is to be visible while another app is
-//! focused — the user dictates *into* that app, so Hush's main
-//! window is in the background. A second window labelled `hud`
-//! with `decorations: false`, `transparent: true`,
-//! `alwaysOnTop: true`, `skipTaskbar: true` (configured in
-//! `tauri.conf.json`) is the standard pattern.
+//! The HUD's job is to be visible while another app is focused — the
+//! user dictates *into* that app, so Hush's main window is in the
+//! background. A second window labelled `hud` with `decorations: false`,
+//! `transparent: true`, `alwaysOnTop: true`, `skipTaskbar: true`,
+//! `shadow: false` (see `tauri.conf.json`) is the standard pattern.
+//! Folding it into the main window would mean juggling that window's
+//! borderless/always-on-top state around every recording.
 //!
-//! The HUD loads `/hud` — a separate Svelte route that renders a
-//! minimal "recording" indicator. No interactivity, no fetches; it
-//! is essentially a status light driven by Tauri events.
+//! ## Division of labour
+//!
+//! This module owns window placement and visibility ([`show`] /
+//! [`hide`] and their `_async` main-thread wrappers, #476) and the
+//! `hud:state` event ([`set_state`] / [`HudState`]). The `/hud` route
+//! owns everything visual: the level meter (its own `audio:level`
+//! subscription), the elapsed timer, the stop / confirm / call-end
+//! prompts, and self-dismissal after `Done` / `Stopped`.
 //!
 //! ## Show / hide policy
 //!
-//! - **Show** when `start_dictation` succeeds (the audio stream is
-//!   open).
-//! - **Hide** when `stop_dictation` returns (regardless of whether
-//!   the transcription itself succeeded — the recording is over).
-//! - **Hide** if the IPC layer ever exits an in-flight recording
-//!   path early (e.g. an error after `audio.start` but before
-//!   `audio.stop`). The IPC commands handle this directly today;
-//!   moving to a more careful state machine is part of refactor #38.
-//!
-//! ## Why no level meter yet
-//!
-//! Streaming the audio level requires the cpal callback (which is
-//! on the audio thread, can't directly emit Tauri events) to push
-//! per-chunk RMS values through a channel that a Tauri-aware
-//! dispatcher consumes. That's a non-trivial refactor of the
-//! existing `audio::CpalAudioCapture` worker, and worth its own PR
-//! per the wakeup-budget the polish review used. The HUD ships
-//! today as "the window appears, the dot pulses". The level meter
-//! lands when the audio module exposes a level callback / channel.
-//!
-//! ## Why not just show/hide a single window
-//!
-//! The main window is what the user opens to manage settings,
-//! history, vocabulary, etc. Folding the HUD into it would mean
-//! making the main window borderless / always-on-top during
-//! recording, then restoring it afterwards. That's twice the OS
-//! window state to juggle and visibly worse UX (the settings panes
-//! disappear during recording). A second dedicated window keeps
-//! both surfaces independent.
+//! - **Show** when a dictation or meeting starts (and for the
+//!   auto-start `Pending` countdown), if the HUD is enabled in Settings.
+//! - **Hide** directly on error paths; on success the backend moves the
+//!   HUD to `Done` (dictation) or `Stopped` (meeting) and the page
+//!   dismisses itself after a short confirmation, so the user can see
+//!   the stop registered. Never hide over live capture: a failed
+//!   meeting stop reports `StopFailed` instead.
 
 use anyhow::{Context, Result};
 use tauri::{AppHandle, Manager, PhysicalPosition, Runtime};
@@ -336,10 +313,6 @@ pub enum HudState {
     /// (~1.5 s) so the user sees a clear "safe to paste" signal
     /// before the HUD disappears (#669).
     Done,
-    /// The call-end detector reached confidence threshold. Prompt
-    /// the user to stop recording. `confidence` is "high" (two or
-    /// more signals agree) or "medium" (one signal held for 120 s).
-    CallMayHaveEnded { confidence: &'static str },
 }
 
 impl HudState {
@@ -353,7 +326,6 @@ impl HudState {
             HudState::StopFailed => "stop-failed",
             HudState::Processing => "processing",
             HudState::Done => "done",
-            HudState::CallMayHaveEnded { .. } => "call-may-have-ended",
         }
     }
 }
@@ -380,9 +352,6 @@ struct HudStatePayload {
     /// transcription completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     started_at_ms: Option<u64>,
-    /// Confidence for call-may-have-ended. "high" or "medium".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    confidence: Option<&'static str>,
     /// `"dictation"` or `"meeting"`. Only for the Recording state.
     #[serde(skip_serializing_if = "Option::is_none")]
     kind: Option<&'static str>,
@@ -416,7 +385,6 @@ pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: HudState) -> Result<()> 
         state: state.state_str(),
         ends_at_ms: None,
         started_at_ms: None,
-        confidence: None,
         kind: None,
     };
     let payload = match state {
@@ -437,12 +405,9 @@ pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: HudState) -> Result<()> 
         | HudState::Stopping
         | HudState::Stopped
         | HudState::StopFailed => bare,
-        HudState::CallMayHaveEnded { confidence } => HudStatePayload {
-            confidence: Some(confidence),
-            ..bare
-        },
     };
-    app.emit("hud:state", &payload).context("emit hud:state")?;
+    app.emit(crate::events::names::HUD_STATE, &payload)
+        .context("emit hud:state")?;
     Ok(())
 }
 

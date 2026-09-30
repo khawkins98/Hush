@@ -200,12 +200,6 @@ export async function installMocks(
       // `settings/+page.svelte`. Tests run macOS-flavoured copy
       // since that's the project's design target.
       "plugin:os|platform": () => "macos",
-      // `@tauri-apps/plugin-shell::open()` — used by the
-      // `openExternal` helper (#322) for every external link in
-      // the app. Default no-op so specs that don't care about
-      // link clicks pass through; specs that exercise a link
-      // override with a recording handler.
-      "plugin:shell|open": () => undefined,
       // `@tauri-apps/plugin-clipboard-manager::writeText()` — used by
       // ResultBlock.svelte and HistoryDictationRow.svelte to copy
       // formatted transcripts. Default no-op so tests that don't

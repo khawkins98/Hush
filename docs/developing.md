@@ -295,7 +295,7 @@ When adding an integration test that needs an external resource, prefer `#[ignor
 
 ### Frontend e2e — Path A (`npm run test:e2e`)
 
-Playwright + Chromium drives the SvelteKit dev server in `HUSH_E2E=1` mode, which swaps `@tauri-apps/api/{core,event,app}` + `plugin-shell` for in-tree stubs (`tests/e2e/setup/*-stub.ts`). Tests configure per-spec `invoke` handlers and fire backend-emitted events. See `tests/e2e/README.md`.
+Playwright + Chromium drives the SvelteKit dev server in `HUSH_E2E=1` mode, which swaps `@tauri-apps/api/{core,event,app}` for in-tree stubs (`tests/e2e/setup/*-stub.ts`). Tests configure per-spec `invoke` handlers and fire backend-emitted events. See `tests/e2e/README.md`.
 
 The browser playground (`npm run dev`, `HUSH_MOCK=1`) reuses the **same stubs** — the only difference is the seed: Playwright sets a minimal, deterministic, throw-on-unmocked set per test; `npm run dev` falls back to `tests/e2e/setup/mock-defaults.ts`, a populated, forgiving seed (unknown commands return `[]`/`undefined` instead of throwing). `mock-defaults.ts` no-ops under Playwright, which sets `window.__hush_e2e` first.
 

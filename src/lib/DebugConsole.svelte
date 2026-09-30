@@ -15,7 +15,10 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount, tick } from "svelte";
+  import { timerScope } from "./timers";
   import { Events } from "./events";
+
+  const timers = timerScope();
 
   type LogEntry = {
     seq: number;
@@ -86,7 +89,7 @@
     try {
       await navigator.clipboard.writeText(text);
       allCopied = true;
-      setTimeout(() => (allCopied = false), 2000);
+      timers.set(() => (allCopied = false), 2000);
     } catch (err) {
       console.warn("[hush] clipboard write failed", err);
     }
@@ -147,6 +150,7 @@
   });
 
   onDestroy(() => {
+    timers.clearAll();
     unlisten?.();
     document.removeEventListener("visibilitychange", onVisibilityChange);
     window.removeEventListener("focus", onVisibilityChange);
