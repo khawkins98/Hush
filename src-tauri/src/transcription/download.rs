@@ -214,11 +214,12 @@ fn sha_eq(a: &str, b: &str) -> bool {
 /// Hex-encode a byte slice as lowercase ASCII. Used for SHA-256 digest
 /// formatting. Inline rather than pulling in `hex` / `base16ct`: the
 /// hot path is a 32-byte digest at most, called twice (real download +
-/// test helper), and the inline cost is one `String` allocation. Sha2
+/// test helper, plus the bundled-model checks in `vad` and `diarization`),
+/// and the inline cost is one `String` allocation. Sha2
 /// 0.11 dropped the `LowerHex` impl on `finalize()`'s return type so
 /// the prior `format!("{:x}", hasher.finalize())` no longer compiles —
 /// hence this helper rather than touching every call site.
-fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
+pub(crate) fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
     let bytes = bytes.as_ref();
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -269,7 +270,7 @@ mod tests {
 
         let cancel = CancelHandle::new();
         let progress = no_progress();
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
 
         download_with_progress(&client, &url, &dest, &expected_sha, &cancel, &progress)
             .await
@@ -299,7 +300,7 @@ mod tests {
         });
 
         let cancel = CancelHandle::new();
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         download_with_progress(&client, &url, &dest, &expected_sha, &cancel, &progress)
             .await
             .unwrap();
@@ -328,7 +329,7 @@ mod tests {
 
         let cancel = CancelHandle::new();
         let progress = no_progress();
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
 
         let err = download_with_progress(&client, &url, &dest, &wrong_sha, &cancel, &progress)
             .await
@@ -350,7 +351,7 @@ mod tests {
         let dest = dir.path().join("model.bin");
         let cancel = CancelHandle::new();
         let progress = no_progress();
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
 
         let err = download_with_progress(
             &client,
@@ -384,7 +385,7 @@ mod tests {
             cancel_clone.cancel();
         });
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let err = download_with_progress(&client, &url, &dest, &expected_sha, &cancel, &progress)
             .await
             .expect_err("cancel must surface as error");

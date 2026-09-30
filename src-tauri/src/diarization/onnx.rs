@@ -486,7 +486,7 @@ fn verify_model_sha256(path: &Path) -> Result<()> {
         }
         hasher.update(&buf[..n]);
     }
-    let got = format!("{:x}", hasher.finalize());
+    let got = crate::transcription::download::hex_encode(hasher.finalize());
     if got != expected {
         return Err(anyhow!(
             "model SHA-256 mismatch (got {got}, expected {expected}) — refusing to load"

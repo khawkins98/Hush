@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2.12 and plugins, SvelteKit, Vite, Svelte, Playwright, and the Cargo
   lockfile).
 
+- **Build: dropped the unused ScreenCaptureKit and Swift runtime link.**
+  System audio moved to the CoreAudio tap in #588, but the
+  `screencapturekit` crate stayed linked, and it was the only reason for
+  the rpath hack in `.cargo/config.toml`, CI's `DYLD_FALLBACK_LIBRARY_PATH`
+  step, and the dylib workaround for local `cargo test`. All four are gone.
+  Also: reqwest 0.12 → 0.13 (one copy instead of two alongside Tauri's;
+  strips sensitive headers on redirects that change scheme), sha2 0.11,
+  Vitest 5, jsdom 30.
+
 - **New default configuration.** Out of the box (and for anyone who hasn't
   set these explicitly): audio cues are **on** (start + complete chimes; they
   honour system volume and Do Not Disturb), Language Style defaults to

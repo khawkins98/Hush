@@ -31,8 +31,8 @@
 //! ## Why FFI rather than the objc2-* binding crates
 //!
 //! The three system functions are simple C signatures (the mic one is
-//! technically Objective-C, called via objc2 since it's already in the
-//! dep tree from `screencapturekit`). Adding direct deps on
+//! technically Objective-C, called via objc2, which Hush already uses
+//! for AppKit calls). Adding direct deps on
 //! `objc2-av-foundation`, `objc2-core-graphics`, `objc2-io-kit` would
 //! land a few hundred KLOC of generated bindings for three function
 //! calls — not worth the build-time hit. Raw `extern "C"` against the

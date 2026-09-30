@@ -36,7 +36,7 @@ impl SileroVad {
     pub fn load() -> Result<Self> {
         // Self-check the bundled bytes haven't been corrupted under git.
         use sha2::{Digest, Sha256};
-        let actual = format!("{:x}", Sha256::digest(SILERO_VAD_ONNX));
+        let actual = crate::transcription::download::hex_encode(Sha256::digest(SILERO_VAD_ONNX));
         if actual != SILERO_VAD_SHA256 {
             return Err(anyhow!(
                 "bundled silero_vad.onnx SHA mismatch — expected {}, got {} \

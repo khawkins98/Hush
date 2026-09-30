@@ -472,7 +472,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -493,7 +493,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -525,7 +525,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -544,7 +544,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -568,7 +568,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -601,7 +601,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -625,7 +625,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -654,7 +654,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "0.2.0")
             .await
             .unwrap();
@@ -682,7 +682,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::client();
         let result = check_for_updates_at(&client, &mock_url(&server), "not-a-version").await;
 
         match result {
