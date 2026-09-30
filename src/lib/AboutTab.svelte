@@ -221,7 +221,7 @@
     unlistenDownloadProgress = await listen<{
       chunkLen: number;
       total: number | null;
-    }>("updater:download-progress", (e) => {
+    }>(Events.UpdaterDownloadProgress, (e) => {
       const prev = installProgress?.downloaded ?? 0;
       installProgress = {
         downloaded: prev + e.payload.chunkLen,
@@ -230,7 +230,7 @@
     });
 
     unlistenInstallPending = await listen<{ version: string }>(
-      "updater:install-pending",
+      Events.UpdaterInstallPending,
       () => {
         // Bytes are on disk; the plugin is about to swap the
         // installed app and relaunch. Swap the UI from

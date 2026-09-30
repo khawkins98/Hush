@@ -34,10 +34,12 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onDestroy } from "svelte";
-
+  import { timerScope } from "./timers";
   import AudioPipelineDiagram from "./AudioPipelineDiagram.svelte";
   import type { PermissionStatus } from "./types";
   import { permissions } from "$lib/state/permissions.svelte";
+
+  const timers = timerScope();
 
   type Props = {
     show: boolean;
@@ -110,7 +112,7 @@
     // The OS dialog is async — the user's response surfaces via
     // the next poll tick; release the in-flight guard after a
     // short window so a mistaken second-click doesn't re-fire.
-    setTimeout(() => {
+    timers.set(() => {
       micRequesting = false;
       void permissions.diagnose();
     }, 400);
@@ -201,6 +203,7 @@
   });
 
   onDestroy(() => {
+    timers.clearAll();
     if (pollHandle !== null) {
       clearInterval(pollHandle);
       pollHandle = null;
@@ -585,11 +588,11 @@ button:not(.kh-button) {
   gap: 0.5rem;
   transition: border-color 0.15s, background-color 0.15s, opacity 0.15s;
 }
-button:disabled {
+button:not(.kh-button):disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
-button:hover:not(:disabled) {
+button:not(.kh-button):hover:not(:disabled) {
   border-color: var(--accent-hover);
 }
 button.ghost {

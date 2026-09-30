@@ -328,7 +328,7 @@
     transition: background-color 0.12s, transform 0.1s;
   }
   .primary-action:hover:not(:disabled) {
-    background-color: #5a7be0;
+    background-color: var(--accent-hover, #d9890d);
   }
   .primary-action:active:not(:disabled) {
     transform: translateY(1px);

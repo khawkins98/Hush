@@ -408,7 +408,9 @@
   cursor: pointer;
   transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
-.filter-chip:hover:not(:disabled) {
+/* :not(.active) — otherwise this (0,3,0) out-specifies `.filter-chip.active`
+   (0,2,0) and the selected chip reads as unselected under the pointer. */
+.filter-chip:not(.active):hover:not(:disabled) {
   background-color: var(--accent-subtle);
   border-color: var(--accent-border);
   color: var(--text-primary);

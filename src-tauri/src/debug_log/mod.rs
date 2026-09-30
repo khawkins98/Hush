@@ -12,7 +12,7 @@
 //!                      │
 //!                      ├─► ring buffer (cap 500, seq-numbered)
 //!                      │
-//!                      └─► AppHandle::emit("log:event", entry)
+//!                      └─► AppHandle::emit(crate::events::names::LOG_EVENT, entry)
 //!                            (only after handle is set AND the debug
 //!                            console window is visible; lock dropped
 //!                            before the emit call)
@@ -205,7 +205,7 @@ where
         //    only sink; the console re-syncs from it on reopen.
         if let Some(handle) = handle_opt {
             if self.state.console_visible() {
-                let _ = handle.emit("log:event", &entry);
+                let _ = handle.emit(crate::events::names::LOG_EVENT, &entry);
             }
         }
     }

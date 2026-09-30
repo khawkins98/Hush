@@ -465,6 +465,17 @@ pub async fn run_call_end_detector_task(app: tauri::AppHandle) {
     loop {
         ticker.tick().await;
 
+        // No meeting, nothing to end. Explicit rather than relying on the
+        // `WhisperSilenceSignal` cold-start quirk (`ticks == 0` ⇒ reversal)
+        // to keep an idle app from prompting ~30–60 s after every stop:
+        // with the mic released and system audio zeroed, the other two
+        // signals read "quiet" whenever no session is running. Resetting
+        // here also means each new session starts from `Monitoring`.
+        if !state.meeting_manager.has_active_session() {
+            detector_state = CallEndState::Monitoring;
+            continue;
+        }
+
         // Only activate for manually-started sessions.
         let session_is_manual = !state.runtime_flags.session_is_auto.load(Ordering::Relaxed);
 

@@ -296,13 +296,15 @@ pub async fn stop_dictation(
     };
     if too_short {
         tracing::info!(duration_ms = ?duration_ms, "dictation: skipped — recording too short");
-        let foreground = take_foreground_snapshot(&state)?;
         // Hide the Processing HUD on the too-short path —
         // there's no transcription happening, so the Processing
         // visual would falsely imply "still working". No
         // completion cue either; silence is the right signal
-        // for a genuinely empty press (#291 / #292).
+        // for a genuinely empty press (#291 / #292). Hidden
+        // *before* the fallible snapshot so its `?` can't strand
+        // the pill on "Processing…".
         crate::hud::hide_async(&app);
+        let foreground = take_foreground_snapshot(&state)?;
         // Don't write to the clipboard for an empty result —
         // pre-#197 this branch was unreachable so the question
         // didn't come up. The user just held the hotkey and got
@@ -344,7 +346,7 @@ pub async fn stop_dictation(
         if progress == 0 {
             tracing::info!("dictation: transcribing (2/3 — whisper decoding started)");
         }
-        if let Err(e) = app_clone.emit("transcription:progress", progress) {
+        if let Err(e) = app_clone.emit(crate::events::names::TRANSCRIPTION_PROGRESS, progress) {
             tracing::warn!(error = ?e, "emit transcription:progress failed");
         }
     })));
@@ -417,7 +419,13 @@ pub async fn stop_dictation(
     let stripped = strip_whisper_brackets(raw_text.trim());
     let text = apply_replacements(&stripped, &rules);
 
-    write_to_clipboard(&app, &text)?;
+    // Every early return between the Processing and Done transitions must
+    // hide the HUD (#803) — a bare `?` here left the pill stuck on
+    // "Processing…" after a clipboard failure.
+    write_to_clipboard(&app, &text).map_err(|e| {
+        crate::hud::hide_async(&app);
+        e
+    })?;
     tracing::info!(
         chars = text.chars().count(),
         words = text.split_whitespace().count(),
@@ -479,26 +487,19 @@ pub async fn stop_dictation(
         .sum::<i64>();
     let manager_handle = Arc::clone(&state.meeting_manager);
     let meeting_text = text.clone();
-    // Clone the handle so the spawned task can emit without holding
-    // a reference to the outer `app` borrow past the task boundary.
-    let app_for_spawn = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = manager_handle
             .append_if_active(&meeting_text, utterance_duration_ms)
             .await
         {
+            // No frontend emit: this path previously sent
+            // `dictation:meeting-append-failed` with no `sessionId`, which
+            // the listener requires, so it was always dropped. And it's
+            // unreachable in practice — `stop_dictation` refuses with
+            // `MeetingSessionActive` while a session is live, so there is
+            // no session to fail to append to. The pump's own append
+            // failures are surfaced via `emit_utterance_append_failed`.
             tracing::error!(error = ?e, "failed to append utterance to active meeting session");
-            // Surface the failure to the frontend (#696). The transcript
-            // itself landed on the clipboard; this is a secondary data-
-            // loss path that deserves a visible warning rather than a
-            // silent log entry. `ok()` swallows emit errors — if the
-            // window is already closed the warning is moot.
-            if let Err(emit_err) = app_for_spawn.emit(
-                "dictation:meeting-append-failed",
-                serde_json::json!({ "error": e.to_string() }),
-            ) {
-                tracing::warn!(error = ?emit_err, "emit dictation:meeting-append-failed failed");
-            }
         }
     });
 

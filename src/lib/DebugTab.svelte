@@ -17,9 +17,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { version as osVersion } from "@tauri-apps/plugin-os";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { timerScope } from "./timers";
   import "./settings-tab.css";
   import { formatBuildTimestamp, type BuildInfo } from "./utils/format";
+
+  const timers = timerScope();
+  onDestroy(() => timers.clearAll());
 
   type LogEntry = {
     seq: number;
@@ -97,7 +101,7 @@
     try {
       await navigator.clipboard.writeText(reportText);
       copied = true;
-      setTimeout(() => (copied = false), 2000);
+      timers.set(() => (copied = false), 2000);
     } catch (e) {
       console.warn("[hush] clipboard write failed", e);
     }
@@ -133,7 +137,7 @@
     try {
       await navigator.clipboard.writeText(cmd);
       logPathCopied = true;
-      setTimeout(() => (logPathCopied = false), 2000);
+      timers.set(() => (logPathCopied = false), 2000);
     } catch (e) {
       console.warn("[hush] clipboard write failed", e);
     }

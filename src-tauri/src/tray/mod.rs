@@ -209,7 +209,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
             // `settings:goto-tab` so the listener flips the
             // sidebar to the Settings panel.
             show_main_window(app);
-            if let Err(e) = app.emit("settings:goto-tab", "general") {
+            if let Err(e) = app.emit(crate::events::names::SETTINGS_GOTO_TAB, "general") {
                 tracing::warn!(error = ?e, "tray: emit goto-tab(general) failed");
             }
         }
@@ -309,7 +309,7 @@ fn emit_toggle<R: Runtime>(app: &AppHandle<R>) {
     // Reuse the existing toggle-hotkey event channel so the
     // frontend's `hotkey:toggle` listener handles start/stop.
     // Cheap; the frontend already gates on `busy` / `recording`.
-    if let Err(e) = app.emit("hotkey:toggle", ()) {
+    if let Err(e) = app.emit(crate::events::names::HOTKEY_TOGGLE, ()) {
         tracing::warn!(error = ?e, "tray: failed to emit hotkey:toggle");
     }
 }

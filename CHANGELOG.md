@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Cleanup:** removed the unused `tauri-plugin-shell` (and 9 crates it
+  pulled in; external links already used a custom command), unused
+  menu-bar window permissions, dead HUD call-end plumbing and a dead
+  error event; Rust-side event names are now constants in
+  `events::names`; stale docs corrected (ARCHITECTURE runtime flags, HUD
+  module/page headers); timers in four components are cancelled on
+  unmount; the menu-bar button's hover colour matches the current palette.
+
 - **Developer tooling: `npm run dev-reset` keeps your vocabulary.** Dictionary
   terms, text replacements, and enabled vocabulary packs now survive a
   reset; pass `--nuke-dictionary` to wipe them as before.
@@ -80,6 +88,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new defaults. Change any of them in Settings → General / Vocabulary.
 
 ### Fixed
+
+- **"Launch Hush at login" works again.** Its permissions lived in the
+  old Settings-window capability, which was deleted when Settings moved
+  into the main window (#480), so the toggle had been silently rejected
+  since. The "Couldn't read autostart state" message no longer hides in
+  dev builds; that is how this went unnoticed. A new unit test fails if
+  the main window uses a Tauri plugin it has no permission for.
+- **"Your call has likely ended" banner belongs to one meeting.** It no
+  longer appears with nothing recording or lingers after you stop from
+  the overlay, and dismissing it no longer silences it for later meetings.
+- **"Don't record" lasts for the whole call.** Declining the auto-start
+  countdown previously re-prompted on the next audio-device change (e.g.
+  plugging in a headset) while the call was still going.
+- **Recording overlay no longer sticks on "Processing…"** if the
+  clipboard write fails after a dictation.
+- **Hover no longer undoes selected/button styles.** The active History
+  filter keeps its fill, and Download buttons keep their black outline.
+- Call-end detection now explicitly checks that a meeting is running,
+  instead of relying on a start-up quirk to stay quiet when idle.
 
 - **Transcribe page no longer stays on "Recording" after a meeting is
   stopped elsewhere.** A meeting started with the page's Record button and
