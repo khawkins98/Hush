@@ -755,3 +755,55 @@ test("toggle hotkey during meeting-only mode stops the meeting, not starts dicta
   await expect.poll(() => stopCalled).toBe(true);
   expect(startCalled).toBe(false);
 });
+
+// ---------------------------------------------------------------------------
+// recording → idle when the meeting is stopped elsewhere
+// ---------------------------------------------------------------------------
+
+// A meeting started from the Transcribe page can be stopped from the HUD's
+// ■, the call-end prompt, or auto-stop — all of which call
+// meeting_stop_manual directly. Pre-fix the page only cleared
+// meeting.activeId on the resulting events and stayed in `recording`: red
+// Stop button, running timer, over a meeting that had already ended.
+for (const event of ["meeting:finalizing", "meeting:session-ended"] as const) {
+  test(`external stop (${event}) returns the Transcribe page to idle`, async ({ page }) => {
+    let stopCalls = 0;
+    await page.exposeFunction("__hushExternalStopCount", () => {
+      stopCalls++;
+    });
+    await installMocks(page, {
+      meeting_stop_manual: () => {
+        (window as unknown as { __hushExternalStopCount: () => void }).__hushExternalStopCount();
+      },
+    });
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Start recording" }).click();
+    await expect(
+      page.getByRole("button", { name: "Stop recording and transcribe" }),
+    ).toBeVisible();
+
+    await fireEvent(page, event, { sessionId: DEFAULT_SESSION_ID });
+
+    await expect(page.getByRole("button", { name: "Start recording" })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Stop recording and transcribe" }),
+    ).toHaveCount(0);
+    // The page must not issue its own stop — the meeting is already stopped.
+    expect(stopCalls).toBe(0);
+  });
+}
+
+test("finalizing for a different session leaves the page recording", async ({ page }) => {
+  await installMocks(page);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Start recording" }).click();
+  const stopBtn = page.getByRole("button", { name: "Stop recording and transcribe" });
+  await expect(stopBtn).toBeVisible();
+
+  await fireEvent(page, "meeting:finalizing", { sessionId: DEFAULT_SESSION_ID + 41 });
+  await page.waitForTimeout(300);
+
+  await expect(stopBtn).toBeVisible();
+});
