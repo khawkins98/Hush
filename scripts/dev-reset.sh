@@ -5,9 +5,12 @@
 #
 # 1. **Default ("full reset")** — restores the machine to vanilla
 #    "first-ever-install" state. Wipes TCC permissions, prefs, caches, app
-#    installs, autostart, and the in-database settings/dictionary/replacements.
-#    Transcription + meeting history are preserved by default (use --nuke-db
-#    to wipe those too). Use before testing onboarding from scratch.
+#    installs, autostart, and the in-database settings. Your dictionary
+#    terms and text replacements are preserved by default — they're
+#    hand-curated and never part of what onboarding tests (use
+#    --nuke-dictionary to wipe them too). Transcription + meeting history
+#    are preserved by default (use --nuke-db to wipe those too). Use before
+#    testing onboarding from scratch.
 #
 # 2. **`--keep-app-state` ("TCC-focused reset")** — clears only the things
 #    that affect macOS permission testing: kills processes, resets TCC
@@ -25,11 +28,12 @@
 #   npm run dev-reset -- --user alice        # reset for a specific macOS user account
 #   npm run dev-reset -- --nuke-models       # also delete downloaded models (~GB)
 #   npm run dev-reset -- --nuke-db           # also wipe transcription + meeting history
+#   npm run dev-reset -- --nuke-dictionary   # also wipe dictionary, replacements, vocab packs
 #   npm run dev-reset -- --user alice --nuke-models
 #
 # What gets removed in the **full reset** (default):
 #   macOS TCC permissions (ScreenCapture, Microphone, ListenEvent, Accessibility)
-#   settings / dictionary terms / text replacements rows (inside hush.db)
+#   settings rows (inside hush.db), except enabled vocabulary packs
 #   <home>/Library/Preferences/io.github.khawkins98.hush.plist             (NSUserDefaults)
 #   <home>/Library/Caches/io.github.khawkins98.hush/                       (WebKit etc.)
 #   <home>/Library/Caches/hush/
@@ -42,7 +46,9 @@
 #   Hush.app installs in /Applications and ~/Applications
 #   (Same legacy bundle-ID purges for TCC + app installs.)
 #
-# What is PRESERVED by default in both modes (to keep your dev recordings):
+# What is PRESERVED by default in both modes:
+#   dictionary terms, text replacements, enabled vocabulary packs
+#     (--nuke-dictionary to wipe)
 #   transcription history
 #   meeting sessions + utterances
 #
@@ -70,6 +76,7 @@ BUNDLE_ID="io.github.khawkins98.hush"
 LEGACY_BUNDLE_ID="com.khawkins.hush"
 nuke_models=0
 nuke_db=0
+nuke_dictionary=0
 keep_app_state=0
 explicit_user=""
 
@@ -82,6 +89,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --nuke-db)
       nuke_db=1
+      shift
+      ;;
+    --nuke-dictionary)
+      nuke_dictionary=1
       shift
       ;;
     --keep-app-state)
@@ -204,11 +215,15 @@ if [ "$nuke_db" -eq 1 ]; then
     fi
   done
 elif [ "$keep_app_state" -eq 1 ]; then
+  if [ "$nuke_dictionary" -eq 1 ]; then
+    echo "  --keep-app-state wins over --nuke-dictionary: DB untouched" >&2
+  fi
   echo "  --keep-app-state: preserving settings, dictionary, and replacements (DB untouched)"
 elif [ -f "$DB_FILE" ]; then
-  # Soft wipe: preserve transcription and meeting history; clear settings,
-  # dictionary, and replacements only so the next launch feels like a
-  # first-run for settings/permissions without losing recordings.
+  # Soft wipe: clear settings so the next launch feels like a first-run
+  # for settings/permissions. History, dictionary terms, and replacements
+  # survive — the latter two are hand-curated vocabulary that took real
+  # effort to build and nothing in onboarding depends on them being empty.
   _sqlite3() {
     if [[ "$(id -u)" -eq 0 && "$TARGET_USER" != "$(id -un 2>/dev/null || true)" ]]; then
       sudo -u "$TARGET_USER" sqlite3 "$@"
@@ -217,9 +232,17 @@ elif [ -f "$DB_FILE" ]; then
     fi
   }
   if command -v sqlite3 >/dev/null 2>&1; then
-    _sqlite3 "$DB_FILE" \
-      "DELETE FROM settings; DELETE FROM dictionary_terms; DELETE FROM replacements;" \
-      && echo "  cleared settings, dictionary_terms, replacements (history preserved)"
+    if [ "$nuke_dictionary" -eq 1 ]; then
+      _sqlite3 "$DB_FILE" \
+        "DELETE FROM settings; DELETE FROM dictionary_terms; DELETE FROM replacements;" \
+        && echo "  cleared settings, dictionary_terms, replacements (history preserved)"
+    else
+      # `enabled_packs` is vocabulary too (which curated term packs feed
+      # the prompt), so it survives alongside the dictionary.
+      _sqlite3 "$DB_FILE" "DELETE FROM settings WHERE key <> 'enabled_packs';" \
+        && echo "  cleared settings (dictionary, replacements, vocab packs, history preserved;" \
+        && echo "  pass --nuke-dictionary to also clear dictionary + replacements + packs)"
+    fi
   else
     echo "  sqlite3 not found — skipping selective DB clear (install sqlite3 or use --nuke-db)" >&2
   fi
