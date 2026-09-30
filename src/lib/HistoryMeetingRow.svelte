@@ -30,6 +30,7 @@
     SpeakerIdentity,
   } from "./types";
   import HistoryActionRow, { type ExpandAction, type ExportMenuEntry } from "./HistoryActionRow.svelte";
+  import { speakerDisplayLabel } from "./transcript-format";
 
   type Props = {
     session: MeetingSession;
@@ -264,20 +265,13 @@
   }
 
   // Speaker label rendering for the inline transcript. Backend
-  // writes "mic" / "system" / "Speaker N" / null; map the source-
-  // derived ones to friendlier copy and let model-derived labels
-  // pass through.
+  // writes "mic" / "system" / "Speaker N" / null. The source-derived
+  // mapping lives in `transcript-format` so this row, the live pane,
+  // and the clipboard text can't drift apart (#1003); only the
+  // null → "Unknown" fallback is specific to this surface, since the
+  // other two omit the prefix entirely rather than labelling it.
   function speakerCopy(label: string | null): string {
-    switch (label) {
-      case "mic":
-        return "You";
-      case "system":
-        return "Remote";
-      case null:
-        return "Unknown";
-      default:
-        return label;
-    }
+    return speakerDisplayLabel(label) ?? "Unknown";
   }
 
   // Show speaker labels only when there are ≥2 distinct labels

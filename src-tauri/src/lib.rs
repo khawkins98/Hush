@@ -22,6 +22,10 @@ pub mod hotkey;
 pub mod hud;
 pub mod ipc;
 pub mod meeting;
+/// Shared memory sampler for diagnostic tests. Test-only; see
+/// `docs/memory-debugging.md` for why footprint rather than RSS.
+#[cfg(test)]
+mod memprobe;
 pub mod permissions;
 pub mod repository;
 pub mod settings;

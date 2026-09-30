@@ -258,7 +258,7 @@ jobs:
           # Allowlisted *exact* dep-table lines (kept in lockstep
           # with `learnings.md` → "Supply-chain pins").
           allowed=$(cat <<'EOF'
-          ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "ndarray", "tls-rustls", "tracing"], optional = true }
+          ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray"], optional = true }
           rdev = { git = "https://github.com/fufesou/rdev", rev = "a90dbe1172f8832f54c97c62e823c5a34af5fdfe" }
           EOF
           )
@@ -274,6 +274,45 @@ jobs:
             echo "::error::Unallowlisted RC pin or git dep in src-tauri/Cargo.toml:" >&2
             echo "$unexpected" >&2
             echo "::error::Either remove it, or add it to learnings.md 'Supply-chain pins' AND the allowlist in .github/workflows/ci.yml::supply-chain-pins." >&2
+            exit 1
+          fi
+
+      # The step above only sees dep-table lines in Cargo.toml, so a
+      # pre-release arriving *transitively* is invisible to it — which
+      # is exactly how `ort` rc.13 re-entered the tree under a caret on
+      # `parakeet-rs` (2026-07-28). This step closes that hole by
+      # scanning the resolved lockfile instead of the manifest.
+      #
+      # Keep the allowlist minimal: a pre-release anywhere in the
+      # dependency graph is a deliberate decision, not an accident to
+      # be waved through.
+      - name: New transitive pre-release in Cargo.lock?
+        run: |
+          set -euo pipefail
+          # Pair each `name = "x"` with the `version = "y"` that follows
+          # it, then keep only pre-release versions.
+          current=$(awk '
+            /^name = / { gsub(/[";]/, "", $3); pkg = $3 }
+            /^version = / {
+              gsub(/[";]/, "", $3)
+              if ($3 ~ /-(rc|alpha|beta|pre|dev)\./) print pkg " " $3
+            }
+          ' src-tauri/Cargo.lock | sort -u)
+          allowed=$(cat <<'EOF'
+          ort 2.0.0-rc.13
+          ort-sys 2.0.0-rc.13
+          EOF
+          )
+          unexpected=$(echo "$current" | while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if ! echo "$allowed" | grep -qF -- "$line"; then
+              echo "$line"
+            fi
+          done)
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unallowlisted pre-release in the resolved dependency graph:" >&2
+            echo "$unexpected" >&2
+            echo "::error::These arrive transitively. Pin them explicitly in src-tauri/Cargo.toml, record the decision in learnings.md 'Supply-chain pins', and add them to the allowlist in .github/workflows/ci.yml::supply-chain-pins." >&2
             exit 1
           fi
 

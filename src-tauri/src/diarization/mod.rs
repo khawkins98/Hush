@@ -59,6 +59,12 @@ pub mod features;
 #[cfg(feature = "diarization-onnx")]
 pub mod onnx;
 
+/// Diagnostic re-test of the #641 ORT finding against rc.13. Test-only,
+/// `#[ignore]`d, and gated on `parakeet` because that is the only build
+/// where `ort` is present. Production diarization does not use it.
+#[cfg(all(test, feature = "parakeet"))]
+mod ort_probe;
+
 /// Tag a batch of utterances with speaker labels in place.
 ///
 /// Called by the meeting pump after each batch of finals lands from
