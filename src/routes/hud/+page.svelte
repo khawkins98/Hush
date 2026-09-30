@@ -112,7 +112,9 @@
   let stopError = $state<string | null>(null);
   let stopErrorTimer: ReturnType<typeof setTimeout> | null = null;
 
-  let lastControlPressAt = 0;
+  // -Infinity, not 0: performance.now() counts from page load, so a 0
+  // start would swallow any double-click in the first 700 ms.
+  let lastControlPressAt = Number.NEGATIVE_INFINITY;
 
   // Elapsed-timer anchor saved when a stop begins, so a failed stop can
   // resume the live counter instead of freezing it.
