@@ -3,9 +3,9 @@
 //! ## Why a static catalog rather than a discovered list
 //!
 //! Whisper.cpp is the single transcription engine (PRD §5), and the
-//! model line-up is fixed by upstream — there are five sizes (tiny,
-//! base, small, medium, large-v3) and that's all the picker needs to
-//! know about. Hardcoding the list:
+//! model line-up is fixed by upstream — a handful of sizes plus the
+//! quantized builds upstream publishes alongside them — and that's all
+//! the picker needs to know about. Hardcoding the list:
 //!
 //! - Lets the picker show metadata (size, speed/accuracy ratings,
 //!   description) without round-tripping a remote index.
@@ -27,6 +27,22 @@
 //! all-rounder default per PRD §6. The scores are deliberately
 //! impressionistic; if we want hard numbers later we'll measure on a
 //! reference machine and pin per-platform values.
+//!
+//! ## Quantized variants
+//!
+//! Upstream publishes `q5_*` / `q8_0` builds of each model next to the
+//! full-precision files. q8_0 is commonly measured as indistinguishable
+//! from f16 and q5 as the last "near-lossless" step — at roughly half
+//! / a third of the file size, and a proportionally smaller resident
+//! footprint, which is the constraint Hush cares most about (see
+//! `docs/memory-debugging.md`). whisper.cpp loads them natively; nothing
+//! else in the pipeline changes. We list a curated few rather than
+//! every build so the picker stays scannable, and skip the `.en`
+//! English-only builds: they silently fail non-English speech.
+//!
+//! This breaks the "bigger file = more accurate" line the picker used to
+//! imply (Turbo q8_0 beats Medium at ~60% of its size), so the catalog is
+//! ordered by model family, each quantized build next to its full one.
 
 use serde::{Deserialize, Serialize};
 
@@ -109,7 +125,7 @@ fn download_url_for(filename: &str) -> String {
 ///
 /// ## Why a function rather than a `lazy_static!` / `OnceCell`
 ///
-/// The catalog is small (five entries, a few hundred bytes), so
+/// The catalog is small (under a dozen entries, a few KB), so
 /// allocating per-call is cheaper than the synchronisation cost of a
 /// shared static `Vec` would be. The IPC command builds it once per
 /// `model_list` call; nothing on the hot path consults this.
@@ -157,14 +173,26 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe".into(),
         },
         ModelMetadata {
+            id: "whisper-small-q8_0".into(),
+            display_name: "Whisper Small (compact)".into(),
+            filename: "ggml-small-q8_0.bin".into(),
+            size_mb: 264,
+            speed_rating: 7,
+            accuracy_rating: 8,
+            description: "Recommended default. Small, 8-bit quantized: near-identical accuracy to Small at about half the download and memory.".into(),
+            is_default: true,
+            download_url: download_url_for("ggml-small-q8_0.bin"),
+            sha256: "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f".into(),
+        },
+        ModelMetadata {
             id: "whisper-small".into(),
             display_name: "Whisper Small".into(),
             filename: "ggml-small.bin".into(),
             size_mb: 466,
             speed_rating: 7,
             accuracy_rating: 8,
-            description: "Recommended default. Noticeably better accuracy for accents and technical vocabulary at near-real-time speed on Apple Silicon.".into(),
-            is_default: true,
+            description: "Full-precision Small. Noticeably better than Base on accents and technical vocabulary; the compact build is the same model at half the size.".into(),
+            is_default: false,
             download_url: download_url_for("ggml-small.bin"),
             sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b".into(),
         },
@@ -181,10 +209,34 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208".into(),
         },
         ModelMetadata {
+            id: "whisper-large-v3-turbo-q5_0".into(),
+            display_name: "Whisper Turbo (smallest)".into(),
+            filename: "ggml-large-v3-turbo-q5_0.bin".into(),
+            size_mb: 574,
+            speed_rating: 7,
+            accuracy_rating: 9,
+            description: "Turbo, 5-bit quantized. Most of Turbo's accuracy at about a third of its size — the lightest high-accuracy option.".into(),
+            is_default: false,
+            download_url: download_url_for("ggml-large-v3-turbo-q5_0.bin"),
+            sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2".into(),
+        },
+        ModelMetadata {
+            id: "whisper-large-v3-turbo-q8_0".into(),
+            display_name: "Whisper Turbo (compact)".into(),
+            filename: "ggml-large-v3-turbo-q8_0.bin".into(),
+            size_mb: 874,
+            speed_rating: 7,
+            accuracy_rating: 10,
+            description: "Turbo, 8-bit quantized. Near-identical accuracy to Turbo at about half the download and memory.".into(),
+            is_default: false,
+            download_url: download_url_for("ggml-large-v3-turbo-q8_0.bin"),
+            sha256: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1".into(),
+        },
+        ModelMetadata {
             id: "whisper-large-v3-turbo".into(),
             display_name: "Whisper Turbo".into(),
             filename: "ggml-large-v3-turbo.bin".into(),
-            size_mb: 1550,
+            size_mb: 1625,
             speed_rating: 7,
             accuracy_rating: 10,
             description:
@@ -239,6 +291,8 @@ mod tests {
 
     #[test]
     fn catalog_contains_expected_whisper_variants() {
+        // Removing an id strands users whose saved selection points at it
+        // (they silently fall back to the default), so this list only grows.
         let ids: Vec<String> = whisper_models().into_iter().map(|m| m.id).collect();
         assert!(ids.contains(&"whisper-tiny".to_string()));
         assert!(ids.contains(&"whisper-base".to_string()));
@@ -246,6 +300,9 @@ mod tests {
         assert!(ids.contains(&"whisper-medium".to_string()));
         assert!(ids.contains(&"whisper-large-v3-turbo".to_string()));
         assert!(ids.contains(&"whisper-large-v3".to_string()));
+        assert!(ids.contains(&"whisper-small-q8_0".to_string()));
+        assert!(ids.contains(&"whisper-large-v3-turbo-q5_0".to_string()));
+        assert!(ids.contains(&"whisper-large-v3-turbo-q8_0".to_string()));
     }
 
     #[test]
@@ -255,10 +312,8 @@ mod tests {
     }
 
     #[test]
-    fn default_model_is_whisper_small_per_prd() {
-        // PRD §6: "Default to `small` Q5_0". If we ever change the
-        // default this test reminds us to update the PRD too.
-        assert_eq!(default_model().id, "whisper-small");
+    fn default_model_is_compact_small() {
+        assert_eq!(default_model().id, "whisper-small-q8_0");
     }
 
     #[test]
@@ -294,16 +349,14 @@ mod tests {
     }
 
     #[test]
-    fn size_mb_is_monotonic_with_accuracy() {
-        // Whisper's size/quality curve is monotonic — bigger model =
-        // higher accuracy. If we ever add a model that breaks this, we
-        // should rethink the picker UX (size and accuracy bars
-        // currently both grow rightward, so a non-monotonic catalog
-        // would mislead the user into thinking they're the same metric).
-        let models = whisper_models();
+    fn full_precision_size_is_monotonic_with_accuracy() {
+        // Across full-precision models the size/quality curve is
+        // monotonic — bigger model = higher accuracy. Quantized builds
+        // deliberately break that line (see module note), so they are
+        // excluded here and checked against their own family below.
         let mut prev_size = 0u32;
         let mut prev_acc = 0u8;
-        for m in &models {
+        for m in whisper_models().iter().filter(|m| !is_quantized(m)) {
             assert!(
                 m.size_mb >= prev_size,
                 "{}: size_mb regressed (catalog out of order?)",
@@ -316,6 +369,46 @@ mod tests {
             );
             prev_size = m.size_mb;
             prev_acc = m.accuracy_rating;
+        }
+    }
+
+    fn is_quantized(m: &ModelMetadata) -> bool {
+        m.id.contains("-q5_") || m.id.contains("-q8_")
+    }
+
+    #[test]
+    fn quantized_variants_are_smaller_and_no_more_accurate_than_full() {
+        // A quantized card must sit next to (before) its full-precision
+        // sibling, be smaller, and never claim *more* accuracy — the
+        // rating bars would otherwise tell users to prefer the lossy build.
+        let models = whisper_models();
+        for (i, q) in models.iter().enumerate().filter(|(_, m)| is_quantized(m)) {
+            let base_id = q.id.rsplit_once('-').map(|(b, _)| b).unwrap();
+            let base = find_by_id(base_id)
+                .unwrap_or_else(|| panic!("{}: no full-precision sibling {base_id}", q.id));
+            let base_pos = models.iter().position(|m| m.id == base_id).unwrap();
+            assert!(i < base_pos, "{}: should be listed before {base_id}", q.id);
+            assert!(
+                q.size_mb < base.size_mb,
+                "{}: not smaller than {base_id}",
+                q.id
+            );
+            assert!(
+                q.accuracy_rating <= base.accuracy_rating,
+                "{}: rated more accurate than {base_id}",
+                q.id
+            );
+            assert!(q.filename.starts_with("ggml-") && q.filename.ends_with(".bin"));
+        }
+    }
+
+    #[test]
+    fn every_downloadable_model_has_a_sha256() {
+        // The downloader refuses models without a hash; a new catalog
+        // entry missing one would show a Download button that can't work.
+        for m in whisper_models() {
+            assert_eq!(m.sha256.len(), 64, "{}: sha256 missing or malformed", m.id);
+            assert!(m.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", m.id);
         }
     }
 }

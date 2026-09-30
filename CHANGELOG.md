@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Smaller "compact" Whisper models.** The model picker now offers
+  quantized builds that need far less disk and memory for nearly the same
+  accuracy: **Turbo (compact)** at 874 MB and **Turbo (smallest)** at
+  574 MB, versus 1.6 GB for Turbo; and **Small (compact)** at 264 MB,
+  versus 488 MB for Small. They come from the same upstream source and use
+  the same checksum-verified download as the existing models. **Small (compact) is now the default**: half the first-run download.
+
 - **Meeting transcripts: your own voice is no longer mistaken for a call
   participant (#1003, #1005).** Audio from your local microphone is now
   labelled "You" directly instead of going through the speaker matcher,
