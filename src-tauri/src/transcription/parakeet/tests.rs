@@ -7,6 +7,8 @@
 //!   cargo test --lib --features parakeet parakeet:: -- --ignored --nocapture
 //! ```
 
+use crate::memprobe::sample_memory;
+
 /// Per-test scratch directory, unique per process.
 ///
 /// A fixed path under `temp_dir()` collides between concurrent
@@ -263,61 +265,4 @@ fn memory_soak_over_many_inferences() {
     }
     println!("done in {:.1}s", start.elapsed().as_secs_f64());
     println!("final: {}", sample_memory());
-}
-
-/// Physical footprint + IOAccelerator total for this process.
-///
-/// Shells out to `footprint` and `vmmap` rather than using mach APIs
-/// directly — same numbers `npm run memwatch` reports, so results here
-/// are directly comparable to the figures in `learnings.md`.
-///
-/// **Footprint, not RSS.** `docs/memory-debugging.md` exists largely
-/// because leaks in this codebase have repeatedly hidden in compressed
-/// dirty pages that RSS does not count. Both are printed; footprint is
-/// the one to read.
-#[cfg(target_os = "macos")]
-fn sample_memory() -> String {
-    let pid = std::process::id().to_string();
-
-    let rss_kb = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_owned())
-        .unwrap_or_default();
-
-    let footprint = std::process::Command::new("footprint")
-        .arg(&pid)
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.contains("Footprint:"))
-                .and_then(|l| l.split("Footprint:").nth(1))
-                .map(|v| v.trim().to_owned())
-        })
-        .unwrap_or_else(|| "n/a".into());
-
-    // The #641 signal. Absent from the summary entirely == zero Metal
-    // dispatch, which is the outcome we want.
-    let ioaccel = std::process::Command::new("vmmap")
-        .args(["-summary", &pid])
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .find(|l| l.to_lowercase().contains("ioaccelerator"))
-                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        })
-        .unwrap_or_else(|| "IOAccelerator: none".into());
-
-    format!("rss={rss_kb}KB footprint={footprint} | {ioaccel}")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn sample_memory() -> String {
-    "memory sampling is macOS-only".to_owned()
 }

@@ -32,6 +32,53 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-09-30 — HUD: a double-click on a button that re-renders itself raises the main window
+
+The HUD's ■ swaps itself for a "Stop recording? / Stop / Keep recording"
+strip on click. A fast double-click therefore delivers click #2 to
+whatever now sits under the cursor — usually bare pill — and the
+`dblclick` event bubbles to `.hud-root`, whose double-click handler
+raises the main window. The per-button `ondblclick={stopPropagation}`
+guards were useless: the button that would have stopped propagation was
+no longer in the DOM. Users read "main window appeared" as "stopped",
+while the meeting kept recording.
+
+Fixes, all in `routes/hud/+page.svelte`:
+
+- A capture-phase `pointerdown` on the root timestamps any button press;
+  `raiseMainWindow` ignores dblclicks within 700 ms of one, and any whose
+  target is inside a button or `.hud-prompt`.
+- Prompt buttons render `disabled` for 300 ms after appearing, so the
+  second click of a double-click can't *confirm* a stop either.
+  (`disabled` rather than a timestamp check so Playwright's actionability
+  wait handles it.)
+- The backend no longer hides the HUD before `stop_manual` resolves; it
+  emits `stopping` → `stopped`, or `stop-failed` if a session still reads
+  as active after an error (hiding only when nothing is capturing). The
+  invariant: never hide the pill over live capture.
+
+Related Tauri details (2.11/2.12 `drag.js`):
+- A bare `data-tauri-drag-region` only drags when the click lands on
+  *that element itself*, not its children. Use `="deep"` for subtree
+  drag. We kept bare to avoid changing drag/double-click interplay
+  without a native test.
+- Dragging invokes `plugin:window|start_dragging`, an ACL'd command. The
+  HUD capability (tightened in #238) didn't grant
+  `core:window:allow-start-dragging`, so the grip never worked. Any
+  window using drag regions needs that permission.
+
+Same red-team pass: the call-end detector (#1001) emits
+`meeting:call-may-have-ended`, but the HUD only handled a
+`hud:state { state: "call-may-have-ended" }` form nothing ever sent. Its
+prompt was covered only by mocked e2e tests that fired the fake form.
+When a mock-driven spec fires an event, grep the backend for the emitter
+first.
+
+Also: the HUD window is `shadow: false` and exactly the size in
+`tauri.conf.json`, so any CSS `box-shadow` on a pill that fills the
+window is clipped flat. The pill is now inset 8 px inside a 320×64
+window; keep the inset ≥ the shadow's blur + offset.
+
 ## 2026-07-28 (latest) — #641 re-tested: the ORT leak was rc.12-specific and is gone on rc.13
 
 The entry below reversed #641 for Parakeet on the strength of a soak, while explicitly declining to generalise: different model, different runtime version, different session lifetime, three variables moved at once. This closes that gap by holding the model fixed and re-running #641's own workload.

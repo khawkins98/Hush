@@ -24,7 +24,10 @@ pub mod ipc;
 pub mod meeting;
 /// Shared memory sampler for diagnostic tests. Test-only; see
 /// `docs/memory-debugging.md` for why footprint rather than RSS.
-#[cfg(test)]
+/// Gated on `parakeet` because its only callers (the #641 ORT probe
+/// and the Parakeet soak) are — a bare `cfg(test)` leaves it dead in
+/// default-feature test builds and clippy's `-D warnings` fails CI.
+#[cfg(all(test, feature = "parakeet"))]
 mod memprobe;
 pub mod permissions;
 pub mod repository;
@@ -1495,6 +1498,10 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                         // Don't hold `session_emitted = true` on failure —
                         // the next HAL event should retry.
                         session_emitted = false;
+                        // The Pending countdown pill was shown above; with no
+                        // session to flip it to Recording it would otherwise
+                        // sit on "Meeting detected" indefinitely.
+                        crate::hud::hide_async(&app);
                     } else {
                         tracing::info!(app_name, "auto-started meeting session");
                         // Show the recording HUD — the session-started event
@@ -1512,6 +1519,7 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                                 &app,
                                 crate::hud::HudState::Recording {
                                     started_at_ms: crate::hud::now_unix_ms(),
+                                    kind: crate::hud::RecordingKind::Meeting,
                                 },
                             ) {
                                 tracing::warn!(

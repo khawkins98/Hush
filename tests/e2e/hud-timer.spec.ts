@@ -97,7 +97,7 @@ test.describe("HUD timer reset across sessions (#481)", () => {
 
 // Transcription progress indicator (#566): the label shows "Processing…"
 // without a percentage until the first `transcription:progress` event
-// arrives, then updates to "Processing… N%". Progress resets between
+// arrives, then updates to "Transcribing… N%". Progress resets between
 // recording cycles so back-to-back sessions don't show a stale percentage.
 test.describe("HUD transcription progress indicator (#566)", () => {
   async function bootstrap(page: Parameters<typeof installMocks>[0]) {
@@ -117,22 +117,22 @@ test.describe("HUD transcription progress indicator (#566)", () => {
     await expect(page.locator(".hud-label")).toHaveText("Processing…");
   });
 
-  test("updates label to 'Processing… N%' on transcription:progress event", async ({
+  test("updates label to 'Transcribing… N%' on transcription:progress event", async ({
     page,
   }) => {
     await bootstrap(page);
     await fireEvent(page, "transcription:progress", 42);
-    await expect(page.locator(".hud-label")).toHaveText("Processing… 42%");
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 42%");
   });
 
   test("label updates as progress increases", async ({ page }) => {
     await bootstrap(page);
     await fireEvent(page, "transcription:progress", 25);
-    await expect(page.locator(".hud-label")).toHaveText("Processing… 25%");
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 25%");
     await fireEvent(page, "transcription:progress", 75);
-    await expect(page.locator(".hud-label")).toHaveText("Processing… 75%");
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 75%");
     await fireEvent(page, "transcription:progress", 100);
-    await expect(page.locator(".hud-label")).toHaveText("Processing… 100%");
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 100%");
   });
 
   test("progress resets to 'Processing…' on next recording cycle", async ({
@@ -140,7 +140,7 @@ test.describe("HUD transcription progress indicator (#566)", () => {
   }) => {
     await bootstrap(page);
     await fireEvent(page, "transcription:progress", 80);
-    await expect(page.locator(".hud-label")).toHaveText("Processing… 80%");
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 80%");
 
     // New recording cycle — progress must clear so the next Processing
     // transition starts clean rather than flashing the previous session's
@@ -165,7 +165,9 @@ test.describe("HUD double-click raises main window", () => {
     });
     await installMocks(page, {
       // Must be an inline literal — no outer-scope variable capture.
-      show_main_window: () => {
+      show_main_window: (args: unknown) => {
+        // Routed to the Transcribe screen, where the live recording is.
+        if ((args as { section?: string } | undefined)?.section !== "dictation") return;
         (window as unknown as { __hushTestTrackShowMain: () => void }).__hushTestTrackShowMain();
       },
     });

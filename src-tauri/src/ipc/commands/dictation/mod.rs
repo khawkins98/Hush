@@ -103,6 +103,7 @@ pub fn start_dictation(
             &app,
             crate::hud::HudState::Recording {
                 started_at_ms: crate::hud::now_unix_ms(),
+                kind: crate::hud::RecordingKind::Dictation,
             },
         ) {
             tracing::warn!(error = ?e, "emit hud:state(recording) failed");

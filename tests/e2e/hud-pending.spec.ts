@@ -100,6 +100,7 @@ test.describe("HUD pending state", () => {
 
     await fireEvent(page, "hud:state", {
       state: "recording",
+      kind: "meeting",
       startedAtMs: Date.now(),
     });
 

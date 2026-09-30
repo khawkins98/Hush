@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Meeting transcripts: your own voice is no longer mistaken for a call
+  participant (#1003, #1005).** Audio from your local microphone is now
+  labelled "You" directly instead of going through the speaker matcher,
+  which could previously tag you as a remote speaker — and, by pulling
+  remote speaker clusters towards your voice, blur who-said-what for
+  everyone else. Sessions with no remote audio (two people sharing a room
+  mic) still use the matcher, since there the channel tells us nothing.
+
+- **Parakeet TDT engine (developer preview, off by default) (#521, #1005).**
+  A second speech-recognition engine behind the `parakeet` build feature,
+  running on ONNX Runtime. Not yet wired into the app; release builds are
+  unaffected. See `learnings.md` for why it runs on ONNX Runtime rather
+  than tract, and the memory measurements that cleared it.
+
 - **Meeting lifecycle UX — countdown, stop button, and call-end detection (#1001).**
   Three improvements to the meeting recording flow:
   - *Pre-recording countdown.* When auto-detection fires, a 3-second countdown pill
@@ -34,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Developer tooling: `npm run dev-reset` keeps your vocabulary.** Dictionary
+  terms, text replacements, and enabled vocabulary packs now survive a
+  reset; pass `--nuke-dictionary` to wipe them as before.
+
+- **Dependencies refreshed** within their existing version ranges (Tauri
+  2.12 and plugins, SvelteKit, Vite, Svelte, Playwright, and the Cargo
+  lockfile).
+
 - **New default configuration.** Out of the box (and for anyone who hasn't
   set these explicitly): audio cues are **on** (start + complete chimes; they
   honour system volume and Do Not Disturb), Language Style defaults to
@@ -42,6 +64,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new defaults. Change any of them in Settings → General / Vocabulary.
 
 ### Fixed
+
+- **Recording overlay: Stop is dependable, and you can see it working.**
+  - Clicking ■ now shows *Stopping…* and then *Stopped · saving
+    transcript* before the overlay closes. Previously the overlay vanished
+    the moment you clicked, so a stop that didn't take looked the same as
+    one that did. A stop that fails now says so and leaves you recording.
+  - Double-clicking ■ no longer opens the main window instead of stopping.
+    The confirm buttons also ignore input for a split second after they
+    appear, so a double-click can't confirm by accident.
+  - The ■ button no longer appears during dictation. There it used to hide
+    the overlay while the dictation kept recording; dictation is stopped
+    with your hotkey.
+  - Double-clicking the overlay now opens the main window on the
+    Transcribe screen, where the live recording and its Stop button are,
+    rather than wherever you last left it.
+  - The overlay's "call has ended?" prompt (#1001) now actually appears.
+    The detector's event only reached the main window, so the overlay
+    never showed it.
+  - Dragging the overlay by its grip works. The overlay window lacked the
+    permission Tauri's drag handling needs.
+  - If an auto-detected meeting fails to start after the countdown, the
+    overlay no longer stays stuck on "Meeting detected".
+- **Recording overlay: layout and polish.** The pill's shadow is no longer
+  cut off at the window edge; the "Stop recording?" and "call ended"
+  prompts, the pending countdown, and 1 h+ timers no longer overflow or
+  clip; screen-reader-only text no longer shows up visibly in the pending
+  countdown; the pending state uses an amber dot (nothing is recording
+  yet); and the transcription label shows a percentage again
+  (*Transcribing… 42%*).
 
 - **Meeting transcripts: stray `.com` / `.org` / lone-punctuation lines from
   Whisper are now dropped.** These are silence/low-information confabulations
