@@ -230,7 +230,7 @@ hound = { version = "3.5", optional = true }
 async-trait = "0.1"
 
 # Foreground app detection
-active-win-pos-rs = "0.11"
+active-win-pos-rs = "0.10"
 
 # Push-to-talk key events (key-down / key-up). We pin to fufesou's
 # rdev fork because Narsil's upstream is incomplete on macOS 26+:
