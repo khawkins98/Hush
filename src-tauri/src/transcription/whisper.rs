@@ -155,6 +155,117 @@ fn logprob_thold() -> f32 {
         .clamp(-10.0, 0.0)
 }
 
+/// Encoder positions in every stock Whisper model (`n_audio_ctx`): 30 s of
+/// audio. whisper.cpp rejects an `audio_ctx` above this with error -5.
+const WHISPER_FULL_AUDIO_CTX: i32 = 1500;
+
+/// 16 kHz samples per encoder position: mel hop is 160 samples (10 ms)
+/// and the encoder's second conv has stride 2, so one position is 20 ms.
+const SAMPLES_PER_AUDIO_CTX_FRAME: usize = 320;
+
+/// Extra encoder positions past the end of the input when
+/// `HUSH_WHISPER_AUDIO_CTX=1`. The decoder predicts timestamps against the
+/// encoded window, and whisper.cpp's own mel already ends in zero padding,
+/// so a little trailing silence keeps the last word away from the edge.
+/// 64 positions = 1.28 s. Tunable via `HUSH_WHISPER_AUDIO_CTX_MARGIN`.
+const DEFAULT_AUDIO_CTX_MARGIN: i32 = 64;
+
+/// Smallest `audio_ctx` the dynamic sizing will use. Stock models were
+/// only trained on 1500-position windows, and tiny windows are where
+/// errors appear: with no floor, small-q8_0 turned "Send it to Sarah."
+/// into "Sended to Sarah.". 384 positions (7.68 s) was the most
+/// conservative value with no one-shot regression in the A/B. Tunable
+/// via `HUSH_WHISPER_AUDIO_CTX_FLOOR`. See learnings.md 2026-10-01
+/// "Encoder audio_ctx sizing".
+const DEFAULT_AUDIO_CTX_FLOOR: i32 = 384;
+
+/// Encoder context for an input of `n_samples` 16 kHz samples: enough
+/// positions to cover the whole input, plus `margin`, no smaller than
+/// `floor` and never above the model's 1500.
+///
+/// The covering requirement is load-bearing, not just accuracy:
+/// whisper.cpp's decode loop advances `seek` by the last timestamp it
+/// saw, and when the encoder window ends before the audio does it will
+/// re-encode from the new seek, so a too-small window turns one encode
+/// into several and lets a segment be cut at the window edge. Covering
+/// the input keeps every call a single encode, as it is today.
+///
+/// No alignment is needed: whisper.cpp pads the cross-attention KV to a
+/// multiple of 256 internally (`GGML_PAD(n_ctx, 256)`), and the conv
+/// front end accepts any width.
+fn dynamic_audio_ctx(n_samples: usize, margin: i32, floor: i32) -> i32 {
+    let covering = n_samples.div_ceil(SAMPLES_PER_AUDIO_CTX_FRAME);
+    let covering = i32::try_from(covering).unwrap_or(WHISPER_FULL_AUDIO_CTX);
+    covering
+        .saturating_add(margin.max(0))
+        .max(floor)
+        .clamp(1, WHISPER_FULL_AUDIO_CTX)
+}
+
+/// `audio_ctx` to hand `FullParams::set_audio_ctx` given the raw env
+/// values. `0` is whisper.cpp's "use the model's n_audio_ctx" sentinel,
+/// so the off path is byte-for-byte today's behaviour. Only `"1"` turns
+/// the sizing on.
+///
+/// Off by default because the A/B (learnings.md 2026-10-01) found that
+/// with a shrunk window large-v3-turbo emits timestamps past the end of
+/// the audio, which the streaming slide trusts, so words get dropped. It
+/// also loops on trailing silence. The 2–5× CPU saving is real but
+/// costs timestamp integrity.
+fn resolve_audio_ctx(
+    n_samples: usize,
+    enabled: Option<&str>,
+    margin: Option<&str>,
+    floor: Option<&str>,
+) -> i32 {
+    if enabled.map(str::trim) != Some("1") {
+        return 0;
+    }
+    let parse = |v: Option<&str>, default: i32| {
+        v.and_then(|s| s.trim().parse::<i32>().ok())
+            .map(|n| n.clamp(0, WHISPER_FULL_AUDIO_CTX))
+            .unwrap_or(default)
+    };
+    dynamic_audio_ctx(
+        n_samples,
+        parse(margin, DEFAULT_AUDIO_CTX_MARGIN),
+        parse(floor, DEFAULT_AUDIO_CTX_FLOOR),
+    )
+}
+
+/// Env-reading wrapper around [`resolve_audio_ctx`]. Read per inference,
+/// like the other `HUSH_WHISPER_*` decode knobs, so an A/B needs no
+/// restart. Logged at DEBUG per call (with the input length) so a
+/// meeting log shows what the encoder was actually given.
+fn audio_ctx_for(n_samples: usize) -> i32 {
+    let enabled = std::env::var("HUSH_WHISPER_AUDIO_CTX").ok();
+    let margin = std::env::var("HUSH_WHISPER_AUDIO_CTX_MARGIN").ok();
+    let floor = std::env::var("HUSH_WHISPER_AUDIO_CTX_FLOOR").ok();
+    let ctx = resolve_audio_ctx(
+        n_samples,
+        enabled.as_deref(),
+        margin.as_deref(),
+        floor.as_deref(),
+    );
+    if ctx > 0 {
+        // Once at INFO so a default-level meeting log records that the
+        // experiment was on; per-call detail stays at DEBUG.
+        static ANNOUNCED: std::sync::Once = std::sync::Once::new();
+        ANNOUNCED.call_once(|| {
+            // Raw env strings aren't logged: a malformed value silently
+            // falls back to its default, so echoing it would mislead.
+            // The DEBUG line below carries the resolved `audio_ctx`.
+            tracing::info!("whisper: encoder audio_ctx sizing enabled (HUSH_WHISPER_AUDIO_CTX=1)");
+        });
+        tracing::debug!(
+            audio_ctx = ctx,
+            input_ms = n_samples / 16,
+            "whisper: dynamic encoder audio_ctx (HUSH_WHISPER_AUDIO_CTX=1)"
+        );
+    }
+    ctx
+}
+
 /// Read the text tokens of one decoded segment as [`TokenScore`]s.
 /// Special tokens (timestamps, `<|endoftext|>`, language tags) all have
 /// ids `>= token_eot` in whisper's vocabulary layout and are skipped:
@@ -727,6 +838,8 @@ impl WhisperTranscription {
         if !prompt.is_empty() {
             params.set_initial_prompt(prompt);
         }
+        // Opt-in encoder sizing; 0 (the default) keeps the full 30 s window.
+        params.set_audio_ctx(audio_ctx_for(pcm.len()));
 
         // Hold this transcriber's inference gate for the duration of
         // inference.
@@ -1441,6 +1554,8 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         if !self.prompt.is_empty() {
             params.set_initial_prompt(self.prompt);
         }
+        // Opt-in encoder sizing; 0 (the default) keeps the full 30 s window.
+        params.set_audio_ctx(audio_ctx_for(mono_16k_pcm.len()));
 
         let ctx = self.ctx.lock();
         // Reuse a single WhisperState across calls (#612). Pre-#612
@@ -1633,6 +1748,65 @@ impl std::fmt::Debug for WhisperTranscription {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn dynamic_audio_ctx_covers_input_plus_margin() {
+        // 11 s = 176_000 samples = 550 positions; + 64 margin.
+        assert_eq!(super::dynamic_audio_ctx(176_000, 64, 384), 614);
+        // Partial positions round up: one extra sample needs one more frame.
+        assert_eq!(super::dynamic_audio_ctx(176_001, 0, 0), 551);
+    }
+
+    #[test]
+    fn dynamic_audio_ctx_applies_floor_and_ceiling() {
+        // 1 s clip: 50 + 64 = 114, lifted to the floor.
+        assert_eq!(super::dynamic_audio_ctx(16_000, 64, 384), 384);
+        // 29 s + margin would exceed the model's 1500 positions.
+        assert_eq!(super::dynamic_audio_ctx(29 * 16_000, 64, 384), 1500);
+        // Longer than 30 s (dictation can be) still clamps rather than
+        // tripping whisper.cpp's audio_ctx > n_audio_ctx error.
+        assert_eq!(super::dynamic_audio_ctx(10 * 60 * 16_000, 64, 384), 1500);
+        // Empty input with no floor or margin still yields a valid ctx.
+        assert_eq!(super::dynamic_audio_ctx(0, 0, 0), 1);
+        // A negative margin is ignored, not subtracted.
+        assert_eq!(super::dynamic_audio_ctx(176_000, -100, 0), 550);
+    }
+
+    #[test]
+    fn resolve_audio_ctx_is_off_unless_exactly_one() {
+        for off in [None, Some("0"), Some(""), Some("true"), Some("2")] {
+            assert_eq!(
+                super::resolve_audio_ctx(176_000, off, None, None),
+                0,
+                "{off:?}"
+            );
+        }
+        assert_eq!(
+            super::resolve_audio_ctx(176_000, Some(" 1 "), None, None),
+            550 + super::DEFAULT_AUDIO_CTX_MARGIN
+        );
+    }
+
+    #[test]
+    fn resolve_audio_ctx_reads_margin_and_floor_overrides() {
+        assert_eq!(
+            super::resolve_audio_ctx(176_000, Some("1"), Some("0"), Some("0")),
+            550
+        );
+        assert_eq!(
+            super::resolve_audio_ctx(16_000, Some("1"), Some("32"), Some("256")),
+            256
+        );
+        // Garbage falls back to the defaults; out-of-range values clamp.
+        assert_eq!(
+            super::resolve_audio_ctx(16_000, Some("1"), Some("x"), Some("y")),
+            super::DEFAULT_AUDIO_CTX_FLOOR
+        );
+        assert_eq!(
+            super::resolve_audio_ctx(16_000, Some("1"), None, Some("99999")),
+            1500
+        );
+    }
 
     #[test]
     fn vad_boundary_is_on_unless_explicitly_disabled() {
