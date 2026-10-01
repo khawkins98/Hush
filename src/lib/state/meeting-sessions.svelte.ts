@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { untrack } from "svelte";
 
 import type { MeetingCopyNotice } from "$lib/MeetingSection.svelte";
 import {
@@ -226,7 +227,11 @@ export const meeting = {
   async refreshActiveDetail(id: number, opts: { full?: boolean } = {}) {
     meetingActiveDetailSeq += 1;
     const seq = meetingActiveDetailSeq;
-    const prev = meetingActiveDetail;
+    // `untrack`: callers invoke this from inside an `$effect`
+    // (AppLifecycle's poll), and reading the `$state` here synchronously
+    // would make that effect depend on the detail it is about to write —
+    // re-running (and re-fetching) on every update, forever.
+    const prev = untrack(() => meetingActiveDetail);
     const incremental = !opts.full && prev !== null && prev.session.id === id;
     try {
       const detail = incremental
