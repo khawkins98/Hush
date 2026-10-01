@@ -102,6 +102,13 @@ to disable.**
   An arbitrary 0.8 s cut from the middle of a sentence gave "Knock!", a
   hallucination on a clipped fragment. Real presses are whole words, but
   this is the failure mode to watch for.
+  **Update (follow-up PR): adopted.** `NoSpeech` is now a no-op at every
+  length (`dictation::pipeline::press_is_empty`). It's safe because
+  `NoSpeech` is only possible when every frame was scored — long clips
+  score just their edges and treat the middle as speech — and the VAD
+  scores a mic-gained copy.
+
+**Update (follow-up PR): VAD-boundary windowing is now on by default** (`HUSH_VAD_BOUNDARY=0` restores time-based windows), at Ken's call after reviewing the fixture numbers below.
 
 **VAD-boundary windowing (`HUSH_VAD_BOUNDARY=1`): opt-in, but the best
 result in the round.** When the VAD sees 600 ms of silence after

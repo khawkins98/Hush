@@ -808,7 +808,7 @@ impl SlidingWindowState {
         })
     }
 
-    /// VAD-boundary commit (#1013, opt-in via `HUSH_VAD_BOUNDARY=1`):
+    /// VAD-boundary commit (#1013; on by default, `HUSH_VAD_BOUNDARY=0` disables):
     /// transcribe the window up to `boundary_abs_ms` — the end of a
     /// speech region the VAD just closed — commit everything in it as
     /// final, and slide the window past it.

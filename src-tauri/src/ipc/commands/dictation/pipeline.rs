@@ -46,6 +46,29 @@ pub(super) enum DictationTrim {
     Trimmed(crate::audio::CapturedAudio),
 }
 
+/// Whether a push-to-talk press should be treated as empty (no
+/// transcription, clipboard untouched) given the VAD trim outcome.
+///
+/// - `NoSpeech` → empty at any length: a hiss-only press must never reach
+///   whisper, which confabulates ("(bells chiming)") on noise.
+/// - `Skipped` (VAD off/unavailable) → the pre-VAD duration rule: shorter
+///   than `min_ms` is empty. A missing duration is treated as empty
+///   rather than feeding whisper input of unknown shape.
+/// - `Trimmed` → only the absolute `floor_ms` applies, so a real
+///   sub-second "yes" goes through.
+pub(super) fn press_is_empty(
+    trim: &DictationTrim,
+    duration_ms: Option<i64>,
+    min_ms: i64,
+    floor_ms: i64,
+) -> bool {
+    match trim {
+        DictationTrim::NoSpeech => true,
+        DictationTrim::Skipped => duration_ms.map_or(true, |ms| ms < min_ms),
+        DictationTrim::Trimmed(_) => duration_ms.map_or(true, |ms| ms < floor_ms),
+    }
+}
+
 /// Trim leading/trailing non-speech from a dictation clip with the
 /// already-loaded Silero VAD, and zero-pad short clips to 1.25 s
 /// (#1013; the follow-up scoped in learnings.md 2026-05-28).

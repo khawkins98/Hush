@@ -922,6 +922,53 @@ fn mono_16k(secs_x10: usize) -> CapturedAudio {
 }
 
 #[test]
+fn press_with_no_speech_is_empty_at_any_length() {
+    use super::pipeline::{press_is_empty, DictationTrim};
+    // The hiss-only case: 1.5 s and 8 s presses the VAD found empty.
+    assert!(press_is_empty(
+        &DictationTrim::NoSpeech,
+        Some(1_500),
+        1_000,
+        300
+    ));
+    assert!(press_is_empty(
+        &DictationTrim::NoSpeech,
+        Some(8_000),
+        1_000,
+        300
+    ));
+}
+
+#[test]
+fn press_without_vad_keeps_the_duration_rule() {
+    use super::pipeline::{press_is_empty, DictationTrim};
+    assert!(press_is_empty(
+        &DictationTrim::Skipped,
+        Some(800),
+        1_000,
+        300
+    ));
+    assert!(!press_is_empty(
+        &DictationTrim::Skipped,
+        Some(1_500),
+        1_000,
+        300
+    ));
+    assert!(press_is_empty(&DictationTrim::Skipped, None, 1_000, 300));
+}
+
+#[test]
+fn trimmed_press_only_applies_the_tap_floor() {
+    use super::pipeline::{press_is_empty, DictationTrim};
+    let trimmed = || DictationTrim::Trimmed(mono_16k(10));
+    assert!(press_is_empty(&trimmed(), Some(200), 1_000, 300));
+    assert!(
+        !press_is_empty(&trimmed(), Some(600), 1_000, 300),
+        "a real sub-second yes"
+    );
+}
+
+#[test]
 fn vad_trim_is_skipped_with_noop_vad() {
     let out = super::pipeline::vad_trim_dictation(&crate::vad::NoopVad, &mono_16k(20), 0.0);
     assert!(matches!(out, super::pipeline::DictationTrim::Skipped));
