@@ -302,7 +302,7 @@
       Add one above when you find an app it gets wrong.
     </p>
   {:else}
-    <ul class="override-list">
+    <ul class="override-list" aria-label="App overrides">
       {#each overrides as override (override.appName)}
         <li class="override-row">
           <code class="override-name">{override.appName}</code>

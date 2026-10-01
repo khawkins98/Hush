@@ -30,7 +30,7 @@
     </span>
   </label>
   {#if gs.hudError}
-    <p class="settings-error">{gs.hudError}</p>
+    <p class="settings-error" role="alert">{gs.hudError}</p>
   {/if}
 
   <label class="toggle-row">
@@ -52,7 +52,7 @@
     </span>
   </label>
   {#if gs.soundCuesError}
-    <p class="settings-error">{gs.soundCuesError}</p>
+    <p class="settings-error" role="alert">{gs.soundCuesError}</p>
   {/if}
 
   <div
@@ -115,6 +115,6 @@
     </div>
   </div>
   {#if gs.soundCueSubError}
-    <p class="settings-error">{gs.soundCueSubError}</p>
+    <p class="settings-error" role="alert">{gs.soundCueSubError}</p>
   {/if}
 </section>

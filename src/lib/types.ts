@@ -225,6 +225,17 @@ export type StreamingUtterance = {
   endedAtMs: number;
   isFinal: boolean;
   speakerLabel: string | null;
+  /// Word-level model confidence (#1013), aligned 1:1 with
+  /// `text.split(/\s+/)`. Present only when the backend runs with
+  /// `HUSH_CONFIDENCE_SHADING=1`; absent (not null) otherwise.
+  words?: WordConfidence[];
+};
+
+/// Mirrors `crate::transcription::quality::WordConfidence`.
+export type WordConfidence = {
+  word: string;
+  /// Model confidence in the word, 0–1.
+  p: number;
 };
 
 // Snapshot of which meeting session (if any) is currently active.
@@ -273,6 +284,8 @@ export type ModelCard = {
   accuracyRating: number;
   description: string;
   isDefault: boolean;
+  /// `.en` build: English speech only (mirrors `english_only`).
+  englishOnly: boolean;
   isDownloaded: boolean;
   isSelected: boolean;
   expectedPath: string;

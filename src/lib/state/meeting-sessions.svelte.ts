@@ -18,6 +18,11 @@ import { audio } from "$lib/state/audio.svelte";
 let meetingSessions = $state<MeetingSession[]>([]);
 let meetingSessionsLoaded = $state(false);
 let meetingSessionsError = $state<ErrorDisplay | null>(null);
+// True while the most recent session-list load failed. Separate from
+// `meetingSessionsError`, which also carries detail-fetch / delete /
+// rename failures — only a failed list load should offer Retry and
+// suppress History's empty state.
+let meetingLoadFailed = $state(false);
 let meetingActiveId = $state<number | null>(null);
 let meetingActiveDetail = $state<MeetingSessionDetail | null>(null);
 let meetingBusy = $state(false);
@@ -108,6 +113,9 @@ export const meeting = {
   get error() {
     return meetingSessionsError;
   },
+  get loadFailed() {
+    return meetingLoadFailed;
+  },
   set error(val: ErrorDisplay | null) {
     meetingSessionsError = val;
   },
@@ -191,9 +199,11 @@ export const meeting = {
       meetingSessions = sessions;
       meetingActiveId = active.active;
       meetingSessionsError = null;
+      meetingLoadFailed = false;
     } catch (e) {
       if (seq !== meetingRefreshSeq) return;
       meetingSessionsError = formatErrorDisplay(e);
+      meetingLoadFailed = true;
     } finally {
       meetingSessionsLoaded = true;
     }

@@ -332,7 +332,7 @@
       aria-expanded={expanded}
       title={expanded ? "Hide transcript" : `Show transcript (${session.utteranceCount} utterances)`}
     >
-      <!-- Title row: custom name, or meeting app name + optional "Add name" affordance -->
+      <!-- Title row: custom name, or meeting app name + optional "Add name…" affordance -->
       <div class="meeting-title-row">
         {#if onSetName}
           {#if editingName}
@@ -392,7 +392,14 @@
       </div>
 
       {#if onSetName && !editingName && session.name === null}
-        <button class="add-name-btn" onclick={startNameEdit}>+ Add name</button>
+        <!-- Same wording as the dictation row's affordance so both
+             row kinds read as one naming feature. -->
+        <button
+          class="add-name-btn"
+          onclick={startNameEdit}
+          aria-label="Add a name"
+          data-testid="meeting-add-name-{session.id}"
+        >Add name…</button>
       {/if}
 
       {#if session.notes}

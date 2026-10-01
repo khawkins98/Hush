@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { fireEvent, installMocks } from "./_mock";
 
 // Smoke coverage for the menu-bar quick-access popover (#427
 // Item 1). The popover lives in a separate Tauri window in
@@ -103,5 +103,91 @@ test.describe("menu-bar popover", () => {
     await expect(
       page.locator('[data-testid="popover-error"]'),
     ).toBeVisible();
+  });
+
+  test("Start meeting emits menu-bar:start-meeting and disables while recording", async ({
+    page,
+  }) => {
+    // Same bus-wrapping pattern as the hotkey:toggle test above.
+    await page.addInitScript(() => {
+      (window as unknown as { __hush_meeting_emit_count: number })
+        .__hush_meeting_emit_count = 0;
+      const interval = window.setInterval(() => {
+        const bus = (
+          window as unknown as {
+            __hush_e2e_event_bus?: { fire: (n: string, p: unknown) => void };
+          }
+        ).__hush_e2e_event_bus;
+        if (!bus) return;
+        const original = bus.fire.bind(bus);
+        bus.fire = (name: string, payload: unknown) => {
+          if (name === "menu-bar:start-meeting") {
+            (window as unknown as { __hush_meeting_emit_count: number })
+              .__hush_meeting_emit_count += 1;
+          }
+          original(name, payload);
+        };
+        window.clearInterval(interval);
+      }, 5);
+    });
+    await installMocks(page);
+    await page.goto("/menu-bar");
+
+    const startMeeting = page.locator('[data-testid="popover-start-meeting"]');
+    await expect(startMeeting).toBeEnabled();
+    await startMeeting.click();
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __hush_meeting_emit_count: number })
+              .__hush_meeting_emit_count,
+        ),
+      )
+      .toBe(1);
+
+    // Once the main window broadcasts that something is recording,
+    // the popover's only action is Stop — Start meeting disables.
+    await fireEvent(page, "ui:recording-state", true);
+    await expect(startMeeting).toBeDisabled();
+    await expect(page.locator('[data-testid="popover-toggle"]')).toContainText(
+      /stop recording/i,
+    );
+  });
+
+  test("main window starts a manual meeting on menu-bar:start-meeting", async ({
+    page,
+  }) => {
+    // The popover only emits; the main window owns the start path.
+    // Pin that the event reaches the same meeting_start_manual IPC
+    // the Record button uses.
+    let starts = 0;
+    await page.exposeFunction("__hush_meeting_start", () => {
+      starts += 1;
+    });
+    await installMocks(page, {
+      meeting_start_manual: () => {
+        (window as unknown as { __hush_meeting_start: () => void })
+          .__hush_meeting_start();
+        return {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-09-30T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic"],
+          appTitle: null,
+          name: null,
+        };
+      },
+    });
+    await page.goto("/");
+    await expect(page.locator('[data-testid="record-start-btn"]')).toBeVisible();
+
+    await fireEvent(page, "menu-bar:start-meeting", null);
+    await expect.poll(() => starts).toBe(1);
   });
 });

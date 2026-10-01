@@ -130,7 +130,7 @@
         {/if}
       </div>
       {#if diarizer.diarizerDownloadError}
-        <p class="settings-error" data-testid="diarizer-download-error">
+        <p class="settings-error" role="alert" data-testid="diarizer-download-error">
           {diarizer.diarizerDownloadError}
         </p>
       {/if}
@@ -226,7 +226,7 @@
         {/if}
       </div>
       {#if diarizer.diarizerRemoveError}
-        <p class="settings-error">{diarizer.diarizerRemoveError}</p>
+        <p class="settings-error" role="alert">{diarizer.diarizerRemoveError}</p>
       {/if}
     </div>
   {/if}
@@ -250,7 +250,7 @@
     </span>
   </label>
   {#if diarizer.diarizationError}
-    <p class="settings-error">{diarizer.diarizationError}</p>
+    <p class="settings-error" role="alert">{diarizer.diarizationError}</p>
   {/if}
 
   <label class="slider-row diarizer-threshold-row">
@@ -267,6 +267,8 @@
         step="0.01"
         value={diarizer.diarizerThresholdDisplay}
         data-testid="settings-diarizer-threshold-slider"
+        aria-label="Speaker split sensitivity"
+        aria-valuetext={diarizer.diarizerThresholdDisplay.toFixed(2)}
         disabled={diarizer.diarizerThresholdBusy}
         oninput={diarizer.onDiarizerThresholdInput}
         onchange={diarizer.onDiarizerThresholdChange}
@@ -280,7 +282,7 @@
     No restart required. Defaults to 0.40.
   </p>
   {#if diarizer.diarizerThresholdError}
-    <p class="settings-error">{diarizer.diarizerThresholdError}</p>
+    <p class="settings-error" role="alert">{diarizer.diarizerThresholdError}</p>
   {/if}
 
   <!--
@@ -307,7 +309,7 @@
     </span>
   </label>
   {#if diarizer.speakerIdentityError}
-    <p class="settings-error">{diarizer.speakerIdentityError}</p>
+    <p class="settings-error" role="alert">{diarizer.speakerIdentityError}</p>
   {/if}
 </section>
 

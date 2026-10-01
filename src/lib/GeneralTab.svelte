@@ -107,15 +107,29 @@
 
 <section class="settings-group" aria-labelledby="settings-hotkeys-heading">
   <h2 id="settings-hotkeys-heading" class="group-heading">Hotkeys</h2>
-  <p class="settings-row">
+  <!--
+    The toggle chord is registered from a Rust constant
+    (`hotkey::DEFAULT_TOGGLE_HOTKEY`, `Ctrl+Alt+H`) with no picker,
+    so this row states it as fixed and points at the PTT editor —
+    the one shortcut the user *can* change — instead of reading as
+    a broken control.
+  -->
+  <p class="settings-row" data-testid="settings-toggle-hotkey-row">
     <span class="row-label">Toggle recording</span>
     <span class="row-value">
-      <span class="chord"><kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd></span>
-      <span class="row-note">Not currently editable — the push-to-talk combo below is.</span>
+      <span class="chord">
+        {#if isMacOS}
+          <kbd aria-label="Control Option H">⌃⌥H</kbd>
+        {:else}
+          <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>H</kbd>
+        {/if}
+        <span class="chord-fixed">(fixed)</span>
+      </span>
+      <span class="row-note">Want a different key? Set up push-to-talk below.</span>
     </span>
   </p>
   {#if toggleHotkeyError}
-    <p class="settings-error" data-testid="toggle-hotkey-error">
+    <p class="settings-error" role="alert" data-testid="toggle-hotkey-error">
       ⚠️ Toggle hotkey could not be registered: {toggleHotkeyError}. Check that
       Hush has Input Monitoring access in System Settings → Privacy &amp; Security.
     </p>
@@ -207,6 +221,15 @@
 
 <!--
   Card-primitive CSS imported from src/lib/settings-tab.css (#392).
-  No tab-specific styles in this component — every class GeneralTab
-  uses lives in the shared module.
+  Only the `.chord-fixed` qualifier is local; every other class
+  GeneralTab uses lives in the shared module.
 -->
+
+<style>
+  /* Quiet qualifier next to the keycap so "fixed" reads as a fact
+     about the chord rather than as a second control. */
+  .chord-fixed {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+</style>

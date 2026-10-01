@@ -100,7 +100,7 @@
     </span>
   </label>
   {#if autostartError}
-    <p class="settings-error">{autostartError}</p>
+    <p class="settings-error" role="alert">{autostartError}</p>
   {/if}
 
   {#if autostartPathStale}

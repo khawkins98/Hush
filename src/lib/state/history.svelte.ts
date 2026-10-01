@@ -27,6 +27,12 @@ let historyLoaded = $state(false);
 let historyQuery = $state("");
 let historySearching = $state(false);
 let historyError = $state<ErrorDisplay | null>(null);
+// True while the most recent list load failed. Kept separate from
+// `historyError` because that slot also carries per-row action
+// failures (copy, export) and the bundle-export result toast —
+// only a failed *load* should offer Retry and hide the empty state,
+// since "Nothing here yet" is a lie when we couldn't read the rows.
+let historyLoadFailed = $state(false);
 // Unfiltered total — `historyEntries` shows the current page /
 // filtered slice, so the total drives the sidebar counter and
 // the "Clear all N" confirmation copy.
@@ -139,6 +145,9 @@ export const history = {
   set error(val: ErrorDisplay | null) {
     historyError = val;
   },
+  get loadFailed() {
+    return historyLoadFailed;
+  },
   get totalCount() {
     return historyTotalCount;
   },
@@ -210,9 +219,11 @@ export const history = {
       historyEntries = entries;
       historyTotalCount = total;
       historyVersion += 1;
+      historyLoadFailed = false;
     } catch (e) {
       if (seq !== historyRefreshSeq) return;
       historyError = formatErrorDisplay(e);
+      historyLoadFailed = true;
     } finally {
       if (seq === historyRefreshSeq) {
         historyLoaded = true;

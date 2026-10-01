@@ -50,6 +50,7 @@
 
   // --- Listener handles ---
   let unlistenToggle: UnlistenFn | null = null;
+  let unlistenStartMeeting: UnlistenFn | null = null;
   let unlistenPttPress: UnlistenFn | null = null;
   let unlistenPttRelease: UnlistenFn | null = null;
   let unlistenMenuGoto: UnlistenFn | null = null;
@@ -194,6 +195,14 @@
       else void dictation.start();
     });
 
+    // Menu-bar popover "Start meeting". Start-only (never a toggle):
+    // a stale click from a popover that missed a ui:recording-state
+    // update must not stop a session that is already running.
+    unlistenStartMeeting = await listen(Events.MenuBarStartMeeting, () => {
+      if (dictation.busy || meeting.busy || dictation.anyRecordingActive) return;
+      void dictation.startRecord();
+    });
+
     unlistenMenuGoto = await listen<string>(Events.MenuGotoSection, (e) => {
       const payload = e.payload;
       if (payload === "meetings" || payload === "history") {
@@ -320,6 +329,7 @@
 
   onDestroy(() => {
     unlistenToggle?.();
+    unlistenStartMeeting?.();
     unlistenMenuGoto?.();
     unlistenSettingsGoto?.();
     unlistenPttPress?.();

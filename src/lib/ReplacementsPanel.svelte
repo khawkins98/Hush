@@ -87,7 +87,7 @@
       future transcripts automatically.
     </p>
   {:else}
-    <ul class="replacement-list">
+    <ul class="replacement-list" aria-label="Replacement rules">
       {#each replacements as rule (rule.id)}
         <li class="replacement-row">
           <code class="replacement-find">{rule.findText}</code>

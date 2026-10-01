@@ -20,6 +20,13 @@ export const Events = {
   /// fired. Frontend dispatches start-vs-stop based on its own
   /// recording state. See `+page.svelte`.
   HotkeyToggle: "hotkey:toggle",
+  /// Menu-bar popover → main window: user clicked "Start meeting".
+  /// The main window runs the same `dictation.startRecord()` path as
+  /// its own Record button (source selection, mic + system-audio
+  /// pairing, phase state), so the popover never calls
+  /// `meeting_start_manual` itself — same single-owner reasoning as
+  /// `HotkeyToggle`. Frontend-only; no Rust counterpart.
+  MenuBarStartMeeting: "menu-bar:start-meeting",
   /// Backend → frontend: push-to-talk key down. Start dictation.
   HotkeyPttPress: "hotkey:ptt-press",
   /// Backend → frontend: push-to-talk key up. Stop dictation.

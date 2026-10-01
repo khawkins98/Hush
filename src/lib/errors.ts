@@ -26,7 +26,7 @@ import type { IpcError, KnownIpcError, KnownIpcErrorKind } from "./types";
 /// keeps `ErrorDisplay` serialisable and avoids closing over UI
 /// callbacks inside `lib/errors.ts` (which has no view dependencies).
 /// Add new keys here when an error class can offer a one-click recovery.
-export type ErrorActionKey = "open-model-settings";
+export type ErrorActionKey = "open-model-settings" | "retry";
 
 export type ErrorDisplay = {
   /// Plain-language summary, ~5 words. Always present.

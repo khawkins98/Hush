@@ -26,7 +26,7 @@
   );
 </script>
 
-<div class="error-card scoped-error" role="alert">
+<div class="error-card scoped-error" role="alert" aria-atomic="true">
   <p class="error-headline">
     {#if scope}<strong class="error-scope">{scope}:</strong>{/if}
     <span class="error-headline-text">{error.headline}</span>
@@ -92,7 +92,9 @@
   background-color: var(--danger);
   border: 1px solid var(--danger);
   border-radius: 6px;
-  color: var(--text-on-accent);
+  /* Not --text-on-accent: that token is dark text tuned for the
+     orange accent and reads at ~2:1 on the red danger fill. */
+  color: #fff;
   font-family: inherit;
   font-size: 0.85rem;
   font-weight: 600;

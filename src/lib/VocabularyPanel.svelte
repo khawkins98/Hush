@@ -60,6 +60,64 @@
   };
 </script>
 
+<!-- Personal vocabulary — first because it's the section users come
+     to this tab to edit; language style and packs are set-and-forget. -->
+<section class="vocabulary panel-vocabulary" aria-labelledby="vocabulary-heading">
+  <header class="history-header">
+    <h2 id="vocabulary-heading">Personal Vocabulary</h2>
+  </header>
+  <p class="hint-prose">
+    Words Whisper should be primed to recognise — proper nouns,
+    jargon, names it otherwise mishears. Joined into the model's
+    initial prompt on every transcription. Unlike Replacements
+    (its own tab), vocabulary biases the <em>recognition</em>;
+    replacements rewrite the <em>output</em>.
+  </p>
+
+  {#if vocabularyError}
+    <ErrorDisplay error={vocabularyError} scope="Vocabulary" />
+  {/if}
+
+  <form class="replacement-form" onsubmit={onSubmit}>
+    <input
+      type="text"
+      bind:this={inputEl}
+      bind:value={newVocab}
+      placeholder="Term (e.g. Tauri, ggml, Beingpax)…"
+      aria-label="Vocabulary term"
+    />
+    <button type="submit" disabled={newVocab.trim().length === 0}>Add</button>
+  </form>
+
+  {#if !vocabularyLoaded}
+    <p class="loading-skeleton">Loading vocabulary…</p>
+  {:else if vocabulary.length === 0}
+    <p class="empty-history">
+      No vocabulary terms yet — add a word above and Whisper
+      will be more likely to spell it correctly next time.
+    </p>
+  {:else}
+    <ul class="replacement-list" aria-label="Vocabulary terms">
+      {#each vocabulary as term (term.id)}
+        <li class="replacement-row">
+          <code class="replacement-find">{term.term}</code>
+          <button
+            class="ghost danger"
+            class:confirming={confirmingId === term.id}
+            onclick={() => handleDelete(term)}
+            aria-label={confirmingId === term.id
+              ? `Click again to confirm deleting ${term.term}`
+              : `Delete vocabulary term ${term.term}`}
+            data-testid="vocab-delete-{term.id}"
+          >
+            {confirmingId === term.id ? "Click to confirm" : "Delete"}
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+</section>
+
 <!-- Language style -->
 <section class="vocabulary panel-language-style" aria-labelledby="language-style-heading">
   <header class="history-header">
@@ -97,7 +155,7 @@
       personal vocabulary — their terms are deduplicated against your own so
       your spellings always win.
     </p>
-    <ul class="pack-list">
+    <ul class="pack-list" aria-label="Preset packs">
       {#each packs as pack (pack.slug)}
         <li class="pack-row">
           <label class="pack-label">
@@ -119,63 +177,6 @@
     </ul>
   </section>
 {/if}
-
-<!-- Personal vocabulary -->
-<section class="vocabulary panel-vocabulary" aria-labelledby="vocabulary-heading">
-  <header class="history-header">
-    <h2 id="vocabulary-heading">Personal Vocabulary</h2>
-  </header>
-  <p class="hint-prose">
-    Words Whisper should be primed to recognise — proper nouns,
-    jargon, names it otherwise mishears. Joined into the model's
-    initial prompt on every transcription. Different from
-    Replacements above: vocabulary biases the <em>recognition</em>;
-    replacements rewrite the <em>output</em>.
-  </p>
-
-  {#if vocabularyError}
-    <ErrorDisplay error={vocabularyError} scope="Vocabulary" />
-  {/if}
-
-  <form class="replacement-form" onsubmit={onSubmit}>
-    <input
-      type="text"
-      bind:this={inputEl}
-      bind:value={newVocab}
-      placeholder="Term (e.g. Tauri, ggml, Beingpax)…"
-      aria-label="Vocabulary term"
-    />
-    <button type="submit" disabled={newVocab.trim().length === 0}>Add</button>
-  </form>
-
-  {#if !vocabularyLoaded}
-    <p class="loading-skeleton">Loading vocabulary…</p>
-  {:else if vocabulary.length === 0}
-    <p class="empty-history">
-      No vocabulary terms yet — add a word above and Whisper
-      will be more likely to spell it correctly next time.
-    </p>
-  {:else}
-    <ul class="replacement-list">
-      {#each vocabulary as term (term.id)}
-        <li class="replacement-row">
-          <code class="replacement-find">{term.term}</code>
-          <button
-            class="ghost danger"
-            class:confirming={confirmingId === term.id}
-            onclick={() => handleDelete(term)}
-            aria-label={confirmingId === term.id
-              ? `Click again to confirm deleting ${term.term}`
-              : `Delete vocabulary term ${term.term}`}
-            data-testid="vocab-delete-{term.id}"
-          >
-            {confirmingId === term.id ? "Click to confirm" : "Delete"}
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {/if}
-</section>
 
 <style>
 .vocabulary {
