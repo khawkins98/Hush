@@ -328,6 +328,21 @@ pub trait MeetingSessionRepository:
     /// the frontend's merged-feed render doesn't have to do a
     /// second round-trip.
     async fn search_sessions(&self, query: &str) -> Result<Vec<MeetingSession>>;
+
+    /// Rewrite `speaker_label` on a session's utterances after the
+    /// diarizer's session-end re-cluster (#1013). Each [`Relabel`]
+    /// addresses a row by `(session_id, started_at_ms, ended_at_ms,
+    /// old_label)` — the diarizer never sees row ids — and the
+    /// `old_label` guard makes a stale or repeated relabel a no-op
+    /// rather than clobbering a newer label. Applied in one
+    /// transaction. Returns the number of rows changed.
+    ///
+    /// [`Relabel`]: crate::diarization::Relabel
+    async fn relabel_utterances(
+        &self,
+        session_id: i64,
+        relabels: &[crate::diarization::Relabel],
+    ) -> Result<u64>;
 }
 
 #[cfg(test)]

@@ -512,6 +512,13 @@ impl MeetingSessionRepository for FailingCloseRepo {
     async fn search_sessions(&self, query: &str) -> Result<Vec<MeetingSession>> {
         self.inner.search_sessions(query).await
     }
+    async fn relabel_utterances(
+        &self,
+        session_id: i64,
+        relabels: &[crate::diarization::Relabel],
+    ) -> Result<u64> {
+        self.inner.relabel_utterances(session_id, relabels).await
+    }
 }
 
 /// Audio session that produces NO samples on the tick-drain path but
@@ -687,6 +694,68 @@ impl crate::diarization::Diarize for RecordingDiarizer {
         for u in utterances.iter_mut() {
             u.speaker_label = Some("Speaker A".to_owned());
         }
+    }
+}
+
+/// Diarizer that records the [`crate::diarization::ChunkHint`]s it is
+/// handed (#1013) alongside each utterance's start time, and stamps
+/// `"Speaker A"` on shared-namespace utterances and `"Speaker R"` on
+/// in-room ones.
+pub(super) struct HintRecordingDiarizer {
+    pub(super) seen: Mutex<Vec<(u64, crate::diarization::ChunkHint)>>,
+}
+
+impl crate::diarization::Diarize for HintRecordingDiarizer {
+    fn label_utterances(
+        &self,
+        _utterances: &mut [crate::transcription::Utterance],
+        _audio: &[Vec<f32>],
+        _format: crate::audio::CaptureFormat,
+    ) {
+        panic!("the pump must call label_utterances_with_hints");
+    }
+
+    fn label_utterances_with_hints(
+        &self,
+        utterances: &mut [crate::transcription::Utterance],
+        _audio: &[Vec<f32>],
+        hints: &[crate::diarization::ChunkHint],
+        _format: crate::audio::CaptureFormat,
+    ) {
+        let mut seen = self.seen.lock().unwrap();
+        for (u, h) in utterances.iter_mut().zip(hints) {
+            seen.push((u.started_at_ms, *h));
+            u.speaker_label = Some(
+                match h.namespace {
+                    crate::diarization::SpeakerNamespace::Shared => "Speaker A",
+                    crate::diarization::SpeakerNamespace::LocalRoom => "Speaker R",
+                }
+                .to_owned(),
+            );
+        }
+    }
+}
+
+/// Diarizer whose `finalize_session` returns a fixed relabel list — a
+/// stand-in for the #1013 session-end re-cluster.
+pub(super) struct RelabellingDiarizer {
+    pub(super) relabels: Vec<crate::diarization::Relabel>,
+    pub(super) finalized: std::sync::atomic::AtomicBool,
+}
+
+impl crate::diarization::Diarize for RelabellingDiarizer {
+    fn label_utterances(
+        &self,
+        _utterances: &mut [crate::transcription::Utterance],
+        _audio: &[Vec<f32>],
+        _format: crate::audio::CaptureFormat,
+    ) {
+    }
+
+    fn finalize_session(&self) -> Vec<crate::diarization::Relabel> {
+        self.finalized
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.relabels.clone()
     }
 }
 

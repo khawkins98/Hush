@@ -567,6 +567,106 @@ test.describe("active meeting session flow", () => {
     );
   });
 
+  test("remote partial borrows the latest diarized label (#1013)", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+        null;
+    });
+    await installMocks(page, {
+      audio_list_sources: () => [
+        {
+          kind: "microphone",
+          id: "Built-in Microphone",
+          name: "Built-in Microphone",
+          isDefault: true,
+          isSupported: true,
+        },
+        {
+          kind: "system-audio",
+          id: "system",
+          name: "System audio",
+          isDefault: false,
+          isSupported: true,
+        },
+      ],
+      meeting_start_manual: () => {
+        (window as unknown as { __hush_active_id: number | null }).__hush_active_id =
+          1;
+        return {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 0,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        };
+      },
+      meeting_active_session: () => ({
+        active: (window as unknown as { __hush_active_id: number | null })
+          .__hush_active_id,
+      }),
+      meeting_session_get: () => ({
+        session: {
+          id: 1,
+          appName: "manual",
+          appKind: "other",
+          startedAt: "2026-05-01T15:00:00Z",
+          endedAt: null,
+          speakerCount: null,
+          utteranceCount: 2,
+          notes: null,
+          sources: ["mic", "system"],
+          appTitle: null,
+        },
+        utterances: [
+          {
+            id: 1,
+            sessionId: 1,
+            startedAtMs: 0,
+            endedAtMs: 2000,
+            speakerLabel: "Speaker 1",
+            text: "Morning everyone.",
+            isFinal: true,
+          },
+          {
+            id: 2,
+            sessionId: 1,
+            startedAtMs: 2500,
+            endedAtMs: 4000,
+            speakerLabel: "mic",
+            text: "Hi there.",
+            isFinal: true,
+          },
+        ],
+        currentPartials: [
+          {
+            id: -1,
+            sessionId: 1,
+            startedAtMs: 4500,
+            endedAtMs: null,
+            speakerLabel: "system",
+            text: "Let us get started",
+            isFinal: false,
+          },
+        ],
+      }),
+    });
+
+    await page.goto("/");
+    await gotoSection(page, "dictation");
+    await page.locator('[data-testid="record-start-btn"]').click();
+
+    const pane = page.locator('[data-testid="live-transcript"]');
+    await expect(pane).toContainText("Speaker 1: Let us get started");
+    await expect(pane).not.toContainText("Remote:");
+  });
+
   test("stopping an active session clears active state", async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as { __hush_active_id: number | null }).__hush_active_id =

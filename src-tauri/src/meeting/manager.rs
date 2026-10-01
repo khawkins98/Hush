@@ -393,7 +393,10 @@ mod tests {
     use crate::audio::AudioSource;
     use crate::db::SqliteDatabase;
     use crate::meeting::events::MeetingSourceFailedPayload;
-    use crate::meeting::pump::{diarize_and_dispatch_merged, dispatch_utterances, TickBucket};
+    use crate::meeting::pump::{
+        diarize_and_dispatch_merged, diarize_and_dispatch_merged_with, dispatch_utterances,
+        TickBucket,
+    };
     use crate::meeting::test_support::{
         fresh_manager, fresh_manager_no_transcriber, make_final, make_partial, manager_with_repo,
         FailingCloseRepo, RecordingDiarizer,
@@ -1278,6 +1281,7 @@ mod tests {
                 make_final("a-400", 400, 480, "mic"),
             ],
             audio: vec![Vec::new(), Vec::new()],
+            overlaps_local: Vec::new(),
         };
         let bucket_b = TickBucket {
             source_label: "mic".to_owned(),
@@ -1286,6 +1290,7 @@ mod tests {
                 make_final("b-300", 300, 380, "mic"),
             ],
             audio: vec![Vec::new(), Vec::new()],
+            overlaps_local: Vec::new(),
         };
 
         diarize_and_dispatch_merged(
@@ -1342,6 +1347,7 @@ mod tests {
                 source_label: "mic".into(),
                 utterances: vec![],
                 audio: vec![],
+                overlaps_local: Vec::new(),
             }],
             &diarize,
             &mgr.partials,
@@ -1391,6 +1397,7 @@ mod tests {
             // 200 and 400 samples respectively — distinct from the
             // other bucket so we can verify ordering.
             audio: vec![vec![0.0; 200], vec![0.0; 400]],
+            overlaps_local: Vec::new(),
         };
         let bucket_b = TickBucket {
             source_label: "mic".to_owned(),
@@ -1399,6 +1406,7 @@ mod tests {
                 make_final("b-300", 300, 380, "mic"),
             ],
             audio: vec![vec![0.0; 100], vec![0.0; 300]],
+            overlaps_local: Vec::new(),
         };
 
         diarize_and_dispatch_merged(
@@ -1464,11 +1472,13 @@ mod tests {
                 make_final("b", 300, 400, "mic"),
             ],
             audio: vec![vec![0.0; 50]],
+            overlaps_local: Vec::new(),
         };
         let bucket_b = TickBucket {
             source_label: "mic".to_owned(),
             utterances: vec![make_final("s", 250, 350, "mic")],
             audio: vec![vec![0.0; 75]],
+            overlaps_local: Vec::new(),
         };
 
         diarize_and_dispatch_merged(
@@ -1525,6 +1535,7 @@ mod tests {
                 make_final("b", 300, 400, "mic"),
             ],
             audio: vec![vec![0.0; 200], vec![0.0; 400]],
+            overlaps_local: Vec::new(),
         };
 
         diarize_and_dispatch_merged(
@@ -1585,6 +1596,7 @@ mod tests {
             source_label: "mic".to_owned(),
             utterances: vec![make_final("hello", 100, 200, "mic")],
             audio: vec![vec![0.0; 100]],
+            overlaps_local: Vec::new(),
         };
         // The partial lives on the *system* bucket so this test still
         // proves the #800 partial-skip after #1003 started excluding
@@ -1597,6 +1609,7 @@ mod tests {
                 make_partial("partial revision", 350, 400, "system"),
             ],
             audio: vec![vec![0.0; 100], vec![0.0; 100]],
+            overlaps_local: Vec::new(),
         };
 
         diarize_and_dispatch_merged(
@@ -1657,6 +1670,7 @@ mod tests {
                 make_final("local-300", 300, 380, "mic"),
             ],
             audio: vec![vec![0.0; 100], vec![0.0; 100]],
+            overlaps_local: Vec::new(),
         };
         let sys_bucket = TickBucket {
             source_label: "system".to_owned(),
@@ -1665,6 +1679,7 @@ mod tests {
                 make_final("remote-400", 400, 480, "system"),
             ],
             audio: vec![vec![0.0; 100], vec![0.0; 100]],
+            overlaps_local: Vec::new(),
         };
 
         diarize_and_dispatch_merged(
@@ -1709,6 +1724,126 @@ mod tests {
         mgr.stop_manual().await.unwrap();
     }
 
+    /// #1013: the pump hands the diarizer per-utterance hints — the
+    /// overlap flag from the mic channel becomes `may_update`, and the
+    /// fallback label is the utterance's source tag.
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_passes_overlap_hints() {
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(
+                vec![AudioSource::default_microphone(), AudioSource::SystemAudio],
+                None,
+                None,
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let recorder = Arc::new(crate::meeting::test_support::HintRecordingDiarizer {
+            seen: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+        let mic_bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![make_final("local", 100, 180, "mic")],
+            audio: vec![vec![0.0; 100]],
+            overlaps_local: Vec::new(),
+        };
+        let sys_bucket = TickBucket {
+            source_label: "system".to_owned(),
+            utterances: vec![
+                make_final("over-talk", 200, 280, "system"),
+                make_final("clear", 400, 480, "system"),
+            ],
+            audio: vec![vec![0.0; 100], vec![0.0; 100]],
+            overlaps_local: vec![true, false],
+        };
+        diarize_and_dispatch_merged_with(
+            session.id,
+            vec![mic_bucket, sys_bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+            &crate::events::NoopEventEmitter,
+            false,
+        )
+        .await;
+        let seen = recorder.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "mic stays excluded without opt-in: {seen:?}");
+        assert_eq!(seen[0].0, 200);
+        assert!(
+            !seen[0].1.may_update,
+            "overlapped utterance must not update"
+        );
+        assert!(seen[1].1.may_update);
+        for (_, h) in &seen {
+            assert_eq!(h.namespace, crate::diarization::SpeakerNamespace::Shared);
+            assert_eq!(h.fallback_label, "system");
+        }
+        mgr.stop_manual().await.unwrap();
+    }
+
+    /// #1013 item 7 opt-in: with local separation on, mic finals reach
+    /// the diarizer in the `LocalRoom` namespace (cannot-link with the
+    /// remote stream) instead of being excluded.
+    #[tokio::test]
+    async fn diarize_and_dispatch_merged_local_separation_uses_room_namespace() {
+        let mgr = fresh_manager().await;
+        let session = mgr
+            .start_manual(
+                vec![AudioSource::default_microphone(), AudioSource::SystemAudio],
+                None,
+                None,
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let recorder = Arc::new(crate::meeting::test_support::HintRecordingDiarizer {
+            seen: Mutex::new(Vec::new()),
+        });
+        let recorder_dyn: Arc<dyn crate::diarization::Diarize> = recorder.clone();
+        let mic_bucket = TickBucket {
+            source_label: "mic".to_owned(),
+            utterances: vec![make_final("local", 100, 180, "mic")],
+            audio: vec![vec![0.0; 100]],
+            overlaps_local: Vec::new(),
+        };
+        let sys_bucket = TickBucket {
+            source_label: "system".to_owned(),
+            utterances: vec![make_final("remote", 200, 280, "system")],
+            audio: vec![vec![0.0; 100]],
+            overlaps_local: Vec::new(),
+        };
+        diarize_and_dispatch_merged_with(
+            session.id,
+            vec![mic_bucket, sys_bucket],
+            &recorder_dyn,
+            &mgr.partials,
+            &mgr.repo,
+            &crate::events::NoopEventEmitter,
+            true,
+        )
+        .await;
+        let seen = recorder.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(
+            seen[0].1.namespace,
+            crate::diarization::SpeakerNamespace::LocalRoom
+        );
+        assert_eq!(seen[0].1.fallback_label, "mic");
+        assert_eq!(
+            seen[1].1.namespace,
+            crate::diarization::SpeakerNamespace::Shared
+        );
+        let persisted = mgr.repo.list_utterances(session.id).await.unwrap();
+        let labels: Vec<_> = persisted.iter().map(|u| u.speaker_label.clone()).collect();
+        assert_eq!(
+            labels,
+            vec![Some("Speaker R".to_owned()), Some("Speaker A".to_owned())]
+        );
+        mgr.stop_manual().await.unwrap();
+    }
+
     #[tokio::test]
     async fn diarize_and_dispatch_merged_diarizes_all_local_sessions() {
         // The #1003 exclusion is guarded on there being a remote source.
@@ -1737,11 +1872,13 @@ mod tests {
             source_label: "mic".to_owned(),
             utterances: vec![make_final("a", 100, 180, "mic")],
             audio: vec![vec![0.0; 100]],
+            overlaps_local: Vec::new(),
         };
         let bucket_b = TickBucket {
             source_label: "mic".to_owned(),
             utterances: vec![make_final("b", 200, 280, "mic")],
             audio: vec![vec![0.0; 100]],
+            overlaps_local: Vec::new(),
         };
 
         diarize_and_dispatch_merged(

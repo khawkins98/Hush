@@ -12,8 +12,8 @@ const DIARIZER_MODEL_ID = "wespeaker-resnet34-lm";
 let diarizationEnabled = $state(false);
 let diarizationBusy = $state(false);
 let diarizationError = $state<string | null>(null);
-let diarizerThreshold = $state(0.4);
-let diarizerThresholdDisplay = $state(0.4);
+let diarizerThreshold = $state(0.6);
+let diarizerThresholdDisplay = $state(0.6);
 let diarizerThresholdBusy = $state(false);
 let diarizerThresholdError = $state<string | null>(null);
 

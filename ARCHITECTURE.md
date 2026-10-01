@@ -155,7 +155,7 @@ open handles + per-source StreamingTranscribeSession(s)
 2. **Ack-waited stop** of every `AudioSession` (`handle.stop()` round-trips `Cmd::Stop` and returns the captured tail, rather than relying on `Drop` which discards the tail and doesn't guarantee the device is free before the reply). The tail samples are fed into the streaming session.
 3. Emit `meeting:finalizing { sessionId }` — frontend clears `activeId` (unblocking PTT/dictation) and shows "Finishing transcription…".
 4. Fire the `audio_released` oneshot, allowing `stop_manual` to flip `Releasing → Idle`, park the pump's continuation in the single `finalizing` lane, and return. **Sub-second.**
-5. **Background phase** (no audio held): `flush_sessions` (`finish()` per source, up to 60 s each) → tail diarization → persist tail finals → speaker-identity resolution (`session_centroids()`, #667) → `repo.close_session(id)` → emit `meeting:session-ended`.
+5. **Background phase** (no audio held): `flush_sessions` (`finish()` per source, up to 60 s each) → tail diarization → persist tail finals → **session-end re-cluster** (`Diarize::finalize_session()` → `repo.relabel_utterances`, #1013) → speaker-identity resolution (`session_centroids()`, #667, which now reads the re-clustered centroids) → `repo.close_session(id)` → emit `meeting:session-ended`.
 
 `SessionManager` holds a single `finalizing: Mutex<Option<JoinHandle<()>>>`. A new meeting `start_manual` awaits this handle before claiming the slot (the new session would otherwise share the diarizer cluster state and the meeting `WhisperContext` with the finalizing one — see the "Deferred: concurrent meetings" note below). Dictation `start` does **not** wait: it uses a separate transcriber slot (#248) and no diarizer, so it proceeds as soon as `live = Idle`. `SessionManager::Drop` aborts the handle (abort-and-reconcile: the `finish()` runs in `spawn_blocking` and cannot be cancelled, so joining would hang shutdown; any unclosed session row is cleaned up by `reconcile_orphan_sessions` on next launch).
 
@@ -265,7 +265,13 @@ A `SystemListenerHandle` listens for `kAudioHardwarePropertyDevices` changes on 
 
 `FlagGatedDiarizer` reads the `diarization_enabled` `AtomicBool` from `AppState` and routes to:
 
-- **`OnnxDiarizer`** — wespeaker ResNet34-LM ONNX speaker-embedding (~26 MB) + online 1-NN-with-threshold clustering for session-stable IDs. Model auto-downloads from Hugging Face on first enable, SHA-256 verified.
+- **`OnnxDiarizer`** — wespeaker ResNet34-LM ONNX speaker-embedding (~26 MB) + online clustering for session-stable IDs (`diarization/session.rs::SessionClusterState`). Model auto-downloads from Hugging Face on first enable, SHA-256 verified.
+
+Pipeline since #1013:
+
+1. **Front end** (`features.rs`): kaldi-compatible 80-bin fbank (Hamming, int16 scale, per-frame DC removal + pre-emphasis, mel-domain triangles), numerically matched to `torchaudio.compliance.kaldi.fbank` (max abs diff 5e-4), then **per-utterance CMN** — wespeaker trains on mean-normalised features; without it EER on LibriSpeech was 10.9 % vs 0.6 % with it.
+2. **Online matcher**: nearest centroid (centroid = normalised sum of unit vectors) within `DEFAULT_DISTANCE_THRESHOLD = 0.6`. Duration-gated: < 1.0 s chunks only assign, ≥ 1.5 s needed to found a speaker. The pump passes a `ChunkHint` per utterance: `may_update = false` when the span overlaps local mic speech (overlap guard), and a `SpeakerNamespace` (cannot-link between the remote stream and the opt-in in-room `LocalRoom` space).
+3. **Session-end re-cluster** (background finalization): duration-weighted average-linkage AHC over every retained embedding (cut at the live threshold), tiny clusters (< 4 s) folded into the nearest, short / overlapped chunks attached afterwards, new clusters greedily matched to live IDs so "Speaker 1" keeps its name. Label changes are persisted with `MeetingSessionRepository::relabel_utterances`.
 - **`NoopDiarizer`** — fallback. Source-derived `"mic"` / `"system"` tags pass through and the panel maps them to "You" / "Remote".
 
 The `OnnxDiarizer` is gated behind the `diarization-onnx` Cargo feature (default-on). The earlier D1 silence-gap heuristic (`EnergyDiarizer`) and the offline agglomerative `cluster_with_threshold` were both removed in #310 once the streaming D2 matcher proved stable; `cluster.rs` retains only `cosine_distance` + `DEFAULT_DISTANCE_THRESHOLD`.
@@ -310,7 +316,10 @@ Read once at process / session construction. Mid-session changes do not take eff
 | `RUST_LOG` | `info` | Filter applied to both stderr and file sinks. |
 | `HUSH_LOG_FILE` | (on) | Set to `off` (or `0`) to disable the daily-rolling file appender. |
 | `HUSH_WHISPER_STATE_RECREATE_INTERVAL` | `30` | Number of streaming inferences before `WhisperState` is dropped + lazy-recreated to bound whisper.cpp's per-call C-heap accumulation (#623). Set to `0` for "never recreate" (legacy / A-B test). |
-| `HUSH_DIARIZER_THRESHOLD` | `0.4` | Cosine-distance threshold for declaring two utterance embeddings distinct speakers in `OnnxDiarizer::SessionClusterState::assign` (#316 / #633). Lower → more clusters; higher → speakers merge. Range `[0.0, 2.0]`. Out-of-range values warn and fall back to default. |
+| `HUSH_DIARIZER_THRESHOLD` | `0.6` | Cosine-distance threshold for declaring two utterance embeddings distinct speakers in `diarization::session::SessionClusterState::assign`, and the session-end re-cluster's average-linkage cut (#316 / #633 / #1013). Lower → more clusters; higher → speakers merge. Range `[0.0, 2.0]`. Out-of-range values warn and fall back to default. A value saved from the Settings slider takes precedence. |
+| `HUSH_DIARIZER_RECLUSTER` | on | Set to `0` to skip the session-end re-cluster + relabel (#1013) and keep the live labels. Read at each meeting's finalization. |
+| `HUSH_DIARIZER_OVERLAP_GUARD` | on | Set to `0` to stop flagging remote utterances that overlap local mic speech (they would then update/create clusters like any other). The guard self-disables for a session when > 60 % of remote chunks overlap (speakerphone). Read per tick. (#1013) |
+| `HUSH_DIARIZER_LOCAL_SEPARATION` | off | Set to `1` to diarize the local mic in its own `LocalRoom` namespace in mic + system sessions, separating in-room voices (#1006 item 1). The dominant in-room voice stays "You". Read per tick. (#1013) |
 | `HUSH_VAD_THRESHOLD` | `0.5` | Silero speech-probability threshold per 512-sample frame. Frames scoring at or above this are considered speech; frames below are silence. Lower → less aggressive gating; higher → stricter. (#974) |
 | `HUSH_VAD_HANGOVER_MS` | `1500` | Milliseconds after the last speech frame before `drain()` starts skipping inference. Longer → trailing words are preserved; shorter → silence gaps suppress inference sooner. (#974) |
 | `HUSH_VAD_DISABLE` | unset | Set to `1` to force `NoopVad` everywhere (always-speech, no gating). Use for A/B comparison or debug. (#974) |

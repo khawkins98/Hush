@@ -740,6 +740,10 @@ pub(super) async fn resolve_speaker_identities(
                             .collect::<Vec<f32>>()
                     })
                     .unwrap_or_else(|| centroid.clone());
+                // Session centroids are unit vectors since #1013; keep the
+                // stored voiceprint unit-length too so a heavy identity
+                // and a fresh one compare on direction alone.
+                let new_centroid = crate::speakers::unit_vector(&new_centroid);
                 tracing::info!(
                     cluster_id,
                     identity_id = id,

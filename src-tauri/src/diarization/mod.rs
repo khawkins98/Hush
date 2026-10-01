@@ -58,12 +58,145 @@ pub mod cluster;
 pub mod features;
 #[cfg(feature = "diarization-onnx")]
 pub mod onnx;
+// Online cluster state + session-end re-cluster (#1013). Pure Rust, but
+// only the ONNX diarizer drives it, so it is gated with it to keep
+// `--no-default-features` builds free of dead code.
+#[cfg(feature = "diarization-onnx")]
+pub mod session;
 
 /// Diagnostic re-test of the #641 ORT finding against rc.13. Test-only,
 /// `#[ignore]`d, and gated on `parakeet` because that is the only build
 /// where `ort` is present. Production diarization does not use it.
 #[cfg(all(test, feature = "parakeet"))]
 mod ort_probe;
+
+/// Which cluster space an utterance is matched in (#1013 item 7).
+///
+/// Clusters in different namespaces can never be merged or matched —
+/// a cannot-link constraint between capture channels. The pump picks
+/// the namespace from the capture source; the diarizer only enforces
+/// the separation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpeakerNamespace {
+    /// The ordinary flat space: the remote stream in a mic + system
+    /// session, or every source in an all-local session. Clusters are
+    /// labelled `"Speaker N"`.
+    #[default]
+    Shared,
+    /// In-room voices on the local mic of a mic + system session, when
+    /// in-room separation is enabled (`HUSH_DIARIZER_LOCAL_SEPARATION`).
+    /// The dominant cluster keeps the `"mic"` tag (rendered "You"), so
+    /// the #1003 behaviour is unchanged for a single local talker;
+    /// any further in-room voice gets an `"In-room N"` label (the local
+    /// user counts as in-room 1).
+    LocalRoom,
+}
+
+/// Per-utterance context the pump knows and the embedding does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkHint {
+    pub namespace: SpeakerNamespace,
+    /// `false` when the utterance's span overlaps local mic speech
+    /// (#1013 item 6). The diarizer may still *assign* it to an
+    /// existing speaker, but must not let it move a centroid or found
+    /// a new speaker: overlapped spans are where turn-taking is
+    /// contested and embeddings are least trustworthy.
+    pub may_update: bool,
+    /// The source tag the pump stamps when the diarizer abstains
+    /// (`"mic"` / `"system"`). Needed so the session-end re-cluster can
+    /// address rows that were persisted under the fallback label.
+    pub fallback_label: &'static str,
+}
+
+impl Default for ChunkHint {
+    fn default() -> Self {
+        Self {
+            namespace: SpeakerNamespace::Shared,
+            may_update: true,
+            fallback_label: crate::audio::SYSTEM_SPEAKER_TAG,
+        }
+    }
+}
+
+/// One persisted-label change produced by the session-end re-cluster
+/// (#1013 item 5). Rows are addressed by `(session, start, end, old
+/// label)`: the diarizer never sees row ids, and a source's timestamps
+/// are unique within a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relabel {
+    pub started_at_ms: u64,
+    pub ended_at_ms: u64,
+    pub old_label: String,
+    pub new_label: String,
+}
+
+/// Read a boolean `HUSH_*` diarizer toggle. `1`/`true`/`on` and
+/// `0`/`false`/`off` (any case) are honoured; unset or anything else
+/// yields `default`.
+pub fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "on" | "yes" => true,
+            "0" | "false" | "off" | "no" => false,
+            _ => default,
+        },
+        Err(_) => default,
+    }
+}
+
+/// `HUSH_DIARIZER_RECLUSTER` — session-end re-cluster + relabel (#1013
+/// item 5). Default **on**.
+pub fn recluster_enabled() -> bool {
+    env_flag("HUSH_DIARIZER_RECLUSTER", true)
+}
+
+/// `HUSH_DIARIZER_OVERLAP_GUARD` — mic-activity overlap guard (#1013
+/// item 6). Default **on** (it self-disables per session when the mic
+/// is clearly hearing the remote audio; see `session.rs`).
+pub fn overlap_guard_enabled() -> bool {
+    env_flag("HUSH_DIARIZER_OVERLAP_GUARD", true)
+}
+
+/// `HUSH_DIARIZER_LOCAL_SEPARATION` — diarize the local mic in its own
+/// namespace in mic + system sessions (#1013 item 7 / #1006 item 1).
+/// Default **off**: a single local talker can still split into two
+/// in-room clusters, which would regress the #1003 "mic = You" labels
+/// for the common 1:1 call.
+pub fn local_separation_enabled() -> bool {
+    env_flag("HUSH_DIARIZER_LOCAL_SEPARATION", false)
+}
+
+/// RMS (linear, full scale 1.0) above which a 20 ms mic frame counts
+/// as active. About -40 dBFS: clears a quiet room's noise floor, well
+/// under conversational speech at a laptop or headset mic.
+pub const MIC_ACTIVE_RMS: f32 = 0.01;
+
+/// Fraction of a span's 20 ms frames that must be active before the
+/// span counts as overlapping local speech. Keeps a lone "mm-hm" or a
+/// keyboard click from tripping the guard on a long remote turn.
+pub const MIC_OVERLAP_FRACTION: f32 = 0.3;
+
+/// Whether `mic` (16 kHz mono, the local mic over the same span as a
+/// remote utterance) carries enough speech-level energy to count as
+/// overlapping local speech (#1013 item 6). Energy, not VAD: the guard
+/// only needs "was the local user plausibly talking", and the frame
+/// fraction absorbs transients. Thresholds are reasoned defaults, not
+/// tuned on real calls.
+pub fn mic_overlaps_speech(mic: &[f32]) -> bool {
+    const FRAME: usize = 320; // 20 ms @ 16 kHz
+    let frames = mic.len() / FRAME;
+    if frames == 0 {
+        return false;
+    }
+    let active = mic
+        .chunks_exact(FRAME)
+        .filter(|f| {
+            let energy = f.iter().map(|x| x * x).sum::<f32>() / FRAME as f32;
+            energy.sqrt() > MIC_ACTIVE_RMS
+        })
+        .count();
+    active as f32 >= MIC_OVERLAP_FRACTION * frames as f32
+}
 
 /// Tag a batch of utterances with speaker labels in place.
 ///
@@ -120,6 +253,33 @@ pub trait Diarize: Send + Sync {
     /// Update the active cosine-distance threshold used by the diarizer.
     /// Default no-op for stateless / threshold-less impls.
     fn set_distance_threshold(&self, _threshold: f32) {}
+
+    /// [`Self::label_utterances`] with per-utterance [`ChunkHint`]s
+    /// (`hints` parallel to `utterances`). The default ignores the
+    /// hints, which is correct for impls without cluster state.
+    fn label_utterances_with_hints(
+        &self,
+        utterances: &mut [Utterance],
+        audio_chunks: &[Vec<f32>],
+        hints: &[ChunkHint],
+        format: CaptureFormat,
+    ) {
+        let _ = hints;
+        self.label_utterances(utterances, audio_chunks, format);
+    }
+
+    /// Session-end re-cluster (#1013 item 5): re-run a global
+    /// clustering over every embedding retained this session, update
+    /// the cluster state in place (so a following
+    /// [`Self::session_centroids`] sees the re-clustered speakers), and
+    /// return the label changes the caller must persist.
+    ///
+    /// Call **after** the last `label_utterances*` of the session and
+    /// **before** `session_centroids()` / `reset()`. Default: no
+    /// changes.
+    fn finalize_session(&self) -> Vec<Relabel> {
+        Vec::new()
+    }
 }
 
 /// Fallback impl. Leaves `speaker_label` as it is so the pump's
@@ -219,6 +379,30 @@ impl Diarize for FlagGatedDiarizer {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.set_distance_threshold(threshold);
     }
+
+    fn label_utterances_with_hints(
+        &self,
+        utterances: &mut [Utterance],
+        audio_chunks: &[Vec<f32>],
+        hints: &[ChunkHint],
+        format: CaptureFormat,
+    ) {
+        if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            inner.label_utterances_with_hints(utterances, audio_chunks, hints, format);
+        } else {
+            self.fallback
+                .label_utterances_with_hints(utterances, audio_chunks, hints, format);
+        }
+    }
+
+    /// Forwarded regardless of the enabled flag, like
+    /// `session_centroids`: if diarization was toggled off mid-session
+    /// the inner simply has fewer (or no) retained embeddings.
+    fn finalize_session(&self) -> Vec<Relabel> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        inner.finalize_session()
+    }
 }
 
 impl Diarize for NoopDiarizer {
@@ -256,6 +440,37 @@ mod tests {
             speaker_label: None,
             words: None,
         }
+    }
+
+    #[test]
+    fn mic_overlap_detects_sustained_speech_only() {
+        let silence = vec![0.001_f32; 16_000];
+        assert!(!mic_overlaps_speech(&silence));
+        assert!(!mic_overlaps_speech(&[]));
+        // 1 s of loud signal in a 2 s span = 50 % active.
+        let mut half = vec![0.0_f32; 32_000];
+        for (i, v) in half.iter_mut().take(16_000).enumerate() {
+            *v = 0.1 * (i as f32 * 0.05).sin();
+        }
+        assert!(mic_overlaps_speech(&half));
+        // A 100 ms blip in 3 s stays below the 30 % floor.
+        let mut blip = vec![0.0_f32; 48_000];
+        for v in blip.iter_mut().take(1_600) {
+            *v = 0.5;
+        }
+        assert!(!mic_overlaps_speech(&blip));
+    }
+
+    #[test]
+    fn env_flag_parses_common_spellings() {
+        // Unique names so parallel tests can't race on them.
+        std::env::set_var("HUSH_TEST_FLAG_A", "Off");
+        std::env::set_var("HUSH_TEST_FLAG_B", "1");
+        std::env::set_var("HUSH_TEST_FLAG_C", "maybe");
+        assert!(!env_flag("HUSH_TEST_FLAG_A", true));
+        assert!(env_flag("HUSH_TEST_FLAG_B", false));
+        assert!(env_flag("HUSH_TEST_FLAG_C", true));
+        assert!(!env_flag("HUSH_TEST_FLAG_UNSET_XYZ", false));
     }
 
     #[test]

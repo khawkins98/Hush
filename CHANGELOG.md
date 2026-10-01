@@ -33,6 +33,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HUSH_FINAL_MIN_AVG_LOGPROB` drops low-confidence lines. See
   `learnings.md` for what each one did on test audio.
 
+- **Much better speaker separation in meeting transcripts (#1013).** The
+  speaker matcher now prepares audio the way its voice model was trained
+  (it was missing a normalisation step), which on test recordings cut the
+  rate of confusing two voices from about 11 % to under 1 %. One person
+  is far less likely to be split into "Speaker 1" and "Speaker 2", and
+  two people far less likely to be merged. Short interjections ("yeah",
+  "right") no longer spawn new speakers.
+- **Speaker labels are tidied up when a meeting ends (#1013).** After you
+  stop, Hush re-checks every speaker assignment with the whole meeting in
+  view and fixes labels it got wrong live. Speakers keep their names
+  wherever the re-check agrees. Set `HUSH_DIARIZER_RECLUSTER=0` to turn
+  this off.
+- **Live transcript no longer flips "Remote:" to "Speaker 2:" (#1013).**
+  While a remote participant is still talking, their in-progress line now
+  shows the most recent speaker label instead of the generic "Remote".
+- **Experimental: tell apart several people sharing one microphone
+  (#1006, #1013).** With `HUSH_DIARIZER_LOCAL_SEPARATION=1`, voices on
+  your microphone are separated among themselves (never mixed with
+  remote participants); the main voice stays "You". Off by default.
+
 - **Smaller "compact" Whisper models.** The model picker now offers
   quantized builds that need far less disk and memory for nearly the same
   accuracy: **Turbo (compact)** at 874 MB and **Turbo (smallest)** at
@@ -88,6 +108,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The Permissions tab no longer misstates the push-to-talk default.
   - Error messages are announced to screen readers.
   - Settings no longer re-reads the whole tab aloud when you switch tabs.
+
+- **Speaker split sensitivity now defaults to 0.60 (was 0.40) (#1013).**
+  The old default compensated for the missing normalisation and now
+  over-splits. A value you saved on the slider is reset once so the new
+  default applies.
+- **Remembered speakers need re-learning (#1013).** Voice fingerprints
+  saved before this release (the opt-in cross-meeting speaker memory)
+  were made with the old audio preparation and can't be compared with new
+  ones, so they are no longer matched automatically. They still label
+  your past meetings, names included; new meetings learn each voice
+  afresh, so give recurring speakers their name again from a meeting's
+  transcript in History.
 
 - **Cleanup:** removed the unused `tauri-plugin-shell` (and 9 crates it
   pulled in; external links already used a custom command), unused

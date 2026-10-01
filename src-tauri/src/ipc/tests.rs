@@ -298,6 +298,13 @@ impl crate::meeting::MeetingSessionRepository for NoopMeetings {
     async fn get_by_id(&self, _: i64) -> anyhow::Result<Option<crate::meeting::MeetingSession>> {
         Ok(None)
     }
+    async fn relabel_utterances(
+        &self,
+        _: i64,
+        _: &[crate::diarization::Relabel],
+    ) -> anyhow::Result<u64> {
+        Ok(0)
+    }
     async fn list_open_sessions(&self) -> anyhow::Result<Vec<crate::meeting::MeetingSession>> {
         Ok(vec![])
     }

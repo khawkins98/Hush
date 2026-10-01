@@ -20,20 +20,26 @@
 //! `onnx::SessionClusterState::assign`.
 
 /// Default cosine-distance threshold for declaring two clusters
-/// distinct. Tuned for Wespeaker ResNet34-LM embeddings. Lower
-/// threshold → more clusters (over-segmentation); higher threshold
-/// → fewer clusters (speakers merge together).
+/// distinct. Tuned for wespeaker ResNet34-LM embeddings **with
+/// per-utterance CMN** (#1013). Lower → more clusters
+/// (over-segmentation); higher → speakers merge.
 ///
-/// 0.4 is the empirical default after #316 hands-on testing showed
-/// 0.6 systematically merged distinct speakers into Speaker 1/2 on
-/// multi-person calls — system-audio sources from a single Zoom /
-/// Teams stream share codec characteristics that pull the cosine
-/// distances tighter than the wespeaker eval-curve mid-range
-/// suggests. 0.4 produces noticeably more clusters at a small risk
-/// of over-segmentation; tunable via `HUSH_DIARIZER_THRESHOLD` env
-/// var (read in `OnnxDiarizer::new`) so users can dial back to 0.6
-/// without a rebuild if over-segmentation surfaces.
-pub const DEFAULT_DISTANCE_THRESHOLD: f32 = 0.4;
+/// History: 0.6 originally, dropped to 0.4 in #633 because distinct
+/// speakers kept merging on multi-person calls. That was a symptom of
+/// the missing CMN — without it every embedding carried a shared
+/// per-bin offset that squeezed cross-speaker distances (median 0.60
+/// clean / 0.53 Opus-coded on LibriSpeech) towards same-speaker ones,
+/// and 0.4 in turn over-split single talkers (~5 clusters for one
+/// voice). With CMN, cross-speaker pairs sit at p5 ≈ 0.68–0.74 while
+/// 2 s same-speaker pairs sit at p95 ≈ 0.60–0.63, and a sweep over
+/// synthetic 1–5-speaker conversations put the best online error and
+/// speaker-count accuracy at 0.6 (see learnings.md 2026-10-01 for the
+/// tables). The same value is the session-end re-cluster's
+/// average-linkage cut, which measured best at 0.6 too.
+///
+/// Overridable via the Settings slider (persisted) or the
+/// `HUSH_DIARIZER_THRESHOLD` env var.
+pub const DEFAULT_DISTANCE_THRESHOLD: f32 = 0.6;
 
 /// Cosine distance between two embedding vectors. Distance, not
 /// similarity: `0.0` is identical, `2.0` is anti-correlated.
