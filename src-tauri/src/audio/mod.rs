@@ -218,7 +218,7 @@ impl AudioSource {
     pub fn speaker_tag(&self) -> &'static str {
         match self {
             AudioSource::Microphone(_) => LOCAL_SPEAKER_TAG,
-            AudioSource::SystemAudio => "system",
+            AudioSource::SystemAudio => SYSTEM_SPEAKER_TAG,
         }
     }
 }
@@ -239,6 +239,10 @@ impl AudioSource {
 /// which is why the exclusion needs no separate label vocabulary — an
 /// undiarized mic utterance already falls through to the right copy.
 pub const LOCAL_SPEAKER_TAG: &str = "mic";
+
+/// Speaker tag for audio captured from the system-audio tap (remote
+/// participants). The frontend maps it to "Remote".
+pub const SYSTEM_SPEAKER_TAG: &str = "system";
 
 /// Frontend-facing listing of one audio source the user can pick from.
 ///

@@ -303,6 +303,41 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
         .await
         .context("search meeting sessions")
     }
+
+    async fn relabel_utterances(
+        &self,
+        session_id: i64,
+        relabels: &[crate::diarization::Relabel],
+    ) -> Result<u64> {
+        if relabels.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .context("begin relabel_utterances tx")?;
+        let mut changed = 0_u64;
+        for r in relabels {
+            let res = sqlx::query(
+                "UPDATE utterances SET speaker_label = ? \
+                 WHERE session_id = ? AND started_at_ms = ? AND ended_at_ms = ? \
+                   AND speaker_label = ?",
+            )
+            .bind(&r.new_label)
+            .bind(session_id)
+            .bind(r.started_at_ms as i64)
+            .bind(r.ended_at_ms as i64)
+            .bind(&r.old_label)
+            .execute(&mut *tx)
+            .await
+            .context("relabel utterance")?;
+            changed += res.rows_affected();
+        }
+        tx.commit().await.context("commit relabel_utterances tx")?;
+        Ok(changed)
+    }
 }
 
 /// String form for the `app_kind` column. Kept in one place so the
@@ -503,6 +538,67 @@ mod tests {
         // After closing the remaining row, the list is empty.
         repo.close_session(open.id).await.unwrap();
         assert!(repo.list_open_sessions().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn relabel_utterances_rewrites_only_matching_rows() {
+        let repo = fresh_repo().await;
+        let s = repo.create(sample_new()).await.unwrap();
+        let other = repo.create(sample_new()).await.unwrap();
+        for (sid, start, label) in [
+            (s.id, 0, "Speaker 1"),
+            (s.id, 2_000, "Speaker 1"),
+            (s.id, 4_000, "system"),
+            (other.id, 0, "Speaker 1"),
+        ] {
+            repo.append_utterance(NewPersistedUtterance {
+                session_id: sid,
+                started_at_ms: start,
+                ended_at_ms: start + 1_500,
+                speaker_label: Some(label.to_owned()),
+                text: "hi".to_owned(),
+            })
+            .await
+            .unwrap();
+        }
+        let relabel = |start: u64, old: &str, new: &str| crate::diarization::Relabel {
+            started_at_ms: start,
+            ended_at_ms: start + 1_500,
+            old_label: old.to_owned(),
+            new_label: new.to_owned(),
+        };
+        let changed = repo
+            .relabel_utterances(
+                s.id,
+                &[
+                    relabel(2_000, "Speaker 1", "Speaker 2"),
+                    relabel(4_000, "system", "Speaker 2"),
+                    // Stale old label: must not touch the row.
+                    relabel(0, "Speaker 3", "Speaker 9"),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed, 2);
+        let labels: Vec<Option<String>> = repo
+            .list_utterances(s.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|u| u.speaker_label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                Some("Speaker 1".to_owned()),
+                Some("Speaker 2".to_owned()),
+                Some("Speaker 2".to_owned())
+            ]
+        );
+        // The other session's identical timestamps are untouched.
+        let other_labels = repo.list_utterances(other.id).await.unwrap();
+        assert_eq!(other_labels[0].speaker_label.as_deref(), Some("Speaker 1"));
+        assert_eq!(repo.relabel_utterances(s.id, &[]).await.unwrap(), 0);
     }
 
     #[tokio::test]

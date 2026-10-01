@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   shouldShowSpeakerLabels,
   joinUtterances,
+  resolvePartialLabels,
 } from "$lib/transcript-format";
 import type { UtteranceLike } from "$lib/transcript-format";
 
@@ -90,5 +91,55 @@ describe("joinUtterances", () => {
     ];
     expect(joinUtterances(utts, "\n\n")).toBe("A\n\nB");
     expect(joinUtterances(utts, "\n")).toBe("A\nB");
+  });
+});
+
+describe("resolvePartialLabels (#1013 live label flip)", () => {
+  const sys = (text: string): UtteranceLike => ({ text, speakerLabel: "system" });
+
+  it("keeps 'system' partials when no final has been diarized", () => {
+    const finals: UtteranceLike[] = [
+      { text: "hi", speakerLabel: "mic" },
+      { text: "hello", speakerLabel: "system" },
+    ];
+    expect(resolvePartialLabels(finals, [sys("so")])).toEqual([sys("so")]);
+  });
+
+  it("borrows the most recent diarized label for system partials", () => {
+    const finals: UtteranceLike[] = [
+      { text: "a", speakerLabel: "Speaker 1" },
+      { text: "b", speakerLabel: "mic" },
+      { text: "c", speakerLabel: "Speaker 2" },
+      { text: "d", speakerLabel: "mic" },
+    ];
+    expect(resolvePartialLabels(finals, [sys("next")])).toEqual([
+      { text: "next", speakerLabel: "Speaker 2" },
+    ]);
+  });
+
+  it("leaves mic partials alone", () => {
+    const finals: UtteranceLike[] = [{ text: "a", speakerLabel: "Speaker 1" }];
+    const mic: UtteranceLike = { text: "me", speakerLabel: "mic" };
+    expect(resolvePartialLabels(finals, [mic])).toEqual([mic]);
+  });
+
+  it("does not mutate its inputs", () => {
+    const finals: UtteranceLike[] = [{ text: "a", speakerLabel: "Speaker 1" }];
+    const partials = [sys("p")];
+    resolvePartialLabels(finals, partials);
+    expect(partials[0].speakerLabel).toBe("system");
+  });
+
+  it("stops the live pane flipping Remote → Speaker N", () => {
+    // One remote talker so far: before the fix the in-flight partial
+    // read "Remote:" (and its presence alone forced labels on).
+    const finals: UtteranceLike[] = [
+      { text: "Morning all.", speakerLabel: "Speaker 1" },
+    ];
+    const joined = joinUtterances(
+      [...finals, ...resolvePartialLabels(finals, [sys("Shall we start")])],
+      "\n",
+    );
+    expect(joined).toBe("Morning all.\nShall we start");
   });
 });

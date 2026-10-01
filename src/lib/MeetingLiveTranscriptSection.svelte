@@ -14,7 +14,7 @@
 -->
 <script lang="ts">
   import { shadeLiveTranscript } from "./confidence-shading";
-  import { joinUtterances } from "./transcript-format";
+  import { joinUtterances, resolvePartialLabels } from "./transcript-format";
   import type { MeetingSessionDetail } from "./types";
 
   type Props = {
@@ -37,11 +37,16 @@
   // Speaker labels are prefixed only when ≥2 distinct speakers appear
   // (joinUtterances handles that internally). Mirrors the copy behaviour
   // in `copyMeetingSessionToClipboard` so live and clipboard text match.
+  // Remote partials borrow the latest diarized label (#1013) so a line
+  // doesn't flip from "Remote:" to "Speaker 2:" as it finalizes.
   let liveTranscriptText = $derived.by(() => {
     if (!meetingActiveDetail) return "";
     const finals = meetingActiveDetail.utterances ?? [];
     const partials = meetingActiveDetail.currentPartials ?? [];
-    return joinUtterances([...finals, ...partials], "\n");
+    return joinUtterances(
+      [...finals, ...resolvePartialLabels(finals, partials)],
+      "\n",
+    );
   });
 
   // Confidence shading (#1013): when partials carry word confidences

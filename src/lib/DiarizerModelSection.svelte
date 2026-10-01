@@ -279,7 +279,7 @@
     </div>
   </label>
   <p class="toggle-desc threshold-hint">
-    No restart required. Defaults to 0.40.
+    No restart required. Defaults to 0.60.
   </p>
   {#if diarizer.diarizerThresholdError}
     <p class="settings-error" role="alert">{diarizer.diarizerThresholdError}</p>

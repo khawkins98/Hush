@@ -48,6 +48,46 @@ export function speakerDisplayLabel(label: string | null): string | null {
   }
 }
 
+/** Source tags the backend writes when the diarizer abstains. */
+function isSourceTag(label: string | null): boolean {
+  return label === "mic" || label === "system";
+}
+
+/**
+ * Give in-flight remote partials the label their final will most likely
+ * land with (#1013).
+ *
+ * The diarizer only runs on finals, so a system-audio partial always
+ * carries the raw `"system"` tag ("Remote") and then flips to
+ * `"Speaker 2"` the moment it finalizes — every remote line visibly
+ * changes speaker mid-sentence. Once the session has at least one
+ * diarized remote final, a `"system"` partial borrows the most recent
+ * diarized label instead: in conversation the current talker is usually
+ * the last one, and when that guess is wrong the final corrects it in
+ * place, which reads better than flipping every line.
+ *
+ * With no diarized finals yet (diarizer off, no model, or nobody has
+ * spoken long enough) partials keep `"system"` → "Remote". Mic partials
+ * are untouched: the channel already says they're the local user.
+ * Returns new objects; the inputs are not mutated.
+ */
+export function resolvePartialLabels<T extends UtteranceLike>(
+  finals: readonly T[],
+  partials: readonly T[],
+): T[] {
+  let lastDiarized: string | null = null;
+  for (const u of finals) {
+    if (u.speakerLabel && !isSourceTag(u.speakerLabel)) {
+      lastDiarized = u.speakerLabel;
+    }
+  }
+  if (lastDiarized === null) return [...partials];
+  const label = lastDiarized;
+  return partials.map((p) =>
+    p.speakerLabel === "system" ? { ...p, speakerLabel: label } : p,
+  );
+}
+
 /**
  * Decide whether speaker labels should be rendered for a session.
  * Returns `true` when at least two distinct non-empty speaker

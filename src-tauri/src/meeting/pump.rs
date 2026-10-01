@@ -435,6 +435,40 @@ pub(super) async fn run_pump(mut ctx: PumpContext) {
     // (the manager's single `finalizing` lane), so nothing has `reset()` the
     // shared diarizer between this pump's start-of-session reset and now.
     // Snapshot the centroids *before* any future pump resets them.
+    //
+    // Session-end re-cluster first (#1013 item 5): a global clustering
+    // pass over every embedding retained this session, with the result
+    // matched back to the live labels so "Speaker 1" keeps its name where
+    // the re-cluster agrees. It rewrites the diarizer's cluster state, so
+    // the identity resolution below reads the re-clustered centroids, and
+    // it must persist its label changes *before* `link_utterances` keys
+    // on those labels.
+    if crate::diarization::recluster_enabled() {
+        let diarize_bg = Arc::clone(&ctx.diarize);
+        match tokio::task::spawn_blocking(move || diarize_bg.finalize_session()).await {
+            Ok(relabels) if !relabels.is_empty() => {
+                match ctx.repo.relabel_utterances(ctx.session_id, &relabels).await {
+                    Ok(rows) => tracing::info!(
+                        session_id = ctx.session_id,
+                        relabels = relabels.len(),
+                        rows,
+                        "meeting finalization: re-cluster relabelled utterances"
+                    ),
+                    Err(e) => tracing::warn!(
+                        error = ?e,
+                        session_id = ctx.session_id,
+                        "meeting finalization: persisting re-cluster labels failed; live labels stand"
+                    ),
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!(
+                error = ?e,
+                session_id = ctx.session_id,
+                "meeting finalization: diarizer re-cluster panicked; live labels stand"
+            ),
+        }
+    }
     if ctx.speaker_identity_enabled.load(Ordering::Relaxed) {
         let centroids = ctx.diarize.session_centroids();
         if !centroids.is_empty() {
@@ -1037,8 +1071,13 @@ async fn tick_inference(
             source_label,
             utterances,
             audio,
+            overlaps_local: Vec::new(),
         });
     }
+
+    // Now that every source's samples for this tick are in its rolling
+    // buffer, flag remote utterances that overlap local mic speech.
+    mark_local_overlap(ctx, state, tick_buckets);
 
     // Update the call-end detector's consecutive-empty-ticks counter once,
     // after all sources have been processed. Resetting on any real speech and
@@ -1223,7 +1262,59 @@ async fn flush_sessions(
             source_label,
             utterances: finals,
             audio: tail_audio,
+            overlaps_local: Vec::new(),
         });
+    }
+    mark_local_overlap(ctx, state, tail_buckets);
+}
+
+/// Fill `overlaps_local` for every remote bucket that doesn't have it
+/// yet (#1013 item 6). For each final remote utterance, slice every mic
+/// source's rolling buffer over the same meeting-relative span (undoing
+/// that mic stream's epoch offset) and ask
+/// [`crate::diarization::mic_overlaps_speech`].
+///
+/// The diarizer uses the flag to let the utterance be *assigned* but not
+/// move a centroid or found a new speaker: overlapped spans are where
+/// turn-taking is contested and embeddings are least trustworthy. It
+/// costs one buffer slice per remote final; no extra model.
+fn mark_local_overlap(ctx: &PumpContext, state: &PumpTickState, buckets: &mut [TickBucket]) {
+    if !crate::diarization::overlap_guard_enabled() {
+        return;
+    }
+    let mic_idxs: Vec<usize> = ctx
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| matches!(s, AudioSource::Microphone(_)))
+        .map(|(i, _)| i)
+        .collect();
+    if mic_idxs.is_empty() {
+        return;
+    }
+    for bucket in buckets.iter_mut() {
+        if bucket.source_label == crate::audio::LOCAL_SPEAKER_TAG
+            || !bucket.overlaps_local.is_empty()
+        {
+            continue;
+        }
+        bucket.overlaps_local = bucket
+            .utterances
+            .iter()
+            .map(|u| {
+                u.is_final
+                    && mic_idxs.iter().any(|&m| {
+                        let epoch = state.stream_epoch_offsets_ms[m];
+                        let mut mic = state.audio_buffers[m].slice_ms(
+                            u.started_at_ms.saturating_sub(epoch),
+                            u.ended_at_ms.saturating_sub(epoch),
+                        );
+                        let overlaps = crate::diarization::mic_overlaps_speech(&mic);
+                        mic.zeroize(); // PCM copy: same hygiene as the drain buffers
+                        overlaps
+                    })
+            })
+            .collect();
     }
 }
 
@@ -1248,6 +1339,11 @@ pub(super) struct TickBucket {
     /// Threaded into [`diarize_and_dispatch_merged`] so the
     /// diarizer trait gets real audio chunks instead of `&[]`.
     pub audio: Vec<Vec<f32>>,
+    /// Per-utterance "the local mic carried speech over this span"
+    /// flags (#1013 overlap guard), parallel to `utterances`. Empty
+    /// means "no overlap information" (mic buckets, sessions without a
+    /// mic, guard disabled, tests) and is read as all-`false`.
+    pub overlaps_local: Vec<bool>,
 }
 
 /// Diarize + dispatch a tick's worth of utterances across all
@@ -1275,6 +1371,30 @@ pub(super) async fn diarize_and_dispatch_merged(
     partials: &Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
     repo: &Arc<dyn MeetingSessionRepository>,
     event_emitter: &dyn crate::events::EventEmitter,
+) {
+    diarize_and_dispatch_merged_with(
+        session_id,
+        buckets,
+        diarize,
+        partials,
+        repo,
+        event_emitter,
+        crate::diarization::local_separation_enabled(),
+    )
+    .await;
+}
+
+/// [`diarize_and_dispatch_merged`] with the `HUSH_DIARIZER_LOCAL_SEPARATION`
+/// toggle passed in, so tests can exercise both shapes without racing on
+/// a process-global env var.
+pub(super) async fn diarize_and_dispatch_merged_with(
+    session_id: i64,
+    buckets: Vec<TickBucket>,
+    diarize: &Arc<dyn crate::diarization::Diarize>,
+    partials: &Arc<RwLock<HashMap<i64, HashMap<String, Utterance>>>>,
+    repo: &Arc<dyn MeetingSessionRepository>,
+    event_emitter: &dyn crate::events::EventEmitter,
+    local_separation_opt_in: bool,
 ) {
     if buckets.is_empty() {
         return;
@@ -1310,7 +1430,7 @@ pub(super) async fn diarize_and_dispatch_merged(
     // rolling per-source buffer (#111 PR-F) — already in
     // canonical 16 kHz mono so the diarizer sees a homogeneous
     // batch.
-    let mut tagged: Vec<(usize, Utterance, Vec<f32>)> = Vec::new();
+    let mut tagged: Vec<(usize, Utterance, Vec<f32>, bool)> = Vec::new();
     for (idx, bucket) in buckets.into_iter().enumerate() {
         // bucket.audio is parallel to bucket.utterances; if the
         // pump drifted we'd see a length mismatch — log and
@@ -1328,8 +1448,18 @@ pub(super) async fn diarize_and_dispatch_merged(
             );
             vec![Vec::new(); bucket.utterances.len()]
         };
-        for (u, audio) in bucket.utterances.into_iter().zip(bucket_audio) {
-            tagged.push((idx, u, audio));
+        let overlaps: Vec<bool> = if bucket.overlaps_local.len() == bucket.utterances.len() {
+            bucket.overlaps_local
+        } else {
+            vec![false; bucket.utterances.len()]
+        };
+        for ((u, audio), overlap) in bucket
+            .utterances
+            .into_iter()
+            .zip(bucket_audio)
+            .zip(overlaps)
+        {
+            tagged.push((idx, u, audio, overlap));
         }
     }
 
@@ -1342,7 +1472,7 @@ pub(super) async fn diarize_and_dispatch_merged(
     // arrival order — important when mic + system happen to
     // produce simultaneous finals and we don't want a race-y
     // re-ordering on every tick.
-    tagged.sort_by_key(|(_, u, _)| u.started_at_ms);
+    tagged.sort_by_key(|(_, u, _, _)| u.started_at_ms);
 
     // Split tags from utterances (move out, no clones). Diarizer
     // takes `&mut [Utterance]` so it sees the chronological
@@ -1351,10 +1481,12 @@ pub(super) async fn diarize_and_dispatch_merged(
     let mut bucket_indices: Vec<usize> = Vec::with_capacity(tagged.len());
     let mut chronological: Vec<Utterance> = Vec::with_capacity(tagged.len());
     let mut chronological_audio: Vec<Vec<f32>> = Vec::with_capacity(tagged.len());
-    for (idx, u, audio) in tagged {
+    let mut chronological_overlap: Vec<bool> = Vec::with_capacity(tagged.len());
+    for (idx, u, audio, overlap) in tagged {
         bucket_indices.push(idx);
         chronological.push(u);
         chronological_audio.push(audio);
+        chronological_overlap.push(overlap);
     }
     // Single-source guard (#369). When the user records with only
     // one source bucket — the canonical case once the unified
@@ -1424,9 +1556,21 @@ pub(super) async fn diarize_and_dispatch_merged(
         // (1 bucket's worth). Watch for mid-call speaker splitting on 1:1
         // meetings; if it appears, re-express that guard in terms of the
         // post-exclusion input.
+        //
+        // PER-CHANNEL NAMESPACES (#1013 item 7, opt-in via
+        // `HUSH_DIARIZER_LOCAL_SEPARATION=1`): instead of excluding mic
+        // finals, diarize them in their own `LocalRoom` cluster space that
+        // can never match a remote cluster (mic-vs-system cannot-link).
+        // The dominant in-room cluster keeps the "mic" tag, so a single
+        // local talker still reads "You"; a second in-room voice gets its
+        // own "Speaker N". Off by default because a lone local talker can
+        // still split into two in-room clusters (#369-shaped), which would
+        // regress the common 1:1 call that #1003 fixed.
         let has_remote_source = source_labels
             .iter()
             .any(|l| l != crate::audio::LOCAL_SPEAKER_TAG);
+        let local_separation = has_remote_source && local_separation_opt_in;
+        let mut hints: Vec<crate::diarization::ChunkHint> = Vec::new();
         let final_idxs: Vec<usize> = chronological
             .iter()
             .enumerate()
@@ -1435,9 +1579,22 @@ pub(super) async fn diarize_and_dispatch_merged(
                     return None;
                 }
                 let is_local = source_labels[bucket_indices[i]] == crate::audio::LOCAL_SPEAKER_TAG;
-                if has_remote_source && is_local {
+                if has_remote_source && is_local && !local_separation {
                     return None;
                 }
+                hints.push(crate::diarization::ChunkHint {
+                    namespace: if has_remote_source && is_local {
+                        crate::diarization::SpeakerNamespace::LocalRoom
+                    } else {
+                        crate::diarization::SpeakerNamespace::Shared
+                    },
+                    may_update: !chronological_overlap[i],
+                    fallback_label: if is_local {
+                        crate::audio::LOCAL_SPEAKER_TAG
+                    } else {
+                        crate::audio::SYSTEM_SPEAKER_TAG
+                    },
+                });
                 Some(i)
             })
             .collect();
@@ -1452,7 +1609,12 @@ pub(super) async fn diarize_and_dispatch_merged(
                 .collect();
             let diarize_bg = Arc::clone(diarize);
             let labeled_result = tokio::task::spawn_blocking(move || {
-                diarize_bg.label_utterances(&mut final_utts, &final_audio, CANONICAL_FORMAT);
+                diarize_bg.label_utterances_with_hints(
+                    &mut final_utts,
+                    &final_audio,
+                    &hints,
+                    CANONICAL_FORMAT,
+                );
                 final_utts
             })
             .await;
@@ -1813,5 +1975,58 @@ mod tests {
             "control: an empty diarizer in the slot must yield NO resolution — \
              this is the failure mode the fix prevents"
         );
+    }
+
+    /// #1013 item 5: background finalization runs the diarizer's
+    /// session-end re-cluster and persists its relabels to the session's
+    /// rows before identity resolution.
+    #[tokio::test]
+    async fn background_finalization_persists_recluster_relabels() {
+        use crate::diarization::{Diarize, Relabel};
+        use crate::meeting::test_support::{
+            build_tail_pump_context_with_diarize, RecordingSpeakerStore, RelabellingDiarizer,
+        };
+        use crate::meeting::NewPersistedUtterance;
+
+        let diarizer = Arc::new(RelabellingDiarizer {
+            relabels: vec![Relabel {
+                started_at_ms: 10_000,
+                ended_at_ms: 12_000,
+                old_label: "Speaker 1".to_owned(),
+                new_label: "Speaker 2".to_owned(),
+            }],
+            finalized: std::sync::atomic::AtomicBool::new(false),
+        });
+        let (ctx, repo) = build_tail_pump_context_with_diarize(
+            vec![0.25f32; 4_096],
+            Arc::clone(&diarizer) as Arc<dyn Diarize>,
+            RecordingSpeakerStore::new() as Arc<dyn crate::speakers::SpeakerStore>,
+            false,
+        )
+        .await;
+        let session_id = ctx.session_id;
+        for (start, label) in [(10_000_i64, "Speaker 1"), (20_000, "Speaker 1")] {
+            repo.append_utterance(NewPersistedUtterance {
+                session_id,
+                started_at_ms: start,
+                ended_at_ms: start + 2_000,
+                speaker_label: Some(label.to_owned()),
+                text: "hello".to_owned(),
+            })
+            .await
+            .unwrap();
+        }
+
+        super::run_pump(ctx).await;
+
+        assert!(diarizer.finalized.load(std::sync::atomic::Ordering::SeqCst));
+        let rows = repo.list_utterances(session_id).await.unwrap();
+        let label_at = |start: i64| {
+            rows.iter()
+                .find(|u| u.started_at_ms == start)
+                .and_then(|u| u.speaker_label.clone())
+        };
+        assert_eq!(label_at(10_000).as_deref(), Some("Speaker 2"));
+        assert_eq!(label_at(20_000).as_deref(), Some("Speaker 1"));
     }
 }

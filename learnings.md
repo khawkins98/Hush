@@ -16,6 +16,7 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 **Audio capture & inference:**
 - [`isExclusive = true` for system audio tap (2026-05-06)](#2026-05-06--isexclusive--true-is-required-for-catapversion-to-capture-any-audio-593-594) — `CATapDescription` with `isExclusive = false` produces silence. Needs `true` to capture the system mix. Only well-documented in third-party implementations (Korus, OpenWhispr); not in Apple docs.
 - [`tract-onnx` not ORT for ONNX inference (2026-05-08)](#2026-05-08--641-root-cause-fix-ort--tract-onnx) — ORT silently uses Metal Performance Shaders even with `CPU::default()` EP, causing unbounded `IOAccelerator` growth. Pure-Rust `tract-onnx` avoids this; `TypedRunnableModel<TypedModel>` is `Send+Sync`, no mutex needed.
+- [Speaker-embedding features must match training (2026-10-01)](#2026-10-01--diarizer-the-missing-cmn-was-the-real-633-bug-threshold-back-to-06-duration-gate-session-end-re-cluster-1013) — wespeaker expects per-utterance CMN on kaldi fbank; without it LibriSpeech EER was 12 % instead of 0.7 % and the cosine threshold had been mis-tuned to compensate. Verify a front end against the reference implementation numerically before tuning anything downstream.
 - [Whisper streaming session lifecycle (2026-05-07 + #612)](#2026-05-07--612-not-actually-closed-macos-compression-was-hiding-the-leak) — `WhisperState` must be lazily created on first inference, dropped on decode error, and periodically recreated every ~30 inferences to bound C-heap accumulation. Missing any of these causes memory leak.
 
 **Tauri & cross-module architecture:**
@@ -151,6 +152,121 @@ it.
 diarization test helpers (`diarization/mod.rs`,
 `tests/diarization_fixture.rs`). Each got a one-line `words: None` and
 no other diarization change.
+
+## 2026-10-01 — Diarizer: the missing CMN was the real #633 bug; threshold back to 0.6, duration gate, session-end re-cluster (#1013)
+
+**The finding.** wespeaker trains and infers on fbank features with
+per-utterance cepstral mean normalisation (`feat - mean(feat, dim=0)`,
+read in wespeaker's Apache-2.0 `dataset/processor.py::apply_cmvn` and
+`cli/speaker.py::compute_features`). Hush's `features.rs` never did it,
+so every embedding was computed from out-of-distribution input carrying
+a per-bin offset (channel colouring plus the `ln(32768²)` from feeding
+[-1, 1] floats where the model expects int16-range samples). That offset
+is shared by every utterance, so it squeezed cross-speaker distances
+towards same-speaker ones, which is exactly what #633 observed ("0.6
+merges distinct speakers") and "fixed" by dropping to 0.4, a value that
+then over-split single talkers (#369 / #1006 symptoms).
+
+**Front end now matches the reference.** Besides CMN, `features.rs` moved
+to wespeaker's exact `kaldi.fbank` settings: Hamming window (not Povey),
+int16 scale, per-frame DC removal and pre-emphasis, triangles built in the
+mel domain, `f32::EPSILON` log floor, no dither. Checked against
+`torchaudio.compliance.kaldi.fbank` on a LibriSpeech utterance: max abs
+difference 5.2e-4 over 1 087 × 80 values. The window/scale changes are
+small (CMN cancels a constant log offset exactly, so the scale only moves
+the floor; Hamming vs Povey moved EER by < 0.1 pt); CMN is the one that
+matters.
+
+**Evidence** (Mini LibriSpeech dev-clean-2, OpenSLR 31, CC BY 4.0; 26
+speakers, 453–588 utterances; "Opus" = re-encoded at 16 kb/s VoIP mode
+as a conferencing-stream stand-in; harness:
+`diarization::onnx::eval_tests`, `#[ignore]`d):
+
+| pairwise cosine distance | same-spk p50 / p95 | cross-spk p5 / p50 | EER |
+|---|---|---|---|
+| old front end, full utt, clean | 0.23 / 0.43 | 0.30 / 0.58 | 12.3 % |
+| old front end, full utt, Opus | 0.20 / 0.39 | 0.22 / 0.49 | 17.0 % |
+| new (CMN), full utt, clean | 0.25 / 0.46 | 0.72 / 0.92 | 0.7 % |
+| new (CMN), full utt, Opus | 0.28 / 0.48 | 0.70 / 0.91 | 1.0 % |
+| new (CMN), 2 s chunks, Opus | 0.45 / 0.64 | 0.74 / 0.93 | 2.3 % |
+| new (CMN), 1.2 s chunks, Opus | 0.58 / 0.78 | 0.77 / 0.94 | 5.4 % |
+
+Synthetic conversations (60 per speaker count K, 40–80 turns, 30 % short
+turns of 0.8–1.2 s, the rest 2 s–full; speaker error is duration-weighted
+after optimal label mapping; Opus condition shown):
+
+| pipeline | K=1 err / clusters | K=3 err / clusters | K=5 err / clusters |
+|---|---|---|---|
+| shipped (old front end, running mean, 0.4) | 8.3 % / 3.8 | 26.7 % / 8.2 | 34.0 % / 10.4 |
+| CMN, old matcher, 0.6 | 2.2 % / 1.8 | 2.5 % / 4.4 | 3.0 % / 7.4 |
+| CMN, duration gate + unit-sum, 0.6 | 0.2 % / 1.02 | 1.9 % / 3.03 | 3.1 % / 5.1 |
+| … + session-end re-cluster @ 0.6 | 0.0 % / 1.00 | 1.2 % / 2.98 | 0.4 % / 5.02 |
+
+Clean-audio numbers follow the same shape. Sweeps: online 0.5 and 0.7
+were both worse than 0.6 (0.7 starts merging at K ≥ 3); the re-cluster's
+average-linkage cut was best at 0.6 whether the live threshold was 0.5
+(+0.1) or 0.6 (+0.0); cuts of 0.7 and 0.8 merged speakers (K=5 error 4 % and 15–17 %).
+Hence one threshold, 0.6, for both passes. **Caveats:** read speech, one
+speaker per chunk (real Whisper segments can straddle a turn change), no
+overlap, no real Zoom/Teams audio. Thresholds are well supported for the
+embedding space; how real calls land in it still needs Ken's hands-on
+check.
+
+**Duration gate constants** (assign-only below 1.0 s, found a speaker
+only from 1.5 s; diart's `rho_update` idea, MIT): with CMN, a 0.8 s
+chunk's distance to its own speaker's centroid has p90 0.57–0.60 (at the
+threshold, so it would spawn spurious speakers) and lands nearest a wrong
+centroid 1.5–2.4 % of the time; at 1.2 s p90 is 0.45–0.49 and 0.2 %; at
+2 s, 0 %. The gate is what fixed the cluster *count*: CMN alone at 0.6
+still produced 4.4 clusters for 3 speakers because short turns founded
+singletons. Unit-vector centroids measured neutral on this
+level-normalised corpus; kept because real calls swing in level.
+
+**Session-end re-cluster design (#316).** Chen et al. 2022 report naive
+online centroids at 36.8 % DER vs 19.6 % with a global re-cluster plus
+label matching; our synthetic numbers agree in direction. Every chunk's
+unit embedding, duration, hint and persisted label is retained for the
+session (zeroized on drop). In background finalization, *before* #667
+identity resolution: duration-weighted average-linkage AHC per namespace
+over chunks ≥ 1 s that weren't overlap-flagged (NN-chain, O(n²), skipped
+above 3 000 chunks), groups under 4 s of speech folded into the nearest
+group, short/flagged chunks attached to the nearest centroid, then groups
+greedily matched to live IDs by shared duration so names survive where
+the re-cluster agrees. Changes are persisted with
+`relabel_utterances`, addressed by `(session, start, end, old label)`
+because the diarizer never sees row ids; the old-label guard makes a
+stale relabel a no-op. It also relabels chunks the live matcher
+abstained on (they were stored as "system"). Kill switch:
+`HUSH_DIARIZER_RECLUSTER=0`. Default on because the evidence is strong
+and label matching keeps it from churning names.
+
+**Overlap guard and namespaces.** Remote chunks whose span carries
+local mic speech (≥ 30 % of 20 ms frames above −40 dBFS) may be assigned
+but never update or found a speaker. Thresholds are reasoned, not tuned:
+there was no real two-channel call audio to tune on. It self-disables per
+session when > 60 % of remote chunks are flagged (the mic is hearing the
+remote audio: speakerphone). `HUSH_DIARIZER_LOCAL_SEPARATION=1` puts the
+mic into its own `LocalRoom` namespace (cannot-link with the remote
+stream); the dominant room cluster keeps "mic"/"You". Off by default
+because a lone local talker can still split, which would regress the
+#1003 1:1 case; no in-room recordings were available to validate it.
+
+**Cross-session identity.** Stored voiceprints from before CMN live in a
+different space, so `speaker_identities` gained `embedding_version`
+(migration 0010; old rows = 1, excluded from auto-matching but still
+labelling their meetings; current = 2). Simpler than deleting and keeps
+names. The same migration drops a saved `diarizer_threshold`, which was
+tuned on the old scale. `AUTO_ACCEPT_THRESHOLD` re-checked on
+5-utterance chapter centroids (56–112 same-speaker cross-session pairs,
+2 756–5 512 cross-speaker): with CMN, 0.25 accepts 91–93 % with zero
+false merges, including clean↔Opus; the closest impostor pair was 0.335.
+Without CMN, 0.25 falsely merged 11–16 % of impostor pairs, so the old
+identity feature was riskier than it looked. **AS-norm was evaluated and
+not adopted:** it helped a lot on the old features (under channel shift: 7 false
+merges at 89 % acceptance, 0 at 71 %, vs hundreds raw) but on CMN
+features it *added* 5–53 false merges at thresholds accepting all genuine
+pairs. The implementation stays in the eval harness for when real data
+says otherwise.
 
 ## 2026-09-30 — HUD: a double-click on a button that re-renders itself raises the main window
 
