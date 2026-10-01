@@ -6,6 +6,7 @@
   import { meeting } from "$lib/state/meeting-sessions.svelte";
 
   import ErrorDisplay from "./ErrorDisplay.svelte";
+  import type { ErrorDisplay as ErrorDisplayShape } from "./errors";
   import ExportOptionsDialog from "./ExportOptionsDialog.svelte";
   import HistoryDictationRow from "./HistoryDictationRow.svelte";
   import HistoryMeetingRow from "./HistoryMeetingRow.svelte";
@@ -84,6 +85,35 @@
   }
 
   let hasQuery = $derived(history.historyQuery.trim().length > 0);
+
+  // A failed list load means we don't know whether rows exist, so
+  // the "Nothing here yet" empty state would be misleading — hide it
+  // and let the error card (with its Retry) stand alone.
+  let loadFailed = $derived(history.loadFailed || meeting.loadFailed);
+
+  /// Attach a Retry action to an error card, but only while the card is
+  /// showing the list-load failure itself. `history.error` /
+  /// `meeting.error` also carry export results and per-row failures;
+  /// those can land after a failed load (while `loadFailed` is still
+  /// true) and must keep their own copy — hence the identity check.
+  function withRetry(
+    error: ErrorDisplayShape,
+    loadError: ErrorDisplayShape | null,
+  ): ErrorDisplayShape {
+    const failed = loadError !== null && error === loadError;
+    // The generic `history` mapping reads "History update failed / The
+    // action didn't go through", which describes a row action, not a
+    // list that wouldn't load — so the load case gets its own copy.
+    return failed
+      ? {
+          ...error,
+          headline: "Couldn't load history",
+          hint: "Your saved entries are untouched. Try again.",
+          actionKey: "retry",
+          actionLabel: "Retry",
+        }
+      : error;
+  }
 
   // Click-to-confirm state for the "Clear all" button. Same shape
   // as the meeting-mode Stop session confirmation: first click
@@ -265,14 +295,24 @@
   {/if}
 
   {#if history.error}
-    <ErrorDisplay error={history.error} scope="Dictation history" />
+    <ErrorDisplay
+      error={withRetry(history.error, history.loadError)}
+      scope="Dictation history"
+      onAction={() => void history.refresh()}
+    />
   {/if}
   {#if meeting.error}
-    <ErrorDisplay error={meeting.error} scope="Meeting history" />
+    <ErrorDisplay
+      error={withRetry(meeting.error, meeting.loadError)}
+      scope="Meeting history"
+      onAction={() => void meeting.refresh()}
+    />
   {/if}
 
   {#if !history.feedLoaded}
     <p class="loading-skeleton">Loading history…</p>
+  {:else if history.mergedFeed.length === 0 && loadFailed}
+    <!-- Error card above carries the message + Retry; no empty state. -->
   {:else if history.mergedFeed.length === 0}
     <div class="empty-history">
       <!-- archive icon -->

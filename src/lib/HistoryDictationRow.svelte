@@ -170,7 +170,7 @@
             class="name-input"
             type="text"
             bind:value={nameInputValue}
-            placeholder="Add a label…"
+            placeholder="Add a name…"
             autofocus
             onblur={commitName}
             onkeydown={handleNameKeydown}
@@ -182,9 +182,10 @@
             class="card-title"
             class:card-title--set={entry.name !== null}
             onclick={startNameEdit}
-            title={entry.name ? "Edit label" : "Add a label"}
-            aria-label={entry.name ? `Label: ${entry.name} — click to edit` : "Add a label"}
-          >{entry.name ?? "Add label…"}</button>
+            title={entry.name ? "Edit name" : "Add a name"}
+            aria-label={entry.name ? `Name: ${entry.name} — click to edit` : "Add a name"}
+            data-testid="history-add-name-{entry.id}"
+          >{entry.name ?? "Add name…"}</button>
         {/if}
       {/if}
       <div class="row-meta">

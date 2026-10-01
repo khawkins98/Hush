@@ -254,6 +254,7 @@ mod tests {
             ended_at_ms: end_ms,
             is_final: true,
             speaker_label: None,
+            words: None,
         }
     }
 

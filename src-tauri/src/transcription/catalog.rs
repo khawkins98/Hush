@@ -37,8 +37,19 @@
 //! footprint, which is the constraint Hush cares most about (see
 //! `docs/memory-debugging.md`). whisper.cpp loads them natively; nothing
 //! else in the pipeline changes. We list a curated few rather than
-//! every build so the picker stays scannable, and skip the `.en`
-//! English-only builds: they silently fail non-English speech.
+//! every build so the picker stays scannable.
+//!
+//! ## English-only (`.en`) builds
+//!
+//! #1009 skipped the `.en` builds because they silently fail
+//! non-English speech. #1013 reverses that for two of them (Base and
+//! Small, q8_0): Hush never calls `set_language`, so whisper.cpp's
+//! default language (`en`) already pins every multilingual model to
+//! English output — the app is effectively English-only today, and the
+//! `.en` builds are reported (upstream model card; not measured here)
+//! to be a little more accurate and faster on English. They carry
+//! [`ModelMetadata::english_only`] so the picker badges them and the
+//! limitation is always visible. They are never the default.
 //!
 //! This breaks the "bigger file = more accurate" line the picker used to
 //! imply (Turbo q8_0 beats Medium at ~60% of its size), so the catalog is
@@ -107,6 +118,14 @@ pub struct ModelMetadata {
     /// `learnings.md` for the trust-on-first-use trade we considered
     /// and rejected.
     pub sha256: String,
+
+    /// `true` for the `.en` English-only builds. They are trained on
+    /// English alone, so they are reported to be slightly more accurate
+    /// and faster on English speech — but they cannot transcribe any
+    /// other language at all (non-English audio comes out as garbled
+    /// English or silence). The picker renders an "English only" badge
+    /// from this so the trade-off is never hidden.
+    pub english_only: bool,
 }
 
 /// Base URL for the upstream Whisper GGUF mirror. Hard-coded; no
@@ -159,6 +178,20 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-tiny.bin"),
             sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21".into(),
+            english_only: false,
+        },
+        ModelMetadata {
+            id: "whisper-base.en-q8_0".into(),
+            display_name: "Whisper Base (English only, compact)".into(),
+            filename: "ggml-base.en-q8_0.bin".into(),
+            size_mb: 82,
+            speed_rating: 9,
+            accuracy_rating: 6,
+            description: "English-only Base, 8-bit quantized. Tiny download, a little sharper than Base on English — but cannot transcribe any other language.".into(),
+            is_default: false,
+            download_url: download_url_for("ggml-base.en-q8_0.bin"),
+            sha256: "a4d4a0768075e13cfd7e19df3ae2dbc4a68d37d36a7dad45e8410c9a34f8c87e".into(),
+            english_only: true,
         },
         ModelMetadata {
             id: "whisper-base".into(),
@@ -171,6 +204,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-base.bin"),
             sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe".into(),
+            english_only: false,
         },
         ModelMetadata {
             id: "whisper-small-q8_0".into(),
@@ -183,6 +217,20 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: true,
             download_url: download_url_for("ggml-small-q8_0.bin"),
             sha256: "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f".into(),
+            english_only: false,
+        },
+        ModelMetadata {
+            id: "whisper-small.en-q8_0".into(),
+            display_name: "Whisper Small (English only, compact)".into(),
+            filename: "ggml-small.en-q8_0.bin".into(),
+            size_mb: 264,
+            speed_rating: 7,
+            accuracy_rating: 8,
+            description: "English-only Small, 8-bit quantized. Same size as Small (compact) and tuned for English — but cannot transcribe any other language.".into(),
+            is_default: false,
+            download_url: download_url_for("ggml-small.en-q8_0.bin"),
+            sha256: "67a179f608ea6114bd3fdb9060e762b588a3fb3bd00c4387971be4d177958067".into(),
+            english_only: true,
         },
         ModelMetadata {
             id: "whisper-small".into(),
@@ -195,6 +243,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-small.bin"),
             sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b".into(),
+            english_only: false,
         },
         ModelMetadata {
             id: "whisper-medium".into(),
@@ -207,6 +256,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-medium.bin"),
             sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208".into(),
+            english_only: false,
         },
         ModelMetadata {
             id: "whisper-large-v3-turbo-q5_0".into(),
@@ -219,6 +269,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-large-v3-turbo-q5_0.bin"),
             sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2".into(),
+            english_only: false,
         },
         ModelMetadata {
             id: "whisper-large-v3-turbo-q8_0".into(),
@@ -231,6 +282,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-large-v3-turbo-q8_0.bin"),
             sha256: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1".into(),
+            english_only: false,
         },
         ModelMetadata {
             id: "whisper-large-v3-turbo".into(),
@@ -245,6 +297,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-large-v3-turbo.bin"),
             sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69".into(),
+            english_only: false,
         },
         ModelMetadata {
             id: "whisper-large-v3".into(),
@@ -258,6 +311,7 @@ pub fn whisper_models() -> Vec<ModelMetadata> {
             is_default: false,
             download_url: download_url_for("ggml-large-v3.bin"),
             sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2".into(),
+            english_only: false,
         },
     ]
 }
@@ -303,6 +357,37 @@ mod tests {
         assert!(ids.contains(&"whisper-small-q8_0".to_string()));
         assert!(ids.contains(&"whisper-large-v3-turbo-q5_0".to_string()));
         assert!(ids.contains(&"whisper-large-v3-turbo-q8_0".to_string()));
+        assert!(ids.contains(&"whisper-base.en-q8_0".to_string()));
+        assert!(ids.contains(&"whisper-small.en-q8_0".to_string()));
+    }
+
+    #[test]
+    fn english_only_flag_matches_dot_en_builds() {
+        // The badge is driven by `english_only`; the filename is what
+        // actually decides the model's behaviour. They must agree, or a
+        // multilingual-looking card would silently drop non-English.
+        for m in whisper_models() {
+            let dot_en = m.filename.contains(".en");
+            assert_eq!(m.english_only, dot_en, "{}: english_only mismatch", m.id);
+            assert_eq!(
+                m.id.contains(".en"),
+                dot_en,
+                "{}: id/filename mismatch",
+                m.id
+            );
+            if m.english_only {
+                assert!(
+                    m.display_name.contains("English only"),
+                    "{}: English-only build must say so in its name",
+                    m.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_model_is_multilingual() {
+        assert!(!default_model().english_only);
     }
 
     #[test]
@@ -383,7 +468,16 @@ mod tests {
         // rating bars would otherwise tell users to prefer the lossy build.
         let models = whisper_models();
         for (i, q) in models.iter().enumerate().filter(|(_, m)| is_quantized(m)) {
-            let base_id = q.id.rsplit_once('-').map(|(b, _)| b).unwrap();
+            // `.en` quantized builds are compared against the
+            // multilingual full-precision sibling: upstream's `.en`
+            // full builds aren't in the catalog, and the size/accuracy
+            // invariant must hold against what the user can pick.
+            let base_id_owned =
+                q.id.rsplit_once('-')
+                    .map(|(b, _)| b)
+                    .unwrap()
+                    .replace(".en", "");
+            let base_id = base_id_owned.as_str();
             let base = find_by_id(base_id)
                 .unwrap_or_else(|| panic!("{}: no full-precision sibling {base_id}", q.id));
             let base_pos = models.iter().position(|m| m.id == base_id).unwrap();

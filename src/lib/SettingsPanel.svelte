@@ -155,7 +155,13 @@
 </script>
 
 <div class="settings-panel">
-  <section class="settings-content" aria-live="polite">
+  <!--
+    No aria-live here: a live region around the whole tab made screen
+    readers re-read the entire tab on every switch. Individual notices
+    (model loaded / restart, download status, save results) carry their
+    own polite live regions instead.
+  -->
+  <section class="settings-content">
     {#if activeTab === "general"}
       <GeneralTab {onDebugConsoleChange} />
     {:else if activeTab === "model"}

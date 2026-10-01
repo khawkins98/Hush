@@ -50,6 +50,7 @@
 
 pub mod catalog;
 pub mod download;
+pub mod quality;
 pub mod resample;
 pub mod streaming;
 
@@ -112,7 +113,7 @@ pub type ProgressHookSlot = Arc<Mutex<Option<Arc<dyn Fn(i32) + Send + Sync + 'st
 ///
 /// `serde` derives so this flows over the IPC boundary into the
 /// meeting-mode panel for partial utterance rendering.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Utterance {
     /// Trimmed transcript text. Identical post-processing rules as
@@ -140,6 +141,14 @@ pub struct Utterance {
     /// paths leave this `None` — for dictation the field is
     /// informational only.
     pub speaker_label: Option<String>,
+    /// Word-level model confidence (#1013), aligned 1:1 with
+    /// `text.split_whitespace()`. Only populated on live partials, and
+    /// only when confidence shading is enabled
+    /// (`HUSH_CONFIDENCE_SHADING=1`); `None` everywhere else, including
+    /// every persisted final (the DB stores text only). Omitted from the
+    /// wire when `None` so the IPC shape is unchanged with shading off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<quality::WordConfidence>>,
 }
 
 /// Whisper.cpp's expected input sample rate. The library converts internally
@@ -309,6 +318,7 @@ pub trait Transcribe: Send + Sync {
             ended_at_ms: duration_ms,
             is_final: true,
             speaker_label: None,
+            words: None,
         }])
     }
 
@@ -588,6 +598,7 @@ mod tests {
             ended_at_ms: 1_500,
             is_final: true,
             speaker_label: Some("Speaker A".into()),
+            words: None,
         };
         let json = serde_json::to_string(&u).unwrap();
         assert!(json.contains(r#""startedAtMs":100"#), "got: {json}");

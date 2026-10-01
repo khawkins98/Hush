@@ -46,7 +46,7 @@
     />
   </label>
   {#if gr.inferenceThreadsError}
-    <p class="settings-error">{gr.inferenceThreadsError}</p>
+    <p class="settings-error" role="alert">{gr.inferenceThreadsError}</p>
   {/if}
   <label class="slider-row">
     <span class="toggle-label">
@@ -83,6 +83,6 @@
     />
   </label>
   {#if gr.micGainDbError}
-    <p class="settings-error">{gr.micGainDbError}</p>
+    <p class="settings-error" role="alert">{gr.micGainDbError}</p>
   {/if}
 </section>

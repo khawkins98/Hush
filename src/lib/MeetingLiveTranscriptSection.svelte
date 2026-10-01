@@ -13,6 +13,7 @@
   both dictation and meeting modes.
 -->
 <script lang="ts">
+  import { shadeLiveTranscript } from "./confidence-shading";
   import { joinUtterances } from "./transcript-format";
   import type { MeetingSessionDetail } from "./types";
 
@@ -42,6 +43,14 @@
     const partials = meetingActiveDetail.currentPartials ?? [];
     return joinUtterances([...finals, ...partials], "\n");
   });
+
+  // Confidence shading (#1013): when partials carry word confidences
+  // (backend `HUSH_CONFIDENCE_SHADING=1`), render their low-confidence
+  // words dimmed. `null` → plain text, which is always the case with
+  // shading off.
+  let shaded = $derived(
+    shadeLiveTranscript(liveTranscriptText, meetingActiveDetail?.currentPartials ?? []),
+  );
 
   let showLiveTranscript = $derived(
     recording && liveTranscriptText.trim().length > 0,
@@ -96,7 +105,10 @@
       Live transcript
     </header>
     <p class="live-transcript-body">
-      {liveTranscriptText}<!--
+      {#if shaded}{shaded.head}{#each shaded.tail as line, i (i)}{#if shaded.head || i > 0}{"\n"}{/if}{line.label}{#each line.tokens as tok, j (j)}{#if tok.low}<span
+              class="low-confidence"
+              data-testid="low-confidence-word">{tok.text}</span
+            >{:else}{tok.text}{/if}{/each}{/each}{:else}{liveTranscriptText}{/if}<!--
         Typing indicator: aria-hidden because the transcript text already
         conveys state to screen readers.
       -->{#if showTypingIndicator}<span class="typing-indicator" aria-hidden="true"> …</span>{/if}
@@ -168,6 +180,14 @@
     color: #e0e0e0;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  /* Low-confidence word in an in-flight partial (#1013). Dimmed, with a
+     dotted underline so the cue doesn't rely on contrast alone. */
+  .low-confidence {
+    opacity: 0.55;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
   }
 
   /* Pulsing "…" appended after the last partial when no new text has

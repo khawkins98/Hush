@@ -20,6 +20,11 @@
     bypasses the main window's state machine — visible as the
     "HUD says Recording but main window doesn't" desync seen
     in the first-cut smoke test.
+  - "Start meeting" button that emits `menu-bar:start-meeting`.
+    The main window's listener runs the same `startRecord()` path
+    as its own Record button, for the same single-owner reason as
+    the toggle above. Disabled while anything is recording — the
+    primary button is the stop path in that state.
   - "Open Hush" link calling the `show_main_window` IPC,
     which surfaces the main window from Rust without needing
     the broader `core:window:allow-get-all-windows` permission
@@ -117,6 +122,19 @@
     }
   }
 
+  async function startMeeting() {
+    if (busy || recording) return;
+    busy = true;
+    error = null;
+    try {
+      await emit(Events.MenuBarStartMeeting);
+    } catch (e) {
+      error = formatError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function openMain() {
     error = null;
     try {
@@ -202,21 +220,33 @@
       {#if busy}
         Working…
       {:else if recording}
-        Stop dictation
+        <!-- "recording", not "dictation": the toggle path also stops
+             a running meeting session. -->
+        Stop recording
       {:else}
         Start dictation
       {/if}
     </button>
 
+    <button
+      type="button"
+      class="meeting-action"
+      data-testid="popover-start-meeting"
+      data-tauri-drag-region="false"
+      disabled={busy || recording}
+      onclick={startMeeting}
+    >
+      Start meeting
+    </button>
+
+    <!-- Trimmed to one line so the second button fits the 320×220
+         window; source selection lives in the main window. -->
     <p class="hint">
       {#if recording}
-        Click stop, or press
-        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>,
-        when you're done.
+        Stop here, or press <kbd aria-label="Control Option H">⌃⌥H</kbd>.
       {:else}
-        Default microphone. Pick a different source from the
-        main window. Toggle from anywhere with
-        <kbd>Ctrl</kbd> + <kbd>⌥/Alt</kbd> + <kbd>H</kbd>.
+        Toggle dictation anywhere with
+        <kbd aria-label="Control Option H">⌃⌥H</kbd>.
       {/if}
     </p>
 
@@ -338,6 +368,32 @@
     cursor: not-allowed;
   }
   .primary-action:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.7);
+    outline-offset: 2px;
+  }
+
+  .meeting-action {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    background-color: transparent;
+    color: rgba(255, 255, 255, 0.9);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.45rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.12s, border-color 0.12s;
+  }
+  .meeting-action:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.36);
+  }
+  .meeting-action:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .meeting-action:focus-visible {
     outline: 2px solid rgba(255, 255, 255, 0.7);
     outline-offset: 2px;
   }

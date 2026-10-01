@@ -45,7 +45,11 @@
       key: "inputMonitoring" as const,
       paneTarget: "input-monitoring" as const,
       label: "Input Monitoring",
-      why: "Required for push-to-talk (on by default). Disable PTT in General → Hotkeys if you'd rather skip the prompt.",
+      // No "on/off by default" claim here: the backend defaults PTT
+      // on for fresh installs, but this row is shown to users whose
+      // persisted setting may be either — stating a default here
+      // contradicted the live toggle in General → Hotkeys.
+      why: "Required for push-to-talk. If you don't use push-to-talk, turn it off in General → Hotkeys and Hush won't ask for this.",
     },
   ];
 </script>

@@ -72,6 +72,9 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 
+use super::quality::{
+    collapse_ngram_loops, is_media_artefact_final, words_match_text, WordConfidence,
+};
 use super::Utterance;
 #[cfg(test)]
 use crate::audio::CaptureFormat;
@@ -83,7 +86,7 @@ use crate::audio::CaptureFormat;
 /// buffer the inferer was called with** — not the session timeline.
 /// The state machine adds the window's session-time offset to convert
 /// to absolute session offsets when emitting [`Utterance`]s.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct StreamSegment {
     /// Start of segment relative to the inference buffer's start, ms.
     pub start_ms: u64,
@@ -93,6 +96,14 @@ pub struct StreamSegment {
     /// allowed (whisper occasionally emits blank segments for
     /// non-speech intervals); the state machine filters them.
     pub text: String,
+    /// Mean token log-probability over the segment's text tokens
+    /// (#1013). `None` when the inferer doesn't report confidence
+    /// (scripted test inferers) or the segment had no text tokens.
+    /// Drives the low-confidence final filter.
+    pub avg_logprob: Option<f32>,
+    /// Word-level confidences aligned with `text` (#1013). Empty when
+    /// the inferer doesn't report them.
+    pub words: Vec<WordConfidence>,
 }
 
 /// Trait the state machine calls to actually run inference on a buffer
@@ -138,7 +149,38 @@ pub struct SlidingWindowConfig {
     /// Don't try to infer until at least this much audio has been fed
     /// in total. Whisper produces noise on sub-second buffers.
     pub min_first_inference_ms: u64,
+    /// LocalAgreement-2 early commit (#1013, off by default). When on,
+    /// a tail segment that the previous inference *also* produced (same
+    /// normalised text, start/end within [`LOCAL_AGREEMENT_TOLERANCE_MS`])
+    /// commits as final immediately instead of waiting to age past
+    /// `commit_tail_ms`. The newest segment of each inference never
+    /// commits early — it is the one most likely to be cut mid-word.
+    /// The time-based rule still applies as the fallback. Idea from ufal
+    /// `whisper_streaming` (MIT; Macháček et al. 2023), which commits the
+    /// longest prefix two consecutive hypotheses agree on; this is a
+    /// segment-granularity variant of it.
+    pub local_agreement: bool,
+    /// Minimum mean token log-probability for a final to be committed
+    /// (#1013). `None` disables the filter (default). Finals below the
+    /// threshold are dropped and logged; every final's score is logged
+    /// at DEBUG either way so a threshold can be chosen from real data.
+    pub min_final_avg_logprob: Option<f32>,
+    /// Attach word-level confidences to emitted **partials** so the live
+    /// transcript can dim low-confidence words (#1013, off by default;
+    /// `HUSH_CONFIDENCE_SHADING=1`). Finals never carry them — they are
+    /// persisted as plain text.
+    pub attach_word_confidence: bool,
 }
+
+/// Shortest audio span [`SlidingWindowState::commit_through`] will
+/// decode. Below this there's no word to recover and Whisper would be
+/// fed mostly padding.
+pub const MIN_BOUNDARY_INFER_MS: u64 = 300;
+
+/// How far apart (ms) two hypotheses' timestamps for the same segment
+/// text may be and still count as agreeing. Whisper's segment
+/// timestamps jitter by a few hundred ms between overlapping windows.
+pub const LOCAL_AGREEMENT_TOLERANCE_MS: u64 = 1_000;
 
 impl SlidingWindowConfig {
     /// Defaults sized for the meeting-mode UX target: utterances visible
@@ -149,7 +191,35 @@ impl SlidingWindowConfig {
             infer_interval_ms: 3_000,
             commit_tail_ms: 8_000,
             min_first_inference_ms: 1_500,
+            local_agreement: false,
+            min_final_avg_logprob: None,
+            attach_word_confidence: false,
         }
+    }
+
+    /// [`Self::meeting_defaults`] with the env-tunable quality knobs
+    /// applied (#1013):
+    ///
+    /// * `HUSH_STREAM_LOCAL_AGREEMENT=1` → [`Self::local_agreement`].
+    /// * `HUSH_FINAL_MIN_AVG_LOGPROB=<f32>` → [`Self::min_final_avg_logprob`]
+    ///   (e.g. `-1.5`; unset or unparsable = filter off).
+    /// * `HUSH_CONFIDENCE_SHADING=1` → [`Self::attach_word_confidence`].
+    ///
+    /// Read once per streaming session so a mid-meeting env change can't
+    /// alter behaviour partway through.
+    pub fn meeting_from_env() -> Self {
+        let mut cfg = Self::meeting_defaults();
+        cfg.local_agreement = matches!(
+            std::env::var("HUSH_STREAM_LOCAL_AGREEMENT").as_deref(),
+            Ok("1")
+        );
+        cfg.min_final_avg_logprob = std::env::var("HUSH_FINAL_MIN_AVG_LOGPROB")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|v| v.is_finite());
+        cfg.attach_word_confidence =
+            matches!(std::env::var("HUSH_CONFIDENCE_SHADING").as_deref(), Ok("1"));
+        cfg
     }
 }
 
@@ -250,6 +320,26 @@ fn is_hallucination_fragment(text: &str) -> bool {
     false
 }
 
+/// Result of [`SlidingWindowState::vet_final`].
+#[derive(Debug, PartialEq)]
+enum FinalVerdict {
+    /// Commit this (possibly loop-collapsed) text.
+    Emit(String),
+    /// Drop the final; the `&str` is the reason, for logging.
+    Drop(&'static str),
+}
+
+/// Log a dropped final. The reason (and confidence, when known) goes
+/// to INFO so the default file log shows how often each filter fires;
+/// the transcript text itself only at DEBUG, matching the module's
+/// existing rule of keeping user speech out of INFO logs.
+fn log_dropped_final(reason: &'static str, text: &str, avg_logprob: Option<f32>) {
+    tracing::info!(reason, ?avg_logprob, "streaming: dropped final");
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        tracing::debug!(reason, text, "streaming: dropped final text");
+    }
+}
+
 /// Policy state machine. Owns a rolling buffer of mono 16 kHz PCM,
 /// triggers inference at the configured cadence, and splits the
 /// returned segments into finals + partial per the commit-tail rule.
@@ -298,6 +388,12 @@ pub struct SlidingWindowState {
     /// See [`is_repeat_final`]. Persists across ticks so a loop spanning
     /// multiple inferences is still caught.
     last_committed_text: Option<String>,
+    /// Previous inference's non-empty segments as `(abs_start_ms,
+    /// abs_end_ms, normalised_text)`. Only maintained when
+    /// [`SlidingWindowConfig::local_agreement`] is on — it is the "-2"
+    /// in LocalAgreement-2: a segment commits early only if this
+    /// hypothesis agrees with it.
+    prev_hypothesis: Vec<(u64, u64, String)>,
 }
 
 impl SlidingWindowState {
@@ -315,6 +411,7 @@ impl SlidingWindowState {
             committed_until_ms: 0,
             last_partial_text: None,
             last_committed_text: None,
+            prev_hypothesis: Vec::new(),
         }
     }
 
@@ -465,11 +562,53 @@ impl SlidingWindowState {
         // duration so every segment with text is committed as final —
         // used by `tick_flush` on the gate-close boundary so in-flight
         // utterances aren't stranded by the head-slide (#974 follow-up).
-        let stable_cutoff_rel_ms = if force_commit {
+        let mut stable_cutoff_rel_ms = if force_commit {
             window_duration_ms
         } else {
             window_duration_ms.saturating_sub(self.config.commit_tail_ms)
         };
+
+        // LocalAgreement-2 (#1013, opt-in): pull the cutoff forward over
+        // every leading tail segment the previous hypothesis agrees
+        // with, stopping at the first disagreement and never including
+        // this inference's newest segment.
+        if self.config.local_agreement {
+            let non_empty: Vec<&StreamSegment> = segments
+                .iter()
+                .filter(|s| !s.text.trim().is_empty())
+                .collect();
+            if !force_commit {
+                if let Some((_, older)) = non_empty.split_last() {
+                    let before = stable_cutoff_rel_ms;
+                    for seg in older {
+                        if seg.end_ms <= stable_cutoff_rel_ms {
+                            continue;
+                        }
+                        if self.hypothesis_agrees(seg) {
+                            stable_cutoff_rel_ms = seg.end_ms;
+                        } else {
+                            break;
+                        }
+                    }
+                    if stable_cutoff_rel_ms > before {
+                        tracing::debug!(
+                            advanced_ms = stable_cutoff_rel_ms - before,
+                            "streaming: LocalAgreement-2 early commit"
+                        );
+                    }
+                }
+            }
+            self.prev_hypothesis = non_empty
+                .iter()
+                .map(|seg| {
+                    (
+                        self.window_start_offset_ms.saturating_add(seg.start_ms),
+                        self.window_start_offset_ms.saturating_add(seg.end_ms),
+                        normalize_for_repeat(seg.text.trim()),
+                    )
+                })
+                .collect();
+        }
 
         let mut out = Vec::new();
         let mut last_committed_rel_end_ms: Option<u64> = None;
@@ -491,59 +630,48 @@ impl SlidingWindowState {
                 if abs_end_ms <= self.committed_until_ms {
                     continue;
                 }
-                // Junk-fragment guard (#974 follow-up 2): drop a final
-                // whose entire text is a known silence confabulation
-                // (".com", ".org,", lone punctuation). These slip past
-                // the repetition guard below — they're one word, under
-                // its floor — and appear both looped and one-off. Whole-
-                // string match only, so real text containing a URL is
-                // untouched. Advance the high-water mark so the range
-                // isn't re-evaluated; don't touch `last_committed_text`.
-                if is_hallucination_fragment(text) {
-                    self.committed_until_ms = abs_end_ms;
-                    if tracing::enabled!(tracing::Level::DEBUG) {
-                        tracing::debug!(text, "streaming: dropped junk-fragment final (#974 fu2)");
+                match self.vet_final(seg, text) {
+                    FinalVerdict::Drop(reason) => {
+                        // Advance the high-water mark so the dropped
+                        // range isn't re-evaluated next tick, but don't
+                        // emit it or update `last_committed_text` (so a
+                        // third identical loop iteration is also caught
+                        // against the same anchor).
+                        self.committed_until_ms = abs_end_ms;
+                        log_dropped_final(reason, text, seg.avg_logprob);
+                        continue;
                     }
-                    continue;
-                }
-                // Repetition guard (#974 follow-up): drop a final that
-                // duplicates the immediately preceding committed final —
-                // a whisper decoder loop on low-information audio. Still
-                // advance `committed_until_ms` so the dropped range
-                // isn't re-evaluated next tick, but don't emit the
-                // duplicate or update `last_committed_text` (so a third
-                // identical loop iteration is also caught against the
-                // same anchor).
-                if is_repeat_final(self.last_committed_text.as_deref(), text) {
-                    self.committed_until_ms = abs_end_ms;
-                    if tracing::enabled!(tracing::Level::DEBUG) {
-                        tracing::debug!(
-                            text,
-                            "streaming: dropped repeated final (decoder loop, #974 follow-up)"
-                        );
+                    FinalVerdict::Emit(final_text) => {
+                        out.push(Utterance {
+                            text: final_text.clone(),
+                            started_at_ms: abs_start_ms.max(self.committed_until_ms),
+                            ended_at_ms: abs_end_ms,
+                            is_final: true,
+                            speaker_label: None,
+                            words: None,
+                        });
+                        self.committed_until_ms = abs_end_ms;
+                        self.last_committed_text = Some(final_text);
+                        last_committed_rel_end_ms = Some(seg.end_ms);
                     }
-                    continue;
                 }
-                out.push(Utterance {
-                    text: text.to_owned(),
-                    started_at_ms: abs_start_ms.max(self.committed_until_ms),
-                    ended_at_ms: abs_end_ms,
-                    is_final: true,
-                    speaker_label: None,
-                });
-                self.committed_until_ms = abs_end_ms;
-                self.last_committed_text = Some(text.to_owned());
-                last_committed_rel_end_ms = Some(seg.end_ms);
             }
         }
 
         // Tail segments → one concatenated partial. Concatenation
         // matches what the user sees when whisper splits a single
         // sentence across multiple segments — they're conceptually
-        // one in-flight phrase.
+        // one in-flight phrase. The cheap junk filters run here too so
+        // a ".com" or "Thanks for watching" doesn't flash in the live
+        // pane before the final-side filter drops it.
         let mut tail_text = String::new();
         let mut tail_start_ms: Option<u64> = None;
         let mut tail_end_ms: u64 = 0;
+        let mut tail_words: Option<Vec<WordConfidence>> = if self.config.attach_word_confidence {
+            Some(Vec::new())
+        } else {
+            None
+        };
         for seg in &segments {
             let text = seg.text.trim();
             if text.is_empty() {
@@ -552,6 +680,11 @@ impl SlidingWindowState {
             if seg.end_ms <= stable_cutoff_rel_ms {
                 continue;
             }
+            if is_hallucination_fragment(text) || is_media_artefact_final(text) {
+                continue;
+            }
+            let collapsed = collapse_ngram_loops(text);
+            let shown = collapsed.as_deref().unwrap_or(text);
             if tail_start_ms.is_none() {
                 tail_start_ms = Some(self.window_start_offset_ms.saturating_add(seg.start_ms));
             }
@@ -559,7 +692,17 @@ impl SlidingWindowState {
             if !tail_text.is_empty() {
                 tail_text.push(' ');
             }
-            tail_text.push_str(text);
+            tail_text.push_str(shown);
+            // Word confidences only survive if the text wasn't rewritten
+            // and still lines up word-for-word; otherwise drop the whole
+            // list rather than mis-shade.
+            if let Some(words) = tail_words.as_mut() {
+                if collapsed.is_none() && words_match_text(&seg.words, text) {
+                    words.extend(seg.words.iter().cloned());
+                } else {
+                    tail_words = None;
+                }
+            }
         }
 
         if !tail_text.is_empty() {
@@ -573,6 +716,7 @@ impl SlidingWindowState {
                     ended_at_ms: tail_end_ms,
                     is_final: false,
                     speaker_label: None,
+                    words: tail_words,
                 });
                 self.last_partial_text = Some(tail_text);
             }
@@ -602,6 +746,197 @@ impl SlidingWindowState {
         }
 
         Ok(out)
+    }
+
+    /// Run one candidate final through the quality filters (#974
+    /// follow-ups + #1013), in order of cheapness and certainty:
+    ///
+    /// 1. junk fragment (".com", lone punctuation) → drop;
+    /// 2. whole-final media artefact ("Thanks for watching!") → drop;
+    /// 3. mean token logprob below the opt-in threshold → drop;
+    /// 4. in-segment n-gram loop → collapse to one copy (kept);
+    /// 5. identical to the previous committed final → drop.
+    ///
+    /// Pure with respect to `self` — the caller owns the high-water-mark
+    /// and `last_committed_text` bookkeeping.
+    fn vet_final(&self, seg: &StreamSegment, text: &str) -> FinalVerdict {
+        if is_hallucination_fragment(text) {
+            return FinalVerdict::Drop("junk fragment");
+        }
+        if is_media_artefact_final(text) {
+            return FinalVerdict::Drop("media artefact phrase");
+        }
+        if let (Some(min), Some(avg)) = (self.config.min_final_avg_logprob, seg.avg_logprob) {
+            if avg < min {
+                return FinalVerdict::Drop("low confidence");
+            }
+        }
+        if let Some(avg) = seg.avg_logprob {
+            tracing::debug!(
+                avg_logprob = avg,
+                words = text.split_whitespace().count(),
+                "streaming: final confidence"
+            );
+        }
+        let final_text = match collapse_ngram_loops(text) {
+            Some(collapsed) => {
+                tracing::info!(
+                    before_words = text.split_whitespace().count(),
+                    after_words = collapsed.split_whitespace().count(),
+                    "streaming: collapsed in-segment n-gram loop (#1013)"
+                );
+                collapsed
+            }
+            None => text.to_owned(),
+        };
+        if is_repeat_final(self.last_committed_text.as_deref(), &final_text) {
+            return FinalVerdict::Drop("repeated final (decoder loop)");
+        }
+        FinalVerdict::Emit(final_text)
+    }
+
+    /// LocalAgreement check: did the previous inference produce the same
+    /// (normalised) text for roughly the same time span?
+    fn hypothesis_agrees(&self, seg: &StreamSegment) -> bool {
+        let abs_start = self.window_start_offset_ms.saturating_add(seg.start_ms);
+        let abs_end = self.window_start_offset_ms.saturating_add(seg.end_ms);
+        let norm = normalize_for_repeat(seg.text.trim());
+        self.prev_hypothesis.iter().any(|(ps, pe, pt)| {
+            *pt == norm
+                && ps.abs_diff(abs_start) <= LOCAL_AGREEMENT_TOLERANCE_MS
+                && pe.abs_diff(abs_end) <= LOCAL_AGREEMENT_TOLERANCE_MS
+        })
+    }
+
+    /// VAD-boundary commit (#1013, opt-in via `HUSH_VAD_BOUNDARY=1`):
+    /// transcribe the window up to `boundary_abs_ms` — the end of a
+    /// speech region the VAD just closed — commit everything in it as
+    /// final, and slide the window past it.
+    ///
+    /// This is the streaming analogue of WhisperX's / whisper.cpp
+    /// `--vad` approach (BSD-2 / MIT): the decoder sees one speech
+    /// region bounded by real pauses instead of an arbitrary time slice
+    /// that may start or end mid-word or in silence, which is where the
+    /// literature measures the biggest hallucination reduction
+    /// (Barański et al., ICASSP 2025). The time-based `tick` keeps
+    /// running alongside it for partials and for monologues longer
+    /// than the window.
+    ///
+    /// No-op (returns empty) when the boundary is at/before the window
+    /// start or leaves less than [`MIN_BOUNDARY_INFER_MS`] of audio —
+    /// nothing worth a decode.
+    pub fn commit_through(
+        &mut self,
+        inferer: &mut dyn WhisperLikeInferer,
+        boundary_abs_ms: u64,
+    ) -> Result<Vec<Utterance>> {
+        if self.window.is_empty() || boundary_abs_ms <= self.window_start_offset_ms {
+            return Ok(Vec::new());
+        }
+        let rel_ms = boundary_abs_ms - self.window_start_offset_ms;
+        let cut = ms_to_samples(rel_ms, self.sample_rate).min(self.window.len());
+        if cut < ms_to_samples(MIN_BOUNDARY_INFER_MS, self.sample_rate) {
+            return Ok(Vec::new());
+        }
+        let segments = inferer.infer(&self.window[..cut])?;
+        tracing::debug!(
+            region_ms = samples_to_ms(cut, self.sample_rate),
+            segments = segments.len(),
+            "streaming: VAD-boundary commit inference ran"
+        );
+        let cut_ms = samples_to_ms(cut, self.sample_rate);
+        let mut out = Vec::new();
+        for seg in &segments {
+            let text = seg.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            // Whisper pads short buffers to 30 s and can emit a segment
+            // timestamped wholly past the real audio (usually a
+            // hallucination on the padding). Clamping only its end to the
+            // cut would commit it with start > end, so skip it outright.
+            if seg.start_ms >= cut_ms {
+                continue;
+            }
+            let abs_start_ms = self.window_start_offset_ms.saturating_add(seg.start_ms);
+            let abs_end_ms = self
+                .window_start_offset_ms
+                .saturating_add(seg.end_ms.min(cut_ms));
+            if abs_end_ms <= self.committed_until_ms {
+                continue;
+            }
+            match self.vet_final(seg, text) {
+                FinalVerdict::Drop(reason) => {
+                    self.committed_until_ms = abs_end_ms;
+                    log_dropped_final(reason, text, seg.avg_logprob);
+                }
+                FinalVerdict::Emit(final_text) => {
+                    out.push(Utterance {
+                        text: final_text.clone(),
+                        started_at_ms: abs_start_ms.max(self.committed_until_ms),
+                        ended_at_ms: abs_end_ms,
+                        is_final: true,
+                        speaker_label: None,
+                        words: None,
+                    });
+                    self.committed_until_ms = abs_end_ms;
+                    self.last_committed_text = Some(final_text);
+                }
+            }
+        }
+        self.drop_head(cut);
+        // The region is closed: whatever partial the user saw for it is
+        // now either committed or filtered, and the old hypothesis no
+        // longer overlaps the window.
+        self.last_partial_text = None;
+        self.prev_hypothesis.clear();
+        Ok(out)
+    }
+
+    /// Drop leading non-speech from the window up to `abs_ms` (#1013,
+    /// VAD-boundary mode). Called on speech onset after a pause so the
+    /// next inference starts at the speech instead of at seconds of
+    /// silence — a silence-led window is exactly what Whisper
+    /// confabulates on. Refuses (no-op) while a partial is showing, so
+    /// it can never discard text the user can see.
+    pub fn skip_head_until(&mut self, abs_ms: u64) {
+        if self.last_partial_text.is_some() || abs_ms <= self.window_start_offset_ms {
+            return;
+        }
+        let cut = ms_to_samples(abs_ms - self.window_start_offset_ms, self.sample_rate)
+            .min(self.window.len());
+        if cut > 0 {
+            self.drop_head(cut);
+        }
+    }
+
+    /// Zeroize + drop `count` head samples, advancing the window offset
+    /// and the commit high-water mark with it (nothing before the new
+    /// window start can be committed any more).
+    fn drop_head(&mut self, count: usize) {
+        let count = count.min(self.window.len());
+        use zeroize::Zeroize;
+        self.window[..count].zeroize();
+        self.window.drain(..count);
+        self.window_start_offset_ms = self
+            .window_start_offset_ms
+            .saturating_add(samples_to_ms(count, self.sample_rate));
+        if self.committed_until_ms < self.window_start_offset_ms {
+            self.committed_until_ms = self.window_start_offset_ms;
+        }
+        self.samples_since_last_inference =
+            self.samples_since_last_inference.min(self.window.len());
+    }
+
+    /// Test-only: absolute session offset (ms) of `window[0]`.
+    #[cfg(test)]
+    pub(crate) fn window_start_ms_for_test(&self) -> u64 {
+        self.window_start_offset_ms
+    }
+
+    /// Absolute session offset (ms) of the end of the audio fed so far.
+    pub fn fed_until_ms(&self) -> u64 {
+        samples_to_ms(self.total_samples_fed as usize, self.sample_rate)
     }
 
     /// Force a final inference and emit everything still in the window
@@ -634,6 +969,7 @@ impl SlidingWindowState {
                             ended_at_ms: window_end_ms,
                             is_final: true,
                             speaker_label: None,
+                            words: None,
                         }]
                     } else {
                         tracing::warn!(
@@ -672,7 +1008,7 @@ impl SlidingWindowState {
             "streaming finish: tail flush inference ran"
         );
         let mut out = Vec::new();
-        for seg in segments {
+        for seg in &segments {
             let text = seg.text.trim();
             if text.is_empty() {
                 continue;
@@ -682,14 +1018,27 @@ impl SlidingWindowState {
             if abs_end_ms <= self.committed_until_ms {
                 continue;
             }
+            // Same quality filters as `tick` (#1013) — before this,
+            // the tail flush committed junk fragments and repeats that
+            // the steady-state path would have dropped.
+            let final_text = match self.vet_final(seg, text) {
+                FinalVerdict::Drop(reason) => {
+                    self.committed_until_ms = abs_end_ms;
+                    log_dropped_final(reason, text, seg.avg_logprob);
+                    continue;
+                }
+                FinalVerdict::Emit(t) => t,
+            };
             out.push(Utterance {
-                text: text.to_owned(),
+                text: final_text.clone(),
                 started_at_ms: abs_start_ms.max(self.committed_until_ms),
                 ended_at_ms: abs_end_ms,
                 is_final: true,
                 speaker_label: None,
+                words: None,
             });
             self.committed_until_ms = abs_end_ms;
+            self.last_committed_text = Some(final_text);
         }
         // Drain the window — finish is terminal. Zeroize first so the
         // PCM backing allocation is scrubbed before its length is set
@@ -877,6 +1226,7 @@ where
             ended_at_ms: self.started_at_ms.saturating_add(duration_ms),
             is_final: true,
             speaker_label: None,
+            words: None,
         }])
     }
 }
@@ -941,6 +1291,7 @@ mod tests {
             infer_interval_ms: 1_000,
             commit_tail_ms: 2_000,
             min_first_inference_ms: 500,
+            ..SlidingWindowConfig::meeting_defaults()
         }
     }
 
@@ -953,6 +1304,7 @@ mod tests {
             start_ms: 0,
             end_ms: 100,
             text: "should not appear".into(),
+            ..Default::default()
         }]]);
         let out = state.tick(&mut inferer).unwrap();
         assert!(out.is_empty(), "tick must not infer below min threshold");
@@ -973,6 +1325,7 @@ mod tests {
             start_ms: 0,
             end_ms: 1_000,
             text: "hello".into(),
+            ..Default::default()
         }]]);
         let out = state.tick(&mut inferer).unwrap();
         assert_eq!(out.len(), 1, "exactly one partial");
@@ -992,11 +1345,13 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "hello".into(),
+                ..Default::default()
             }],
             vec![StreamSegment {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "hello".into(),
+                ..Default::default()
             }],
         ]);
         let first = state.tick(&mut inferer).unwrap();
@@ -1019,11 +1374,13 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "hello".into(),
+                ..Default::default()
             }],
             vec![StreamSegment {
                 start_ms: 0,
                 end_ms: 2_000,
                 text: "hello world".into(),
+                ..Default::default()
             }],
         ]);
         let _first = state.tick(&mut inferer).unwrap();
@@ -1048,16 +1405,19 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "first".into(),
+                ..Default::default()
             },
             StreamSegment {
                 start_ms: 1_000,
                 end_ms: 2_000,
                 text: "second".into(),
+                ..Default::default()
             },
             StreamSegment {
                 start_ms: 2_500,
                 end_ms: 3_500,
                 text: "third".into(),
+                ..Default::default()
             },
         ]]);
         let out = state.tick(&mut inferer).unwrap();
@@ -1102,16 +1462,19 @@ mod tests {
                     start_ms: 0,
                     end_ms: 1_000,
                     text: "first".into(),
+                    ..Default::default()
                 },
                 StreamSegment {
                     start_ms: 1_000,
                     end_ms: 2_000,
                     text: "second".into(),
+                    ..Default::default()
                 },
                 StreamSegment {
                     start_ms: 2_500,
                     end_ms: 3_500,
                     text: "third".into(),
+                    ..Default::default()
                 },
             ],
             // Tick 2: post-slide, window_start_offset = 2000. Window
@@ -1126,11 +1489,13 @@ mod tests {
                     start_ms: 500,
                     end_ms: 1_500,
                     text: "third revised".into(),
+                    ..Default::default()
                 },
                 StreamSegment {
                     start_ms: 2_000,
                     end_ms: 2_500,
                     text: "fourth".into(),
+                    ..Default::default()
                 },
             ],
         ]);
@@ -1189,11 +1554,13 @@ mod tests {
                     start_ms: 0,
                     end_ms: 1_000,
                     text: "stable".into(),
+                    ..Default::default()
                 },
                 StreamSegment {
                     start_ms: 3_000,
                     end_ms: 3_500,
                     text: "tail".into(),
+                    ..Default::default()
                 },
             ],
             // Tick 2: post-slide window starts at offset 1000. Whisper
@@ -1239,6 +1606,7 @@ mod tests {
             start_ms: 0,
             end_ms: 1_000,
             text: "tail of session".into(),
+            ..Default::default()
         }]]);
         let finals = state.finish(&mut inferer).unwrap();
         assert_eq!(finals.len(), 1);
@@ -1264,11 +1632,13 @@ mod tests {
                     start_ms: 0,
                     end_ms: 1_000,
                     text: "committed".into(),
+                    ..Default::default()
                 },
                 StreamSegment {
                     start_ms: 3_000,
                     end_ms: 3_500,
                     text: "tail".into(),
+                    ..Default::default()
                 },
             ],
             // finish() call: the in-flight tail ("tail") plus a fresh
@@ -1283,11 +1653,13 @@ mod tests {
                     start_ms: 1_500,
                     end_ms: 2_000,
                     text: "tail revised".into(),
+                    ..Default::default()
                 },
                 StreamSegment {
                     start_ms: 2_000,
                     end_ms: 2_500,
                     text: "trailing".into(),
+                    ..Default::default()
                 },
             ],
         ]);
@@ -1358,11 +1730,13 @@ mod tests {
                 start_ms: 1_500,
                 end_ms: 2_000, // exactly at the boundary
                 text: "boundary segment".into(),
+                ..Default::default()
             },
             StreamSegment {
                 start_ms: 2_500,
                 end_ms: 3_500,
                 text: "later tail".into(),
+                ..Default::default()
             },
         ]]);
         let out = state.tick(&mut inferer).unwrap();
@@ -1393,11 +1767,13 @@ mod tests {
                 start_ms: 0,
                 end_ms: 500,
                 text: "  ".into(),
+                ..Default::default()
             },
             StreamSegment {
                 start_ms: 500,
                 end_ms: 1_000,
                 text: "real".into(),
+                ..Default::default()
             },
         ]]);
         let out = state.tick(&mut inferer).unwrap();
@@ -1472,11 +1848,13 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "in flight".into(),
+                ..Default::default()
             }],
             vec![StreamSegment {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "in flight".into(),
+                ..Default::default()
             }],
         ]);
         let normal = state.tick(&mut inferer).unwrap();
@@ -1586,5 +1964,336 @@ mod tests {
         assert_eq!(ms_to_samples(1_000, 48_000), 48_000);
         // 44.1 kHz: not exact, but round-down is documented.
         assert_eq!(samples_to_ms(44_100, 44_100), 1_000);
+    }
+}
+
+/// Policy-level tests for the #1013 quality features: the whole-final
+/// filters, opt-in confidence threshold, LocalAgreement-2 early commit,
+/// and word-confidence attachment on partials.
+#[cfg(test)]
+mod quality_policy_tests {
+    use super::*;
+
+    struct Scripted(Vec<Vec<StreamSegment>>);
+    impl WhisperLikeInferer for Scripted {
+        fn infer(&mut self, _mono: &[f32]) -> Result<Vec<StreamSegment>> {
+            Ok(if self.0.is_empty() {
+                Vec::new()
+            } else {
+                self.0.remove(0)
+            })
+        }
+    }
+
+    fn cfg() -> SlidingWindowConfig {
+        SlidingWindowConfig {
+            window_max_ms: 30_000,
+            infer_interval_ms: 1_000,
+            commit_tail_ms: 2_000,
+            min_first_inference_ms: 500,
+            ..SlidingWindowConfig::meeting_defaults()
+        }
+    }
+
+    fn seg(start_ms: u64, end_ms: u64, text: &str) -> StreamSegment {
+        StreamSegment {
+            start_ms,
+            end_ms,
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    fn feed_secs(state: &mut SlidingWindowState, secs: usize) {
+        state.feed_mono(&vec![0.1_f32; 16_000 * secs]);
+    }
+
+    fn finals(out: &[Utterance]) -> Vec<&str> {
+        out.iter()
+            .filter(|u| u.is_final)
+            .map(|u| u.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn media_artefact_final_is_dropped_but_real_speech_kept() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        let mut inf = Scripted(vec![vec![
+            seg(0, 400, "Thanks for watching!"),
+            seg(400, 900, "Let's start with the budget."),
+        ]]);
+        feed_secs(&mut st, 3);
+        let out = st.tick(&mut inf).unwrap();
+        assert_eq!(finals(&out), ["Let's start with the budget."]);
+    }
+
+    #[test]
+    fn looped_final_is_collapsed_not_dropped() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        let mut inf = Scripted(vec![vec![seg(
+            0,
+            900,
+            "we need to we need to we need to we need to ship it",
+        )]]);
+        feed_secs(&mut st, 3);
+        let out = st.tick(&mut inf).unwrap();
+        assert_eq!(finals(&out), ["we need to ship it"]);
+    }
+
+    #[test]
+    fn low_confidence_final_is_kept_when_threshold_unset() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        let mut s = seg(0, 900, "probably junk words here");
+        s.avg_logprob = Some(-3.0);
+        let mut inf = Scripted(vec![vec![s]]);
+        feed_secs(&mut st, 3);
+        assert_eq!(finals(&st.tick(&mut inf).unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn low_confidence_final_is_dropped_when_threshold_set() {
+        let mut c = cfg();
+        c.min_final_avg_logprob = Some(-1.5);
+        let mut st = SlidingWindowState::new(16_000, c);
+        let mut junk = seg(0, 400, "probably junk words here");
+        junk.avg_logprob = Some(-2.0);
+        let mut real = seg(400, 900, "this one is fine");
+        real.avg_logprob = Some(-0.3);
+        let mut inf = Scripted(vec![vec![junk, real]]);
+        feed_secs(&mut st, 3);
+        assert_eq!(finals(&st.tick(&mut inf).unwrap()), ["this one is fine"]);
+    }
+
+    #[test]
+    fn finish_applies_the_same_filters() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        let mut inf = Scripted(vec![vec![
+            seg(0, 400, ".com"),
+            seg(400, 800, "Thank you for watching."),
+            seg(800, 1_200, "Real closing words."),
+        ]]);
+        feed_secs(&mut st, 2);
+        let out = st.finish(&mut inf).unwrap();
+        assert_eq!(finals(&out), ["Real closing words."]);
+    }
+
+    #[test]
+    fn local_agreement_off_waits_for_commit_tail() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        let hyp = vec![
+            seg(0, 1_500, "first sentence."),
+            seg(1_500, 2_800, "second"),
+        ];
+        let mut inf = Scripted(vec![hyp.clone(), hyp]);
+        feed_secs(&mut st, 3);
+        // Window 3 s, cutoff 1 s: nothing stable yet.
+        assert!(finals(&st.tick(&mut inf).unwrap()).is_empty());
+        feed_secs(&mut st, 1);
+        // Window 4 s, cutoff 2 s: "first sentence." (ends 1.5 s) ages in.
+        assert_eq!(finals(&st.tick(&mut inf).unwrap()), ["first sentence."]);
+    }
+
+    #[test]
+    fn local_agreement_commits_agreed_segment_early() {
+        let mut c = cfg();
+        c.local_agreement = true;
+        // Long commit tail so only agreement can commit anything.
+        c.commit_tail_ms = 10_000;
+        let mut st = SlidingWindowState::new(16_000, c);
+        let mut inf = Scripted(vec![
+            vec![
+                seg(0, 1_500, "first sentence."),
+                seg(1_500, 2_800, "second"),
+            ],
+            vec![
+                seg(0, 1_600, "First sentence."),
+                seg(1_600, 3_000, "second part"),
+                seg(3_000, 3_900, "third"),
+            ],
+        ]);
+        feed_secs(&mut st, 3);
+        // First hypothesis: nothing to agree with yet.
+        assert!(finals(&st.tick(&mut inf).unwrap()).is_empty());
+        feed_secs(&mut st, 1);
+        // "first sentence." agrees (case-insensitive, ±1 s). "second"
+        // vs "second part" disagrees, so the commit stops there; the
+        // newest segment never commits early.
+        let out = st.tick(&mut inf).unwrap();
+        assert_eq!(finals(&out), ["First sentence."]);
+        let partial = out.iter().find(|u| !u.is_final).unwrap();
+        assert_eq!(partial.text, "second part third");
+    }
+
+    #[test]
+    fn local_agreement_never_commits_newest_segment() {
+        let mut c = cfg();
+        c.local_agreement = true;
+        c.commit_tail_ms = 10_000;
+        let mut st = SlidingWindowState::new(16_000, c);
+        let only = vec![seg(0, 2_500, "same text")];
+        let mut inf = Scripted(vec![only.clone(), only]);
+        feed_secs(&mut st, 3);
+        st.tick(&mut inf).unwrap();
+        feed_secs(&mut st, 1);
+        assert!(finals(&st.tick(&mut inf).unwrap()).is_empty());
+    }
+
+    fn with_words(mut s: StreamSegment) -> StreamSegment {
+        s.words = s
+            .text
+            .split_whitespace()
+            .map(|w| WordConfidence {
+                word: w.into(),
+                p: 0.42,
+            })
+            .collect();
+        s
+    }
+
+    #[test]
+    fn partial_carries_words_only_when_shading_enabled() {
+        let hyp = || vec![with_words(seg(1_500, 2_800, "hello there"))];
+
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let out = st.tick(&mut Scripted(vec![hyp()])).unwrap();
+        assert!(out[0].words.is_none(), "shading off → no words on the wire");
+
+        let mut c = cfg();
+        c.attach_word_confidence = true;
+        let mut st = SlidingWindowState::new(16_000, c);
+        feed_secs(&mut st, 3);
+        let out = st.tick(&mut Scripted(vec![hyp()])).unwrap();
+        let words = out[0].words.as_ref().expect("shading on → words");
+        assert_eq!(words.len(), 2);
+        assert!(!out[0].is_final);
+    }
+
+    #[test]
+    fn partial_drops_words_when_text_was_rewritten() {
+        let mut c = cfg();
+        c.attach_word_confidence = true;
+        let mut st = SlidingWindowState::new(16_000, c);
+        feed_secs(&mut st, 3);
+        let looped = with_words(seg(
+            1_500,
+            2_800,
+            "go to the go to the go to the go to the shop",
+        ));
+        let out = st.tick(&mut Scripted(vec![vec![looped]])).unwrap();
+        assert_eq!(out[0].text, "go to the shop");
+        assert!(out[0].words.is_none());
+    }
+
+    #[test]
+    fn partial_hides_media_artefact_segments() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let out = st
+            .tick(&mut Scripted(vec![vec![
+                seg(1_500, 2_000, "Thanks for watching!"),
+                seg(2_000, 2_800, "okay so"),
+            ]]))
+            .unwrap();
+        assert_eq!(out[0].text, "okay so");
+    }
+
+    #[test]
+    fn finals_never_carry_words() {
+        let mut c = cfg();
+        c.attach_word_confidence = true;
+        let mut st = SlidingWindowState::new(16_000, c);
+        feed_secs(&mut st, 3);
+        let out = st
+            .tick(&mut Scripted(vec![vec![with_words(seg(
+                0,
+                800,
+                "stable words",
+            ))]]))
+            .unwrap();
+        let f = out.iter().find(|u| u.is_final).unwrap();
+        assert!(f.words.is_none());
+    }
+
+    #[test]
+    fn commit_through_commits_region_regardless_of_commit_tail() {
+        let mut c = cfg();
+        c.commit_tail_ms = 10_000;
+        let mut st = SlidingWindowState::new(16_000, c);
+        feed_secs(&mut st, 3);
+        let mut inf = Scripted(vec![vec![
+            seg(0, 1_200, "region one"),
+            seg(1_200, 1_900, "and more"),
+        ]]);
+        let out = st.commit_through(&mut inf, 2_000).unwrap();
+        assert_eq!(finals(&out), ["region one", "and more"]);
+        assert!(out.iter().all(|u| u.is_final));
+        assert_eq!(st.window_start_ms_for_test(), 2_000);
+    }
+
+    #[test]
+    fn commit_through_clamps_segment_end_to_boundary() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let mut inf = Scripted(vec![vec![seg(0, 2_400, "overhangs the cut")]]);
+        let out = st.commit_through(&mut inf, 2_000).unwrap();
+        assert_eq!(out[0].ended_at_ms, 2_000);
+    }
+
+    #[test]
+    fn commit_through_skips_segments_starting_past_the_cut() {
+        // A segment timestamped wholly past the cut (whisper's 30 s padding)
+        // must not be committed with start > end.
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let mut inf = Scripted(vec![vec![
+            seg(0, 1_500, "real speech"),
+            seg(2_200, 2_900, "thank you"),
+        ]]);
+        let out = st.commit_through(&mut inf, 2_000).unwrap();
+        assert_eq!(finals(&out), ["real speech"]);
+        assert!(out.iter().all(|u| u.started_at_ms <= u.ended_at_ms));
+    }
+
+    #[test]
+    fn commit_through_skips_tiny_regions_without_inferring() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 1);
+        let mut inf = Scripted(vec![vec![seg(0, 100, "should not run")]]);
+        assert!(st.commit_through(&mut inf, 100).unwrap().is_empty());
+        assert_eq!(inf.0.len(), 1, "inferer must not be called");
+    }
+
+    #[test]
+    fn commit_through_applies_quality_filters() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let mut inf = Scripted(vec![vec![seg(0, 1_000, "Thanks for watching!")]]);
+        assert!(st.commit_through(&mut inf, 2_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn skip_head_until_trims_leading_silence() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        st.skip_head_until(1_700);
+        assert_eq!(st.window_start_ms_for_test(), 1_700);
+        // Later segment timestamps resolve against the new offset.
+        let out = st
+            .tick(&mut Scripted(vec![vec![seg(0, 300, "hi")]]))
+            .unwrap();
+        assert_eq!(out[0].started_at_ms, 1_700);
+    }
+
+    #[test]
+    fn skip_head_until_refuses_while_partial_visible() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let out = st
+            .tick(&mut Scripted(vec![vec![seg(1_500, 2_800, "in flight")]]))
+            .unwrap();
+        assert!(!out[0].is_final);
+        st.skip_head_until(2_000);
+        assert_eq!(st.window_start_ms_for_test(), 0);
     }
 }

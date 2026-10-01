@@ -55,9 +55,9 @@ export function seedMockBus(): void {
   ];
 
   const models: ModelCard[] = [
-    { id: "base", displayName: "Whisper Base", filename: "ggml-base.bin", sizeMb: 142, speedRating: 4, accuracyRating: 2, description: "Fast, good for short dictation.", isDefault: true, isDownloaded: true, isSelected: true, expectedPath: "/mock/models/ggml-base.bin" },
-    { id: "small", displayName: "Whisper Small", filename: "ggml-small.bin", sizeMb: 466, speedRating: 3, accuracyRating: 3, description: "Balanced speed and accuracy.", isDefault: false, isDownloaded: true, isSelected: false, expectedPath: "/mock/models/ggml-small.bin" },
-    { id: "medium", displayName: "Whisper Medium", filename: "ggml-medium.bin", sizeMb: 1500, speedRating: 2, accuracyRating: 4, description: "Higher accuracy, slower.", isDefault: false, isDownloaded: false, isSelected: false, expectedPath: "/mock/models/ggml-medium.bin" },
+    { id: "base", displayName: "Whisper Base", filename: "ggml-base.bin", sizeMb: 142, speedRating: 4, accuracyRating: 2, description: "Fast, good for short dictation.", isDefault: true, englishOnly: false, isDownloaded: true, isSelected: true, expectedPath: "/mock/models/ggml-base.bin" },
+    { id: "small", displayName: "Whisper Small", filename: "ggml-small.bin", sizeMb: 466, speedRating: 3, accuracyRating: 3, description: "Balanced speed and accuracy.", isDefault: false, englishOnly: false, isDownloaded: true, isSelected: false, expectedPath: "/mock/models/ggml-small.bin" },
+    { id: "medium", displayName: "Whisper Medium", filename: "ggml-medium.bin", sizeMb: 1500, speedRating: 2, accuracyRating: 4, description: "Higher accuracy, slower.", isDefault: false, englishOnly: false, isDownloaded: false, isSelected: false, expectedPath: "/mock/models/ggml-medium.bin" },
   ];
 
   let replacements = [

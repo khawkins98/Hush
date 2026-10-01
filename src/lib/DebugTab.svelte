@@ -205,7 +205,7 @@
     <details>
       <summary class="startup-summary">
         <h2 id="debug-startup-heading" class="group-heading">
-          ⏱ Startup
+          <span aria-hidden="true">⏱</span> Startup
           <span
             class="startup-total"
             class:startup-total-slow={isSlow}

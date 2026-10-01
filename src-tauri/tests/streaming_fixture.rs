@@ -225,3 +225,132 @@ fn streaming_fixture_emits_partials_and_finals() {
         panic!("expected at least one final utterance, got zero");
     }
 }
+
+/// Build a 16 kHz mono "meeting-like" signal from the JFK clip: leading
+/// silence, speech, a stretch of low-level noise (the condition Whisper
+/// hallucinates on), speech again, trailing silence. Deterministic
+/// pseudo-random noise so runs are comparable.
+fn gappy_meeting_signal(jfk: &CapturedAudio) -> Vec<f32> {
+    assert_eq!(jfk.format.channels, 1, "jfk fixture is mono");
+    let speech = hush_lib::transcription::resample::resample_to_mono(
+        &jfk.samples,
+        jfk.format.sample_rate,
+        16_000,
+    );
+    let mut seed: u32 = 0x1234_5678;
+    let mut noise = |n: usize, amp: f32| -> Vec<f32> {
+        (0..n)
+            .map(|_| {
+                // xorshift32 → uniform [-1, 1).
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed as f32 / u32::MAX as f32 * 2.0 - 1.0) * amp
+            })
+            .collect()
+    };
+    let mut out = Vec::new();
+    out.extend(noise(16_000 * 2, 0.0005)); // 2 s near-silence
+    out.extend_from_slice(&speech);
+    out.extend(noise(16_000 * 5, 0.004)); // 5 s low hiss (~-48 dBFS)
+    out.extend_from_slice(&speech);
+    out.extend(noise(16_000 * 3, 0.0005)); // 3 s near-silence
+    out
+}
+
+/// Real-audio A/B harness for the #1013 streaming options. Feeds the
+/// gappy signal through a real Silero-gated streaming session in 500 ms
+/// ticks (the pump cadence) and prints every final with its emit lag.
+/// Run with and without `HUSH_VAD_BOUNDARY=1`,
+/// `HUSH_STREAM_LOCAL_AGREEMENT=1`, `HUSH_FINAL_MIN_AVG_LOGPROB=…`,
+/// `RUST_LOG=hush=debug` to compare:
+///
+/// ```text
+/// HUSH_TEST_MODEL=… cargo test --features whisper --test streaming_fixture \
+///   streaming_fixture_gappy_signal -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore] // Requires HUSH_TEST_MODEL; see module doc.
+fn streaming_fixture_gappy_signal() {
+    let Some(model_path) = read_path_env("HUSH_TEST_MODEL", None) else {
+        return;
+    };
+    if std::env::var("RUST_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
+    let jfk = load_wav_as_captured_audio(&bundled_jfk_path());
+    let signal = gappy_meeting_signal(&jfk);
+    let total_ms = signal.len() as u64 * 1000 / 16_000;
+
+    let transcriber = WhisperTranscription::new(&model_path).expect("load whisper model");
+    let vad = hush_lib::vad::onnx::SileroVad::load().expect("load bundled Silero VAD");
+    use hush_lib::vad::VadModel as _;
+    let mut session = transcriber
+        .start_stream(
+            CaptureFormat {
+                sample_rate: 16_000,
+                channels: 1,
+            },
+            "",
+            vad.new_session(),
+        )
+        .expect("open streaming session");
+
+    let started = std::time::Instant::now();
+    let chunk = 16_000 / 2;
+    let mut finals: Vec<(u64, Utterance)> = Vec::new();
+    let mut partials = 0usize;
+    for (i, c) in signal.chunks(chunk).enumerate() {
+        session.feed(c).expect("feed");
+        let fed_ms = ((i + 1) * chunk) as u64 * 1000 / 16_000;
+        for u in session.drain().expect("drain") {
+            if u.is_final {
+                finals.push((fed_ms, u));
+            } else {
+                partials += 1;
+            }
+        }
+    }
+    for u in session.finish().expect("finish") {
+        finals.push((total_ms, u));
+    }
+    let wall = started.elapsed();
+
+    eprintln!(
+        "gappy: {} ms of audio, {} finals, {} partials, wall {:?} (env: VAD_BOUNDARY={:?} LOCAL_AGREEMENT={:?} MIN_LOGPROB={:?})",
+        total_ms,
+        finals.len(),
+        partials,
+        wall,
+        std::env::var("HUSH_VAD_BOUNDARY").ok(),
+        std::env::var("HUSH_STREAM_LOCAL_AGREEMENT").ok(),
+        std::env::var("HUSH_FINAL_MIN_AVG_LOGPROB").ok(),
+    );
+    let mut lags = Vec::new();
+    for (fed_ms, u) in &finals {
+        let lag = fed_ms.saturating_sub(u.ended_at_ms);
+        lags.push(lag);
+        eprintln!(
+            "  FINAL [{:>6}-{:>6}ms] emitted@{:>6}ms lag {:>5}ms {:?}",
+            u.started_at_ms, u.ended_at_ms, fed_ms, lag, u.text
+        );
+    }
+    if !lags.is_empty() {
+        let mean = lags.iter().sum::<u64>() / lags.len() as u64;
+        eprintln!("gappy: mean final lag {mean} ms (finish-flushed finals included)");
+    }
+    let joined = finals
+        .iter()
+        .map(|(_, u)| u.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    // Both copies of the speech must survive whatever filters are on.
+    assert!(
+        joined.matches("country").count() >= 2,
+        "expected both JFK passages; got {joined:?}"
+    );
+}

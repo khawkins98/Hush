@@ -8,13 +8,12 @@
 //! streaming transcription session mints a fresh [`VadSession`] at start
 //! (`new_session`) and feeds frames through it as audio arrives.
 //!
-//! Today only the **meeting** transcription path is streamed (and therefore
-//! VAD-gated). The dictation path is one-shot — it calls
-//! `Transcribe::transcribe_chunks` on the entire captured PTT buffer — and
-//! relies on the `FullParams` tuning (`set_temperature(0.0)` +
-//! `set_suppress_nst(true)`, see Task 5) for defense-in-depth. The slot is
-//! plumbed and ready if dictation ever moves to streaming or grows an
-//! input-trim path.
+//! Only the **meeting** transcription path is streamed (and therefore
+//! VAD-gated). The dictation path is one-shot, but since #1013 it runs the
+//! same model over the captured clip first to trim edge silence and pad
+//! short clips (`ipc::commands::dictation::pipeline::vad_trim_dictation`),
+//! skipping that step when the no-op model is loaded
+//! ([`VadModel::is_noop`]).
 
 // `onnx::SileroVad` depends on `tract-onnx`, which is only in the dep
 // graph when the `diarization-onnx` feature is on (it's the existing
@@ -38,6 +37,15 @@ pub const FRAME_LEN_SAMPLES: usize = 512;
 pub trait VadModel: Send + Sync {
     /// Mint a fresh per-stream session with zero-initialised recurrent state.
     fn new_session(&self) -> Box<dyn VadSession>;
+
+    /// `true` for [`NoopVad`], whose sessions report speech on every
+    /// frame. Callers that *act* on a no-speech verdict (the dictation
+    /// trim, #1013) must check this: with the no-op model every clip
+    /// looks like wall-to-wall speech, so "VAD found speech" means
+    /// nothing and the caller should keep its pre-VAD behaviour.
+    fn is_noop(&self) -> bool {
+        false
+    }
 }
 
 /// Per-stream state for one ongoing audio source. Mutable because Silero's
@@ -60,6 +68,10 @@ pub struct NoopVad;
 impl VadModel for NoopVad {
     fn new_session(&self) -> Box<dyn VadSession> {
         Box::new(NoopVadSession)
+    }
+
+    fn is_noop(&self) -> bool {
+        true
     }
 }
 

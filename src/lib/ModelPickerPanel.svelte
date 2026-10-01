@@ -68,31 +68,45 @@
       >&lt;app-data&gt;/models/</code
     > folder.
   </p>
+  <!-- Legend for the catalog's naming suffixes: "compact" and "English
+       only" otherwise read as marketing labels with no stated cost. -->
+  <p class="hint-prose model-legend" data-testid="model-legend">
+    <strong>Compact</strong> models are 8-bit or 5-bit quantized builds: a
+    smaller download and less memory, with near-identical accuracy.
+    <strong>English only</strong> models can't transcribe other languages.
+  </p>
 
   {#if modelsError}
     <ErrorDisplay error={modelsError} scope="Model" />
   {/if}
 
-  {#if modelsRestartNotice === "loaded"}
-    <p class="restart-notice notice-loaded" role="status">
-      ✓ Loaded — ready to record now (no restart needed).
-    </p>
-  {:else if modelsRestartNotice === "needs-download"}
-    <p class="restart-notice notice-warn" role="status">
-      Saved as default — but this model isn't downloaded yet. Click
-      <strong>Download</strong> on the card below to fetch it.
-    </p>
-  {:else if modelsRestartNotice === "needs-restart"}
-    <p class="restart-notice" role="status">
-      Saved. Restart Hush to use the new model.
-    </p>
-  {/if}
+  <!--
+    The live region wrapper stays mounted so screen readers announce
+    the notice when it appears; a `role="status"` element that is
+    itself inserted with its content is announced inconsistently.
+  -->
+  <div role="status" aria-live="polite" data-testid="model-notice-region">
+    {#if modelsRestartNotice === "loaded"}
+      <p class="restart-notice notice-loaded">
+        ✓ Loaded — ready to record now (no restart needed).
+      </p>
+    {:else if modelsRestartNotice === "needs-download"}
+      <p class="restart-notice notice-warn">
+        Saved as default — but this model isn't downloaded yet. Click
+        <strong>Download</strong> on the card below to fetch it.
+      </p>
+    {:else if modelsRestartNotice === "needs-restart"}
+      <p class="restart-notice">
+        Saved. Restart Hush to use the new model.
+      </p>
+    {/if}
+  </div>
 
   {#if !modelsLoaded}
     <p class="loading-skeleton">Loading models…</p>
   {/if}
 
-  <ul class="model-grid">
+  <ul class="model-grid" aria-label="Whisper models">
     {#each models as card (card.id)}
       {@const inFlight = downloading.get(card.id) ?? null}
       {@const failure = downloadFailed.get(card.id) ?? null}
@@ -125,6 +139,9 @@
               {card.displayName}
               {#if card.isSelected}
                 <span class="badge default-badge">Selected</span>
+              {/if}
+              {#if card.englishOnly}
+                <span class="badge lang-badge" data-testid="model-english-only-badge">English only</span>
               {/if}
             </h3>
           </header>
@@ -444,6 +461,14 @@ button.ghost.danger.confirming {
   border-radius: 999px;
   background-color: var(--info-border);
   color: var(--info-text);
+}
+
+/* Neutral outline so "English only" reads as a property of the
+   model, not competing with the filled "Selected" state badge. */
+.lang-badge {
+  background-color: transparent;
+  border: 1px solid var(--border-input);
+  color: var(--text-secondary);
 }
 
 .model-stats {

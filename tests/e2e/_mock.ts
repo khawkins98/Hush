@@ -372,6 +372,7 @@ export async function installMocks(
           isDefault: true,
           downloadUrl: "https://example.test/ggml-small.bin",
           sha256: "abc123",
+          englishOnly: false,
           isDownloaded: true,
           isSelected: true,
           expectedPath: "/tmp/models/ggml-small.bin",

@@ -260,7 +260,7 @@
     </label>
 
     {#if ptt.enabled && !ptt.listenerRunning}
-      <p class="settings-hint warn">
+      <p class="settings-hint warn" role="status">
         Couldn't start the keyboard listener. Try toggling off and
         back on; if that doesn't help, restart Hush.
       </p>
@@ -268,7 +268,13 @@
 
     <div class="combo-row">
       <span class="row-label">Combo</span>
-      <span class="combo-display" data-testid="ptt-combo-display">
+      <!-- Polite live region while capturing so a screen-reader user
+           hears the keys as they're held, not just a silent change. -->
+      <span
+        class="combo-display"
+        data-testid="ptt-combo-display"
+        aria-live={capturing ? "polite" : undefined}
+      >
         {#if capturing}
           {#if captureBuffer.length === 0}
             <em class="muted">Press your combo…</em>
@@ -320,7 +326,7 @@
     </div>
 
     {#if capturing}
-      <p class="settings-hint" class:settings-hint-flash={ignoredKeyHint}>
+      <p class="settings-hint" class:settings-hint-flash={ignoredKeyHint} role="status">
         {#if ignoredKeyHint}
           That key isn't usable as a PTT trigger. Combos must be
           made of modifiers, function keys, or Caps Lock.
@@ -333,7 +339,7 @@
     {/if}
 
     {#if ptt.error}
-      <p class="settings-error">{ptt.error}</p>
+      <p class="settings-error" role="alert">{ptt.error}</p>
     {/if}
   {/if}
 </div>

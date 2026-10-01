@@ -22,7 +22,9 @@ pub fn ensure_crypto_provider() {
 }
 
 /// A default client with the provider guaranteed. For tests and other
-/// call sites that would otherwise use `reqwest::Client::new()`.
+/// call sites that would otherwise use `reqwest::Client::new()` — never
+/// call that directly: it panics unless some *other* code already
+/// installed the provider, so tests pass or fail by execution order.
 pub fn client() -> reqwest::Client {
     ensure_crypto_provider();
     reqwest::Client::new()

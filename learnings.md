@@ -32,6 +32,126 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-10-01 — Transcription-quality round-up (#1013): what shipped on, what stayed opt-in, and why
+
+Findings from the #1013 review, implemented in one PR. The pure helpers
+live in `transcription/quality.rs`. Real-audio evidence comes from
+`tests/streaming_fixture.rs::streaming_fixture_gappy_signal`, which runs
+JFK, 5 s of hiss, then JFK again through a real Silero-gated session, and
+from `ipc/commands/dictation/tests.rs::vad_trim_real_audio`. Both are
+`#[ignore]`d and need `HUSH_TEST_MODEL`.
+
+**Per-segment confidence: logging only, no default threshold.**
+whisper.cpp's no-speech drop is an AND: `no_speech_prob > no_speech_thold`
+*and* `avg_logprob < logprob_thold`. Lowering
+`HUSH_WHISPER_NO_SPEECH_THOLD` alone therefore can't catch a *confident*
+hallucination. We now set `logprob_thold` explicitly (still -1.0, the
+whisper.cpp default, so behaviour is unchanged; tune it via
+`HUSH_WHISPER_LOGPROB_THOLD`). We also compute our own mean text-token
+logprob per segment: special tokens are excluded by `id >= token_eot`.
+It is logged at DEBUG for every final.
+
+On the fixtures, real finals scored between -0.16 and -0.40. The one
+hallucination we saw ("Thank you." from trailing hiss) scored -0.89.
+One data point can't set a threshold that won't eat quiet real speech,
+so `HUSH_FINAL_MIN_AVG_LOGPROB` is opt-in and unset by default. Pick a
+value from a real meeting's DEBUG log.
+
+**Media-artefact blocklist: whole-final only, and narrow.** A final is
+dropped only if *every* sentence in it is a listed outro or subtitle-credit
+phrase. Sentences split on `. ! ?` followed by whitespace, so "Amara.org"
+doesn't split. Anything a person might plausibly say as a whole turn
+("thank you", "yeah", "bye") stays off the list on purpose. Deleting a
+real turn costs more than keeping one stray outro.
+
+**Loop detector: collapse, don't drop.** The rule: a 2–6-word n-gram
+repeated ≥ 3 times back to back, with the run covering ≥ 8 words. Single
+words are exempt. So is any n-gram that is itself periodic ("no no" is a
+single-word repeat in disguise). Without that guard, "no no no no no no
+no no" would collapse through the bigram path. We keep one copy rather
+than dropping the final, because loops usually wrap real words.
+
+**`.en` models reverse #1009.** `FullParams` defaults `language` to
+`"en"` and Hush never overrides it, so every multilingual model is
+already pinned to English output. The `.en` builds therefore cost
+nothing we currently offer. They're badged "English only" anyway, in case
+a language picker lands. Upstream claims small.en is better on English;
+on the JFK clip it produced better punctuation and an identical word
+sequence. SHA-256s come from the HF `lfs.oid`, and both were re-verified
+by downloading with `shasum`.
+
+**Dictation VAD trim + pad: on by default, `HUSH_DICTATION_VAD_TRIM=0`
+to disable.**
+- Speech found: transcribe from the first speech frame minus 300 ms to
+  the last plus 400 ms, then zero-pad to 1.25 s. Padding short clips is
+  Handy's idea (MIT).
+- No speech: keep the old rule. Under 1 s is a no-op. Longer clips are
+  transcribed as-is, because a VAD miss must never silently eat quiet
+  speech.
+- The 1.5 s hiss-only fixture still reaches Whisper on the multilingual
+  model and comes back "(bells chiming)". Treating NoSpeech as a no-op
+  at every length is the obvious next step, but it's a policy call.
+- A new 300 ms absolute floor stops accidental taps.
+- The VAD scores a *gained* copy of each frame (the mic-gain slider), so
+  a boosted quiet mic isn't judged silent. The returned buffer is
+  un-gained, because the transcriber applies gain itself.
+- `NoopVad` reports speech on every frame, so `VadModel::is_noop()` was
+  added: with the no-op model the trim is skipped entirely.
+- Real audio: a 0.9 s clip that used to be dropped now gives "And so".
+  An arbitrary 0.8 s cut from the middle of a sentence gave "Knock!", a
+  hallucination on a clipped fragment. Real presses are whole words, but
+  this is the failure mode to watch for.
+
+**VAD-boundary windowing (`HUSH_VAD_BOUNDARY=1`): opt-in, but the best
+result in the round.** When the VAD sees 600 ms of silence after
+≥ 160 ms of speech, the session decodes exactly that region, commits it
+as final, and slides the window past it. On a speech onset, leading
+silence is trimmed off the window.
+
+On the gappy fixture (small q8_0), compared with the default:
+- Mean final lag fell from 5.5 s to 1.8 s.
+- Sentences segmented cleanly.
+- No junk was produced.
+
+The first real-audio run caught two bugs the unit tests had missed:
+- **The onset trim dropped "ask not".** A short blip below the region
+  minimum never got a boundary, so the next onset trimmed it away. The
+  fix: only trim when no speech has been seen since the last boundary.
+- **`finish()` decoded 3 s of trailing hiss** and produced "Thank you.".
+  The fix: in boundary mode, skip the tail decode when no speech followed
+  the last region.
+
+It stays off by default because the evidence is one synthetic fixture,
+not a real meeting. All decoding still goes through `WhisperInferer`, so
+the #612 lazy-init, drop-on-error and periodic-recreate triplet is
+untouched.
+
+**LocalAgreement-2 (`HUSH_STREAM_LOCAL_AGREEMENT=1`): implemented at
+segment granularity; no measurable effect.** Idea from ufal
+`whisper_streaming` (MIT). Whisper returns one segment per sentence over
+a 3–11 s window, and the newest segment must never commit early (it may
+be cut mid-word), so there is rarely an older agreeing segment to commit.
+The gappy fixture output was byte-identical to the default. A real win
+needs *word*-level agreement, which needs `set_token_timestamps(true)`
+plus per-word slide points. That's left as a follow-up; the segment
+variant stays opt-in and harmless.
+
+**Confidence shading (`HUSH_CONFIDENCE_SHADING=1`): partials only.**
+Word p is the geometric mean of each word's token p. It's attached to
+partials only, through a new optional `Utterance.words` field that is
+omitted from the wire when `None`, so the IPC shape is unchanged with
+the flag off. Finals are persisted as plain text, and adding a column
+for shading wasn't worth a migration yet. The frontend
+(`confidence-shading.ts`) treats `joinUtterances`' output as opaque. It
+only shades a partial line that still ends with that partial's text, and
+falls back to plain text otherwise, so speaker-label changes can't break
+it.
+
+**Utterance gained a field.** `Utterance` is constructed in the
+diarization test helpers (`diarization/mod.rs`,
+`tests/diarization_fixture.rs`). Each got a one-line `words: None` and
+no other diarization change.
+
 ## 2026-09-30 — HUD: a double-click on a button that re-renders itself raises the main window
 
 The HUD's ■ swaps itself for a "Stop recording? / Stop / Keep recording"
@@ -510,6 +630,12 @@ Whisper.cpp has knobs that would mitigate this (`no_speech_thold`,
 `logprob_thold`, built-in VAD) but **whisper-rs 0.14 doesn't expose
 them** — verified from the FullParams setter list. So the gate has to
 live upstream in our own code.
+
+> **Correction (2026-10-01, #1013):** this claim was wrong for two of the
+> three knobs. whisper-rs 0.14.4 has `FullParams::set_no_speech_thold`,
+> `FullParams::set_logprob_thold` and `WhisperState::full_get_token_data`
+> (per-token `p` / `plog`). Only native VAD is missing; that needs a
+> whisper-rs bump. See the 2026-10-01 entry.
 
 **Fix:** Silero VAD v5 (bundled ONNX, ~1.3MB after 16kHz specialisation,
 MIT) loaded once via `tract-onnx` (already in the tree for wespeaker).
