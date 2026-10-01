@@ -91,11 +91,16 @@
   // and let the error card (with its Retry) stand alone.
   let loadFailed = $derived(history.loadFailed || meeting.loadFailed);
 
-  /// Attach a Retry action to an error card, but only when that
-  /// stream's list load is what failed — `history.error` /
-  /// `meeting.error` also carry per-row failures where "retry the
-  /// list" would be the wrong recovery.
-  function withRetry(error: ErrorDisplayShape, failed: boolean): ErrorDisplayShape {
+  /// Attach a Retry action to an error card, but only while the card is
+  /// showing the list-load failure itself. `history.error` /
+  /// `meeting.error` also carry export results and per-row failures;
+  /// those can land after a failed load (while `loadFailed` is still
+  /// true) and must keep their own copy — hence the identity check.
+  function withRetry(
+    error: ErrorDisplayShape,
+    loadError: ErrorDisplayShape | null,
+  ): ErrorDisplayShape {
+    const failed = loadError !== null && error === loadError;
     // The generic `history` mapping reads "History update failed / The
     // action didn't go through", which describes a row action, not a
     // list that wouldn't load — so the load case gets its own copy.
@@ -291,14 +296,14 @@
 
   {#if history.error}
     <ErrorDisplay
-      error={withRetry(history.error, history.loadFailed)}
+      error={withRetry(history.error, history.loadError)}
       scope="Dictation history"
       onAction={() => void history.refresh()}
     />
   {/if}
   {#if meeting.error}
     <ErrorDisplay
-      error={withRetry(meeting.error, meeting.loadFailed)}
+      error={withRetry(meeting.error, meeting.loadError)}
       scope="Meeting history"
       onAction={() => void meeting.refresh()}
     />

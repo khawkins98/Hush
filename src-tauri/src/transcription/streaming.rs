@@ -851,6 +851,13 @@ impl SlidingWindowState {
             if text.is_empty() {
                 continue;
             }
+            // Whisper pads short buffers to 30 s and can emit a segment
+            // timestamped wholly past the real audio (usually a
+            // hallucination on the padding). Clamping only its end to the
+            // cut would commit it with start > end, so skip it outright.
+            if seg.start_ms >= cut_ms {
+                continue;
+            }
             let abs_start_ms = self.window_start_offset_ms.saturating_add(seg.start_ms);
             let abs_end_ms = self
                 .window_start_offset_ms
@@ -2231,6 +2238,21 @@ mod quality_policy_tests {
         let mut inf = Scripted(vec![vec![seg(0, 2_400, "overhangs the cut")]]);
         let out = st.commit_through(&mut inf, 2_000).unwrap();
         assert_eq!(out[0].ended_at_ms, 2_000);
+    }
+
+    #[test]
+    fn commit_through_skips_segments_starting_past_the_cut() {
+        // A segment timestamped wholly past the cut (whisper's 30 s padding)
+        // must not be committed with start > end.
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let mut inf = Scripted(vec![vec![
+            seg(0, 1_500, "real speech"),
+            seg(2_200, 2_900, "thank you"),
+        ]]);
+        let out = st.commit_through(&mut inf, 2_000).unwrap();
+        assert_eq!(finals(&out), ["real speech"]);
+        assert!(out.iter().all(|u| u.started_at_ms <= u.ended_at_ms));
     }
 
     #[test]

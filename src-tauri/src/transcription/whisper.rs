@@ -902,7 +902,12 @@ impl WhisperStreamingSession {
             vad_disabled,
             vad_error_logged: false,
             was_inferring: false,
-            boundary: vad_boundary_config_from_env().map(BoundaryTracker::new),
+            // Boundary mode is driven entirely by VAD frames: with the VAD
+            // disabled the tracker would never see one, report "no speech
+            // left", and `finish` would skip flushing the uncommitted tail.
+            boundary: vad_boundary_config_from_env()
+                .filter(|_| !vad_disabled)
+                .map(BoundaryTracker::new),
             pending_boundary_ms: None,
             pending_onset_ms: None,
         }
@@ -940,7 +945,12 @@ impl WhisperStreamingSession {
             vad_disabled,
             vad_error_logged: false,
             was_inferring: false,
-            boundary: vad_boundary_config_from_env().map(BoundaryTracker::new),
+            // Boundary mode is driven entirely by VAD frames: with the VAD
+            // disabled the tracker would never see one, report "no speech
+            // left", and `finish` would skip flushing the uncommitted tail.
+            boundary: vad_boundary_config_from_env()
+                .filter(|_| !vad_disabled)
+                .map(BoundaryTracker::new),
             pending_boundary_ms: None,
             pending_onset_ms: None,
         }

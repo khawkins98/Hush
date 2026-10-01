@@ -26,13 +26,20 @@ let historyEntries = $state<HistoryEntry[]>([]);
 let historyLoaded = $state(false);
 let historyQuery = $state("");
 let historySearching = $state(false);
-let historyError = $state<ErrorDisplay | null>(null);
+// `$state.raw`: error displays are replaced wholesale, never mutated, and
+// staying unproxied lets `loadError` be compared by identity below.
+let historyError = $state.raw<ErrorDisplay | null>(null);
 // True while the most recent list load failed. Kept separate from
 // `historyError` because that slot also carries per-row action
 // failures (copy, export) and the bundle-export result toast —
 // only a failed *load* should offer Retry and hide the empty state,
 // since "Nothing here yet" is a lie when we couldn't read the rows.
 let historyLoadFailed = $state(false);
+// The exact error the failed load produced. The panel relabels the card
+// as "Couldn't load history" + Retry only while `historyError` is still
+// this object — a later export result or row-action failure in the same
+// slot keeps its own copy.
+let historyLoadError = $state.raw<ErrorDisplay | null>(null);
 // Unfiltered total — `historyEntries` shows the current page /
 // filtered slice, so the total drives the sidebar counter and
 // the "Clear all N" confirmation copy.
@@ -148,6 +155,9 @@ export const history = {
   get loadFailed() {
     return historyLoadFailed;
   },
+  get loadError() {
+    return historyLoadError;
+  },
   get totalCount() {
     return historyTotalCount;
   },
@@ -220,10 +230,12 @@ export const history = {
       historyTotalCount = total;
       historyVersion += 1;
       historyLoadFailed = false;
+      historyLoadError = null;
     } catch (e) {
       if (seq !== historyRefreshSeq) return;
       historyError = formatErrorDisplay(e);
       historyLoadFailed = true;
+      historyLoadError = historyError;
     } finally {
       if (seq === historyRefreshSeq) {
         historyLoaded = true;
