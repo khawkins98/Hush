@@ -252,11 +252,10 @@ fn audio_ctx_for(n_samples: usize) -> i32 {
         // experiment was on; per-call detail stays at DEBUG.
         static ANNOUNCED: std::sync::Once = std::sync::Once::new();
         ANNOUNCED.call_once(|| {
-            tracing::info!(
-                margin = margin.as_deref().unwrap_or("default"),
-                floor = floor.as_deref().unwrap_or("default"),
-                "whisper: encoder audio_ctx sizing enabled (HUSH_WHISPER_AUDIO_CTX=1)"
-            );
+            // Raw env strings aren't logged: a malformed value silently
+            // falls back to its default, so echoing it would mislead.
+            // The DEBUG line below carries the resolved `audio_ctx`.
+            tracing::info!("whisper: encoder audio_ctx sizing enabled (HUSH_WHISPER_AUDIO_CTX=1)");
         });
         tracing::debug!(
             audio_ctx = ctx,
