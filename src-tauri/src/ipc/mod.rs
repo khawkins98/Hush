@@ -58,7 +58,7 @@ mod tests;
 
 // Public API (consumed from `lib.rs` startup wiring + the meeting module).
 pub use builder::AppStateBuilder;
-pub use pipeline::{load_transcriber_for_model, run_pipeline};
+pub use pipeline::{load_transcriber_for_model, run_pipeline, LoadedTranscribers};
 pub use state::{AppState, DataServices, ForegroundApp, RuntimeFlags, TranscribeSlot};
 
 // Crate-private re-exports — read by `lib.rs` (autostart-mode decode in the

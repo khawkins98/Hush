@@ -76,7 +76,7 @@ impl SessionManager {
     ) -> Result<MeetingSession> {
         // A new meeting must wait for any in-flight background finalization
         // to complete before claiming the slot — it would otherwise share
-        // the diarizer cluster state and the meeting `WhisperContext` with
+        // the diarizer cluster state and the meeting inference gate with
         // the finalizing session (background finalization; see learnings.md
         // 2026-05-26 "Deferred: concurrent meetings" for why concurrent
         // meetings are out of scope). Normally sub-second.
@@ -487,14 +487,8 @@ impl SessionManager {
     /// `Idle`, `Opening`, `Releasing`, or a poisoned state mutex.
     ///
     /// Called by [`crate::ipc::commands::meeting::meeting_stop_manual`] to
-    /// decide whether to rebuild the meeting/dictation WhisperContexts after
-    /// the stop. The rebuild must fire whenever a meeting pump was involved
-    /// (to bound whisper's #612 C-heap growth), but must NOT fire for the
-    /// "no meeting session active" early-return case (no pump ran, so the
-    /// transcribe slots are still in use for dictation and rebuilding them
-    /// would be pointless churn). The DB close now runs in the background
-    /// finalization, not here, so there is no longer a DB-close-error /
-    /// retry path keyed off this flag.
+    /// decide whether the stop owns the HUD (a meeting was live) or must
+    /// leave it alone (it may be showing a dictation).
     pub fn has_active_session(&self) -> bool {
         self.state
             .lock()

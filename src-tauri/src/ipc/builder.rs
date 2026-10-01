@@ -394,7 +394,6 @@ impl AppStateBuilder {
                 diarize: self
                     .diarize
                     .unwrap_or_else(|| Arc::new(crate::diarization::NoopDiarizer)),
-                transcriber_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 diarize_slot: self.diarize_slot.unwrap_or_else(|| {
                     Arc::new(std::sync::RwLock::new(
                         Arc::new(crate::diarization::NoopDiarizer)

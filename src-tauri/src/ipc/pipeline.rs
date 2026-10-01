@@ -113,6 +113,34 @@ pub(crate) fn redirect_decision(
     }
 }
 
+/// Both transcriber slots' contents from ONE model load: the dictation
+/// and meeting-pump transcribers share a single `WhisperContext` (one copy
+/// of the weights in memory) but each has its own inference gate, so they
+/// still infer concurrently (#248). Every loader in this module hands back
+/// this pair so no caller can accidentally load the model twice.
+pub struct LoadedTranscribers {
+    pub dictation: Arc<dyn Transcribe>,
+    pub meeting: Arc<dyn Transcribe>,
+}
+
+/// Wire a freshly-loaded model to AppState's live slider atomics and split
+/// it into the two slots over one shared context.
+#[cfg(feature = "whisper")]
+fn into_slot_pair(
+    loaded: crate::transcription::WhisperTranscription,
+    inference_threads: &Arc<AtomicI32>,
+    mic_gain_db: &Arc<AtomicU32>,
+) -> LoadedTranscribers {
+    let dictation = loaded
+        .with_inference_threads(Arc::clone(inference_threads))
+        .with_mic_gain_db(Arc::clone(mic_gain_db));
+    let meeting = dictation.share_context();
+    LoadedTranscribers {
+        dictation: Arc::new(dictation),
+        meeting: Arc::new(meeting),
+    }
+}
+
 /// Try to load the GGUF for a single catalog model id. Returns `None`
 /// if the model isn't in the catalog, the file isn't on disk, or the
 /// `whisper` Cargo feature is off. Returns an error if the file is on
@@ -130,7 +158,7 @@ pub fn load_transcriber_for_model(
     models_dir: &Path,
     inference_threads: &Arc<AtomicI32>,
     mic_gain_db: &Arc<AtomicU32>,
-) -> Result<Option<Arc<dyn Transcribe>>> {
+) -> Result<Option<LoadedTranscribers>> {
     #[cfg(feature = "whisper")]
     {
         use crate::transcription::catalog;
@@ -142,16 +170,14 @@ pub fn load_transcriber_for_model(
         if !path.exists() {
             return Ok(None);
         }
-        let transcriber = crate::transcription::WhisperTranscription::new(&path)
-            .with_context(|| format!("load whisper model {} from {}", meta.id, path.display()))?
-            .with_inference_threads(Arc::clone(inference_threads))
-            .with_mic_gain_db(Arc::clone(mic_gain_db));
+        let loaded = crate::transcription::WhisperTranscription::new(&path)
+            .with_context(|| format!("load whisper model {} from {}", meta.id, path.display()))?;
         tracing::info!(
             model_id = %meta.id,
             path = %path.display(),
             "hot-loaded whisper model"
         );
-        Ok(Some(Arc::new(transcriber) as Arc<dyn Transcribe>))
+        Ok(Some(into_slot_pair(loaded, inference_threads, mic_gain_db)))
     }
 
     #[cfg(not(feature = "whisper"))]
@@ -164,10 +190,10 @@ pub fn load_transcriber_for_model(
 
 /// Load a Whisper model from disk on a blocking thread (#561).
 ///
-/// `WhisperTranscription::new` mmaps the GGUF file and initialises the
-/// whisper.cpp context — typically 1–2 s for large models. Wrapping it in
-/// `spawn_blocking` frees the tokio executor thread so `tokio::join!` can
-/// drive two concurrent loads on separate blocking threads.
+/// `WhisperTranscription::new` reads every weight tensor of the GGUF into
+/// host memory and initialises the whisper.cpp context — typically 1–2 s
+/// for large models. Wrapping it in `spawn_blocking` keeps that disk I/O
+/// off the tokio executor thread.
 #[cfg(feature = "whisper")]
 async fn load_whisper_model(
     path: std::path::PathBuf,
@@ -177,20 +203,17 @@ async fn load_whisper_model(
         .map_err(|e| anyhow::anyhow!("whisper model load task panicked: {e}"))?
 }
 
-/// Resolve the active transcriber backend. Pulled out so a test or a
-/// future "reload model" command can call it without rebuilding the
-/// rest of `AppState`.
-///
-/// `pub(crate)` so [`super::builder`]'s `AppState::build_default` and
-/// the post-meeting-stop reload path in `commands::meeting` can both
-/// call this without duplicating the model-selection logic.
+/// Resolve the active transcriber backend and load it once, returning the
+/// dictation + meeting slot pair over one shared context. Pulled out so a
+/// test or a future "reload model" command can call it without rebuilding
+/// the rest of `AppState`.
 #[cfg_attr(not(feature = "whisper"), allow(unused_variables))]
 pub(crate) async fn build_transcriber(
     settings: &Arc<dyn SettingsRepository>,
     models_dir: &Path,
     inference_threads: &Arc<AtomicI32>,
     mic_gain_db: &Arc<AtomicU32>,
-) -> Option<Arc<dyn Transcribe>> {
+) -> Option<LoadedTranscribers> {
     #[cfg(feature = "whisper")]
     {
         use crate::settings::keys;
@@ -214,10 +237,7 @@ pub(crate) async fn build_transcriber(
                                 path = %path_display,
                                 "loaded selected whisper model"
                             );
-                            return Some(Arc::new(
-                                t.with_inference_threads(Arc::clone(inference_threads))
-                                    .with_mic_gain_db(Arc::clone(mic_gain_db)),
-                            ) as Arc<dyn Transcribe>);
+                            return Some(into_slot_pair(t, inference_threads, mic_gain_db));
                         }
                         Err(e) => {
                             tracing::error!(
@@ -256,10 +276,7 @@ pub(crate) async fn build_transcriber(
                             path = %path_display,
                             "loaded catalog-default whisper model (no explicit selection)"
                         );
-                        return Some(Arc::new(
-                            t.with_inference_threads(Arc::clone(inference_threads))
-                                .with_mic_gain_db(Arc::clone(mic_gain_db)),
-                        ) as Arc<dyn Transcribe>);
+                        return Some(into_slot_pair(t, inference_threads, mic_gain_db));
                     }
                     Err(e) => {
                         tracing::error!(
@@ -280,10 +297,7 @@ pub(crate) async fn build_transcriber(
             match load_whisper_model(path).await {
                 Ok(t) => {
                     tracing::info!(path = %path_display, "loaded HUSH_MODEL_PATH whisper model");
-                    return Some(Arc::new(
-                        t.with_inference_threads(Arc::clone(inference_threads))
-                            .with_mic_gain_db(Arc::clone(mic_gain_db)),
-                    ) as Arc<dyn Transcribe>);
+                    return Some(into_slot_pair(t, inference_threads, mic_gain_db));
                 }
                 Err(e) => {
                     tracing::error!(

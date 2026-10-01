@@ -33,6 +33,105 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-10-01 — whisper.cpp does NOT mmap the model: one shared `WhisperContext` for both slots; #636 meeting-stop rebuild removed
+
+**Correction.** Three earlier entries (2026-04-30 #248, 2026-05-06 #561,
+and the comment in `ipc/state.rs`) claimed `whisper-rs` mmaps the GGUF so
+the dictation and meeting contexts share the weight pages. That is false.
+The vendored whisper.cpp (`whisper-rs-sys 0.13.1`, `whisper.cpp`
+`whisper_model_load`) allocates a host backend buffer and `loader->read`s
+every tensor into it. Each `WhisperContext` is a full private copy of the
+weights, so the #248 split had been holding the model twice since April.
+
+**Measured** (`tests/shared_context_fixture.rs::memory_shared_context_vs_double_load`,
+release build, `vmmap -summary` physical footprint + `ps` RSS, one
+process):
+
+| Model | 1 load, shared | 2 loads (old) | Cost of the 2nd load |
+|---|---|---|---|
+| small-q8_0 | 263 MB fp / 270 MB RSS | 521 / 528 | **+258 MB** fp, +258 RSS |
+| small | 476 / 482 | 947 / 953 | **+471 MB** fp, +471 RSS |
+| large-v3-turbo | ~1.5 GB / 1056 MB | ~3.0 GB / 306 MB | **+~1.5 GB** fp; RSS *fell* 750 MB |
+
+The large-v3-turbo RSS row is the iron rule from
+`docs/memory-debugging.md` again: at 3 GB of weights macOS compressed the
+pages, so RSS dropped while the footprint doubled. (vmmap reports GB
+values with one decimal, so the large figures are ±50 MB.)
+
+**Design.** Load once, share the context, keep one gate per slot:
+
+- `WhisperTranscription` holds a `ContextHandle { ctx: Arc<WhisperContext>, gate: Arc<Mutex<()>> }`.
+  `share_context()` returns a second transcriber with the same `ctx`, a
+  fresh `gate` and progress hook, and the same `inference_threads` and
+  `mic_gain_db` atomics. The Settings sliders still apply to both paths.
+- `pipeline::build_transcriber` / `load_transcriber_for_model` return a
+  `LoadedTranscribers { dictation, meeting }` pair built from one load, so
+  no caller can load twice by accident. `AppState` keeps both
+  `TranscribeSlot`s and `swap_transcriber(dictation, meeting)`, so the
+  IPC and test surface is unchanged.
+- **Why the concurrency is safe.** whisper-rs 0.14.4 loads with
+  `whisper_init_from_file_with_params_no_state`, so the context holds only
+  weights + vocab. Every mutable buffer (KV cache, mel, compute scratch,
+  results) is in `whisper_state`. `whisper_full_with_state` only *reads*
+  `ctx` (audited: `ctx->model` / `ctx->vocab` / `ctx->params` / `ctx->itype`),
+  and upstream's own `whisper_full_parallel` runs one state per thread on
+  one shared context. `WhisperInnerContext` is `Send + Sync`,
+  `create_state(&self)` takes no lock, and each `WhisperState` holds its
+  own `Arc` to the inner context.
+- **Why keep a gate at all.** It is for scheduling, not safety. Per-slot
+  gates reproduce the pre-change behaviour exactly. Dictation and the
+  meeting pump infer concurrently, as they did on two contexts (#248). A
+  meeting's mic and system-audio sessions still take turns on the meeting
+  gate, so CPU load matches the old setup and the "live meeting would
+  freeze behind a finalizing one" constraint in `start_stream` still holds.
+  Dropping the gate would let the mic and system-audio sessions run
+  together. That would double peak inference threads during meetings,
+  and it's a separate decision.
+- The #612 `WhisperState` triplet in `WhisperInferer::infer` (lazy-init,
+  drop-on-Err, periodic recreate) is untouched; it acts on the state, not
+  the context.
+- Verified concurrently on a real model by
+  `shared_context_fixture::dictation_and_streaming_concurrently_on_shared_context`.
+  Three one-shot dictations all overlapped a streaming session on the
+  same context and all produced the JFK text (small-q8_0, debug build:
+  ~5.6 s each vs 4.1 s solo, which is CPU contention rather than lock
+  waiting).
+
+**#636 decision: the meeting-stop whisper rebuild is removed.** #636
+rebuilt both contexts after every meeting stop to release "compute
+buffers inside `WhisperContext` (KV cache, mel scratch, beam scratch)".
+With a `_no_state` context those buffers were never in the context. They
+are in the `WhisperState`s, which drop when the streaming sessions end.
+Measured with the same fixture: after 5 dictations + 3 streaming sessions,
+the used context's footprint was within 0–6 MB of a freshly loaded one
+(small-q8_0 +6 MB, small +6 MB, large-v3-turbo +0 MB). Two reasons to
+remove it rather than keep it. First, it re-read the full weights from
+disk after every meeting. Second, with a shared context, rebuild-then-install
+briefly holds two copies (up to +1.5 GB for large-v3-turbo). It also opened
+a window where the two slots could point at different contexts. The
+`transcriber_generation` counter (#801) existed only to guard that
+rebuild against a racing `model_select`, so it is gone too.
+`stop_meeting_and_rebuild_transcriber` keeps its name to avoid churning
+callers. The doc comment marks it historical. If footprint growth across
+meetings ever shows up again, look at the states and the allocator first.
+`memory_shared_context_vs_double_load` gives a per-model "used vs fresh"
+number to check before reinstating a context rebuild.
+
+**Hot-swap.** `model_select` loads the new model once and installs the
+pair into both slots. An in-flight meeting or its background finalization
+keeps the old context alive through its own `Arc` until it ends, as
+before. The old weights are freed when the last session holding them
+drops.
+
+**Fixture drift fixed on the way.** `tests/meeting_fixture.rs` no longer
+compiled after `SessionManager::new` and `start_manual` grew parameters
+(VAD model, two level atomics, `SessionDictOpts`). It also read
+utterances right after `stop_manual`, which now returns before background
+finalization has flushed the tail. It now waits for the session row's
+`ended_at`.
+
+---
+
 ## 2026-10-01 — Transcription-quality round-up (#1013): what shipped on, what stayed opt-in, and why
 
 Findings from the #1013 review, implemented in one PR. The pure helpers
@@ -1725,6 +1824,8 @@ GitHub user [@m13v](https://github.com/m13v) commented on three issues across th
 
 **Why two contexts?** Dictation and meeting pump each own a private `WhisperContext` to avoid mutex contention on the single-threaded `whisper.cpp` inference path (#248). The RAM cost is minimal — `whisper-rs` mmaps the GGUF so the OS shares physical pages between the two contexts.
 
+> **Corrected 2026-10-01:** the mmap claim above is wrong. whisper.cpp reads every tensor into a private host buffer, so the two contexts were two full copies of the weights (+258 MB small-q8_0 … +~1.5 GB large-v3-turbo). Both slots now share one context and only one load happens at startup. See "2026-10-01 — whisper.cpp does NOT mmap the model".
+
 **Fix:** Wrap `WhisperTranscription::new` in a `load_whisper_model` helper that calls `tokio::task::spawn_blocking`. Replace the two sequential `build_transcriber` calls with `tokio::join!`. Both blocking loads run on separate tokio blocking-pool threads, so the total cost is roughly max(load1, load2) rather than load1 + load2.
 
 **Why splashscreen is deferred:** The setup hook uses `tauri::async_runtime::block_on`, which blocks the macOS main thread. During that block the OS won't update any window — including a splashscreen. Showing a splash that updates while models load requires moving `build_default` off the blocking setup hook (deferred `app.manage()` after an async spawn + a frontend readiness signal). This is a larger refactor tracked separately.
@@ -1990,6 +2091,8 @@ footprint leak. Check: `grep -A40 'typedef enum mi_option_e' ~/.cargo/registry/s
 **Fix.** Two slots: `transcribe` (dictation) and `transcribe_meeting`. `model_select` loads two `WhisperTranscription` instances from the same GGUF path and writes both via `swap_transcriber(new_dictation, new_meeting)`. `SessionManager` is constructed with the meeting slot only; `stop_dictation` reads the dictation slot only. The two paths now have independent `Mutex<WhisperContext>`s.
 
 **Why the marginal cost is small.** `whisper-rs` mmap's the GGUF file. Two `WhisperContext`s constructed from the same path share the underlying weight pages on disk; the only incremental RAM is the per-context working state (KV cache, decoder buffers — order of MB on small models, not tens of MB).
+
+> **Corrected 2026-10-01:** false. The marginal cost was a full second copy of the weights. The contention fix survives in a different form: one shared context, with one inference gate per slot. See "2026-10-01 — whisper.cpp does NOT mmap the model".
 
 **Why not split inference parameters per path.** The split deliberately keeps the same model in both slots — diverging parameters (e.g. beam-search for dictation vs greedy for meetings) is a possible future refinement, but introducing it now would conflate "fix the contention bug" with "tune for accuracy vs latency tradeoffs", which want separate decisions and separate tests.
 
@@ -3327,6 +3430,8 @@ The Electron main process (`src/helpers/audioTapManager.js`) spawns this binary 
 - **RSS / "Real Mem" in Activity Monitor:** misleading. macOS compresses committed pages to the swap compressor, keeping RSS low while physical footprint grows. Always use `vmmap -summary <pid>` (physical footprint line) or `top`'s MEM column.
 
 ### The actual fix (#636)
+
+> **Superseded 2026-10-01:** the whisper half of this rebuild was removed. whisper-rs loads contexts `_no_state`, so the context never held the KV cache or scratch; those live in `WhisperState`. A used context measured within 0–6 MB of a fresh one. See "2026-10-01 — whisper.cpp does NOT mmap the model". The diarizer half had already been removed (#667 centroid race).
 
 `meeting_stop_manual` runs a single-phase background rebuild at every session boundary:
 
