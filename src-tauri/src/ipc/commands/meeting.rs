@@ -114,6 +114,34 @@ pub async fn meeting_session_get(
     state: State<'_, AppState>,
     id: i64,
 ) -> IpcResult<MeetingSessionDetail> {
+    meeting_session_detail_inner(&state, id, None).await
+}
+
+/// Incremental variant of [`meeting_session_get`] for the live
+/// transcript poll: same response shape, but `utterances` holds only
+/// rows with `id > after_utterance_id`. `session` and
+/// `current_partials` are always complete (one row / a handful of
+/// partials). The frontend appends the new finals and replaces the
+/// partials; it still does a full [`meeting_session_get`] on first load,
+/// when the window becomes visible again, and at session end — the
+/// session-end re-cluster and speaker merges rewrite *existing* rows,
+/// which an id cursor can't see.
+#[tauri::command]
+pub async fn meeting_session_get_since(
+    state: State<'_, AppState>,
+    id: i64,
+    after_utterance_id: i64,
+) -> IpcResult<MeetingSessionDetail> {
+    meeting_session_detail_inner(&state, id, Some(after_utterance_id)).await
+}
+
+/// Shared body of [`meeting_session_get`] / [`meeting_session_get_since`].
+/// `after_utterance_id = None` returns every utterance.
+pub(crate) async fn meeting_session_detail_inner(
+    state: &AppState,
+    id: i64,
+    after_utterance_id: Option<i64>,
+) -> IpcResult<MeetingSessionDetail> {
     // Single-row PK lookup (#253) — pre-fix this loaded every
     // session row with `list()` and ran a linear `find` on the
     // result, scaling O(N) over the user's entire meeting
@@ -125,14 +153,13 @@ pub async fn meeting_session_get(
         .await
         .map_err(|e| IpcError::MeetingSessions(format!("session get: {e:#}")))?
         .ok_or_else(|| IpcError::MeetingSessions(format!("session {id} not found")))?;
-    let utterances = state
-        .data
-        .meetings
-        .list_utterances(id)
-        .await
-        .map_err(|e| IpcError::MeetingSessions(format!("session utterances: {e:#}")))?;
+    let utterances = match after_utterance_id {
+        Some(after) => state.data.meetings.list_utterances_since(id, after).await,
+        None => state.data.meetings.list_utterances(id).await,
+    }
+    .map_err(|e| IpcError::MeetingSessions(format!("session utterances: {e:#}")))?;
     // Read in-flight partials from the manager's in-memory store.
-    // The poll path is hot (every ~1 s while a session is active);
+    // The poll path is hot (every 3 s while a session is active);
     // `current_partials_for` uses an `RwLock::read` and clones a
     // small Vec, so the cost is negligible.
     let current_partials = state.meeting_manager.current_partials_for(id);

@@ -129,11 +129,22 @@
       meeting.clearActiveDetail();
       return;
     }
-    void meeting.refreshActiveDetail(id);
+    // Full fetch first; the 3 s ticks are then incremental (new finals
+    // + current partials only). Ticks are skipped while the window is
+    // hidden (main is hidden-on-close for most of a meeting) and a full
+    // fetch re-syncs on becoming visible. The end-of-meeting full fetch
+    // in dictation.svelte.ts picks up the post-session re-cluster.
+    void meeting.refreshActiveDetail(id, { full: true });
     meetingActivePollHandle = setInterval(() => {
+      if (document.hidden) return;
       void meeting.refreshActiveDetail(id);
     }, 3000);
+    const onVisibilityChange = () => {
+      if (!document.hidden) void meeting.refreshActiveDetail(id, { full: true });
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (meetingActivePollHandle !== null) {
         clearInterval(meetingActivePollHandle);
         meetingActivePollHandle = null;

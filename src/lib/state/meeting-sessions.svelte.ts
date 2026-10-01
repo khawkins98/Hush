@@ -7,6 +7,7 @@ import {
   type ErrorDisplay,
 } from "$lib/errors";
 import { Events } from "$lib/events";
+import { lastUtteranceId, mergeDetailDelta } from "$lib/meeting-detail";
 import { joinUtterances } from "$lib/transcript-format";
 import type {
   ActiveMeetingSession,
@@ -215,15 +216,34 @@ export const meeting = {
       meetingSessionsLoaded = true;
     }
   },
-  async refreshActiveDetail(id: number) {
+  /// Refresh the live session detail. By default this is incremental:
+  /// when a detail for `id` is already held it asks only for utterances
+  /// past the last id it has (`meeting_session_get_since`) and merges
+  /// them in, instead of re-shipping the whole transcript every poll.
+  /// `full: true` forces a complete `meeting_session_get` — used on
+  /// first load and when the window becomes visible again, the points
+  /// where held rows may be stale.
+  async refreshActiveDetail(id: number, opts: { full?: boolean } = {}) {
     meetingActiveDetailSeq += 1;
     const seq = meetingActiveDetailSeq;
+    const prev = meetingActiveDetail;
+    const incremental = !opts.full && prev !== null && prev.session.id === id;
     try {
-      const detail = await invoke<MeetingSessionDetail>("meeting_session_get", { id });
+      const detail = incremental
+        ? await invoke<MeetingSessionDetail>("meeting_session_get_since", {
+            id,
+            afterUtteranceId: lastUtteranceId(prev.utterances),
+          })
+        : await invoke<MeetingSessionDetail>("meeting_session_get", { id });
       // Discard if a newer refreshActiveDetail already completed, or if
       // the active session changed while the fetch was in-flight (#890).
+      // The seq check also guarantees `prev` is still the held detail:
+      // every write to it bumps the seq first.
       if (seq !== meetingActiveDetailSeq || meetingActiveId !== id) return;
-      meetingActiveDetail = detail;
+      const next = incremental ? mergeDetailDelta(prev, detail) : detail;
+      // Unchanged poll → no $state write, so the live transcript isn't
+      // re-joined for nothing.
+      if (next !== meetingActiveDetail) meetingActiveDetail = next;
     } catch (e) {
       if (seq !== meetingActiveDetailSeq || meetingActiveId !== id) return;
       // Transient poll failures are logged but not surfaced — the next

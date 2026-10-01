@@ -719,8 +719,12 @@ impl AppState {
         );
         let speakers: Arc<dyn crate::speakers::SpeakerStore> =
             Arc::new(crate::speakers::SqliteSpeakerStore::new(Arc::clone(&db)));
+        // Cached: the profile poller and auto-start classifier read the
+        // list on a timer, writes only come from Settings.
         let meeting_app_overrides: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
-            Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db));
+            Arc::new(crate::meeting::CachedMeetingAppOverrideRepository::new(
+                Arc::new(crate::meeting::SqliteMeetingAppOverrideRepository::new(db)),
+            ));
         record_phase("database and repositories");
         tracing::info!(
             elapsed_ms = t_start.elapsed().as_millis(),

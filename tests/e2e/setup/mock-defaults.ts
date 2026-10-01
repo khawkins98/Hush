@@ -200,6 +200,7 @@ export function seedMockBus(): void {
     meeting_sessions_search: () => [],
     meeting_active_session: () => ({ active: null }),
     meeting_session_get: () => null,
+    meeting_session_get_since: () => null,
     meeting_session_delete: () => undefined,
     meeting_session_set_name: () => undefined,
     meeting_session_export: () => undefined,
