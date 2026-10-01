@@ -575,7 +575,7 @@ mod tests {
         DiarizerDownloadDeps {
             emitter,
             downloads,
-            http: reqwest::Client::new(),
+            http: crate::tls::client(),
             diarize_slot: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
                 crate::diarization::NoopDiarizer,
             ))),

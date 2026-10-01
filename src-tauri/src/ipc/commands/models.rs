@@ -495,7 +495,7 @@ mod tests {
         ModelDownloadDeps {
             emitter,
             downloads,
-            http: reqwest::Client::new(),
+            http: crate::tls::client(),
             models_dir,
         }
     }
