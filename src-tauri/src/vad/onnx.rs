@@ -72,17 +72,28 @@ impl VadModel for SileroVad {
     fn new_session(&self) -> Box<dyn VadSession> {
         Box::new(SileroVadSession {
             model: Arc::clone(&self.model),
-            state: tract_ndarray::Array3::<f32>::zeros(STATE_SHAPE).into_dyn(),
+            state: zero_state(),
         })
     }
 }
 
+fn zero_state() -> Tensor {
+    tract_ndarray::Array3::<f32>::zeros(STATE_SHAPE).into()
+}
+
 pub struct SileroVadSession {
     model: Arc<TypedRunnableModel<TypedModel>>,
-    /// LSTM hidden state, shape `[2, 1, 128]`. Re-written on every
-    /// `score_frame` call from the model's `stateN` output. Zero-initialised
-    /// at session start.
-    state: tract_ndarray::ArrayD<f32>,
+    /// LSTM hidden state, shape `[2, 1, 128]`. Moved into each
+    /// `score_frame` call and replaced by the model's `stateN` output.
+    /// Zero-initialised at session start.
+    ///
+    /// A plain `Tensor` (not a reusable tract `SimpleState`): reusing plan
+    /// state across frames was measured at 1.20 ms/frame vs 1.08 ms for a
+    /// fresh `run` (release, M-series, 2 000 frames — no gain), and
+    /// `SimpleState` is `!Send` while a `VadSession` must move across
+    /// blocking-pool threads. What this does avoid is the per-frame state
+    /// clone in and `to_owned` copy out.
+    state: Tensor,
 }
 
 impl VadSession for SileroVadSession {
@@ -96,19 +107,28 @@ impl VadSession for SileroVadSession {
         }
 
         // Inputs in declared order: audio f32 [1,512], state f32 [2,1,128].
-        let audio_t: Tensor =
-            tract_ndarray::Array2::from_shape_vec((1, FRAME_LEN_SAMPLES), frame.to_vec())
-                .context("build Silero audio tensor")?
-                .into();
+        // One copy of the frame into the input tensor; the state is moved
+        // in rather than cloned.
+        let audio_t = Tensor::from_shape(&[1, FRAME_LEN_SAMPLES], frame)
+            .context("build Silero audio tensor")?;
+        let state_t = std::mem::take(&mut self.state);
 
-        let state_t: Tensor = self.state.clone().into();
-
-        let outputs = self
-            .model
-            .run(tvec!(audio_t.into(), state_t.into()))
-            .context("Silero VAD inference")?;
+        let mut outputs = match self.model.run(tvec!(audio_t.into(), state_t.into())) {
+            Ok(outputs) => outputs,
+            Err(e) => {
+                // The state was moved into the failed run. Restart the LSTM
+                // from zeros (what a fresh session does) rather than leave
+                // a placeholder that would fail every later frame.
+                self.state = zero_state();
+                return Err(e.context("Silero VAD inference"));
+            }
+        };
 
         // Outputs in declared order: [prob f32 [1,1], stateN f32 [2,1,128]].
+        // Persist the new hidden state for the next call — `into_tensor`
+        // takes the buffer without copying when the run's output is
+        // uniquely owned (it is).
+        self.state = outputs.remove(1).into_tensor();
         let prob_view = outputs[0]
             .to_array_view::<f32>()
             .context("read Silero prob")?;
@@ -124,13 +144,6 @@ impl VadSession for SileroVadSession {
             .next()
             .copied()
             .ok_or_else(|| anyhow!("Silero prob output empty"))?;
-
-        // Persist the new hidden state for the next call.
-        self.state = outputs[1]
-            .to_array_view::<f32>()
-            .context("read Silero stateN")?
-            .to_owned()
-            .into_dyn();
 
         Ok(prob.clamp(0.0, 1.0))
     }
@@ -185,6 +198,45 @@ mod tests {
             p_noise >= p_silent,
             "structured-noise prob ({p_noise}) should be >= silent prob ({p_silent})"
         );
+    }
+
+    /// The move-in/move-out state handling must score exactly like the
+    /// previous clone-in/copy-out implementation (reproduced inline here).
+    #[test]
+    fn score_frame_matches_clone_based_reference() {
+        let vad = SileroVad::load().unwrap();
+        let sr = SAMPLE_RATE_HZ as f32;
+        let frames: Vec<Vec<f32>> = (0..200)
+            .map(|f| {
+                (0..FRAME_LEN_SAMPLES)
+                    .map(|i| {
+                        let t = (f * FRAME_LEN_SAMPLES + i) as f32 / sr;
+                        let gate = if (f / 25) % 2 == 0 { 0.4 } else { 0.01 };
+                        (2.0 * std::f32::consts::PI * 180.0 * t).sin() * gate
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut session = vad.new_session();
+        let mut ref_state = tract_ndarray::Array3::<f32>::zeros(STATE_SHAPE).into_dyn();
+        for f in &frames {
+            let got = session.score_frame(f).unwrap();
+            let audio: Tensor =
+                tract_ndarray::Array2::from_shape_vec((1, FRAME_LEN_SAMPLES), f.to_vec())
+                    .unwrap()
+                    .into();
+            let state: Tensor = ref_state.clone().into();
+            let out = vad.model.run(tvec!(audio.into(), state.into())).unwrap();
+            let want = out[0]
+                .to_array_view::<f32>()
+                .unwrap()
+                .iter()
+                .next()
+                .copied()
+                .unwrap();
+            ref_state = out[1].to_array_view::<f32>().unwrap().to_owned().into_dyn();
+            assert_eq!(got.to_bits(), want.clamp(0.0, 1.0).to_bits());
+        }
     }
 
     #[test]
