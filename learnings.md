@@ -17,6 +17,7 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 - [`isExclusive = true` for system audio tap (2026-05-06)](#2026-05-06--isexclusive--true-is-required-for-catapversion-to-capture-any-audio-593-594) — `CATapDescription` with `isExclusive = false` produces silence. Needs `true` to capture the system mix. Only well-documented in third-party implementations (Korus, OpenWhispr); not in Apple docs.
 - [`tract-onnx` not ORT for ONNX inference (2026-05-08)](#2026-05-08--641-root-cause-fix-ort--tract-onnx) — ORT silently uses Metal Performance Shaders even with `CPU::default()` EP, causing unbounded `IOAccelerator` growth. Pure-Rust `tract-onnx` avoids this; `TypedRunnableModel<TypedModel>` is `Send+Sync`, no mutex needed.
 - [Speaker-embedding features must match training (2026-10-01)](#2026-10-01--diarizer-the-missing-cmn-was-the-real-633-bug-threshold-back-to-06-duration-gate-session-end-re-cluster-1013) — wespeaker expects per-utterance CMN on kaldi fbank; without it LibriSpeech EER was 12 % instead of 0.7 % and the cosine threshold had been mis-tuned to compensate. Verify a front end against the reference implementation numerically before tuning anything downstream.
+- [Encoder `audio_ctx` sizing breaks timestamps (2026-10-01)](#2026-10-01--encoder-audio_ctx-sizing-hush_whisper_audio_ctx-25-faster-stays-opt-in) — shrinking whisper.cpp's encoder window to the input cuts inference CPU 2–5×, but large-v3-turbo then emits timestamps past the window end and loops on trailing silence. Opt-in only.
 - [Whisper streaming session lifecycle (2026-05-07 + #612)](#2026-05-07--612-not-actually-closed-macos-compression-was-hiding-the-leak) — `WhisperState` must be lazily created on first inference, dropped on decode error, and periodically recreated every ~30 inferences to bound C-heap accumulation. Missing any of these causes memory leak.
 
 **Tauri & cross-module architecture:**
@@ -131,6 +132,118 @@ finalization has flushed the tail. It now waits for the session row's
 `ended_at`.
 
 ---
+
+## 2026-10-01 — Encoder audio_ctx sizing (`HUSH_WHISPER_AUDIO_CTX`): 2–5× faster, stays opt-in
+
+Neither `WhisperInferer::infer` (meeting streaming) nor dictation's
+`run_inference` set `FullParams::audio_ctx`. So whisper.cpp encoded the
+full 1500-position (30 s) mel window on every call, even though meeting
+windows are about 8–11 s, VAD-boundary regions 1–5 s, and most dictation
+under 10 s. `HUSH_WHISPER_AUDIO_CTX=1` sizes the window to the input:
+`ceil(samples / 320)` positions (one position is 20 ms: a 10 ms mel hop
+and a stride-2 conv), plus a margin (default 64 = 1.28 s), with a floor
+(default 384 = 7.7 s), clamped to 1500. whisper.cpp needs no alignment
+from us, because it pads the cross-attention KV to a multiple of 256
+itself. **Default stays off.** The evidence below shows why.
+
+**Method.** We used a scratch harness, not committed. It loads the model
+once and interleaves configs on each input, keeping the min of 2–3 reps,
+because other agents' builds had pushed the load average to ~80 for most
+of the run. Inputs:
+- the JFK clip;
+- `say`-generated clips of 1.1 s, 4.7 s, 10.1 s and 21.8 s;
+- the gappy JFK signal from `streaming_fixture_gappy_signal`;
+- a 60 s, four-voice TTS "meeting" with pauses and a 5 s hiss gap.
+
+The repo fixtures (`audio_fixture`, both `streaming_fixture` tests,
+`vad_trim_real_audio`) were run off vs. on as well. `meeting_fixture`
+no longer compiles on `main` (its `SessionManager::new` call has drifted
+by three arguments), so it wasn't run. CPU only (`use gpu = 0`,
+Accelerate BLAS). Timings are ms. Small rows come from a re-run at low
+load; most large-v3-turbo rows were taken at high load, so read those
+as direction, not magnitude.
+
+| model | input | off | on (m64/f384) | speed-up | text |
+|---|---|---|---|---|---|
+| small-q8_0 | JFK 11 s one-shot | 1618 | 525 | 3.1× | identical |
+| small-q8_0 | 1.1 s one-shot | 1228 | 253 | 4.9× | identical |
+| small-q8_0 | 4.7 s one-shot | 1344 | 301 | 4.5× | "fixHotKeyReleaseEdge" → "fix hotkey release edge" |
+| small-q8_0 | 10.1 s one-shot | 1567 | 609 | 2.6× | identical |
+| small-q8_0 | 21.8 s one-shot | 1987 | 1505 | 1.3× | identical |
+| small-q8_0 | gappy stream, boundary mode (Σ infer) | 15638 | 7831 | 2.0× | segmentation only |
+| small-q8_0 | TTS meeting, boundary mode (Σ infer) | 20576 | 6251 | 3.3× | adds a duplicated "Probably." |
+| small-q8_0 | TTS meeting, time windows (Σ infer) | 23153 | 10304 | 2.2× | see the instability note |
+| large-v3-turbo | `audio_fixture` total (quiet) | 10.4 s | 2.7 s | 3.9× | identical |
+| large-v3-turbo | 4.7 s one-shot | 13082 | 2934 | 4.5× | identical |
+| large-v3-turbo | 21.8 s one-shot | 35025 | 16478 | 2.1× | identical |
+| large-v3-turbo | TTS meeting, time windows (low load) | 99393 | 41370 | 2.4× | segmentation only |
+| large-v3-turbo | 3 s + JFK + 3 s, untrimmed | ok | **loop** | — | "Ask what you can do for your country." ×9 |
+| large-v3-turbo | `streaming_fixture_emits_partials_and_finals` | pass | **FAIL** | — | final `ended_at_ms` 26380 on an 11 s clip |
+| large-v3-turbo | gappy stream, time windows | ok | **lost words** | — | the second "And so … for you" is gone; m128/f512 printed "Thank you." in its place |
+
+Margin and floor sweep (small-q8_0, high load):
+- **Floor 0, margin 32:** turned "Send it to Sarah." into "Sended to Sarah.", and hiss into "[ ]".
+- **Floor 256:** a lowercase "open". Otherwise the same as 384, and a
+  little faster.
+- **Floor 512, margin 128:** no better than 384 on quality. On
+  large-v3-turbo it had the worst gappy result ("Thank you." in place of
+  a whole passage).
+- **Default:** 384/64 is the most conservative setting that showed no
+  one-shot regression on small.
+
+**What breaks, and why it matters more than the speed.**
+- **large-v3-turbo timestamps.** With a shrunk window, turbo emits
+  timestamp tokens far past the end of the encoded audio: a partial
+  stamped `[0-15220ms]` after 3 s of audio, and a final ending at
+  26.4 s on an 11 s clip. It looks as if it's still predicting on the
+  30 s scale. The streaming session slides its window by segment
+  timestamps, so bad timestamps become dropped or duplicated words, not
+  just bad metadata. That's the "lost words" row.
+- **Utterance start times shift on both models.** In boundary mode the
+  second JFK passage's final started at 12.7 s instead of 18.2 s: the
+  first segment got stamped at the window start, before the leading
+  hiss. Diarization aligns embeddings to those times.
+- **Trailing silence makes turbo loop.** A long silent tail inside a
+  shrunk window is the known failure mode, and turbo hit it. Dictation's
+  VAD trim strips that tail, and the *trimmed* clip transcribed cleanly
+  with the flag on, but a meeting window can still end in silence.
+- **Small also leaves `[BLANK_AUDIO]` on silence-padded input.**
+  Dictation strips bracket sentinels, so it's harmless there.
+- **Hiss alone hallucinates either way** on turbo ("Thank you." off,
+  "So," / "I'm going to go." on). Dictation's NoSpeech no-op already
+  covers that case.
+
+**The baseline is unstable too.** Across two harness runs the
+off-config small model, in time-window mode on the TTS meeting, once
+transcribed every turn and once dropped the last two turns entirely.
+Separately, "Probably. | Probably." duplicates appeared in *off* runs as
+well as on ones. Streaming-commit artefacts are sensitive to any
+change, so a single changed word between configs in streaming mode is
+noise. The turbo timestamp overshoot and the loop are not: they
+reproduce, and they're a different kind of failure.
+
+**Recommendation: don't turn it on by default for every model.** The
+speed-up is real, 2–5× less inference CPU. But it trades timestamp
+integrity, which the streaming slide and the diarizer rely on, and it
+reintroduces a repetition mode on turbo. Two follow-ups would change
+that:
+1. **Dictation only, after VAD trim.** Dictation consumes text, never
+   timestamps. Every trimmed-dictation result here was clean on both
+   models. This is the low-risk candidate.
+2. **Streaming.** First clamp segment timestamps to the window length
+   (or drop segments past it), then check whether turbo's text survives.
+
+**Before any default-on, run a real-meeting check.**
+- Inputs: a recorded real call (30+ min, compressed remote audio, more
+  than one speaker) plus a hand transcript.
+- Replay it through `WhisperStreamingSession` in 500 ms ticks, off vs.
+  on, for both models. Compare word error rate and dropped or duplicated
+  turns, and diff utterance timestamps against the off run.
+- Run `npm run memwatch`. The encoder scratch shrinks too, but that
+  hasn't been measured.
+
+TTS clips and one JFK recording are thin evidence for speed, and
+thinner still for quality.
 
 ## 2026-10-01 — Transcription-quality round-up (#1013): what shipped on, what stayed opt-in, and why
 
