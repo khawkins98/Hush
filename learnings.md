@@ -130,6 +130,86 @@ utterances right after `stop_manual`, which now returns before background
 finalization has flushed the tail. It now waits for the session row's
 `ended_at`.
 
+## 2026-10-01 (perf round-up) — memory/CPU round-up: the non-obvious calls
+
+One PR (`perf/roundup-memory-cpu`) of audit findings. The calls worth
+remembering:
+
+**whisper.cpp has a hard 1 s input floor.** `whisper_full` returns zero
+segments for input under 1000 ms ("input is too short"). With
+VAD-boundary commits on by default, a short isolated reply ("No.",
+"Yes.") closes a region of ~0.7 s; `commit_through` decoded it to nothing
+and then dropped the head anyway, so the word was lost for good.
+`streaming.rs::infer_with_min_len` now zero-pads any buffer under
+`MIN_WHISPER_INPUT_MS = 1050` (the extra 50 ms clears whisper's own
+frame rounding), clamps segment ends to the real audio and skips
+segments that start inside the padding. Applied to `commit_through` and
+`finish` (the post-boundary tail can be short); `tick` can't go under
+1 s because its interval gate guarantees ≥ `infer_interval_ms` of window.
+Regression: `streaming_fixture_isolated_short_word_survives_boundary_commit`
+synthesises a 361 ms "No." with macOS `say` (no binary fixture
+committed) and fails without the padding (`region_ms=692 segments=0`).
+
+**`audio:level` is emitted to visible windows only, and the pump parks.**
+Every Tauri emit is a WKWebView `evaluateJavaScript` per target webview,
+which leaks host memory per call (#986). The old pump broadcast at 30 Hz
+to every webview — including the main window, which is hidden-on-close
+but keeps RecordPanel's AudioWaveform mounted — and woke 30×/s forever
+even when idle (#329 only skipped the emit). Now: ~15 Hz, `emit_to` the
+`hud` / `main` windows whose `is_visible()` is true (re-queried every
+~0.5 s because it's a synchronous main-thread hop), and the task awaits
+a `tokio::sync::Notify` signalled from `CpalAudioCapture`'s start entry
+points while nothing records. `notify_one` (not `notify_waiters`) is
+load-bearing: it leaves a permit if a start lands between the pump's
+`is_recording()` check and its await. The frontend side matches:
+AudioWaveform parks its rAF loop once idle bars decay below 1e-4, and
+the HUD / RecordPanel elapsed labels use a 250 ms interval that only
+exists while recording.
+
+**The utterances FTS update trigger fires only on `UPDATE OF text`.**
+Migration 0011 narrows `utterances_au`. Every UPDATE the app issues on
+`utterances` touches `speaker_label` (session-end re-cluster) or
+`speaker_identity_id` (identity resolution, speaker merge) — whole
+sessions at a time — and each one re-indexed the row in FTS5 for no
+reason. `text` is the only indexed column, so the narrowed trigger keeps
+the index exactly in sync.
+
+**The wespeaker diarizer loads in the background.** `build_default`
+(inside `block_on` in `setup`) used to build the `OnnxDiarizer`
+synchronously. Now the `DiarizeSlot` starts as a `NoopDiarizer`
+placeholder and `spawn_background_diarizer_load` builds the real one on
+a blocking thread, swapping it in only if the slot still holds that
+exact placeholder (`Arc::ptr_eq`) — a download or remove that happened
+meanwhile wins — and re-applying the live threshold atomic in case the
+slider moved during the load. A meeting started in that window gets
+source labels for its first utterances (logged). Note the measured
+build cost: ~130–190 ms with optimised tract; the ~913 ms figure from
+the startup profile was largely unoptimised dev deps, which
+`[profile.dev.package."*"] opt-level = 2` also fixes.
+
+**Live transcript polling is incremental.** `meeting_session_get_since
+{ id, afterUtteranceId }` returns the same `MeetingSessionDetail` shape
+with only rows whose id is past the cursor (`utterances.id` is
+AUTOINCREMENT, so "id > cursor" is exactly "appended since"). The
+frontend full-fetches on first load and on `visibilitychange` → visible,
+skips ticks while `document.hidden`, and the end-of-meeting full fetch
+in `dictation.svelte.ts` still picks up the re-cluster's relabels (an id
+cursor can't see rewrites of existing rows). Gotcha hit while building
+it: `refreshActiveDetail` is called from inside an `$effect`, so reading
+the held `$state` detail synchronously made the effect depend on the
+value it writes — an infinite re-fetch loop that froze the page. The
+read is wrapped in `untrack`.
+
+**Measured and dropped.** Pinning the wespeaker input to `(1, T, 80)`
+before `into_optimized()` produced bit-identical embeddings but no
+measurable speed-up (10 s clip 558 → 525 ms in one run, 600 → 625 ms in
+another; noise). Reusing a tract `SimpleState` across Silero VAD frames
+was *slower* (1.20 vs 1.08 ms/frame) and `SimpleState` is `!Send`, so
+the VAD session keeps a fresh `run` per frame and only stops cloning the
+LSTM state in and copying it out. The sparse mel filterbank, by
+contrast, is 7.7× faster for the fbank step (21.4 → 2.8 ms per 10 s,
+bit-identical output) — though fbank is only ~4 % of an embed.
+
 ---
 
 ## 2026-10-01 — Transcription-quality round-up (#1013): what shipped on, what stayed opt-in, and why
