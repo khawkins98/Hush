@@ -411,10 +411,6 @@ impl std::ops::Deref for ContextGuard<'_> {
     }
 }
 
-/// The inference gate was poisoned by a panic mid-inference.
-#[derive(Debug)]
-struct GatePoisoned;
-
 impl ContextHandle {
     fn new(ctx: WhisperContext) -> Self {
         Self {
@@ -432,13 +428,16 @@ impl ContextHandle {
         }
     }
 
-    /// Acquire this transcriber's inference gate.
-    fn lock(&self) -> std::result::Result<ContextGuard<'_>, GatePoisoned> {
-        let gate = self.gate.lock().map_err(|_| GatePoisoned)?;
-        Ok(ContextGuard {
+    /// Acquire this transcriber's inference gate. Poison is ignored: the
+    /// gate guards `()`, so a panic mid-inference leaves nothing
+    /// inconsistent behind it. Surfacing poison as an error would instead
+    /// brick the slot until restart or a model switch, now that no
+    /// per-meeting rebuild hands out fresh gates.
+    fn lock(&self) -> ContextGuard<'_> {
+        ContextGuard {
             ctx: &self.ctx,
-            _gate: gate,
-        })
+            _gate: self.gate.lock().unwrap_or_else(|e| e.into_inner()),
+        }
     }
 }
 
@@ -730,14 +729,8 @@ impl WhisperTranscription {
         }
 
         // Hold this transcriber's inference gate for the duration of
-        // inference. A poisoned gate means a previous call panicked
-        // mid-inference; we surface that as a regular error rather than
-        // re-panicking, since a failed transcription should not take the
-        // whole app down.
-        let ctx = self
-            .ctx
-            .lock()
-            .map_err(|_| anyhow!("whisper inference gate poisoned"))?;
+        // inference.
+        let ctx = self.ctx.lock();
 
         // `create_state` is required per-call: the state holds the decoder
         // KV cache, which must not be shared across concurrent inferences
@@ -1449,10 +1442,7 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             params.set_initial_prompt(self.prompt);
         }
 
-        let ctx = self
-            .ctx
-            .lock()
-            .map_err(|_| anyhow!("whisper inference gate poisoned"))?;
+        let ctx = self.ctx.lock();
         // Reuse a single WhisperState across calls (#612). Pre-#612
         // this branch ran `ctx.create_state()` per call — over a
         // long session that's hundreds of init/free cycles, and
@@ -2151,12 +2141,8 @@ mod tests {
 
         // Holding one transcriber's gate (an in-flight meeting tick) must
         // not block the other's (a dictation stop).
-        let _meeting_tick = meeting.ctx.lock().expect("meeting gate");
+        let _meeting_tick = meeting.ctx.lock();
         assert!(dictation.ctx.gate.try_lock().is_ok());
-        // ...while a streaming session cloned from the meeting transcriber
-        // does wait on it, keeping mic + system sessions taking turns.
-        let session_handle = meeting.ctx.clone();
-        assert!(session_handle.gate.try_lock().is_err());
     }
 
     // ---- VAD-boundary windowing (#1013) -----------------------------

@@ -185,6 +185,7 @@ fn dictation_and_streaming_concurrently_on_shared_context() {
 }
 
 /// `(physical footprint MB, RSS MB)` for this process.
+#[cfg(target_os = "macos")]
 fn mem_mb() -> (f64, f64) {
     let pid = std::process::id().to_string();
     let vmmap = std::process::Command::new("vmmap")
@@ -216,6 +217,7 @@ fn mem_mb() -> (f64, f64) {
     (footprint, rss_kb / 1024.0)
 }
 
+#[cfg(target_os = "macos")]
 fn report(label: &str, base: (f64, f64)) -> (f64, f64) {
     hush_lib::alloc_tuning::force_collect();
     let now = mem_mb();
