@@ -185,6 +185,13 @@ pub struct MelExtractor {
     /// Mel filterbank matrix, row-major `(NUM_MEL_BINS,
     /// FFT_SIZE/2 + 1)`.
     filterbank: Vec<f32>,
+    /// Per mel row, the half-open FFT-bin range `[first, last + 1)`
+    /// holding its non-zero weights. Each triangle spans only a handful
+    /// of the 257 bins, so `extract` sums over this range instead of the
+    /// whole row (~10× fewer multiply-adds). Zeros outside the range
+    /// contribute exactly `+0.0`, so the sparse sum — taken in the same
+    /// sequential order — is bit-identical to the dense one.
+    nonzero_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl Default for MelExtractor {
@@ -219,11 +226,13 @@ impl MelExtractor {
                 nyquist,
             )
         };
+        let nonzero_ranges = nonzero_bin_ranges(&filterbank, FFT_SIZE / 2 + 1);
         Self {
             config,
             fft,
             window,
             filterbank,
+            nonzero_ranges,
         }
     }
 
@@ -308,15 +317,34 @@ impl MelExtractor {
                 *p = c.re * c.re + c.im * c.im;
             }
 
-            for mel_idx in 0..NUM_MEL_BINS {
+            for (mel_idx, range) in self.nonzero_ranges.iter().enumerate() {
                 let row = &self.filterbank[mel_idx * row_len..(mel_idx + 1) * row_len];
-                let energy: f32 = row.iter().zip(power.iter()).map(|(g, p)| g * p).sum();
+                let energy: f32 = row[range.clone()]
+                    .iter()
+                    .zip(power[range.clone()].iter())
+                    .map(|(g, p)| g * p)
+                    .sum();
                 output.push(energy.max(floor).ln());
             }
         }
 
         output
     }
+}
+
+/// For each `row_len`-wide row of `matrix`, the bin range spanning its
+/// first through last non-zero weight (empty for an all-zero row).
+fn nonzero_bin_ranges(matrix: &[f32], row_len: usize) -> Vec<std::ops::Range<usize>> {
+    matrix
+        .chunks_exact(row_len)
+        .map(|row| match row.iter().position(|&w| w != 0.0) {
+            Some(first) => {
+                let last = row.iter().rposition(|&w| w != 0.0).unwrap_or(first);
+                first..last + 1
+            }
+            None => 0..0,
+        })
+        .collect()
 }
 
 /// Apply a first-order pre-emphasis filter to the whole signal (the
@@ -668,6 +696,89 @@ mod tests {
         assert!(
             bin_4k > bin_1k,
             "4 kHz peak (bin {bin_4k}) should be higher than 1 kHz peak (bin {bin_1k})"
+        );
+    }
+
+    /// Dense reference for `MelExtractor::extract`'s filterbank step:
+    /// the pre-sparse implementation, kept test-only to pin that the
+    /// sparse ranges change nothing.
+    fn extract_dense_reference(m: &MelExtractor, samples: &[f32]) -> Vec<f32> {
+        let mut dense = MelExtractor::with_config(m.config);
+        let full = 0..(FFT_SIZE / 2 + 1);
+        dense.nonzero_ranges = vec![full; NUM_MEL_BINS];
+        dense.extract(samples)
+    }
+
+    #[test]
+    fn sparse_filterbank_is_bit_identical_to_dense() {
+        // Deterministic pseudo-random "speech": noise plus a few tones,
+        // varied amplitude, 2 s at 16 kHz.
+        let mut seed: u32 = 0xC0FF_EE11;
+        let samples: Vec<f32> = (0..32_000)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let noise = (seed as f32 / u32::MAX as f32 - 0.5) * 0.2;
+                let t = i as f32 / 16_000.0;
+                noise
+                    + 0.3 * (2.0 * std::f32::consts::PI * 220.0 * t).sin()
+                    + 0.1 * (2.0 * std::f32::consts::PI * 3_100.0 * t).sin()
+            })
+            .collect();
+        for config in [FbankConfig::WESPEAKER, FbankConfig::LEGACY] {
+            let m = MelExtractor::with_config(config);
+            let sparse = m.extract(&samples);
+            let dense = extract_dense_reference(&m, &samples);
+            assert_eq!(sparse.len(), dense.len());
+            for (i, (a, b)) in sparse.iter().zip(&dense).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "bin {i}: sparse {a} vs dense {b}");
+            }
+        }
+    }
+
+    /// Timing for the sparse filterbank step (run with `--release`).
+    #[test]
+    #[ignore]
+    fn bench_sparse_vs_dense_extract() {
+        let samples: Vec<f32> = (0..160_000)
+            .map(|i| ((i as f32) * 0.013).sin() * 0.3)
+            .collect();
+        let m = MelExtractor::new();
+        let runs = 20;
+        let t0 = std::time::Instant::now();
+        for _ in 0..runs {
+            std::hint::black_box(m.extract(&samples));
+        }
+        let sparse = t0.elapsed() / runs;
+        let t0 = std::time::Instant::now();
+        for _ in 0..runs {
+            std::hint::black_box(extract_dense_reference(&m, &samples));
+        }
+        let dense = t0.elapsed() / runs;
+        eprintln!("10 s fbank: sparse {sparse:?}, dense {dense:?}");
+    }
+
+    #[test]
+    fn nonzero_ranges_are_narrow_and_cover_every_weight() {
+        let m = MelExtractor::new();
+        let row_len = FFT_SIZE / 2 + 1;
+        let mut total = 0;
+        for (mel, range) in m.nonzero_ranges.iter().enumerate() {
+            let row = &m.filterbank[mel * row_len..(mel + 1) * row_len];
+            for (bin, &w) in row.iter().enumerate() {
+                if w != 0.0 {
+                    assert!(
+                        range.contains(&bin),
+                        "mel {mel} bin {bin} outside {range:?}"
+                    );
+                }
+            }
+            total += range.len();
+        }
+        assert!(
+            total < NUM_MEL_BINS * row_len / 4,
+            "ranges unexpectedly wide: {total}"
         );
     }
 

@@ -35,8 +35,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 
 use super::{
-    drain_buffer, push_samples_circular, AudioSession, AudioSource, CaptureFormat, CapturedAudio,
-    MAX_BUFFER_FRAMES,
+    drain_buffer, drain_buffer_into, push_samples_circular, AudioSession, AudioSource,
+    CaptureFormat, CapturedAudio, MAX_BUFFER_FRAMES,
 };
 
 // ── Public struct ────────────────────────────────────────────────────────────
@@ -280,13 +280,9 @@ impl AudioSession for CoreAudioTapSession {
         let inner = self.inner.as_ref().ok_or_else(|| {
             anyhow!("CoreAudio tap session already stopped; drain_into unavailable")
         })?;
-        let mut samples = drain_buffer(&inner.buffer);
-        sink.extend_from_slice(&samples);
-        // Zeroize before drop: same discipline as the cpal drain_into path.
-        {
-            use zeroize::Zeroize;
-            samples.zeroize();
-        }
+        // Straight from the ring into the caller's buffer: no
+        // intermediate PCM copy to allocate and scrub.
+        drain_buffer_into(&inner.buffer, sink);
         // Surface a helper-exit error once the buffer is fully drained so the
         // pump can emit meeting:source-failed instead of recording silence (#910).
         if sink.is_empty() && inner.reader_exited.load(Ordering::Acquire) {

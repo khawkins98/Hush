@@ -176,7 +176,7 @@
   // when the backend emits `hud:state === "recording"`, freezes
   // when state flips to `processing`, and resets between cycles so
   // back-to-back dictations each start at 0:00. The visible
-  // `elapsedLabel` is recomputed on every rAF tick — separate
+  // `elapsedLabel` is recomputed by a 250 ms interval — separate
   // from the AudioWaveform's internal animation loop because the
   // timer label is HUD-specific.
   let recordingStartedAt = $state<number | null>(null);
@@ -220,17 +220,25 @@
   let unlistenProgress: UnlistenFn | null = null;
   let unlistenCallEndCancelled: UnlistenFn | null = null;
   let unlistenCallMayHaveEnded: UnlistenFn | null = null;
-  let raf: number | undefined;
+
+  // Elapsed label: a 250 ms interval that exists only while a recording
+  // is timing. Pre-change this was a rAF loop running for the HUD's whole
+  // lifetime (the HUD page is persistent and mostly hidden) to update a
+  // seconds-resolution string. A timer — unlike rAF — also keeps ticking
+  // if WebKit throttles rAF on a window that mounted hidden (see the
+  // `hudState` comment above).
+  $effect(() => {
+    const startedAt = recordingStartedAt;
+    if (startedAt === null) return;
+    const update = () => {
+      elapsedLabel = formatElapsed(Date.now() - startedAt);
+    };
+    update();
+    const id = setInterval(update, 250);
+    return () => clearInterval(id);
+  });
 
   onMount(async () => {
-    const tick = () => {
-      const now = Date.now();
-      if (recordingStartedAt !== null) {
-        elapsedLabel = formatElapsed(now - recordingStartedAt);
-      }
-      raf = requestAnimationFrame(tick);
-    };
-
     unlistenState = await listen<HudStatePayload>(
       Events.HudState,
       (event) => {
@@ -335,8 +343,6 @@
         callEndConfidence = null;
       }
     });
-
-    raf = requestAnimationFrame(tick);
   });
 
   onDestroy(() => {
@@ -357,10 +363,6 @@
       armTimer = null;
     }
     clearStopError();
-    if (raf !== undefined) {
-      cancelAnimationFrame(raf);
-      raf = undefined;
-    }
   });
 
   let promptVisible = $derived(

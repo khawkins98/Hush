@@ -493,6 +493,14 @@ impl MeetingSessionRepository for FailingCloseRepo {
         self.inner.list_utterances(session_id).await
     }
 
+    async fn list_utterances_since(
+        &self,
+        session_id: i64,
+        after_id: i64,
+    ) -> Result<Vec<PersistedUtterance>> {
+        self.inner.list_utterances_since(session_id, after_id).await
+    }
+
     async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()> {
         self.inner.set_notes(id, notes).await
     }

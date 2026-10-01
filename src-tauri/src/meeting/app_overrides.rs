@@ -113,6 +113,75 @@ pub trait MeetingAppOverrideRepository: Send + Sync {
     async fn delete(&self, app_name: &str) -> Result<()>;
 }
 
+/// Read-through cache in front of another override repository.
+///
+/// The per-app profile poller (`lib.rs`) and the meeting auto-start
+/// classifier read the full override list on a timer / on every mic
+/// activation, while writes only happen from the Settings panel. Every
+/// write goes through this trait, so invalidating on `upsert` /
+/// `set_profile` / `delete` keeps the cache coherent within the process
+/// (the only writer — SQLite isn't shared with another process).
+pub struct CachedMeetingAppOverrideRepository {
+    inner: Arc<dyn MeetingAppOverrideRepository>,
+    cache: tokio::sync::Mutex<Option<Vec<MeetingAppOverride>>>,
+}
+
+impl CachedMeetingAppOverrideRepository {
+    pub fn new(inner: Arc<dyn MeetingAppOverrideRepository>) -> Self {
+        Self {
+            inner,
+            cache: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    async fn invalidate(&self) {
+        *self.cache.lock().await = None;
+    }
+}
+
+#[async_trait]
+impl MeetingAppOverrideRepository for CachedMeetingAppOverrideRepository {
+    async fn list(&self) -> Result<Vec<MeetingAppOverride>> {
+        // Held across the miss so concurrent readers don't stampede
+        // the DB; the list is tiny and the query sub-millisecond.
+        let mut guard = self.cache.lock().await;
+        if let Some(rows) = guard.as_ref() {
+            return Ok(rows.clone());
+        }
+        let rows = self.inner.list().await?;
+        *guard = Some(rows.clone());
+        Ok(rows)
+    }
+
+    async fn upsert(&self, new: NewMeetingAppOverride) -> Result<MeetingAppOverride> {
+        let result = self.inner.upsert(new).await;
+        // Invalidate even on error: a failed write may still have
+        // partially landed, and a re-read is cheap.
+        self.invalidate().await;
+        result
+    }
+
+    async fn set_profile(
+        &self,
+        app_name: &str,
+        preferred_audio_source: Option<&str>,
+        preferred_model_id: Option<&str>,
+    ) -> Result<MeetingAppOverride> {
+        let result = self
+            .inner
+            .set_profile(app_name, preferred_audio_source, preferred_model_id)
+            .await;
+        self.invalidate().await;
+        result
+    }
+
+    async fn delete(&self, app_name: &str) -> Result<()> {
+        let result = self.inner.delete(app_name).await;
+        self.invalidate().await;
+        result
+    }
+}
+
 pub struct SqliteMeetingAppOverrideRepository {
     db: Arc<SqliteDatabase>,
 }
@@ -259,6 +328,41 @@ mod tests {
     async fn fresh_repo() -> SqliteMeetingAppOverrideRepository {
         let db = SqliteDatabase::open_in_memory().await.unwrap();
         SqliteMeetingAppOverrideRepository::new(Arc::new(db))
+    }
+
+    #[tokio::test]
+    async fn cached_repo_serves_reads_from_cache_and_invalidates_on_write() {
+        let db = Arc::new(SqliteDatabase::open_in_memory().await.unwrap());
+        let sqlite = Arc::new(SqliteMeetingAppOverrideRepository::new(Arc::clone(&db)));
+        let cached = CachedMeetingAppOverrideRepository::new(sqlite);
+        assert!(cached.list().await.unwrap().is_empty());
+
+        // A write behind the cache's back is invisible: proves reads
+        // are served from the cache, not the DB.
+        sqlx::query("INSERT INTO meeting_app_overrides (app_name, kind) VALUES ('x', 'meeting')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(cached.list().await.unwrap().is_empty());
+
+        // Writes through the trait invalidate.
+        cached
+            .upsert(NewMeetingAppOverride {
+                app_name: "zoom".into(),
+                kind: MeetingAppKind::Meeting,
+            })
+            .await
+            .unwrap();
+        assert_eq!(cached.list().await.unwrap().len(), 2);
+        cached
+            .set_profile("zoom", Some("system"), None)
+            .await
+            .unwrap();
+        let rows = cached.list().await.unwrap();
+        let zoom = rows.iter().find(|r| r.app_name == "zoom").unwrap();
+        assert_eq!(zoom.preferred_audio_source.as_deref(), Some("system"));
+        cached.delete("zoom").await.unwrap();
+        assert_eq!(cached.list().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

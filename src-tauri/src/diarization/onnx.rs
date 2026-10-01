@@ -68,6 +68,7 @@
 //! acceptable given inference runs at most once per utterance on the
 //! meeting pump's blocking thread.
 
+use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -285,13 +286,20 @@ impl Diarize for OnnxDiarizer {
             .map(|chunk| {
                 let resampled = prepare_audio_for_embedding(chunk, format);
                 let duration_secs = resampled.len() as f32 / SAMPLE_RATE_HZ as f32;
-                match self.embed(&resampled) {
+                let result = match self.embed(&resampled) {
                     Ok(emb) => Some((emb, duration_secs)),
                     Err(e) => {
                         tracing::debug!(error = %e, "OnnxDiarizer: skip utterance");
                         None
                     }
+                };
+                // A converted copy is our own PCM buffer; scrub it like
+                // the pump's other PCM copies (#882). The borrowed
+                // (already-canonical) case is the caller's to manage.
+                if let Cow::Owned(mut owned) = resampled {
+                    zeroize::Zeroize::zeroize(&mut owned);
                 }
+                result
             })
             .collect();
 
@@ -405,17 +413,25 @@ fn verify_model_sha256(path: &Path) -> Result<()> {
 /// Convert a captured chunk into the `f32 16 kHz mono` shape the
 /// embedding model expects. Re-uses the existing transcription-
 /// pipeline helpers so a fix to the resampler benefits both paths.
-fn prepare_audio_for_embedding(chunk: &[f32], format: CaptureFormat) -> Vec<f32> {
-    let mono = if format.channels > 1 {
-        crate::audio::downmix_to_mono(chunk, format.channels)
+///
+/// Borrows when the chunk is already 16 kHz mono — the meeting pump's
+/// canonical format, i.e. every production call — so the hot path makes
+/// no PCM copy.
+fn prepare_audio_for_embedding(chunk: &[f32], format: CaptureFormat) -> Cow<'_, [f32]> {
+    let mono: Cow<'_, [f32]> = if format.channels > 1 {
+        Cow::Owned(crate::audio::downmix_to_mono(chunk, format.channels))
     } else {
-        chunk.to_vec()
+        Cow::Borrowed(chunk)
     };
     if format.sample_rate == SAMPLE_RATE_HZ {
-        mono
-    } else {
-        crate::transcription::resample::resample_to_mono(&mono, format.sample_rate, SAMPLE_RATE_HZ)
+        return mono;
     }
+    let resampled =
+        crate::transcription::resample::resample_to_mono(&mono, format.sample_rate, SAMPLE_RATE_HZ);
+    if let Cow::Owned(mut downmixed) = mono {
+        zeroize::Zeroize::zeroize(&mut downmixed);
+    }
+    Cow::Owned(resampled)
 }
 
 #[cfg(test)]
@@ -436,7 +452,11 @@ mod tests {
                 channels: 1,
             },
         );
-        assert_eq!(out, chunk);
+        assert_eq!(&*out, chunk.as_slice());
+        assert!(
+            matches!(out, Cow::Borrowed(_)),
+            "canonical audio must not be copied"
+        );
     }
 
     #[test]

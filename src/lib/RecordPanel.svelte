@@ -118,10 +118,9 @@
   // resolved from remount-safe sources (dictation state module, or the
   // backend-persisted meeting session start) so navigating to Settings/
   // History and back during a recording doesn't reset the counter.
-  // rAF refreshes the label; reset to the zero placeholder when not
-  // recording.
+  // A 250 ms interval refreshes the label while recording; reset to the
+  // zero placeholder when not recording.
   let elapsedLabel = $state(ELAPSED_ZERO);
-  let raf: number | undefined;
 
   // Remount-safe start timestamp. Re-derives whenever the dictation
   // phase or the polled meeting detail changes; null while idle or
@@ -138,8 +137,8 @@
 
   $effect(() => {
     if (recording) {
-      // Seed immediately from the resolved start (rAF refines it every
-      // frame after). Falls back to 00:00 only when no source has the
+      // Seed immediately from the resolved start (the interval below
+      // refreshes it after). Falls back to 00:00 only when no source has the
       // start time yet.
       elapsedLabel =
         effectiveStartMs !== null
@@ -155,6 +154,20 @@
     } else {
       elapsedLabel = ELAPSED_ZERO;
     }
+  });
+
+  // Refresh the elapsed label only while recording with a known start.
+  // Pre-change a rAF loop ran for the panel's whole lifetime — including
+  // while the main window sat hidden-on-close — to update a
+  // seconds-resolution string. The interval is torn down (effect
+  // cleanup) whenever recording stops or the start anchor changes.
+  $effect(() => {
+    const startMs = effectiveStartMs;
+    if (!recording || startMs === null) return;
+    const id = setInterval(() => {
+      elapsedLabel = formatElapsed(Date.now() - startMs);
+    }, 250);
+    return () => clearInterval(id);
   });
 
   onMount(async () => {
@@ -178,13 +191,6 @@
         }, 1500);
       }
     });
-    const tick = () => {
-      if (recording && effectiveStartMs !== null) {
-        elapsedLabel = formatElapsed(Date.now() - effectiveStartMs);
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
   });
 
   onDestroy(() => {
@@ -197,10 +203,6 @@
     if (doneTimer !== null) {
       clearTimeout(doneTimer);
       doneTimer = null;
-    }
-    if (raf !== undefined) {
-      cancelAnimationFrame(raf);
-      raf = undefined;
     }
   });
 

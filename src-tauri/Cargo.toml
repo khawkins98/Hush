@@ -332,3 +332,29 @@ libc = "0.2"
 # bindings from our own code.
 coreaudio-sys = { version = "0.2", features = ["core_audio"] }
 
+# Build profiles. src-tauri is its own workspace root (there is no
+# Cargo.toml above it), so profiles must live here — they are ignored in
+# a non-root member.
+#
+# Release: thin LTO + a single codegen unit buys cross-crate inlining in
+# the hot paths (mel features, resampling, tract) for a slower link.
+# `strip` drops symbol tables from the shipped binary; panic backtraces in
+# hush.log then show addresses only, which is the accepted trade for size.
+# Deliberately NOT `panic = "abort"`: tokio isolates a panicking task as a
+# `JoinError` and the meeting pump / background finalization rely on that
+# to survive a bad chunk instead of killing the whole app.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# "debuginfo", not `true`: keep the symbol table so panic backtraces in
+# hush.log still name functions.
+strip = "debuginfo"
+
+# Dev: optimise every dependency (not the hush crate itself, so its
+# incremental rebuilds stay fast). Unoptimised tract / rubato / whisper
+# glue made `npm run tauri dev` meetings far slower than real time and
+# skewed any perf observation made in dev. Side effect: cmake-rs now
+# builds whisper.cpp as RelWithDebInfo instead of Debug in dev.
+[profile.dev.package."*"]
+opt-level = 2
+

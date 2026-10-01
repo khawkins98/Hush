@@ -61,8 +61,8 @@ mod test_support;
 pub(crate) use test_support::manager_with_slow_finish_parts;
 
 pub use app_overrides::{
-    MeetingAppOverride, MeetingAppOverrideRepository, NewMeetingAppOverride,
-    SqliteMeetingAppOverrideRepository,
+    CachedMeetingAppOverrideRepository, MeetingAppOverride, MeetingAppOverrideRepository,
+    NewMeetingAppOverride, SqliteMeetingAppOverrideRepository,
 };
 pub use autostart::MeetingAutostartMode;
 pub use classifier::AppClassifier;
@@ -289,6 +289,19 @@ pub trait MeetingSessionRepository:
     /// All utterances for a session, oldest-first. Used by the
     /// session-detail view to render the transcript.
     async fn list_utterances(&self, session_id: i64) -> Result<Vec<PersistedUtterance>>;
+
+    /// Utterances for a session whose `id` is greater than `after_id`,
+    /// in the same order as [`Self::list_utterances`]. Backs the live
+    /// transcript's incremental poll (`meeting_session_get_since`), which
+    /// pre-change re-fetched every row of the session every 3 s. Relies on
+    /// `utterances.id` being `AUTOINCREMENT` (strictly increasing, never
+    /// reused), so "rows after the last id I have" is exactly "rows
+    /// appended since my last poll".
+    async fn list_utterances_since(
+        &self,
+        session_id: i64,
+        after_id: i64,
+    ) -> Result<Vec<PersistedUtterance>>;
 
     /// Update a session's freeform notes. The panel calls this on
     /// blur of the notes textarea.

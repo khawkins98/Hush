@@ -289,6 +289,13 @@ impl crate::meeting::MeetingSessionRepository for NoopMeetings {
     ) -> anyhow::Result<Vec<crate::meeting::PersistedUtterance>> {
         Ok(vec![])
     }
+    async fn list_utterances_since(
+        &self,
+        _: i64,
+        _: i64,
+    ) -> anyhow::Result<Vec<crate::meeting::PersistedUtterance>> {
+        Ok(vec![])
+    }
     async fn set_notes(&self, _: i64, _: Option<String>) -> anyhow::Result<()> {
         Ok(())
     }
@@ -1404,6 +1411,89 @@ async fn set_mic_gain_db_clamps_to_valid_range() {
             .load(std::sync::atomic::Ordering::Relaxed),
     );
     assert_eq!(stored, 6.0);
+}
+
+// ---------------------------------------------------------------------------
+// Live-transcript incremental poll (meeting_session_get_since)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn meeting_session_get_since_returns_header_and_only_newer_utterances() {
+    use super::commands::meeting::meeting_session_detail_inner;
+    let db = crate::db::SqliteDatabase::open_in_memory().await.unwrap();
+    let meetings: Arc<dyn crate::meeting::MeetingSessionRepository> = Arc::new(
+        crate::meeting::SqliteMeetingSessionRepository::new(Arc::new(db)),
+    );
+    let state = AppStateBuilder::new()
+        .audio(Arc::new(MockAudio::new(fake_audio())))
+        .history(Arc::new(MemHistory::new()))
+        .replacements(Arc::new(NoopReplacements))
+        .vocabulary(Arc::new(NoopVocabulary))
+        .settings(Arc::new(MemSettings {
+            map: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }))
+        .meetings(Arc::clone(&meetings))
+        .meeting_app_overrides({
+            let o: Arc<dyn crate::meeting::MeetingAppOverrideRepository> =
+                Arc::new(NoopMeetingAppOverrides);
+            o
+        })
+        .meeting_manager(Arc::new(crate::meeting::SessionManager::new_for_test(
+            Arc::clone(&meetings),
+        )))
+        .models_dir(std::path::PathBuf::from("/tmp/hush-test-models"))
+        .build()
+        .unwrap();
+
+    let session = meetings
+        .create(crate::meeting::NewMeetingSession {
+            app_name: "Zoom".into(),
+            app_kind: crate::meeting::MeetingAppKind::Meeting,
+            sources: vec!["mic".into()],
+            app_title: None,
+        })
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for (i, text) in ["first", "second"].iter().enumerate() {
+        let u = meetings
+            .append_utterance(crate::meeting::NewPersistedUtterance {
+                session_id: session.id,
+                started_at_ms: i as i64 * 1_000,
+                ended_at_ms: i as i64 * 1_000 + 900,
+                speaker_label: Some("mic".into()),
+                text: (*text).into(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        ids.push(u.id);
+    }
+
+    let full = meeting_session_detail_inner(&state, session.id, None)
+        .await
+        .unwrap();
+    assert_eq!(full.utterances.len(), 2);
+
+    let delta = meeting_session_detail_inner(&state, session.id, Some(ids[0]))
+        .await
+        .unwrap();
+    assert_eq!(delta.session.id, session.id, "header always returned");
+    assert_eq!(delta.session.utterance_count, 2, "header reflects all rows");
+    let texts: Vec<&str> = delta.utterances.iter().map(|u| u.text.as_str()).collect();
+    assert_eq!(texts, ["second"]);
+    assert!(delta.current_partials.is_empty());
+
+    let none_new = meeting_session_detail_inner(&state, session.id, Some(ids[1]))
+        .await
+        .unwrap();
+    assert!(none_new.utterances.is_empty());
+
+    let missing = meeting_session_detail_inner(&state, 9_999, Some(0)).await;
+    assert!(
+        missing.is_err(),
+        "unknown session id errors like the full get"
+    );
 }
 
 // ---------------------------------------------------------------------------

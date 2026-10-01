@@ -407,6 +407,24 @@ export async function installMocks(
       meeting_session_get: () => {
         throw { kind: "settings", message: "meeting session not found (default mock)" };
       },
+      // Incremental live-transcript poll. Same `MeetingSessionDetail`
+      // shape as `meeting_session_get`, with `utterances` limited to
+      // `id > afterUtteranceId`. Defaults to mirroring whatever
+      // `meeting_session_get` resolves to (the default above or a spec
+      // override), so specs that script the full detail exercise the
+      // incremental path without a second override. `handlers` is the
+      // merged table declared below; it is read at call time.
+      meeting_session_get_since: async (args) => {
+        const { id, afterUtteranceId } = args as { id: number; afterUtteranceId: number };
+        const full = (await handlers.meeting_session_get({ id })) as {
+          utterances?: Array<{ id: number }>;
+        } & Record<string, unknown>;
+        if (!full) return full;
+        return {
+          ...full,
+          utterances: (full.utterances ?? []).filter((u) => u.id > afterUtteranceId),
+        };
+      },
       meeting_session_delete: () => undefined,
       // Per-row meeting export (#357 phase 3b). Accepts `{ id,
       // format, path }`; same no-op default as the dictation

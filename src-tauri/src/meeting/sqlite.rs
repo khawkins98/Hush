@@ -196,12 +196,31 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
                     speaker_identity_id \
              FROM utterances \
              WHERE session_id = ? \
-             ORDER BY started_at_ms ASC",
+             ORDER BY started_at_ms ASC, id ASC",
         )
         .bind(session_id)
         .fetch_all(self.db.pool())
         .await
         .context("list utterances")
+    }
+
+    async fn list_utterances_since(
+        &self,
+        session_id: i64,
+        after_id: i64,
+    ) -> Result<Vec<PersistedUtterance>> {
+        sqlx::query_as::<_, PersistedUtterance>(
+            "SELECT id, session_id, started_at_ms, ended_at_ms, speaker_label, text, is_final, \
+                    speaker_identity_id \
+             FROM utterances \
+             WHERE session_id = ? AND id > ? \
+             ORDER BY started_at_ms ASC, id ASC",
+        )
+        .bind(session_id)
+        .bind(after_id)
+        .fetch_all(self.db.pool())
+        .await
+        .context("list utterances since")
     }
 
     async fn set_notes(&self, id: i64, notes: Option<String>) -> Result<()> {
@@ -671,6 +690,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_utterances_since_returns_only_newer_rows_of_that_session() {
+        let repo = fresh_repo().await;
+        let s = repo.create(sample_new()).await.unwrap();
+        let other = repo.create(sample_new()).await.unwrap();
+        let mut ids = Vec::new();
+        for (i, text) in ["one", "two", "three"].iter().enumerate() {
+            let u = repo
+                .append_utterance(NewPersistedUtterance {
+                    session_id: s.id,
+                    started_at_ms: i as i64 * 1_000,
+                    ended_at_ms: i as i64 * 1_000 + 500,
+                    speaker_label: None,
+                    text: (*text).into(),
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            ids.push(u.id);
+        }
+        repo.append_utterance(NewPersistedUtterance {
+            session_id: other.id,
+            started_at_ms: 0,
+            ended_at_ms: 500,
+            speaker_label: None,
+            text: "elsewhere".into(),
+        })
+        .await
+        .unwrap();
+
+        let all = repo.list_utterances_since(s.id, 0).await.unwrap();
+        assert_eq!(all.len(), 3);
+        let newer = repo.list_utterances_since(s.id, ids[0]).await.unwrap();
+        let texts: Vec<&str> = newer.iter().map(|u| u.text.as_str()).collect();
+        assert_eq!(texts, ["two", "three"]);
+        assert!(repo
+            .list_utterances_since(s.id, ids[2])
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
     async fn set_notes_round_trips() {
         let repo = fresh_repo().await;
         let s = repo.create(sample_new()).await.unwrap();
@@ -766,6 +827,64 @@ mod tests {
             .await
             .unwrap();
         assert!(miss.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fts_index_tracks_text_updates_but_ignores_label_updates() {
+        // Migration 0011 narrowed `utterances_au` to `UPDATE OF text`.
+        // Label / identity rewrites must leave the index intact, and a
+        // text change must still re-index.
+        let repo = fresh_repo().await;
+        let trigger_sql: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'utterances_au'",
+        )
+        .fetch_one(repo.db.pool())
+        .await
+        .unwrap();
+        assert!(
+            trigger_sql.contains("UPDATE OF text"),
+            "trigger must be narrowed to text updates: {trigger_sql}"
+        );
+        let s = repo.create(sample_new()).await.unwrap();
+        let u = repo
+            .append_utterance(NewPersistedUtterance {
+                session_id: s.id,
+                started_at_ms: 0,
+                ended_at_ms: 1_000,
+                speaker_label: Some("system".into()),
+                text: "quarterly roadmap review".into(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let fts_hits = |q: &'static str| {
+            let pool = repo.db.pool().clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM utterances_fts WHERE utterances_fts MATCH ?",
+                )
+                .bind(q)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+
+        sqlx::query("UPDATE utterances SET speaker_label = 'Speaker 2' WHERE id = ?")
+            .bind(u.id)
+            .execute(repo.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(fts_hits("roadmap").await, 1);
+        assert_eq!(repo.search_sessions("roadmap").await.unwrap().len(), 1);
+
+        sqlx::query("UPDATE utterances SET text = 'budget planning' WHERE id = ?")
+            .bind(u.id)
+            .execute(repo.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(fts_hits("roadmap").await, 0);
+        assert_eq!(fts_hits("budget").await, 1);
     }
 
     #[tokio::test]

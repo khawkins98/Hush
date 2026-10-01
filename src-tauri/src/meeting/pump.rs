@@ -851,6 +851,20 @@ async fn tick_inference(
     // tick. Updated in the per-source loop; applied to the call-end detector
     // atomic after the loop so the last-source-wins problem is avoided.
     let mut tick_had_real_speech = false;
+    // Mirrors the gating in `diarize_and_dispatch_merged_with` so the
+    // per-utterance audio slice below is skipped when its consumer
+    // would ignore it. Bucket count there is ≤ source count here, so
+    // "one source" here implies the single-bucket fast path there.
+    // (Corner case accepted: two mics + a system source whose system
+    // bucket fails this tick would diarize mic finals with empty audio;
+    // the diarizer abstains and they keep the "mic" tag, which is the
+    // same label the exclusion would have produced.)
+    let diarizer_may_run = ctx.sources.len() > 1;
+    let exclude_local_from_diarizer = ctx
+        .sources
+        .iter()
+        .any(|s| s.speaker_tag() != crate::audio::LOCAL_SPEAKER_TAG)
+        && !crate::diarization::local_separation_enabled();
     #[allow(clippy::needless_range_loop)]
     for i in 0..ctx.sources.len() {
         // Skip sources without a streaming session — drained
@@ -1002,9 +1016,28 @@ async fn tick_inference(
         // Audio is sliced using LOCAL stream-relative timestamps
         // before the epoch offset is applied — the rolling buffer
         // index matches the per-stream clock.
+        //
+        // Only slice what the diarizer can actually consume: it sees
+        // finals only (#800), never runs for a single-source session
+        // (#369 fast path), and never sees mic finals when a remote
+        // source is present unless local separation is on (#1003).
+        // Partials and the rest get an empty Vec — each slice is a
+        // fresh up-to-30 s PCM copy, and a partial is emitted on most
+        // inference ticks.
+        let slice_for_diarizer = |u: &Utterance| -> bool {
+            u.is_final
+                && diarizer_may_run
+                && !(exclude_local_from_diarizer && source_label == crate::audio::LOCAL_SPEAKER_TAG)
+        };
         let audio: Vec<Vec<f32>> = utterances
             .iter()
-            .map(|u| state.audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms))
+            .map(|u| {
+                if slice_for_diarizer(u) {
+                    state.audio_buffers[i].slice_ms(u.started_at_ms, u.ended_at_ms)
+                } else {
+                    Vec::new()
+                }
+            })
             .collect();
 
         // Apply per-source epoch offset (#611): when a streaming
@@ -1603,9 +1636,11 @@ pub(super) async fn diarize_and_dispatch_merged_with(
                 .iter()
                 .map(|&i| chronological[i].clone())
                 .collect();
-            let final_audio: Vec<Vec<f32>> = final_idxs
+            // Move, don't clone: `chronological_audio` is never read
+            // again, and each chunk is a PCM copy of up to 30 s.
+            let mut final_audio: Vec<Vec<f32>> = final_idxs
                 .iter()
-                .map(|&i| chronological_audio[i].clone())
+                .map(|&i| std::mem::take(&mut chronological_audio[i]))
                 .collect();
             let diarize_bg = Arc::clone(diarize);
             let labeled_result = tokio::task::spawn_blocking(move || {
@@ -1615,6 +1650,10 @@ pub(super) async fn diarize_and_dispatch_merged_with(
                     &hints,
                     CANONICAL_FORMAT,
                 );
+                // Same PCM-copy hygiene as the drain buffers (#882).
+                for chunk in &mut final_audio {
+                    chunk.zeroize();
+                }
                 final_utts
             })
             .await;
