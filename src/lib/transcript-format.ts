@@ -81,10 +81,10 @@ function isInRoomLabel(label: string | null): boolean {
  * are untouched: the channel already says they're the local user.
  * Returns new objects; the inputs are not mutated.
  */
-export function resolvePartialLabels<T extends UtteranceLike>(
-  finals: readonly T[],
-  partials: readonly T[],
-): T[] {
+export function resolvePartialLabels<P extends UtteranceLike>(
+  finals: readonly UtteranceLike[],
+  partials: readonly P[],
+): P[] {
   let lastDiarized: string | null = null;
   for (const u of finals) {
     // Only remote clusters are candidates: a remote partial must never
