@@ -142,9 +142,15 @@
     const onVisibilityChange = () => {
       if (!document.hidden) void meeting.refreshActiveDetail(id, { full: true });
     };
+    // `focus` backs up `visibilitychange` (same pattern as DebugConsole):
+    // if WKWebView doesn't flip visibility on the hide-on-close
+    // order-out, re-showing the window still re-syncs.
+    const onFocus = () => void meeting.refreshActiveDetail(id, { full: true });
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
       if (meetingActivePollHandle !== null) {
         clearInterval(meetingActivePollHandle);
         meetingActivePollHandle = null;

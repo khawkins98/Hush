@@ -350,11 +350,13 @@
 
   onMount(async () => {
     mounted = true;
+    // Before the await: if `listen` rejects (browser playground outside
+    // the mock) the decay loop must still start.
+    ensureLoop();
     unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
       rms = event.payload ?? 0;
       ensureLoop();
     });
-    ensureLoop();
   });
 
   // Restart the (possibly parked) loop on every mood change so the

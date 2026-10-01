@@ -571,6 +571,9 @@ pub trait AudioCapture: Send + Sync {
 /// dictation sessions. The circular-deque approach keeps the most-recent
 /// audio — the semantics the module-level `MAX_BUFFER_FRAMES` comment
 /// always claimed ("drops the oldest") but `rtrb` couldn't deliver.
+// Only the macOS CoreAudio tap still pushes a whole slice; cpal uses the
+// `_iter` form. Gated so Linux clippy does not flag it as dead code.
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn push_samples_circular(
     buf: &Mutex<VecDeque<f32>>,
     samples: &[f32],

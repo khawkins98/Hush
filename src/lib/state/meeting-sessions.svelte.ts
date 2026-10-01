@@ -65,6 +65,10 @@ let meetingRefreshSeq = 0;
 /// detail fetch from the previous session that should not overwrite the
 /// already-resolved detail for the current one.
 let meetingActiveDetailSeq = 0;
+// True while a full `meeting_session_get` is in flight. An incremental
+// tick must not supersede it (bumping the seq would discard the full
+// re-sync and merge into the stale held detail instead).
+let meetingActiveFullPending = false;
 /// Current search query mirror. Kept in sync by history.setSearchQuery()
 /// so meeting.refresh() uses the right filter without importing history.
 let meetingSearchQuery = "";
@@ -225,6 +229,7 @@ export const meeting = {
   /// first load and when the window becomes visible again, the points
   /// where held rows may be stale.
   async refreshActiveDetail(id: number, opts: { full?: boolean } = {}) {
+    if (!opts.full && meetingActiveFullPending) return;
     meetingActiveDetailSeq += 1;
     const seq = meetingActiveDetailSeq;
     // `untrack`: callers invoke this from inside an `$effect`
@@ -233,6 +238,7 @@ export const meeting = {
     // re-running (and re-fetching) on every update, forever.
     const prev = untrack(() => meetingActiveDetail);
     const incremental = !opts.full && prev !== null && prev.session.id === id;
+    if (!incremental) meetingActiveFullPending = true;
     try {
       const detail = incremental
         ? await invoke<MeetingSessionDetail>("meeting_session_get_since", {
@@ -255,6 +261,10 @@ export const meeting = {
       // poll cycle will self-heal and we don't want to clobber the
       // session-list error field with an ephemeral detail-fetch blip.
       console.warn("refreshActiveDetail failed:", e);
+    } finally {
+      // Only the newest call owns the flag; a superseded full fetch
+      // (newer full, or a session switch) must not clear its successor's.
+      if (!incremental && seq === meetingActiveDetailSeq) meetingActiveFullPending = false;
     }
   },
   clearActiveDetail() {

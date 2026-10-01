@@ -196,7 +196,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
                     speaker_identity_id \
              FROM utterances \
              WHERE session_id = ? \
-             ORDER BY started_at_ms ASC",
+             ORDER BY started_at_ms ASC, id ASC",
         )
         .bind(session_id)
         .fetch_all(self.db.pool())
@@ -214,7 +214,7 @@ impl MeetingSessionRepository for SqliteMeetingSessionRepository {
                     speaker_identity_id \
              FROM utterances \
              WHERE session_id = ? AND id > ? \
-             ORDER BY started_at_ms ASC",
+             ORDER BY started_at_ms ASC, id ASC",
         )
         .bind(session_id)
         .bind(after_id)
