@@ -481,6 +481,7 @@ mod tests {
             is_default: false,
             download_url: url.into(),
             sha256: "0".repeat(64),
+            english_only: false,
         }
     }
 

@@ -36,6 +36,7 @@ use whisper_rs::{
 };
 
 use crate::audio::{apply_mic_gain, downmix_to_mono, CaptureFormat, CapturedAudio};
+use crate::transcription::quality::{aggregate_token_scores, TokenScore};
 use crate::transcription::resample::resample_to_mono;
 use crate::transcription::streaming::{
     SlidingWindowConfig, SlidingWindowState, StreamSegment, StreamingTranscribeSession,
@@ -116,6 +117,61 @@ const DEFAULT_VAD_HANGOVER_MS: u64 = 1500;
 /// "2026-06-05 VAD hallucination follow-up".
 const DEFAULT_NO_SPEECH_THOLD: f32 = 0.6;
 
+/// whisper.cpp's `logprob_thold` (#1013). whisper.cpp's no-speech drop
+/// is an **AND**: a segment is discarded as silence only when its
+/// no-speech probability exceeds `no_speech_thold` *and* the decode's
+/// average logprob is below this value. A confident hallucination
+/// (high avg logprob on a silent window) therefore survives any
+/// `no_speech_thold` setting — lowering `HUSH_WHISPER_NO_SPEECH_THOLD`
+/// alone can't catch it. Raising this (towards 0) widens the silence
+/// drop. whisper.cpp's default is -1.0; we set it explicitly (same
+/// value, behaviour-neutral) so it's tunable via
+/// `HUSH_WHISPER_LOGPROB_THOLD`. With `temperature_inc = 0` there is no
+/// fallback ladder, so this knob affects only the no-speech decision.
+///
+/// The learnings.md entry from #974 claimed whisper-rs 0.14 doesn't
+/// expose `logprob_thold`; that was wrong — `FullParams::set_logprob_thold`
+/// and `WhisperState::full_get_token_data` both exist in 0.14.4.
+const DEFAULT_LOGPROB_THOLD: f32 = -1.0;
+
+/// Resolve [`DEFAULT_LOGPROB_THOLD`] against `HUSH_WHISPER_LOGPROB_THOLD`,
+/// clamped to `[-10.0, 0.0]` (logprobs are never positive).
+fn logprob_thold() -> f32 {
+    std::env::var("HUSH_WHISPER_LOGPROB_THOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(DEFAULT_LOGPROB_THOLD)
+        .clamp(-10.0, 0.0)
+}
+
+/// Read the text tokens of one decoded segment as [`TokenScore`]s.
+/// Special tokens (timestamps, `<|endoftext|>`, language tags) all have
+/// ids `>= token_eot` in whisper's vocabulary layout and are skipped:
+/// their probabilities describe timing / control decisions, not words.
+/// Errors on individual tokens are skipped rather than failing the
+/// inference — confidence is diagnostic, the text is what matters.
+fn segment_token_scores(state: &WhisperState, segment: i32, eot: i32) -> Vec<TokenScore> {
+    let n = state.full_n_tokens(segment).unwrap_or(0);
+    let mut out = Vec::with_capacity(n.max(0) as usize);
+    for t in 0..n {
+        let Ok(data) = state.full_get_token_data(segment, t) else {
+            continue;
+        };
+        if data.id >= eot {
+            continue;
+        }
+        let Ok(text) = state.full_get_token_text_lossy(segment, t) else {
+            continue;
+        };
+        out.push(TokenScore {
+            text,
+            plog: data.plog,
+        });
+    }
+    out
+}
+
 /// Resolve [`DEFAULT_NO_SPEECH_THOLD`] against `HUSH_WHISPER_NO_SPEECH_THOLD`,
 /// clamped to `[0.0, 1.0]`. Read per inference (cheap env read; matches the
 /// runtime-tunable convention of the VAD knobs).
@@ -135,6 +191,129 @@ fn no_speech_thold() -> f32 {
 /// Off by default (no per-tick log spam in normal use).
 fn vad_trace_enabled() -> bool {
     matches!(std::env::var("HUSH_VAD_TRACE").as_deref(), Ok("1"))
+}
+
+/// VAD-boundary windowing (#1013, opt-in): silence after speech that
+/// closes a speech region and triggers a boundary commit. Shorter than
+/// the 1.5 s gate hangover so the region commits while the gate is still
+/// open. Tunable via `HUSH_VAD_BOUNDARY_SILENCE_MS`.
+const DEFAULT_VAD_BOUNDARY_SILENCE_MS: u64 = 600;
+/// Audio kept after the last speech frame when committing a region, so
+/// trailing consonants aren't clipped.
+const VAD_BOUNDARY_TAIL_PAD_MS: u64 = 200;
+/// Audio kept before a speech onset when trimming leading silence.
+const VAD_BOUNDARY_LEAD_PAD_MS: u64 = 300;
+/// A speech region needs at least this many speech frames (~160 ms) to
+/// earn a boundary commit; shorter blips (a click, a cough) are left to
+/// the normal time-based path.
+const VAD_BOUNDARY_MIN_SPEECH_FRAMES: u32 = 5;
+
+/// `HUSH_VAD_BOUNDARY=1` → `Some(silence_frames)`; off otherwise.
+/// Read once per session (same freeze-at-construction rule as the other
+/// VAD knobs).
+fn vad_boundary_config_from_env() -> Option<u64> {
+    if !matches!(std::env::var("HUSH_VAD_BOUNDARY").as_deref(), Ok("1")) {
+        return None;
+    }
+    let ms = std::env::var("HUSH_VAD_BOUNDARY_SILENCE_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_VAD_BOUNDARY_SILENCE_MS)
+        .max(100);
+    Some(ms_to_vad_frames(ms))
+}
+
+fn ms_to_vad_frames(ms: u64) -> u64 {
+    (ms * u64::from(WHISPER_SAMPLE_RATE) / 1000).div_ceil(crate::vad::FRAME_LEN_SAMPLES as u64)
+}
+
+fn vad_frames_to_ms(frames: u64) -> u64 {
+    frames * crate::vad::FRAME_LEN_SAMPLES as u64 * 1000 / u64::from(WHISPER_SAMPLE_RATE)
+}
+
+/// Speech-region tracker for VAD-boundary windowing (#1013). Fed one
+/// speech/non-speech decision per VAD frame, in order; emits the
+/// absolute ms of a region's end once enough silence follows it, and
+/// the ms of each speech onset (for trimming leading silence). Pure
+/// bookkeeping so the policy is unit-testable without a model.
+#[derive(Debug, Default)]
+struct BoundaryTracker {
+    /// Silence frames that close a region.
+    silence_frames: u64,
+    /// Index of the next frame to be observed (frame `i` covers samples
+    /// `[i*512, (i+1)*512)` of the session stream).
+    next_frame: u64,
+    /// First frame of the open speech region, if any.
+    region_start: Option<u64>,
+    /// Speech frames seen in the open region.
+    region_speech_frames: u32,
+    /// Last speech frame seen in the open region.
+    last_speech: Option<u64>,
+    /// Any speech frame seen since the last emitted boundary (or session
+    /// start). An onset only licenses a leading-silence trim when this
+    /// is false: if a short blip — below the region minimum, so it never
+    /// produced a boundary — is still uncommitted in the window, trimming
+    /// up to the next onset would silently discard it. (The first
+    /// real-audio run lost "ask not" from the JFK clip exactly this way.)
+    speech_since_boundary: bool,
+}
+
+/// What [`BoundaryTracker::observe`] saw on one frame.
+#[derive(Debug, PartialEq, Eq)]
+enum BoundaryEvent {
+    /// A region opened at this ms (speech onset after a pause).
+    Onset(u64),
+    /// A region closed; commit through this ms.
+    Boundary(u64),
+}
+
+impl BoundaryTracker {
+    /// Whether any speech arrived after the last emitted boundary — i.e.
+    /// whether the window may still hold uncommitted speech.
+    fn has_uncommitted_speech(&self) -> bool {
+        self.speech_since_boundary
+    }
+
+    fn new(silence_frames: u64) -> Self {
+        Self {
+            silence_frames,
+            ..Self::default()
+        }
+    }
+
+    fn observe(&mut self, is_speech: bool) -> Option<BoundaryEvent> {
+        let f = self.next_frame;
+        self.next_frame += 1;
+        if is_speech {
+            let opens_region = self.region_start.is_none();
+            if opens_region {
+                self.region_start = Some(f);
+                self.region_speech_frames = 0;
+            }
+            self.region_speech_frames += 1;
+            self.last_speech = Some(f);
+            let trim_ok = opens_region && !self.speech_since_boundary;
+            self.speech_since_boundary = true;
+            return trim_ok.then(|| BoundaryEvent::Onset(vad_frames_to_ms(f)));
+        }
+        let (Some(_), Some(last)) = (self.region_start, self.last_speech) else {
+            return None;
+        };
+        if f - last < self.silence_frames {
+            return None;
+        }
+        let long_enough = self.region_speech_frames >= VAD_BOUNDARY_MIN_SPEECH_FRAMES;
+        self.region_start = None;
+        self.region_speech_frames = 0;
+        self.last_speech = None;
+        if long_enough {
+            self.speech_since_boundary = false;
+        }
+        long_enough.then(|| {
+            let end = vad_frames_to_ms(last + 1) + VAD_BOUNDARY_TAIL_PAD_MS;
+            BoundaryEvent::Boundary(end.min(vad_frames_to_ms(f + 1)))
+        })
+    }
 }
 
 /// Resolves [`DEFAULT_STATE_RECREATE_INTERVAL`] against an env-var
@@ -563,7 +742,7 @@ impl Transcribe for WhisperTranscription {
             Arc::clone(&self.ctx),
             format,
             prompt.to_owned(),
-            SlidingWindowConfig::meeting_defaults(),
+            SlidingWindowConfig::meeting_from_env(),
             Arc::clone(&self.inference_threads),
             vad_session,
         );
@@ -685,6 +864,15 @@ pub struct WhisperStreamingSession {
     /// `true` means "last call to drain ran the inferer"; `false` means
     /// "either never inferred yet, or last drain was gated".
     was_inferring: bool,
+    // ---- VAD-boundary windowing (#1013, opt-in) ---------------------
+    /// `Some` when `HUSH_VAD_BOUNDARY=1`. Tracks speech regions from
+    /// the per-frame VAD decisions `drain_vad` already makes.
+    boundary: Option<BoundaryTracker>,
+    /// Region end (absolute ms) waiting for the next `drain` to commit.
+    pending_boundary_ms: Option<u64>,
+    /// Speech onset (absolute ms) to trim leading silence up to, applied
+    /// in `feed` once the samples are in the window.
+    pending_onset_ms: Option<u64>,
 }
 
 impl WhisperStreamingSession {
@@ -714,6 +902,9 @@ impl WhisperStreamingSession {
             vad_disabled,
             vad_error_logged: false,
             was_inferring: false,
+            boundary: vad_boundary_config_from_env().map(BoundaryTracker::new),
+            pending_boundary_ms: None,
+            pending_onset_ms: None,
         }
     }
 
@@ -749,6 +940,9 @@ impl WhisperStreamingSession {
             vad_disabled,
             vad_error_logged: false,
             was_inferring: false,
+            boundary: vad_boundary_config_from_env().map(BoundaryTracker::new),
+            pending_boundary_ms: None,
+            pending_onset_ms: None,
         }
     }
 
@@ -813,9 +1007,11 @@ impl WhisperStreamingSession {
                 Ok(prob) => {
                     frames_scored += 1;
                     max_prob = max_prob.max(prob);
-                    if prob >= self.vad_threshold {
+                    let is_speech = prob >= self.vad_threshold;
+                    if is_speech {
                         self.last_speech_at = Some(std::time::Instant::now());
                     }
+                    self.observe_boundary(is_speech);
                 }
                 Err(e) => {
                     if !self.vad_error_logged {
@@ -827,6 +1023,9 @@ impl WhisperStreamingSession {
                         self.vad_error_logged = true;
                     }
                     self.last_speech_at = Some(std::time::Instant::now());
+                    // Graceful degrade: a failing VAD counts as speech,
+                    // so boundary mode never closes a region on it.
+                    self.observe_boundary(true);
                 }
             }
             offset += frame_len;
@@ -844,6 +1043,25 @@ impl WhisperStreamingSession {
         }
     }
 
+    /// Feed one VAD decision to the boundary tracker (no-op unless
+    /// boundary mode is on) and queue what it reports.
+    fn observe_boundary(&mut self, is_speech: bool) {
+        let Some(tracker) = self.boundary.as_mut() else {
+            return;
+        };
+        match tracker.observe(is_speech) {
+            Some(BoundaryEvent::Boundary(ms)) => {
+                self.pending_boundary_ms = Some(self.pending_boundary_ms.map_or(ms, |p| p.max(ms)));
+            }
+            // Only trim on an onset when no region is waiting to be
+            // committed — otherwise the trim would cut into it.
+            Some(BoundaryEvent::Onset(ms)) if self.pending_boundary_ms.is_none() => {
+                self.pending_onset_ms = Some(ms.saturating_sub(VAD_BOUNDARY_LEAD_PAD_MS));
+            }
+            _ => {}
+        }
+    }
+
     /// Test-only drain that runs the gate against an arbitrary
     /// inferer. Lets the VAD-gate tests assert "inferer was / was not
     /// invoked" without constructing a real `WhisperContext`. The
@@ -855,6 +1073,10 @@ impl WhisperStreamingSession {
         &mut self,
         inferer: &mut dyn WhisperLikeInferer,
     ) -> Result<Vec<Utterance>> {
+        if let Some(boundary_ms) = self.pending_boundary_ms.take() {
+            self.was_inferring = false;
+            return self.state.commit_through(inferer, boundary_ms);
+        }
         if self.should_gate() {
             if self.was_inferring {
                 // First gated drain after a run of inferences: flush
@@ -900,6 +1122,9 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
             // the capture pump chunks samples (#974).
             self.drain_vad(&mono_16k);
             self.state.feed_mono(&mono_16k);
+            if let Some(onset_ms) = self.pending_onset_ms.take() {
+                self.state.skip_head_until(onset_ms);
+            }
         }
         Ok(())
     }
@@ -911,6 +1136,34 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
         // win — preventing hallucinations on non-speech windows like
         // a Zoom hold beep or a typing sound.
         let trace = vad_trace_enabled();
+        // VAD-boundary commit (#1013, opt-in): a speech region just
+        // closed — decode exactly that region and commit it. Runs ahead
+        // of the gate (the boundary fires inside the hangover, while the
+        // gate is still open). Clearing `was_inferring` stops the
+        // gate-close flush from re-decoding the silence that follows.
+        if let Some(boundary_ms) = self.pending_boundary_ms.take() {
+            if trace {
+                tracing::info!(
+                    boundary_ms,
+                    "VAD trace: region closed → boundary commit (HUSH_VAD_BOUNDARY)"
+                );
+            }
+            self.was_inferring = false;
+            let ctx = self
+                .ctx
+                .as_ref()
+                .expect("WhisperStreamingSession::drain called without a loaded ctx (production paths always supply Some)")
+                .clone();
+            let mut inferer = WhisperInferer {
+                ctx,
+                prompt: &self.prompt,
+                inference_threads: Arc::clone(&self.inference_threads),
+                whisper_state: &mut self.whisper_state,
+                inferences_on_current_state: &mut self.inferences_on_current_state,
+                state_recreate_interval: self.state_recreate_interval,
+            };
+            return self.state.commit_through(&mut inferer, boundary_ms);
+        }
         if self.should_gate() {
             if self.was_inferring {
                 // First gated drain after a run of inferences: flush
@@ -970,6 +1223,11 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
             .as_ref()
             .expect("WhisperStreamingSession::finish called without a loaded ctx (production paths always supply Some)")
             .clone();
+        let pending_boundary = self.pending_boundary_ms.take();
+        let speech_left = self
+            .boundary
+            .as_ref()
+            .map(BoundaryTracker::has_uncommitted_speech);
         let mut inferer = WhisperInferer {
             ctx,
             prompt: &self.prompt,
@@ -978,8 +1236,35 @@ impl StreamingTranscribeSession for WhisperStreamingSession {
             inferences_on_current_state: &mut self.inferences_on_current_state,
             state_recreate_interval: self.state_recreate_interval,
         };
-        self.state.finish(&mut inferer)
+        finish_with_boundary(&mut self.state, &mut inferer, pending_boundary, speech_left)
     }
+}
+
+/// Session-end flush, aware of VAD-boundary mode (#1013). Commits any
+/// region still waiting for a drain, then runs the normal tail flush —
+/// unless boundary mode knows the rest of the window is pure silence
+/// (`speech_left == Some(false)`), in which case decoding it would only
+/// invite a confabulation (the first real-audio run produced a "Thank
+/// you." from 3 s of trailing hiss) and the tail is dropped instead.
+/// `speech_left == None` (boundary mode off) is the unchanged path.
+fn finish_with_boundary(
+    state: &mut SlidingWindowState,
+    inferer: &mut dyn WhisperLikeInferer,
+    pending_boundary: Option<u64>,
+    speech_left: Option<bool>,
+) -> Result<Vec<Utterance>> {
+    let mut out = match pending_boundary {
+        Some(ms) => state.commit_through(inferer, ms)?,
+        None => Vec::new(),
+    };
+    if speech_left == Some(false) {
+        tracing::debug!(
+            "streaming finish: boundary mode, no speech after last region — skipping tail decode"
+        );
+        return Ok(out);
+    }
+    out.extend(state.finish(inferer)?);
+    Ok(out)
 }
 
 /// Adapter that plugs whisper.cpp inference into the
@@ -1053,6 +1338,9 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         // only blocks bracketed non-speech tokens; this is the lever for
         // the English-text confabulations on compressed call audio.
         params.set_no_speech_thold(no_speech_thold());
+        // `logprob_thold` (#1013): the other half of whisper.cpp's
+        // no-speech AND — see `DEFAULT_LOGPROB_THOLD`.
+        params.set_logprob_thold(logprob_thold());
         if !self.prompt.is_empty() {
             params.set_initial_prompt(self.prompt);
         }
@@ -1128,6 +1416,7 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             "whisper: inference complete"
         );
 
+        let eot = ctx.token_eot();
         let mut out = Vec::with_capacity(n_segments as usize);
         for i in 0..n_segments {
             let text = state
@@ -1144,10 +1433,15 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
                 .map_err(|e| anyhow!("failed to read segment {i} t1: {e}"))?;
             let start_ms = (t0.max(0) as u64).saturating_mul(10);
             let end_ms = (t1.max(0) as u64).saturating_mul(10);
+            // Per-segment confidence (#1013): mean text-token logprob
+            // for the final filter + word-level p for shading.
+            let confidence = aggregate_token_scores(&segment_token_scores(state, i, eot));
             out.push(StreamSegment {
                 start_ms,
                 end_ms,
                 text,
+                avg_logprob: confidence.avg_logprob,
+                words: confidence.words,
             });
         }
 
@@ -1434,6 +1728,7 @@ mod tests {
             infer_interval_ms: 1_000,
             commit_tail_ms: 2_000,
             min_first_inference_ms: 500,
+            ..SlidingWindowConfig::meeting_defaults()
         }
     }
 
@@ -1460,6 +1755,7 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "hello".into(),
+                ..Default::default()
             }],
         };
         let _ = session.drain_with_inferer(&mut inferer).unwrap();
@@ -1526,6 +1822,7 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "hello".into(),
+                ..Default::default()
             }],
         };
         let _ = session.drain_with_inferer(&mut inferer).unwrap();
@@ -1605,6 +1902,7 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "stranded sentence".into(),
+                ..Default::default()
             }],
         };
         let first = session.drain_with_inferer(&mut inferer).unwrap();
@@ -1663,6 +1961,7 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "in flight".into(),
+                ..Default::default()
             }],
         };
         let _ = session.drain_with_inferer(&mut inferer).unwrap();
@@ -1715,5 +2014,197 @@ mod tests {
             },
         };
         let _ = transcriber.transcribe(&audio).expect("inference");
+    }
+
+    // ---- VAD-boundary windowing (#1013) -----------------------------
+
+    #[test]
+    fn boundary_tracker_reports_onset_and_region_end() {
+        let silence = ms_to_vad_frames(600);
+        let mut t = BoundaryTracker::new(silence);
+        // 5 silence frames, then 10 speech frames (onset at frame 5).
+        for _ in 0..5 {
+            assert_eq!(t.observe(false), None);
+        }
+        assert_eq!(
+            t.observe(true),
+            Some(BoundaryEvent::Onset(vad_frames_to_ms(5)))
+        );
+        for _ in 0..9 {
+            assert_eq!(t.observe(true), None);
+        }
+        // Last speech frame = 14. Silence until the threshold is met.
+        let mut ev = None;
+        for _ in 0..silence {
+            ev = t.observe(false);
+        }
+        assert_eq!(
+            ev,
+            Some(BoundaryEvent::Boundary(
+                vad_frames_to_ms(15) + VAD_BOUNDARY_TAIL_PAD_MS
+            ))
+        );
+        // Region is closed: more silence reports nothing.
+        assert_eq!(t.observe(false), None);
+    }
+
+    #[test]
+    fn boundary_tracker_ignores_short_blips() {
+        let silence = ms_to_vad_frames(600);
+        let mut t = BoundaryTracker::new(silence);
+        assert!(matches!(t.observe(true), Some(BoundaryEvent::Onset(_))));
+        t.observe(true);
+        for _ in 0..silence + 5 {
+            assert_eq!(t.observe(false), None, "a 2-frame blip must not commit");
+        }
+    }
+
+    #[test]
+    fn boundary_tracker_brief_dip_does_not_split_region() {
+        let silence = ms_to_vad_frames(600);
+        let mut t = BoundaryTracker::new(silence);
+        for _ in 0..10 {
+            t.observe(true);
+        }
+        for _ in 0..silence - 1 {
+            assert_eq!(t.observe(false), None);
+        }
+        // Speech resumes just before the threshold — same region, no
+        // new onset.
+        assert_eq!(t.observe(true), None);
+    }
+
+    #[test]
+    fn boundary_mode_trims_leading_silence_and_commits_region() {
+        // ~1 s silence, ~1.5 s speech, ~0.8 s silence, as Silero would
+        // score it.
+        let mut probs = std::collections::VecDeque::new();
+        probs.extend(std::iter::repeat(0.0).take(31));
+        probs.extend(std::iter::repeat(0.9).take(47));
+        probs.extend(std::iter::repeat(0.0).take(25));
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            SlidingWindowConfig {
+                commit_tail_ms: 10_000,
+                ..vad_gate_streaming_config()
+            },
+            Box::new(ScriptedVad {
+                probs,
+                calls: std::sync::Arc::clone(&calls),
+            }),
+        );
+        session.boundary = Some(BoundaryTracker::new(ms_to_vad_frames(600)));
+
+        let frames = 31 + 47 + 25;
+        session
+            .feed(&vec![0.1_f32; frames * crate::vad::FRAME_LEN_SAMPLES])
+            .unwrap();
+        // Leading silence trimmed to onset (31 frames ≈ 992 ms) − 300 ms pad.
+        assert_eq!(
+            session.state.window_start_ms_for_test(),
+            vad_frames_to_ms(31) - VAD_BOUNDARY_LEAD_PAD_MS
+        );
+        assert!(session.pending_boundary_ms.is_some());
+
+        let mut inferer = CountingInferer {
+            calls: 0,
+            segments_per_call: vec![StreamSegment {
+                start_ms: 100,
+                end_ms: 1_500,
+                text: "hello from the region".into(),
+                ..Default::default()
+            }],
+        };
+        let out = session.drain_with_inferer(&mut inferer).unwrap();
+        assert_eq!(inferer.calls, 1);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].is_final, "a closed region commits as final");
+        assert_eq!(out[0].text, "hello from the region");
+        assert!(session.pending_boundary_ms.is_none());
+        assert!(
+            !session.was_inferring,
+            "no gate-close flush over the trailing silence"
+        );
+    }
+
+    #[test]
+    fn boundary_tracker_does_not_trim_over_an_uncommitted_blip() {
+        let silence = ms_to_vad_frames(600);
+        let mut t = BoundaryTracker::new(silence);
+        // Short blip (below the region minimum) …
+        assert!(matches!(t.observe(true), Some(BoundaryEvent::Onset(_))));
+        t.observe(true);
+        for _ in 0..silence + 2 {
+            t.observe(false);
+        }
+        // … then real speech: no Onset, because trimming would drop
+        // the blip that never got its own boundary.
+        assert_eq!(t.observe(true), None);
+        assert!(t.has_uncommitted_speech());
+    }
+
+    #[test]
+    fn boundary_tracker_trims_again_after_a_committed_region() {
+        let silence = ms_to_vad_frames(600);
+        let mut t = BoundaryTracker::new(silence);
+        for _ in 0..10 {
+            t.observe(true);
+        }
+        let mut saw_boundary = false;
+        for _ in 0..silence {
+            saw_boundary |= matches!(t.observe(false), Some(BoundaryEvent::Boundary(_)));
+        }
+        assert!(saw_boundary);
+        assert!(!t.has_uncommitted_speech());
+        assert!(matches!(t.observe(true), Some(BoundaryEvent::Onset(_))));
+    }
+
+    #[test]
+    fn finish_skips_tail_decode_when_only_silence_remains() {
+        let mut st = SlidingWindowState::new(WHISPER_SAMPLE_RATE, vad_gate_streaming_config());
+        st.feed_mono(&vec![0.0_f32; 16_000 * 3]);
+        let mut inferer = CountingInferer {
+            calls: 0,
+            segments_per_call: vec![StreamSegment {
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "Thank you.".into(),
+                ..Default::default()
+            }],
+        };
+        let out = finish_with_boundary(&mut st, &mut inferer, None, Some(false)).unwrap();
+        assert!(out.is_empty());
+        assert_eq!(inferer.calls, 0, "no decode over trailing silence");
+    }
+
+    #[test]
+    fn finish_runs_tail_decode_when_boundary_mode_off_or_speech_left() {
+        for speech_left in [None, Some(true)] {
+            let mut st = SlidingWindowState::new(WHISPER_SAMPLE_RATE, vad_gate_streaming_config());
+            st.feed_mono(&vec![0.1_f32; 16_000 * 2]);
+            let mut inferer = CountingInferer {
+                calls: 0,
+                segments_per_call: vec![StreamSegment {
+                    start_ms: 0,
+                    end_ms: 1_000,
+                    text: "tail words".into(),
+                    ..Default::default()
+                }],
+            };
+            let out = finish_with_boundary(&mut st, &mut inferer, None, speech_left).unwrap();
+            assert_eq!(out.len(), 1, "{speech_left:?}");
+        }
+    }
+
+    #[test]
+    fn boundary_mode_off_by_default() {
+        let session = WhisperStreamingSession::new_for_test(
+            meeting_capture_format(),
+            vad_gate_streaming_config(),
+            Box::new(AlwaysSpeechVad),
+        );
+        // HUSH_VAD_BOUNDARY isn't set by any test.
+        assert!(session.boundary.is_none());
     }
 }

@@ -31,7 +31,8 @@ use super::{poisoned, DictationResult, IpcError, IpcResult};
 // `pub(super)` items in pipeline.rs are visible at this scope.
 use pipeline::{
     fire_ready_notification, spawn_history_create, start_dictation_inner, stop_audio_capture,
-    strip_whisper_brackets, take_foreground_snapshot, write_to_clipboard,
+    strip_whisper_brackets, take_foreground_snapshot, vad_trim_dictation, write_to_clipboard,
+    DictationTrim,
 };
 
 /// Enumerate every audio source the user can pick from in the source
@@ -287,12 +288,46 @@ pub async fn stop_dictation(
     // presses. ("No" / "yes" / "k" run 250–400 ms but that's faster
     // than most users hold a push-to-talk key intentionally.)
     const MIN_DICTATION_MS: i64 = 1000;
-    let too_short = match duration_ms {
+    // Absolute floor (#1013): below this a press is an accidental tap
+    // whatever the VAD thinks — not even a clipped "k" fits.
+    const MIN_PRESS_MS: i64 = 300;
+    let by_duration = match duration_ms {
         Some(ms) => ms < MIN_DICTATION_MS,
         // Conservative: missing duration (impossible format) →
         // treat as too-short rather than crash whisper with
         // unknown input.
         None => true,
+    };
+    // VAD trim + pad (#1013): when the Silero VAD finds speech, hand
+    // whisper just the speech (plus padding, zero-padded to 1.25 s) —
+    // which also lets a real sub-second "yes" through instead of
+    // dropping it. A press the VAD finds empty keeps the old rule:
+    // under 1 s is a no-op, longer clips are transcribed as-is (a VAD
+    // miss must never silently eat quiet speech).
+    let gain_db = f32::from_bits(
+        state
+            .runtime_flags
+            .mic_gain_db
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
+    let too_short = match vad_trim_dictation(state.inference.vad.as_ref(), &captured, gain_db) {
+        DictationTrim::Skipped | DictationTrim::NoSpeech => by_duration,
+        DictationTrim::Trimmed(trimmed) => {
+            let floor = duration_ms.map_or(true, |ms| ms < MIN_PRESS_MS);
+            if floor {
+                true
+            } else {
+                tracing::info!(
+                    duration_ms = ?duration_ms,
+                    trimmed_ms = trimmed.samples.len() as u64 * 1000
+                        / u64::from(crate::transcription::WHISPER_SAMPLE_RATE),
+                    "dictation: VAD-trimmed clip (#1013)"
+                );
+                captured.samples.zeroize();
+                captured = trimmed;
+                false
+            }
+        }
     };
     if too_short {
         tracing::info!(duration_ms = ?duration_ms, "dictation: skipped — recording too short");
@@ -353,7 +388,9 @@ pub async fn stop_dictation(
     // Move samples into a named buffer so we can zeroize the raw PCM
     // after transcription on every return path (#879).
     let mut chunks = [std::mem::take(&mut captured.samples)];
-    let transcribe_result = transcriber.transcribe_chunks(&chunks, format, &prompt);
+    // `captured.format`, not the pre-trim `format`: a VAD-trimmed clip
+    // (#1013) is 16 kHz mono regardless of the device format.
+    let transcribe_result = transcriber.transcribe_chunks(&chunks, captured.format, &prompt);
     for v in &mut chunks {
         v.zeroize();
     }

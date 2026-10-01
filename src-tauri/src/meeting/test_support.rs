@@ -428,6 +428,7 @@ pub(super) fn make_partial(text: &str, started: u64, ended: u64, label: &str) ->
         ended_at_ms: ended,
         is_final: false,
         speaker_label: Some(label.to_owned()),
+        words: None,
     }
 }
 
@@ -438,6 +439,7 @@ pub(super) fn make_final(text: &str, started: u64, ended: u64, label: &str) -> U
         ended_at_ms: ended,
         is_final: true,
         speaker_label: Some(label.to_owned()),
+        words: None,
     }
 }
 

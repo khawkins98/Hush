@@ -50,9 +50,10 @@ pub mod keys {
     pub const FIRST_RUN_COMPLETED: &str = "first_run_completed";
 
     /// Whether the PTT listener should run. Stored as `"true"` /
-    /// `"false"`; absent means "platform default" (true on Linux /
-    /// Windows, false on macOS so the Input Monitoring prompt only
-    /// fires when the user opts in). Settings UI flips this; the env
+    /// `"false"`; absent means **enabled** on every platform (see the
+    /// `Ok(None) => true` arm in `AppState::build_default`; macOS
+    /// therefore asks for Input Monitoring on first launch — the
+    /// Permissions tab copy says so). Settings UI flips this; the env
     /// vars `HUSH_PTT_ENABLE` / `HUSH_PTT_DISABLE` still work as
     /// hard overrides for power users / dev workflows.
     pub const PTT_ENABLED: &str = "ptt_enabled";

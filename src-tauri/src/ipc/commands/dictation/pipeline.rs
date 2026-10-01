@@ -32,6 +32,112 @@ use crate::ipc::AppState;
 use super::super::ForegroundApp;
 use super::super::{classify_permission_error, poisoned, IpcError, IpcResult};
 
+/// Outcome of [`vad_trim_dictation`] (#1013).
+#[derive(Debug)]
+pub(super) enum DictationTrim {
+    /// Trim not attempted — `HUSH_DICTATION_VAD_TRIM=0`, the no-op VAD
+    /// is loaded, the format is degenerate, or the VAD errored. The
+    /// caller keeps its pre-#1013 behaviour exactly.
+    Skipped,
+    /// The VAD heard no speech anywhere in the clip.
+    NoSpeech,
+    /// Speech found: transcribe this trimmed, padded 16 kHz mono buffer
+    /// in place of the raw capture.
+    Trimmed(crate::audio::CapturedAudio),
+}
+
+/// Trim leading/trailing non-speech from a dictation clip with the
+/// already-loaded Silero VAD, and zero-pad short clips to 1.25 s
+/// (#1013; the follow-up scoped in learnings.md 2026-05-28).
+///
+/// Why: silence at the edges of a push-to-talk clip is where Whisper
+/// confabulates ("Thank you." on a release click), and sub-second
+/// clips were previously rejected outright even when they held a real
+/// "yes". The decision policy is the pure
+/// [`crate::transcription::quality::plan_dictation_trim`]; this wrapper
+/// only converts to 16 kHz mono and runs the VAD.
+///
+/// `gain_db` is the user's mic-gain setting: the VAD scores a gained
+/// copy of each frame so a quiet mic the user has boosted isn't judged
+/// as silence. The returned buffer is *un*-gained — the transcriber
+/// applies the gain itself, and applying it twice would clip.
+///
+/// Intermediate PCM copies are zeroized before return (#879).
+pub(super) fn vad_trim_dictation(
+    vad: &dyn crate::vad::VadModel,
+    captured: &crate::audio::CapturedAudio,
+    gain_db: f32,
+) -> DictationTrim {
+    use crate::transcription::quality::{
+        apply_trim, assemble_edge_probs, edge_frame_ranges, plan_dictation_trim, TrimConfig,
+        TrimPlan, EDGE_SCAN_FRAMES,
+    };
+    use zeroize::Zeroize;
+
+    if matches!(std::env::var("HUSH_DICTATION_VAD_TRIM").as_deref(), Ok("0")) || vad.is_noop() {
+        return DictationTrim::Skipped;
+    }
+    let format = captured.format;
+    if format.sample_rate == 0 || format.channels == 0 {
+        return DictationTrim::Skipped;
+    }
+    let mut mono = crate::audio::downmix_to_mono(&captured.samples, format.channels);
+    let mut pcm = crate::transcription::resample::resample_to_mono(
+        &mono,
+        format.sample_rate,
+        crate::transcription::WHISPER_SAMPLE_RATE,
+    );
+    mono.zeroize();
+
+    let cfg = TrimConfig::dictation_defaults();
+    let n_frames = pcm.len() / cfg.frame_len;
+    // Long clips only need their edges scored (#1013): the trim never
+    // cuts the middle, and Silero costs ~20 ms per second of audio even
+    // in release builds (measured: 1.2 s for 60 s), which would add
+    // noticeable latency to a long dictation.
+    let frame_ranges = edge_frame_ranges(n_frames, EDGE_SCAN_FRAMES);
+    let mut scored: Vec<Vec<f32>> = Vec::with_capacity(frame_ranges.len());
+    let mut frame = vec![0.0f32; cfg.frame_len];
+    for range in &frame_ranges {
+        // A fresh session per range: Silero's LSTM state must follow the
+        // audio contiguously, and the tail range is not contiguous with
+        // the head.
+        let mut session = vad.new_session();
+        let mut probs = Vec::with_capacity(range.len());
+        for f in range.clone() {
+            frame.copy_from_slice(&pcm[f * cfg.frame_len..(f + 1) * cfg.frame_len]);
+            crate::audio::apply_mic_gain(&mut frame, gain_db);
+            match session.score_frame(&frame) {
+                Ok(p) => probs.push(p),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "dictation: VAD scoring failed; transcribing untrimmed");
+                    frame.zeroize();
+                    pcm.zeroize();
+                    return DictationTrim::Skipped;
+                }
+            }
+        }
+        scored.push(probs);
+    }
+    frame.zeroize();
+    let probs = assemble_edge_probs(n_frames, &frame_ranges, &scored);
+
+    let outcome = match plan_dictation_trim(pcm.len(), &probs, &cfg) {
+        TrimPlan::NoSpeech => DictationTrim::NoSpeech,
+        TrimPlan::Trim { start, end, pad_to } => {
+            DictationTrim::Trimmed(crate::audio::CapturedAudio {
+                samples: apply_trim(&pcm, start, end, pad_to),
+                format: crate::audio::CaptureFormat {
+                    sample_rate: crate::transcription::WHISPER_SAMPLE_RATE,
+                    channels: 1,
+                },
+            })
+        }
+    };
+    pcm.zeroize();
+    outcome
+}
+
 /// Body of `start_dictation`: pre-flight transcriber-loaded check,
 /// foreground snapshot, mic-permission probe, and audio-backend
 /// start. The `start_dictation` command shell in `mod.rs` is a thin

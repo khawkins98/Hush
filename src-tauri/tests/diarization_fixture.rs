@@ -86,6 +86,7 @@ fn make_utterance(end_ms: u64) -> Utterance {
         ended_at_ms: end_ms,
         is_final: true,
         speaker_label: None,
+        words: None,
     }
 }
 
@@ -210,6 +211,7 @@ fn short_audio_leaves_speaker_label_unchanged() {
         ended_at_ms: 100,
         is_final: true,
         speaker_label: None,
+        words: None,
     };
     diarizer.label_utterances(
         std::slice::from_mut(&mut u),

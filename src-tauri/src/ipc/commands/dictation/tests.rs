@@ -895,3 +895,179 @@ async fn dictation_start_succeeds_while_meeting_finalization_in_flight() {
         "background finalization must close the session row"
     );
 }
+
+// -- VAD trim + pad (#1013) --------------------------------------------
+
+/// VAD model whose sessions replay a fixed per-frame probability list
+/// (then silence), so `vad_trim_dictation` can be driven without the
+/// real Silero model.
+struct PatternVad(Vec<f32>);
+impl crate::vad::VadModel for PatternVad {
+    fn new_session(&self) -> Box<dyn crate::vad::VadSession> {
+        Box::new(crate::vad::test_mocks::ScriptedVad {
+            probs: self.0.iter().copied().collect(),
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        })
+    }
+}
+
+fn mono_16k(secs_x10: usize) -> CapturedAudio {
+    CapturedAudio {
+        samples: vec![0.1; 1_600 * secs_x10],
+        format: crate::audio::CaptureFormat {
+            sample_rate: 16_000,
+            channels: 1,
+        },
+    }
+}
+
+#[test]
+fn vad_trim_is_skipped_with_noop_vad() {
+    let out = super::pipeline::vad_trim_dictation(&crate::vad::NoopVad, &mono_16k(20), 0.0);
+    assert!(matches!(out, super::pipeline::DictationTrim::Skipped));
+}
+
+#[test]
+fn vad_trim_reports_no_speech_when_vad_hears_nothing() {
+    let out = super::pipeline::vad_trim_dictation(&PatternVad(vec![0.0; 200]), &mono_16k(20), 0.0);
+    assert!(matches!(out, super::pipeline::DictationTrim::NoSpeech));
+}
+
+#[test]
+fn vad_trim_pads_a_short_real_utterance_to_1_25_s() {
+    // 0.6 s press, speech in frames 4..=14 (~0.35 s "yes").
+    let mut probs = vec![0.0; 4];
+    probs.extend(std::iter::repeat(0.9).take(11));
+    let out = super::pipeline::vad_trim_dictation(&PatternVad(probs), &mono_16k(6), 0.0);
+    let super::pipeline::DictationTrim::Trimmed(t) = out else {
+        panic!("expected a trimmed clip, got {out:?}");
+    };
+    assert_eq!(t.format.sample_rate, 16_000);
+    assert_eq!(t.format.channels, 1);
+    assert_eq!(t.samples.len(), 20_000, "padded to 1.25 s");
+}
+
+#[test]
+fn vad_trim_cuts_long_leading_and_trailing_silence() {
+    // 5 s clip; speech only in frames 60..=90.
+    let mut probs = vec![0.0; 60];
+    probs.extend(std::iter::repeat(0.9).take(31));
+    let out = super::pipeline::vad_trim_dictation(&PatternVad(probs), &mono_16k(50), 0.0);
+    let super::pipeline::DictationTrim::Trimmed(t) = out else {
+        panic!("expected a trimmed clip, got {out:?}");
+    };
+    // 31 frames of speech + 300 ms lead + 400 ms tail ≈ 2.1 s, well under 5 s.
+    assert!(t.samples.len() < 40_000, "got {} samples", t.samples.len());
+    assert!(t.samples.len() >= 31 * 512);
+}
+
+#[test]
+fn vad_trim_converts_stereo_48k_to_16k_mono() {
+    let captured = CapturedAudio {
+        samples: vec![0.1; 48_000 * 2 * 2], // 2 s stereo @ 48 kHz
+        format: crate::audio::CaptureFormat {
+            sample_rate: 48_000,
+            channels: 2,
+        },
+    };
+    let out = super::pipeline::vad_trim_dictation(&PatternVad(vec![0.9; 62]), &captured, 0.0);
+    let super::pipeline::DictationTrim::Trimmed(t) = out else {
+        panic!("expected a trimmed clip, got {out:?}");
+    };
+    assert_eq!(t.format.sample_rate, 16_000);
+    assert_eq!(t.format.channels, 1);
+    // Whole 2 s clip is speech → kept whole (~32 000 samples).
+    assert!(
+        (31_000..=32_100).contains(&t.samples.len()),
+        "{}",
+        t.samples.len()
+    );
+}
+
+/// Real-audio check for the dictation VAD trim (#1013): needs a model,
+/// so `#[ignore]`d. Prints transcripts for a sub-second clip (rejected
+/// before #1013), a silence-padded clip trimmed vs untrimmed, and the
+/// Silero scoring cost on 60 s of audio.
+///
+/// ```text
+/// HUSH_TEST_MODEL=… cargo test --lib vad_trim_real_audio -- --ignored --nocapture
+/// ```
+#[cfg(all(feature = "whisper", feature = "diarization-onnx"))]
+#[test]
+#[ignore]
+fn vad_trim_real_audio() {
+    use crate::transcription::WhisperTranscription;
+    use crate::vad::VadModel as _;
+    let Ok(model) = std::env::var("HUSH_TEST_MODEL") else {
+        eprintln!("skip: HUSH_TEST_MODEL not set");
+        return;
+    };
+    let wav = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.wav");
+    let mut reader = hound::WavReader::open(wav).unwrap();
+    let spec = reader.spec();
+    let max = (1_i64 << (spec.bits_per_sample - 1)) as f32;
+    let raw: Vec<f32> = reader
+        .samples::<i32>()
+        .map(|s| s.unwrap() as f32 / max)
+        .collect();
+    let jfk = crate::transcription::resample::resample_to_mono(&raw, spec.sample_rate, 16_000);
+    let fmt = crate::audio::CaptureFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    };
+    let vad = crate::vad::onnx::SileroVad::load().unwrap();
+    let whisper = WhisperTranscription::new(&model).unwrap();
+    let run = |label: &str, samples: Vec<f32>| {
+        let captured = CapturedAudio {
+            samples,
+            format: fmt,
+        };
+        let before_ms = captured.samples.len() * 1000 / 16_000;
+        let t0 = std::time::Instant::now();
+        let trim = super::pipeline::vad_trim_dictation(&vad, &captured, 0.0);
+        let vad_cost = t0.elapsed();
+        let untrimmed = whisper.transcribe(&captured).unwrap();
+        match trim {
+            super::pipeline::DictationTrim::Trimmed(t) => {
+                let after_ms = t.samples.len() * 1000 / 16_000;
+                let trimmed = whisper.transcribe(&t).unwrap();
+                eprintln!(
+                    "{label}: {before_ms} ms → {after_ms} ms (VAD {vad_cost:?})\n  untrimmed: {untrimmed:?}\n  trimmed:   {trimmed:?}"
+                );
+            }
+            other => eprintln!("{label}: {other:?} (VAD {vad_cost:?})\n  untrimmed: {untrimmed:?}"),
+        }
+    };
+
+    // Sub-second press: first 0.9 s of JFK. Pre-#1013 this was dropped
+    // as "too short" without inference.
+    run("short 0.9s", jfk[..14_400].to_vec());
+    // A clip that only holds the second half of a word run — 0.8 s from
+    // the middle of the speech.
+    run("short mid 0.8s", jfk[64_000..76_800].to_vec());
+    // Silence-padded: 3 s quiet hiss, JFK, 3 s quiet hiss.
+    let hiss = |n: usize| -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i * 7919 % 1000) as f32 / 1000.0 - 0.5) * 0.001)
+            .collect()
+    };
+    let mut padded = hiss(48_000);
+    padded.extend_from_slice(&jfk);
+    padded.extend(hiss(48_000));
+    run("padded 3s+jfk+3s", padded);
+    // Pure hiss, 1.5 s: the VAD should report no speech.
+    run("hiss only 1.5s", hiss(24_000));
+
+    // Cost: 60 s of audio through Silero.
+    let mut long = Vec::new();
+    while long.len() < 16_000 * 60 {
+        long.extend_from_slice(&jfk);
+    }
+    long.truncate(16_000 * 60);
+    let t0 = std::time::Instant::now();
+    let mut s = vad.new_session();
+    for f in long.chunks_exact(512) {
+        s.score_frame(f).unwrap();
+    }
+    eprintln!("Silero cost for 60 s of audio: {:?}", t0.elapsed());
+}
