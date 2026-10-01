@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-01
+
+v0.14.0 is about trust in what Hush hears and shows. Speaker labelling was rebuilt around a missing normalisation step in the voice model's input — on synthetic 3–5-person test calls, speaker mix-ups fell from roughly a third of speech to about 1 % — with an end-of-meeting tidy-up pass and a way to rename and merge saved speakers. Meeting lines now land within a second or two, junk lines Whisper invents on silence are filtered, smaller "compact" models halve download and memory (Small (compact) is the new default), and a quick push-to-talk "yes" now pastes while a press of pure background noise does nothing. The recording overlay was reworked so Stop is dependable and you can see it working. Most of the rest was a review-driven sweep: "Launch at login" works again, a batch of state, styling and window-permission bugs were fixed, and the unused ScreenCaptureKit/Swift link and shell plugin were dropped.
+
 ### Added
 
 - **Saved speakers: rename, merge, delete (Settings → Meeting).** The
@@ -109,6 +113,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detects this, shows a "drag me to Applications and reopen" alert, and quits.
   Installed copies are unaffected.
 
+- **Tunable silence-discard threshold** via `HUSH_WHISPER_NO_SPEECH_THOLD`
+  (default `0.6`, matching whisper.cpp's built-in — behavior-neutral until
+  set). Lower values filter more aggressively; the lever for the `.com` /
+  `.org` confabulations that compressed call audio (Teams/Zoom) provokes. (#974 follow-up)
+- **VAD gate decision tracing** via `HUSH_VAD_TRACE=1` — logs the Silero
+  speech probability per audio feed and each gate suppress/allow/flush
+  decision, so a real meeting reveals exactly why a given hallucination
+  passed the gate. Diagnostic only; off by default. (#974 follow-up)
+
 ### Changed
 
 - **Settings and History copy and accessibility (#1013).**
@@ -164,6 +177,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Oxford English**, and the **Developer — General** vocabulary pack is
   enabled. Existing explicit choices are untouched — only unset values pick up
   the new defaults. Change any of them in Settings → General / Vocabulary.
+
+- **Developer tooling: `npm run tauri:bundle` retired (#997).** `npm run
+  tauri:dmg` is the single path for macOS permission (TCC) testing: it
+  installs from a real DMG, so it exercises the same quarantine-strip and
+  restart codepath users hit.
 
 ### Fixed
 
@@ -258,17 +276,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to one line. The guard only applies to substantial repeated text, so a
   presenter genuinely repeating a short phrase ("next.", "yes") is never
   suppressed. (#974 follow-up)
-
-### Added
-
-- **Tunable silence-discard threshold** via `HUSH_WHISPER_NO_SPEECH_THOLD`
-  (default `0.6`, matching whisper.cpp's built-in — behavior-neutral until
-  set). Lower values filter more aggressively; the lever for the `.com` /
-  `.org` confabulations that compressed call audio (Teams/Zoom) provokes. (#974 follow-up)
-- **VAD gate decision tracing** via `HUSH_VAD_TRACE=1` — logs the Silero
-  speech probability per audio feed and each gate suppress/allow/flush
-  decision, so a real meeting reveals exactly why a given hallucination
-  passed the gate. Diagnostic only; off by default. (#974 follow-up)
 
 ## [0.13.0] - 2026-06-04
 
