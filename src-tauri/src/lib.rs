@@ -1209,6 +1209,9 @@ const AUDIO_LEVEL_IDLE_POLL: std::time::Duration = std::time::Duration::from_mil
 /// `is_visible` is a synchronous hop to the main thread, so it is not
 /// worth paying on every 66 ms sample.
 const AUDIO_LEVEL_VISIBILITY_REFRESH_TICKS: u32 = 8;
+/// Ticks (~1 s at 15 Hz) after a capture starts during which window
+/// visibility is re-queried every tick, so the late-shown HUD is picked up.
+const AUDIO_LEVEL_STARTUP_REFRESH_TICKS: u32 = 15;
 /// Windows that render an `AudioWaveform` and so consume `audio:level`.
 const AUDIO_LEVEL_TARGETS: [&str; 2] = ["hud", "main"];
 
@@ -1234,9 +1237,20 @@ async fn run_audio_level_pump(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut targets: Vec<&'static str> = Vec::new();
         let mut ticks_since_refresh = AUDIO_LEVEL_VISIBILITY_REFRESH_TICKS;
+        let mut ticks_this_capture: u32 = 0;
         while audio.is_recording() {
             ticker.tick().await;
-            if ticks_since_refresh >= AUDIO_LEVEL_VISIBILITY_REFRESH_TICKS {
+            // The HUD is shown only after capture start returns (meetings
+            // later still, via `show_async`), so the first snapshot misses
+            // it. Re-query every tick for the first second; otherwise a
+            // short push-to-talk would show a flat waveform for ~0.5 s.
+            ticks_this_capture = ticks_this_capture.saturating_add(1);
+            let refresh_every = if ticks_this_capture <= AUDIO_LEVEL_STARTUP_REFRESH_TICKS {
+                1
+            } else {
+                AUDIO_LEVEL_VISIBILITY_REFRESH_TICKS
+            };
+            if ticks_since_refresh >= refresh_every {
                 ticks_since_refresh = 0;
                 targets = AUDIO_LEVEL_TARGETS
                     .into_iter()

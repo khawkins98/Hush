@@ -626,13 +626,16 @@ fn spawn_background_diarizer_load(
         let started = std::time::Instant::now();
         let initial = f32::from_bits(threshold.load(Ordering::Relaxed));
         let loaded = build_diarizer_inner(&models_dir, initial);
+        let mut guard = slot
+            .write()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        // Re-read under the write lock: the threshold setter stores the
+        // atomic and then applies it under the read lock, so reading here
+        // can't miss a change that landed during the load.
         let current = f32::from_bits(threshold.load(Ordering::Relaxed));
         if current.to_bits() != initial.to_bits() {
             loaded.set_distance_threshold(current);
         }
-        let mut guard = slot
-            .write()
-            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
         if Arc::ptr_eq(&*guard, &placeholder) {
             *guard = loaded;
             tracing::info!(
