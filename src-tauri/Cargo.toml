@@ -346,7 +346,9 @@ coreaudio-sys = { version = "0.2", features = ["core_audio"] }
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = true
+# "debuginfo", not `true`: keep the symbol table so panic backtraces in
+# hush.log still name functions.
+strip = "debuginfo"
 
 # Dev: optimise every dependency (not the hush crate itself, so its
 # incremental rebuilds stay fast). Unoptimised tract / rubato / whisper
