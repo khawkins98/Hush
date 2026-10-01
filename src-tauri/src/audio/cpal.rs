@@ -27,7 +27,7 @@ use cpal::{SampleFormat, Stream, StreamError, SupportedStreamConfig};
 #[cfg(target_os = "macos")]
 use super::core_audio_tap;
 use super::{
-    drain_buffer, push_samples_circular, AudioCapture, AudioDevice, AudioSession, AudioSource,
+    drain_buffer, push_samples_circular_iter, AudioCapture, AudioDevice, AudioSession, AudioSource,
     CaptureFormat, CapturedAudio, DeviceLost, MAX_BUFFER_FRAMES,
 };
 
@@ -55,7 +55,7 @@ pub struct CpalAudioCapture {
     active_sessions: Arc<AtomicU32>,
     /// Latest RMS level, encoded as `f32::to_bits()`. Written by the cpal
     /// callback at audio-callback rate (~100 Hz at 48 kHz / 480-frame
-    /// callbacks), read by the HUD level pump at ~30 Hz.
+    /// callbacks), read by the HUD level pump at ~15 Hz.
     ///
     /// `Relaxed` ordering is the load-bearing invariant here, and the
     /// reasoning is worth spelling out so a future change doesn't
@@ -82,6 +82,12 @@ pub struct CpalAudioCapture {
     /// the new dependency would be the new ordering requirement.
     /// Cleared back to `0.0` on stop so the meter idles cleanly.
     level: Arc<AtomicU32>,
+    /// Notified after every successful capture start (see
+    /// [`AudioCapture::recording_started_signal`]). Signalled from the
+    /// public start entry points rather than next to each
+    /// `active_sessions.fetch_add`, so the worker thread and the tap
+    /// module stay unaware of it.
+    recording_started: Arc<tokio::sync::Notify>,
     /// Joined on drop. Wrapped in [`Option`] so [`Drop`] can take ownership.
     worker: Option<JoinHandle<()>>,
     /// State machine for the legacy singleton `start_with_source` / `stop`
@@ -149,6 +155,7 @@ impl CpalAudioCapture {
             cmd_tx: Mutex::new(cmd_tx),
             active_sessions,
             level,
+            recording_started: Arc::new(tokio::sync::Notify::new()),
             worker: Some(worker),
             legacy_source: AtomicU8::new(LEGACY_IDLE),
             #[cfg(target_os = "macos")]
@@ -200,7 +207,9 @@ impl AudioCapture for CpalAudioCapture {
         // we no longer block on the SCK slot here. The pump (PR2)
         // exercises this combination as its canonical config.
         let device_id = device_id.map(str::to_owned);
-        self.dispatch(|reply| Cmd::Start { device_id, reply })
+        self.dispatch(|reply| Cmd::Start { device_id, reply })?;
+        self.recording_started.notify_one();
+        Ok(())
     }
 
     fn start_with_source(&self, source: AudioSource) -> Result<()> {
@@ -249,6 +258,7 @@ impl AudioCapture for CpalAudioCapture {
                 ) {
                     Ok(session) => {
                         *guard = Some(session);
+                        self.recording_started.notify_one();
                         Ok(())
                     }
                     Err(e) => {
@@ -322,6 +332,10 @@ impl AudioCapture for CpalAudioCapture {
         }
     }
 
+    fn recording_started_signal(&self) -> Option<Arc<tokio::sync::Notify>> {
+        Some(Arc::clone(&self.recording_started))
+    }
+
     fn start_session(&self, source: AudioSource) -> Result<Box<dyn AudioSession>> {
         match source {
             AudioSource::Microphone(device_id) => {
@@ -348,6 +362,7 @@ impl AudioCapture for CpalAudioCapture {
                     device_id: device_id_owned,
                     reply,
                 })?;
+                self.recording_started.notify_one();
                 Ok(Box::new(CpalMicSessionHandle {
                     source: AudioSource::Microphone(device_id),
                     cmd_tx: Some(cmd_tx),
@@ -368,6 +383,7 @@ impl AudioCapture for CpalAudioCapture {
                 // active_sessions already incremented inside start(); the
                 // CoreAudioTapSession takes ownership of the decrement in its
                 // stop()/Drop path.
+                self.recording_started.notify_one();
                 Ok(Box::new(session) as Box<dyn AudioSession>)
             }
             #[cfg(not(target_os = "macos"))]
@@ -426,10 +442,14 @@ impl AudioSession for CpalMicSessionHandle {
         let (mut samples, format) = rx
             .recv()
             .map_err(|_| anyhow!("audio worker dropped reply channel"))??;
-        sink.extend_from_slice(&samples);
-        // Zeroize the local copy: the Vec's backing allocation survives
-        // until the next collection cycle and may contain PCM data.
-        {
+        if sink.is_empty() {
+            // The pump hands in an empty buffer each tick: adopt the
+            // worker's Vec instead of copying it (nothing left to scrub).
+            *sink = samples;
+        } else {
+            sink.extend_from_slice(&samples);
+            // Zeroize the local copy: the Vec's backing allocation survives
+            // until the next collection cycle and may contain PCM data.
             use zeroize::Zeroize;
             samples.zeroize();
         }
@@ -845,20 +865,22 @@ fn push_samples<T: Copy>(
     if data.is_empty() {
         return;
     }
+    // Convert, accumulate RMS and push in one pass: no per-callback
+    // `Vec` is allocated on the realtime thread.
     let mut sum_sq = 0.0_f32;
-    let converted: Vec<f32> = data
-        .iter()
-        .map(|s| {
+    push_samples_circular_iter(
+        buf,
+        data.iter().map(|s| {
             let f = convert(s);
             sum_sq += f * f;
             f
-        })
-        .collect();
-    push_samples_circular(buf, &converted, MAX_BUFFER_FRAMES);
+        }),
+        MAX_BUFFER_FRAMES,
+    );
     let rms = rms_from_sum_sq(sum_sq, data.len());
     // `Relaxed`: each callback writes the latest reading; the HUD
     // pump reads independently and can tolerate a stale value for
-    // one 33 ms tick. There is no other field that needs to be
+    // one 66 ms tick. There is no other field that needs to be
     // observed alongside the level.
     level.store(rms.to_bits(), Ordering::Relaxed);
 }
@@ -925,6 +947,7 @@ fn u16_to_f32(s: &u16) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::push_samples_circular;
 
     #[test]
     fn i16_conversion_endpoints() {

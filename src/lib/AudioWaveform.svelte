@@ -2,7 +2,7 @@
   Live audio-level waveform (#411 phase B + F1 moods + F4 metering).
 
   Self-contained leaf that subscribes to the backend's `audio:level`
-  pump (~30 Hz RMS samples in [0, 1]), runs an attack/release
+  pump (~15 Hz RMS samples in [0, 1]), runs an attack/release
   envelope over the raw value, and writes the smoothed result into
   a small ring buffer. The component renders one centered bar per
   buffer entry; the most recent sample is the rightmost bar.
@@ -22,6 +22,16 @@
   feel "instant on speech, slow to fall on silence between words";
   WAVEFORM_INTERVAL_MS 80 (~12 Hz pushes against a 60 Hz rAF) keeps
   the bars moving across the strip without blur.
+
+  ## Parking
+
+  The rAF loop only runs while it has something to animate. Once the
+  mood is `processing` (frozen bars, CSS-only pulse) or the idle/error
+  decay has settled every bar below `PARK_EPSILON`, it stops
+  rescheduling. A mood change (the `$effect` below) or a fresh
+  `audio:level` sample restarts it. Pre-change the loop ran forever —
+  including in the main window while hidden-on-close — writing
+  `$state` and allocating a new bar array every 80 ms.
 
   ## Moods (#411 phase F1)
 
@@ -190,6 +200,11 @@
 
   let unlistenLevel: UnlistenFn | null = null;
   let raf: number | undefined;
+  let mounted = false;
+  // Wall-clock of the last loop iteration, for the stalled-rAF self-heal
+  // in `ensureLoop`.
+  let lastTickAt = 0;
+  let lastWaveformPush = 0;
   let flashTimer: ReturnType<typeof setTimeout> | null = null;
   let clipTimer: ReturnType<typeof setTimeout> | null = null;
   let peakSetAt = 0;
@@ -226,87 +241,127 @@
   let currentDbLabel = $state("");
   let lastDbLabelUpdateMs = 0;
 
+  // Below this every bar renders at the silence floor (log scale floors
+  // at 0.001; linear needs level × 400 under the ~6 % floor), so once
+  // the decay crosses it nothing visible changes and the loop can stop.
+  const PARK_EPSILON = 1e-4;
+  // A scheduled frame that hasn't fired for this long is treated as
+  // stalled (WebKit can throttle rAF on a window that mounted hidden —
+  // see hud/+page.svelte) and is re-requested.
+  const RAF_STALL_MS = 500;
+
+  /// Start the loop if it's parked (or its pending frame has stalled).
+  function ensureLoop() {
+    if (!mounted) return;
+    if (raf !== undefined) {
+      if (Date.now() - lastTickAt < RAF_STALL_MS) return;
+      cancelAnimationFrame(raf);
+    }
+    lastTickAt = Date.now();
+    raf = requestAnimationFrame(tick);
+  }
+
+  function tick() {
+    raf = undefined;
+    lastTickAt = Date.now();
+    // Processing: freeze the buffer entirely. The CSS pulse on
+    // the wrapper carries the "still alive" signal so the
+    // user gets continuous feedback across the transcription
+    // gap without a layout shift. Nothing to animate → park; the
+    // mode-change effect restarts the loop.
+    if (effectiveMode === "processing") {
+      return;
+    }
+
+    let target: number;
+    if (effectiveMode === "idle" || effectiveMode === "error") {
+      // Static low baseline — see comment near IDLE_BASELINE
+      // for why we no longer animate at idle.
+      target = IDLE_BASELINE;
+    } else {
+      target = rms;
+    }
+
+    const coeff = target > displayLevel ? ATTACK : RELEASE;
+    displayLevel += (target - displayLevel) * coeff;
+
+    // Adaptive ceiling — only updated during recording so a long
+    // silence between sessions doesn't quietly shrink the scale.
+    if (logScale && effectiveMode === "recording") {
+      if (displayLevel > adaptivePeak) {
+        adaptivePeak += (displayLevel - adaptivePeak) * ADAPTIVE_ATTACK;
+      } else {
+        adaptivePeak = Math.max(
+          0.001,
+          adaptivePeak + (displayLevel - adaptivePeak) * ADAPTIVE_RELEASE,
+        );
+      }
+    }
+
+    const now = Date.now();
+    if (now - lastWaveformPush >= WAVEFORM_INTERVAL_MS) {
+      waveform = [...waveform.slice(1), displayLevel];
+      lastWaveformPush = now;
+    }
+
+    // F4 metering — only meaningful while we're tracking live
+    // audio. Idle's sine-wave target would otherwise paint a
+    // bogus -28 dB peak while nothing's recording.
+    if (metering && effectiveMode === "recording") {
+      if (displayLevel > peak) {
+        peak = displayLevel;
+        peakSetAt = now;
+      } else if (now - peakSetAt > PEAK_HOLD_MS) {
+        peak *= PEAK_DECAY_PER_FRAME;
+        if (peak < 0.001) peak = 0;
+      }
+      if (displayLevel >= CLIP_THRESHOLD && !clipping) {
+        clipping = true;
+        if (clipTimer !== null) clearTimeout(clipTimer);
+        clipTimer = setTimeout(() => {
+          clipping = false;
+        }, CLIP_FLASH_MS);
+      }
+      if (now - lastDbLabelUpdateMs >= 200) {
+        lastDbLabelUpdateMs = now;
+        const db = 20 * Math.log10(Math.max(displayLevel, 0.001));
+        const dbInt = Math.max(-60, db);
+        currentDbLabel = displayLevel > 0.001
+          ? `${dbInt.toFixed(0)} dB · ${dbContext(dbInt)}`
+          : "";
+      }
+    } else {
+      if (peak > 0) peak = 0;
+      if (currentDbLabel !== "") currentDbLabel = "";
+    }
+
+    // Park once a non-recording mood has fully settled. Recording
+    // keeps running: level samples drive it continuously.
+    if (
+      effectiveMode !== "recording"
+      && displayLevel < PARK_EPSILON
+      && waveform.every((v) => v < PARK_EPSILON)
+    ) {
+      displayLevel = 0;
+      return;
+    }
+    raf = requestAnimationFrame(tick);
+  }
+
   onMount(async () => {
+    mounted = true;
     unlistenLevel = await listen<number>(Events.AudioLevel, (event) => {
       rms = event.payload ?? 0;
+      ensureLoop();
     });
+    ensureLoop();
+  });
 
-    let lastWaveformPush = 0;
-    const tick = () => {
-      // Processing: freeze the buffer entirely. The CSS pulse on
-      // the wrapper carries the "still alive" signal so the
-      // user gets continuous feedback across the transcription
-      // gap without a layout shift.
-      if (effectiveMode === "processing") {
-        raf = requestAnimationFrame(tick);
-        return;
-      }
-
-      let target: number;
-      if (effectiveMode === "idle" || effectiveMode === "error") {
-        // Static low baseline — see comment near IDLE_BASELINE
-        // for why we no longer animate at idle.
-        target = IDLE_BASELINE;
-      } else {
-        target = rms;
-      }
-
-      const coeff = target > displayLevel ? ATTACK : RELEASE;
-      displayLevel += (target - displayLevel) * coeff;
-
-      // Adaptive ceiling — only updated during recording so a long
-      // silence between sessions doesn't quietly shrink the scale.
-      if (logScale && effectiveMode === "recording") {
-        if (displayLevel > adaptivePeak) {
-          adaptivePeak += (displayLevel - adaptivePeak) * ADAPTIVE_ATTACK;
-        } else {
-          adaptivePeak = Math.max(
-            0.001,
-            adaptivePeak + (displayLevel - adaptivePeak) * ADAPTIVE_RELEASE,
-          );
-        }
-      }
-
-      const now = Date.now();
-      if (now - lastWaveformPush >= WAVEFORM_INTERVAL_MS) {
-        waveform = [...waveform.slice(1), displayLevel];
-        lastWaveformPush = now;
-      }
-
-      // F4 metering — only meaningful while we're tracking live
-      // audio. Idle's sine-wave target would otherwise paint a
-      // bogus -28 dB peak while nothing's recording.
-      if (metering && effectiveMode === "recording") {
-        if (displayLevel > peak) {
-          peak = displayLevel;
-          peakSetAt = now;
-        } else if (now - peakSetAt > PEAK_HOLD_MS) {
-          peak *= PEAK_DECAY_PER_FRAME;
-          if (peak < 0.001) peak = 0;
-        }
-        if (displayLevel >= CLIP_THRESHOLD && !clipping) {
-          clipping = true;
-          if (clipTimer !== null) clearTimeout(clipTimer);
-          clipTimer = setTimeout(() => {
-            clipping = false;
-          }, CLIP_FLASH_MS);
-        }
-        if (now - lastDbLabelUpdateMs >= 200) {
-          lastDbLabelUpdateMs = now;
-          const db = 20 * Math.log10(Math.max(displayLevel, 0.001));
-          const dbInt = Math.max(-60, db);
-          currentDbLabel = displayLevel > 0.001
-            ? `${dbInt.toFixed(0)} dB · ${dbContext(dbInt)}`
-            : "";
-        }
-      } else {
-        if (peak > 0) peak = 0;
-        if (currentDbLabel !== "") currentDbLabel = "";
-      }
-
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
+  // Restart the (possibly parked) loop on every mood change so the
+  // decay toward idle, or live tracking on entering recording, runs.
+  $effect(() => {
+    void effectiveMode;
+    ensureLoop();
   });
 
   // Trigger the one-shot flash on each mode → error transition.
@@ -323,6 +378,7 @@
   });
 
   onDestroy(() => {
+    mounted = false;
     unlistenLevel?.();
     unlistenLevel = null;
     if (raf !== undefined) {

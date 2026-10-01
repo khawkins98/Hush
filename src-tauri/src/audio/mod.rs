@@ -538,6 +538,20 @@ pub trait AudioCapture: Send + Sync {
     fn current_level(&self) -> f32 {
         0.0
     }
+
+    /// Signalled whenever a capture session starts, so the `audio:level`
+    /// pump in `lib.rs` can park while nothing records instead of waking
+    /// ~15×/s to check [`Self::is_recording`]. Backends signal with
+    /// `notify_one`, which stores a permit when nobody is waiting — a
+    /// start racing the pump's "not recording → wait" step still wakes
+    /// it. Spurious wakes are harmless (the pump re-checks
+    /// `is_recording`).
+    ///
+    /// Default `None`: the backend can't signal, and the pump falls back
+    /// to a slow poll. Test mocks inherit this.
+    fn recording_started_signal(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        None
+    }
 }
 
 // -- Shared helpers --------------------------------------------------------
@@ -562,12 +576,27 @@ pub(super) fn push_samples_circular(
     samples: &[f32],
     max_frames: usize,
 ) {
+    push_samples_circular_iter(buf, samples.iter().copied(), max_frames);
+}
+
+/// Iterator form of [`push_samples_circular`], so a realtime callback can
+/// convert + push in one pass without collecting a per-callback `Vec`.
+///
+/// Appends everything with one `extend`, then evicts any overflow from
+/// the front with a single `drain(..n)` — same "keep the newest
+/// `max_frames`" result as evicting per sample, without a
+/// `pop_front`/`push_back` pair per sample under the lock. The deque may
+/// briefly exceed `max_frames` by one callback's worth inside the lock.
+pub(super) fn push_samples_circular_iter(
+    buf: &Mutex<VecDeque<f32>>,
+    samples: impl IntoIterator<Item = f32>,
+    max_frames: usize,
+) {
     let mut guard = buf.lock().unwrap_or_else(|p| p.into_inner());
-    for &s in samples {
-        if guard.len() >= max_frames {
-            guard.pop_front(); // evict oldest to make room for newest
-        }
-        guard.push_back(s);
+    guard.extend(samples);
+    let overflow = guard.len().saturating_sub(max_frames);
+    if overflow > 0 {
+        guard.drain(..overflow); // evict oldest to keep the newest
     }
 }
 
@@ -583,6 +612,15 @@ pub(super) fn push_samples_circular(
 pub(super) fn drain_buffer(buf: &Mutex<VecDeque<f32>>) -> Vec<f32> {
     let mut guard = buf.lock().unwrap_or_else(|p| p.into_inner());
     guard.drain(..).collect()
+}
+
+/// [`drain_buffer`] straight into the caller's `sink`, skipping the
+/// intermediate `Vec` (and its zeroize pass) when the caller already
+/// owns the destination — the meeting pump's per-tick drain.
+#[cfg(target_os = "macos")]
+pub(super) fn drain_buffer_into(buf: &Mutex<VecDeque<f32>>, sink: &mut Vec<f32>) {
+    let mut guard = buf.lock().unwrap_or_else(|p| p.into_inner());
+    sink.extend(guard.drain(..));
 }
 
 /// Compute the RMS level for one audio callback buffer.

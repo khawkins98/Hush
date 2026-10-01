@@ -568,6 +568,17 @@ fn circular_buffer_evicts_oldest_at_capacity() {
     );
 }
 
+#[test]
+fn circular_buffer_keeps_newest_when_one_push_exceeds_capacity() {
+    // The batched extend-then-drain eviction must match the old
+    // per-sample pop/push result even when a single callback is larger
+    // than the whole buffer.
+    let buf = std::sync::Mutex::new(std::collections::VecDeque::<f32>::new());
+    push_samples_circular(&buf, &[1.0_f32], 3);
+    super::push_samples_circular_iter(&buf, (2..=6).map(|i| i as f32), 3);
+    assert_eq!(drain_buffer(&buf), vec![4.0_f32, 5.0, 6.0]);
+}
+
 // -- DeviceLost typed-error round-trip (#587 PR 1) --------------------
 //
 // The cpal error callback wraps `DeviceLost` in `anyhow::Error::new`;

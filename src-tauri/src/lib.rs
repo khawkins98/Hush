@@ -728,8 +728,8 @@ fn setup_windows<R: tauri::Runtime>(app: &mut tauri::App<R>) {
 /// lifetime:
 /// 1. Orphan-session reconciliation — stamps `ended_at` on sessions
 ///    left open by a previous crash or kill.
-/// 2. HUD level-meter pump — emits `audio:level` at ~30 Hz while
-///    recording is active.
+/// 2. HUD level-meter pump — emits `audio:level` at ~15 Hz to visible
+///    windows while recording is active; parked otherwise.
 /// 3. Per-app profile auto-activation poller — detects foreground-app
 ///    changes and applies per-app source/model overrides.
 /// 4. (macOS only) Event-driven meeting auto-start — listens for
@@ -753,25 +753,24 @@ fn spawn_background_tasks(handle: tauri::AppHandle, state: &ipc::AppState) {
     });
 
     // HUD level-meter pump (#21). Reads the latest RMS from the audio
-    // backend at ~30 Hz and emits `audio:level` so the HUD page can
-    // animate a bar. Activity-gated (#329): skip the emit when nothing is
-    // recording so we don't emit ~2.6M IPC events/day at idle.
+    // backend and emits `audio:level` so the HUD / main-window waveforms
+    // can animate. Every emit is a WKWebView `evaluateJavaScript` per
+    // target window, which leaks host memory per call on macOS (#986,
+    // docs/memory-debugging.md), so the pump is as frugal as it can be:
+    //
+    // * Parked while nothing records — it awaits the backend's
+    //   `recording_started_signal` instead of waking on a timer (#329
+    //   only skipped the emit; the task still woke ~30×/s forever).
+    // * ~15 Hz while recording. AudioWaveform pushes a bar every 80 ms
+    //   and smooths with an attack/release envelope per rAF frame, so a
+    //   66 ms sample period is still faster than its bar cadence.
+    // * `emit_to` only the visible consumer windows. The main window is
+    //   hidden-on-close but keeps RecordPanel's AudioWaveform mounted,
+    //   so a broadcast fed a window nobody could see.
     let audio = std::sync::Arc::clone(&state.audio);
     let handle_for_pump = handle.clone();
     tauri::async_runtime::spawn(async move {
-        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(33));
-        loop {
-            ticker.tick().await;
-            if !audio.is_recording() {
-                continue;
-            }
-            let level = audio.current_level();
-            if let Err(e) = handle_for_pump.emit(crate::events::names::AUDIO_LEVEL, level) {
-                // No listener attached yet (HUD window hidden) is not an
-                // error per se, but trace keeps it out of the default log.
-                tracing::trace!(error = ?e, "emit audio:level failed");
-            }
-        }
+        run_audio_level_pump(handle_for_pump, audio).await;
     });
 
     // Per-app profile auto-activation poller (#427 / #457). Watches the
@@ -1124,6 +1123,7 @@ pub fn run() {
             ipc::commands::meeting::meeting_sessions_list,
             ipc::commands::meeting::meeting_sessions_search,
             ipc::commands::meeting::meeting_session_get,
+            ipc::commands::meeting::meeting_session_get_since,
             ipc::commands::meeting::meeting_session_delete,
             ipc::commands::meeting::meeting_session_export,
             ipc::commands::meeting::meeting_session_set_notes,
@@ -1198,6 +1198,70 @@ pub fn run() {
         });
 }
 
+/// `audio:level` sample period while recording (~15 Hz). See the call
+/// site in [`spawn_background_tasks`] for why it isn't 30 Hz any more.
+const AUDIO_LEVEL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(66);
+/// Fallback wake period while idle for a backend that can't signal
+/// capture start ([`audio::AudioCapture::recording_started_signal`]
+/// returns `None`). Only test/mock backends hit this.
+const AUDIO_LEVEL_IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+/// Re-query window visibility every this many level ticks (~0.5 s).
+/// `is_visible` is a synchronous hop to the main thread, so it is not
+/// worth paying on every 66 ms sample.
+const AUDIO_LEVEL_VISIBILITY_REFRESH_TICKS: u32 = 8;
+/// Windows that render an `AudioWaveform` and so consume `audio:level`.
+const AUDIO_LEVEL_TARGETS: [&str; 2] = ["hud", "main"];
+
+/// Drive the `audio:level` event (#21) — parked while idle, ~15 Hz and
+/// visible-windows-only while recording.
+async fn run_audio_level_pump(
+    handle: tauri::AppHandle,
+    audio: std::sync::Arc<dyn audio::AudioCapture>,
+) {
+    let started = audio.recording_started_signal();
+    loop {
+        // Park until a capture starts. `notify_one` leaves a permit if
+        // the start lands between this check and the await, so the
+        // race can't strand the pump.
+        while !audio.is_recording() {
+            match &started {
+                Some(signal) => signal.notified().await,
+                None => tokio::time::sleep(AUDIO_LEVEL_IDLE_POLL).await,
+            }
+        }
+
+        let mut ticker = tokio::time::interval(AUDIO_LEVEL_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut targets: Vec<&'static str> = Vec::new();
+        let mut ticks_since_refresh = AUDIO_LEVEL_VISIBILITY_REFRESH_TICKS;
+        while audio.is_recording() {
+            ticker.tick().await;
+            if ticks_since_refresh >= AUDIO_LEVEL_VISIBILITY_REFRESH_TICKS {
+                ticks_since_refresh = 0;
+                targets = AUDIO_LEVEL_TARGETS
+                    .into_iter()
+                    .filter(|label| {
+                        handle
+                            .get_webview_window(label)
+                            .and_then(|w| w.is_visible().ok())
+                            .unwrap_or(false)
+                    })
+                    .collect();
+            }
+            ticks_since_refresh += 1;
+            if targets.is_empty() {
+                continue;
+            }
+            let level = audio.current_level();
+            for label in &targets {
+                if let Err(e) = handle.emit_to(*label, crate::events::names::AUDIO_LEVEL, level) {
+                    tracing::trace!(error = ?e, window = label, "emit audio:level failed");
+                }
+            }
+        }
+    }
+}
+
 /// Per-app profile auto-activation poller (#427 / #457).
 ///
 /// Ticks every [`PROFILE_AUTOACTIVATE_POLL_INTERVAL`]. When the foreground
@@ -1218,6 +1282,15 @@ async fn run_profile_autoactivate_poller(app: tauri::AppHandle) {
     // Reset to `None` when the user focuses an app without a profile,
     // so re-focusing the original app retriggers.
     let mut last_profile_app: Option<String> = None;
+    // Last focused app regardless of profile, so an unchanged focus
+    // costs nothing past the window query. Pre-change only
+    // `last_profile_app` was tracked, so sitting in an app *without* a
+    // profile re-read the override list from SQLite every tick.
+    let mut last_focused: Option<String> = None;
+    // Override rows seen on the previous tick. A change (the user just
+    // edited a profile) forces re-evaluation of the current focus even
+    // though the focus itself didn't move.
+    let mut last_rows: Vec<crate::meeting::MeetingAppOverride> = Vec::new();
 
     loop {
         ticker.tick().await;
@@ -1230,6 +1303,26 @@ async fn run_profile_autoactivate_poller(app: tauri::AppHandle) {
             continue;
         }
 
+        // Served from `CachedMeetingAppOverrideRepository` — no DB hit
+        // unless Settings wrote since the last read.
+        let Ok(rows) = state.data.meeting_app_overrides.list().await else {
+            continue;
+        };
+        if rows != last_rows {
+            last_focused = None;
+            last_rows = rows;
+        }
+        let has_profile = |r: &crate::meeting::MeetingAppOverride| {
+            r.preferred_audio_source.is_some() || r.preferred_model_id.is_some()
+        };
+        // No profiles configured (the common case): nothing could
+        // activate, so skip the foreground-window query entirely.
+        if !last_rows.iter().any(has_profile) {
+            last_profile_app = None;
+            last_focused = None;
+            continue;
+        }
+
         let Some(focused) = active_win_pos_rs::get_active_window()
             .ok()
             .map(|w| w.app_name)
@@ -1237,18 +1330,19 @@ async fn run_profile_autoactivate_poller(app: tauri::AppHandle) {
             continue;
         };
 
-        if last_profile_app.as_ref() == Some(&focused) {
+        if last_focused.as_ref() == Some(&focused) {
             continue;
         }
+        last_focused = Some(focused.clone());
 
-        let Ok(rows) = state.data.meeting_app_overrides.list().await else {
-            continue;
-        };
-
-        if let Some(row) = rows.iter().find(|r| r.app_name == focused) {
-            let has_profile =
-                row.preferred_audio_source.is_some() || row.preferred_model_id.is_some();
-            if has_profile {
+        match last_rows
+            .iter()
+            .find(|r| r.app_name == focused && has_profile(r))
+        {
+            Some(row) => {
+                if last_profile_app.as_ref() == Some(&focused) {
+                    continue;
+                }
                 #[derive(Clone, serde::Serialize)]
                 #[serde(rename_all = "camelCase")]
                 struct ProfileActivatedPayload<'a> {
@@ -1271,13 +1365,10 @@ async fn run_profile_autoactivate_poller(app: tauri::AppHandle) {
                     );
                 }
                 last_profile_app = Some(focused);
-            } else {
-                // No profile on this app — reset memory so refocusing
-                // the previous profile-app re-emits.
-                last_profile_app = None;
             }
-        } else {
-            last_profile_app = None;
+            // No profile on this app — reset memory so refocusing the
+            // previous profile-app re-emits.
+            None => last_profile_app = None,
         }
     }
 }
