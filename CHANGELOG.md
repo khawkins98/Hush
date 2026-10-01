@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **English-only models (#1013).** The model picker now offers **Base
+  (English only, compact)** at 82 MB and **Small (English only, compact)**
+  at 264 MB. They're tuned for English and can't transcribe any other
+  language; their cards carry an "English only" badge. Small (compact)
+  stays the default.
+
+- **Short dictations are no longer thrown away (#1013).** A quick
+  push-to-talk "yes" under a second used to be dropped as "too short".
+  Hush now uses its voice detector to find the speech in the clip, trims
+  silence off both ends, and pads very short clips so Whisper can read
+  them. A press with no speech in it is still a silent no-op.
+
+- **Menu-bar popover: Start meeting (#1013).** The menu-bar popover can
+  now start a meeting recording, the same way the Record button does.
+
+- **Experimental transcription options, off by default (#1013).** For
+  A/B testing: `HUSH_VAD_BOUNDARY=1` transcribes each stretch of speech
+  between pauses as a unit, so finished lines land within about a second
+  instead of about eight. `HUSH_STREAM_LOCAL_AGREEMENT=1` commits text
+  that two passes in a row agree on. `HUSH_CONFIDENCE_SHADING=1` dims
+  words the model is unsure of in the live meeting transcript.
+  `HUSH_FINAL_MIN_AVG_LOGPROB` drops low-confidence lines. See
+  `learnings.md` for what each one did on test audio.
+
 - **Smaller "compact" Whisper models.** The model picker now offers
   quantized builds that need far less disk and memory for nearly the same
   accuracy: **Turbo (compact)** at 874 MB and **Turbo (smallest)** at
@@ -55,6 +79,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Settings and History copy and accessibility (#1013).**
+  - The model picker explains what "compact" and "English only" mean.
+  - Vocabulary lists Personal Vocabulary first.
+  - Dictation and meeting rows both say "Add name…".
+  - The toggle-recording shortcut row shows the actual shortcut.
+  - The meeting auto-start card is one sentence, with the details behind "How it works".
+  - The Permissions tab no longer misstates the push-to-talk default.
+  - Error messages are announced to screen readers.
+  - Settings no longer re-reads the whole tab aloud when you switch tabs.
+
 - **Cleanup:** removed the unused `tauri-plugin-shell` (and 9 crates it
   pulled in; external links already used a custom command), unused
   menu-bar window permissions, dead HUD call-end plumbing and a dead
@@ -88,6 +122,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new defaults. Change any of them in Settings → General / Vocabulary.
 
 ### Fixed
+
+- **Fewer phantom lines in meeting transcripts (#1013).** Hush now drops
+  whole lines that are video-outro or subtitle-credit text ("Thanks for
+  watching!", "Subtitles by…"), which Whisper sometimes produces from
+  silence. When the model gets stuck repeating a phrase ("we need to we
+  need to we need to…"), only one copy is kept. Ordinary short replies
+  like "yeah" or "thank you" are never filtered. The same filters now
+  also apply to the last line flushed when a meeting stops.
+
+- **History: a failed load now has a Retry button (#1013).** The "Nothing
+  here yet" message no longer appears underneath the error.
 
 - **"Launch Hush at login" works again.** Its permissions lived in the
   old Settings-window capability, which was deleted when Settings moved
