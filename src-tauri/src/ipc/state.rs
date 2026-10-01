@@ -601,6 +601,55 @@ fn build_diarizer_inner(
     Arc::new(crate::diarization::NoopDiarizer)
 }
 
+/// Load the production diarizer off the startup path and swap it into
+/// `slot` (perf round-up, 2026-10-01).
+///
+/// Pre-change `build_diarizer_inner` ran synchronously inside
+/// `block_on(build_default)` in `setup`, holding first paint for ~0.9 s.
+/// Now the slot starts as `placeholder` (a `NoopDiarizer`) and this
+/// blocking task builds the real one. Swap rules:
+///
+/// * Only replaces the slot while it still holds `placeholder`. If a
+///   download (`swap_diarizer_after_download`) or a remove
+///   (`remove_diarizer_model`) wrote the slot meanwhile, that newer
+///   decision wins.
+/// * Re-applies the live threshold atomic after the load, so a Settings
+///   slider change made during the load isn't lost.
+fn spawn_background_diarizer_load(
+    slot: crate::diarization::DiarizeSlot,
+    placeholder: Arc<dyn crate::diarization::Diarize>,
+    models_dir: std::path::PathBuf,
+    threshold: Arc<std::sync::atomic::AtomicU32>,
+) {
+    use std::sync::atomic::Ordering;
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = std::time::Instant::now();
+        let initial = f32::from_bits(threshold.load(Ordering::Relaxed));
+        let loaded = build_diarizer_inner(&models_dir, initial);
+        let current = f32::from_bits(threshold.load(Ordering::Relaxed));
+        if current.to_bits() != initial.to_bits() {
+            loaded.set_distance_threshold(current);
+        }
+        let mut guard = slot
+            .write()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        if Arc::ptr_eq(&*guard, &placeholder) {
+            *guard = loaded;
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "diarization: background load finished; meetings started before \
+                 now used source labels until this point"
+            );
+        } else {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "diarization: background load finished but the slot was replaced \
+                 meanwhile (download/remove); keeping the newer diarizer"
+            );
+        }
+    });
+}
+
 /// Build the production VAD model (#974).
 ///
 /// When the `diarization-onnx` feature is built in, returns a
@@ -845,8 +894,15 @@ impl AppState {
         // again into the IPC `download_diarizer_model` writer so a
         // post-download swap propagates to the meeting pump on the
         // next tick — no restart needed.
-        let diarize_inner_initial = build_diarizer_inner(&models_dir, diarizer_threshold_initial);
-        record_phase("diarizer init");
+        //
+        // The slot starts as a Noop placeholder; the wespeaker model
+        // (~0.9 s of tract parse/optimise — the bulk of `build_default`'s
+        // wall time per learnings.md) loads on a blocking thread below
+        // and is swapped in when ready. A meeting started inside that
+        // window gets source labels for its first utterances.
+        let diarize_startup_placeholder: Arc<dyn crate::diarization::Diarize> =
+            Arc::new(crate::diarization::NoopDiarizer);
+        let diarize_inner_initial = Arc::clone(&diarize_startup_placeholder);
         // Bundled Silero VAD (#974). Loaded once at startup, mints a
         // fresh per-stream session at each `start_stream` site. If the
         // bundled ONNX is corrupted under git we degrade to NoopVad so
@@ -863,6 +919,12 @@ impl AppState {
         );
         let diarize_slot: crate::diarization::DiarizeSlot =
             Arc::new(std::sync::RwLock::new(diarize_inner_initial));
+        spawn_background_diarizer_load(
+            Arc::clone(&diarize_slot),
+            diarize_startup_placeholder,
+            models_dir.clone(),
+            Arc::clone(&diarizer_threshold_arc),
+        );
         let diarize_fallback: Arc<dyn crate::diarization::Diarize> =
             Arc::new(crate::diarization::NoopDiarizer);
         let diarize: Arc<dyn crate::diarization::Diarize> =
