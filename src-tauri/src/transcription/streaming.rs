@@ -177,6 +177,35 @@ pub struct SlidingWindowConfig {
 /// fed mostly padding.
 pub const MIN_BOUNDARY_INFER_MS: u64 = 300;
 
+/// Shortest buffer the streaming state machine hands to the inferer.
+/// whisper.cpp's `whisper_full` refuses input under 1000 ms ("input is
+/// too short") and returns zero segments, so a short VAD-boundary
+/// region or a short `finish` tail would silently decode to nothing and
+/// then be dropped from the window. Anything shorter is zero-padded up
+/// to this length; the extra 50 ms keeps us clear of the floor after
+/// whisper's own sample → frame rounding.
+pub const MIN_WHISPER_INPUT_MS: u64 = 1_050;
+
+/// Run `inferer` on `samples`, zero-padding the tail up to
+/// [`MIN_WHISPER_INPUT_MS`] when the buffer is shorter. The common case
+/// (buffer already long enough) borrows the slice with no copy. The
+/// padded copy holds raw PCM, so it is a `Zeroizing` buffer — scrubbed
+/// on drop like the window it was copied from (#882 privacy contract).
+fn infer_with_min_len(
+    inferer: &mut dyn WhisperLikeInferer,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<Vec<StreamSegment>> {
+    let min_len = ms_to_samples(MIN_WHISPER_INPUT_MS, sample_rate);
+    if samples.len() >= min_len {
+        return inferer.infer(samples);
+    }
+    let mut padded = zeroize::Zeroizing::new(Vec::with_capacity(min_len));
+    padded.extend_from_slice(samples);
+    padded.resize(min_len, 0.0);
+    inferer.infer(&padded)
+}
+
 /// How far apart (ms) two hypotheses' timestamps for the same segment
 /// text may be and still count as agreeing. Whisper's segment
 /// timestamps jitter by a few hundred ms between overlapping windows.
@@ -838,7 +867,10 @@ impl SlidingWindowState {
         if cut < ms_to_samples(MIN_BOUNDARY_INFER_MS, self.sample_rate) {
             return Ok(Vec::new());
         }
-        let segments = inferer.infer(&self.window[..cut])?;
+        // A region shorter than whisper.cpp's 1 s floor is padded rather
+        // than skipped: the head is dropped below regardless, so a
+        // zero-segment decode here would lose the word for good.
+        let segments = infer_with_min_len(inferer, &self.window[..cut], self.sample_rate)?;
         tracing::debug!(
             region_ms = samples_to_ms(cut, self.sample_rate),
             segments = segments.len(),
@@ -946,7 +978,12 @@ impl SlidingWindowState {
         if self.window.is_empty() {
             return Ok(Vec::new());
         }
-        let segments = match inferer.infer(&self.window) {
+        // The tail left after a VAD-boundary commit can be well under a
+        // second; pad it past whisper.cpp's 1 s floor (see
+        // [`MIN_WHISPER_INPUT_MS`]). `tick` doesn't need this: its
+        // interval gate already guarantees ≥ `infer_interval_ms` of
+        // window (3 s in production).
+        let segments = match infer_with_min_len(inferer, &self.window, self.sample_rate) {
             Ok(segs) => segs,
             Err(e) => {
                 // Inference failed on the tail flush. Best-effort recovery: promote
@@ -1007,14 +1044,23 @@ impl SlidingWindowState {
             window_ms = samples_to_ms(self.window.len(), self.sample_rate),
             "streaming finish: tail flush inference ran"
         );
+        let real_ms = samples_to_ms(self.window.len(), self.sample_rate);
         let mut out = Vec::new();
         for seg in &segments {
             let text = seg.text.trim();
             if text.is_empty() {
                 continue;
             }
+            // Same guard as `commit_through`: a segment wholly inside
+            // the zero padding (or whisper's own 30 s padding) is a
+            // hallucination, and ends are clamped to the real audio.
+            if seg.start_ms >= real_ms {
+                continue;
+            }
             let abs_start_ms = self.window_start_offset_ms.saturating_add(seg.start_ms);
-            let abs_end_ms = self.window_start_offset_ms.saturating_add(seg.end_ms);
+            let abs_end_ms = self
+                .window_start_offset_ms
+                .saturating_add(seg.end_ms.min(real_ms));
             if abs_end_ms <= self.committed_until_ms {
                 continue;
             }
@@ -2262,6 +2308,65 @@ mod quality_policy_tests {
         let mut inf = Scripted(vec![vec![seg(0, 100, "should not run")]]);
         assert!(st.commit_through(&mut inf, 100).unwrap().is_empty());
         assert_eq!(inf.0.len(), 1, "inferer must not be called");
+    }
+
+    /// Records each buffer length it was handed; mirrors whisper.cpp by
+    /// returning no segments for input under 1 s.
+    struct FloorInferer {
+        lens: Vec<usize>,
+        response: Vec<StreamSegment>,
+    }
+    impl WhisperLikeInferer for FloorInferer {
+        fn infer(&mut self, mono: &[f32]) -> Result<Vec<StreamSegment>> {
+            self.lens.push(mono.len());
+            if mono.len() < 16_000 {
+                return Ok(Vec::new());
+            }
+            Ok(self.response.clone())
+        }
+    }
+
+    #[test]
+    fn commit_through_pads_short_region_past_whisper_floor() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let mut inf = FloorInferer {
+            lens: Vec::new(),
+            // Whisper reports a segment ending inside the padding; the
+            // commit must clamp it to the real 500 ms cut.
+            response: vec![seg(0, 900, "yes")],
+        };
+        let out = st.commit_through(&mut inf, 500).unwrap();
+        assert!(inf.lens[0] >= 16_000, "inferer got {} samples", inf.lens[0]);
+        assert_eq!(finals(&out), ["yes"]);
+        assert_eq!(out[0].ended_at_ms, 500);
+        assert_eq!(st.window_start_ms_for_test(), 500);
+    }
+
+    #[test]
+    fn commit_through_does_not_copy_long_regions() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        feed_secs(&mut st, 3);
+        let mut inf = FloorInferer {
+            lens: Vec::new(),
+            response: vec![],
+        };
+        st.commit_through(&mut inf, 2_000).unwrap();
+        assert_eq!(inf.lens, [32_000], "long regions pass through unpadded");
+    }
+
+    #[test]
+    fn finish_pads_short_tail_and_skips_padding_segments() {
+        let mut st = SlidingWindowState::new(16_000, cfg());
+        st.feed_mono(&vec![0.1_f32; 6_400]); // 400 ms
+        let mut inf = FloorInferer {
+            lens: Vec::new(),
+            response: vec![seg(0, 380, "ok"), seg(600, 1_000, "thank you")],
+        };
+        let out = st.finish(&mut inf).unwrap();
+        assert!(inf.lens[0] >= 16_000);
+        assert_eq!(finals(&out), ["ok"]);
+        assert!(out.iter().all(|u| u.ended_at_ms <= 400));
     }
 
     #[test]

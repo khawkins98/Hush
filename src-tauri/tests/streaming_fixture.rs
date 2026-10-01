@@ -354,3 +354,79 @@ fn streaming_fixture_gappy_signal() {
         "expected both JFK passages; got {joined:?}"
     );
 }
+
+/// Regression for the whisper.cpp 1 s input floor: an isolated word
+/// shorter than a second, bounded by silence, closes a VAD region whose
+/// boundary commit used to decode to zero segments (whisper.cpp returns
+/// nothing for < 1000 ms of input) and then drop the audio. The word is
+/// synthesised at test time with macOS `say` so no extra binary fixture
+/// is committed; the test skips where `say` isn't available.
+#[test]
+#[ignore] // Requires HUSH_TEST_MODEL + macOS `say`; see module doc.
+fn streaming_fixture_isolated_short_word_survives_boundary_commit() {
+    let Some(model_path) = read_path_env("HUSH_TEST_MODEL", None) else {
+        return;
+    };
+    if std::env::var("RUST_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
+    let wav = std::env::temp_dir().join(format!("hush-short-word-{}.wav", std::process::id()));
+    let said = std::process::Command::new("say")
+        .arg("-o")
+        .arg(&wav)
+        .args(["--data-format=LEI16@16000", "-r", "320", "No."])
+        .status();
+    if !matches!(said, Ok(s) if s.success()) {
+        eprintln!("skip: macOS `say` unavailable");
+        return;
+    }
+    let word = load_wav_as_captured_audio(&wav);
+    let _ = std::fs::remove_file(&wav);
+    assert_eq!(word.format.sample_rate, 16_000);
+    let word_ms = word.samples.len() as u64 * 1000 / 16_000;
+    assert!(
+        word_ms < 1_000,
+        "fixture word must be sub-second, got {word_ms} ms"
+    );
+
+    let mut signal = vec![0.0_f32; 16_000 * 2];
+    signal.extend_from_slice(&word.samples);
+    signal.extend(std::iter::repeat_n(0.0_f32, 16_000 * 3));
+
+    let transcriber = WhisperTranscription::new(&model_path).expect("load whisper model");
+    let vad = hush_lib::vad::onnx::SileroVad::load().expect("load bundled Silero VAD");
+    use hush_lib::vad::VadModel as _;
+    let mut session = transcriber
+        .start_stream(
+            CaptureFormat {
+                sample_rate: 16_000,
+                channels: 1,
+            },
+            "",
+            vad.new_session(),
+        )
+        .expect("open streaming session");
+    let mut finals = Vec::new();
+    for c in signal.chunks(16_000 / 2) {
+        session.feed(c).expect("feed");
+        finals.extend(
+            session
+                .drain()
+                .expect("drain")
+                .into_iter()
+                .filter(|u| u.is_final),
+        );
+    }
+    finals.extend(session.finish().expect("finish"));
+    let joined = finals
+        .iter()
+        .map(|u| u.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    eprintln!("short word ({word_ms} ms) finals: {joined:?}");
+    assert!(joined.contains("no"), "short word lost; got {joined:?}");
+}
