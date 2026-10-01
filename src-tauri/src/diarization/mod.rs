@@ -87,7 +87,8 @@ pub enum SpeakerNamespace {
     /// in-room separation is enabled (`HUSH_DIARIZER_LOCAL_SEPARATION`).
     /// The dominant cluster keeps the `"mic"` tag (rendered "You"), so
     /// the #1003 behaviour is unchanged for a single local talker;
-    /// any further in-room voice gets its own `"Speaker N"`.
+    /// any further in-room voice gets an `"In-room N"` label (the local
+    /// user counts as in-room 1).
     LocalRoom,
 }
 

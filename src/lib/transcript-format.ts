@@ -54,6 +54,16 @@ function isSourceTag(label: string | null): boolean {
 }
 
 /**
+ * In-room voices beyond the local user (opt-in in-room separation) are
+ * labelled `"In-room N"` by the backend — a separate family precisely so
+ * they can be told apart from remote `"Speaker N"` clusters here, since
+ * utterances carry no source field.
+ */
+function isInRoomLabel(label: string | null): boolean {
+  return label !== null && label.startsWith("In-room ");
+}
+
+/**
  * Give in-flight remote partials the label their final will most likely
  * land with (#1013).
  *
@@ -77,7 +87,9 @@ export function resolvePartialLabels<T extends UtteranceLike>(
 ): T[] {
   let lastDiarized: string | null = null;
   for (const u of finals) {
-    if (u.speakerLabel && !isSourceTag(u.speakerLabel)) {
+    // Only remote clusters are candidates: a remote partial must never
+    // borrow an in-room voice's label.
+    if (u.speakerLabel && !isSourceTag(u.speakerLabel) && !isInRoomLabel(u.speakerLabel)) {
       lastDiarized = u.speakerLabel;
     }
   }

@@ -179,7 +179,7 @@ impl SpeakerStore for SqliteSpeakerStore {
             let absorb_emb = blob_to_embedding(&absorb_blob);
             let total = keep_count + absorb_count;
             if total > 0 {
-                let (new_centroid, new_ver) = merged_centroid(
+                let (new_centroid, new_ver, new_count) = merged_centroid(
                     (&keep_emb, keep_count, keep_ver),
                     (&absorb_emb, absorb_count, absorb_ver),
                 );
@@ -191,7 +191,7 @@ impl SpeakerStore for SqliteSpeakerStore {
                      WHERE id = ?",
                 )
                 .bind(blob)
-                .bind(total)
+                .bind(new_count)
                 .bind(new_ver)
                 .bind(keep_id)
                 .execute(self.db.pool())
@@ -239,14 +239,18 @@ impl From<SpeakerIdentityRow> for SpeakerIdentity {
 /// voiceprint wins outright, because averaging vectors from two
 /// embedding spaces is meaningless — and this is exactly the "merge the
 /// new provisional identity into my old named one" re-enrolment path.
-fn merged_centroid(keep: (&[f32], i64, i64), absorb: (&[f32], i64, i64)) -> (Vec<f32>, i64) {
+/// Returns `(centroid, embedding_version, utterance_count)`. Across
+/// versions only the newer voiceprint survives, so the count must be *its*
+/// own: carrying the combined count would make a 6-utterance print weigh
+/// like 106 in later weighted-mean updates and barely move again.
+fn merged_centroid(keep: (&[f32], i64, i64), absorb: (&[f32], i64, i64)) -> (Vec<f32>, i64, i64) {
     let (keep_emb, keep_count, keep_ver) = keep;
     let (absorb_emb, absorb_count, absorb_ver) = absorb;
     if keep_ver != absorb_ver {
         return if absorb_ver > keep_ver {
-            (absorb_emb.to_vec(), absorb_ver)
+            (absorb_emb.to_vec(), absorb_ver, absorb_count)
         } else {
-            (keep_emb.to_vec(), keep_ver)
+            (keep_emb.to_vec(), keep_ver, keep_count)
         };
     }
     let total = (keep_count + absorb_count).max(1) as f32;
@@ -255,7 +259,7 @@ fn merged_centroid(keep: (&[f32], i64, i64), absorb: (&[f32], i64, i64)) -> (Vec
         .zip(absorb_emb)
         .map(|(k, a)| (k * keep_count as f32 + a * absorb_count as f32) / total)
         .collect();
-    (mean, keep_ver)
+    (mean, keep_ver, keep_count + absorb_count)
 }
 
 /// Find the closest known identity to `query_embedding`.
@@ -333,7 +337,10 @@ mod tests {
         assert_eq!(matchable.len(), 1);
         let (id, emb, count) = &matchable[0];
         assert_eq!(*id, legacy, "the named identity survives");
-        assert_eq!(*count, 16);
+        assert_eq!(
+            *count, 6,
+            "count follows the surviving voiceprint, not the legacy one"
+        );
         assert_eq!(
             emb,
             &unit(1),
@@ -343,10 +350,10 @@ mod tests {
 
     #[test]
     fn merged_centroid_same_version_is_weighted_mean() {
-        let (c, v) = merged_centroid((&[1.0, 0.0], 3, 2), (&[0.0, 1.0], 1, 2));
-        assert_eq!(v, 2);
+        let (c, v, n) = merged_centroid((&[1.0, 0.0], 3, 2), (&[0.0, 1.0], 1, 2));
+        assert_eq!((v, n), (2, 4));
         assert!((c[0] - 0.75).abs() < 1e-6 && (c[1] - 0.25).abs() < 1e-6);
-        let (c, v) = merged_centroid((&[0.0, 1.0], 9, 2), (&[1.0, 0.0], 1, 1));
-        assert_eq!((c, v), (vec![0.0, 1.0], 2), "stale absorb is ignored");
+        let (c, v, n) = merged_centroid((&[0.0, 1.0], 9, 2), (&[1.0, 0.0], 1, 1));
+        assert_eq!((c, v, n), (vec![0.0, 1.0], 2, 9), "stale absorb is ignored");
     }
 }

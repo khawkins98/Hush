@@ -201,12 +201,35 @@ impl SessionClusterState {
     }
 
     /// The label for a cluster ID: `"mic"` for the dominant in-room
-    /// cluster, `"Speaker N"` (1-indexed) otherwise.
+    /// cluster, `"In-room N"` for further in-room voices (the local user
+    /// is in-room 1), and `"Speaker N"` for shared/remote clusters.
+    ///
+    /// N is the cluster's ordinal *within its namespace*, so remote
+    /// speakers number 1, 2, 3… with no gap where an in-room cluster took
+    /// an ID. In-room voices get their own label family so nothing
+    /// downstream (the frontend's partial-label borrowing in particular)
+    /// can mistake one for a remote speaker — labels are plain strings and
+    /// carry no source. Clusters are append-only, so a label never changes
+    /// once issued; with in-room separation off every cluster is Shared
+    /// and this reduces to the previous `"Speaker {id + 1}"`.
     pub fn label(&self, id: usize) -> String {
         if self.local_primary == Some(id) {
-            crate::audio::LOCAL_SPEAKER_TAG.to_owned()
-        } else {
-            format!("Speaker {}", id + 1)
+            return crate::audio::LOCAL_SPEAKER_TAG.to_owned();
+        }
+        let namespace = self
+            .clusters
+            .iter()
+            .find(|c| c.id == id)
+            .map_or(SpeakerNamespace::Shared, |c| c.namespace);
+        let ordinal = self
+            .clusters
+            .iter()
+            .filter(|c| c.namespace == namespace && c.id <= id)
+            .count()
+            .max(1);
+        match namespace {
+            SpeakerNamespace::LocalRoom => format!("In-room {ordinal}"),
+            SpeakerNamespace::Shared => format!("Speaker {ordinal}"),
         }
     }
 
@@ -979,9 +1002,14 @@ mod tests {
             "mic",
             "first room cluster is the local user"
         );
-        // A second in-room voice gets a Speaker label.
+        // A second in-room voice gets its own label family, numbered
+        // within the room (the local user is in-room 1)…
         let guest = s.assign(&axis(3), with_hint(meta(3.0), room())).unwrap();
-        assert_eq!(s.label(guest), format!("Speaker {}", guest + 1));
+        assert_eq!(s.label(guest), "In-room 2");
+        // …and remote speakers number without a gap for the room IDs.
+        let remote2 = s.assign(&axis(5), meta(3.0)).unwrap();
+        assert_eq!(s.label(remote), "Speaker 1");
+        assert_eq!(s.label(remote2), "Speaker 2");
         // Remote matching still works and ignores room clusters.
         assert_eq!(s.assign(&axis(0), meta(3.0)), Some(remote));
     }

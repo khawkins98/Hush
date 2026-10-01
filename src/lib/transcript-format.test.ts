@@ -117,6 +117,22 @@ describe("resolvePartialLabels (#1013 live label flip)", () => {
     ]);
   });
 
+  it("never borrows an in-room voice's label for a remote partial", () => {
+    // In-room separation (opt-in): a second voice in the room is labelled
+    // "In-room 2". A later remote partial must keep the last *remote* label.
+    const finals: UtteranceLike[] = [
+      { text: "a", speakerLabel: "Speaker 1" },
+      { text: "b", speakerLabel: "In-room 2" },
+    ];
+    expect(resolvePartialLabels(finals, [sys("next")])).toEqual([
+      { text: "next", speakerLabel: "Speaker 1" },
+    ]);
+    // Only in-room voices diarized so far: stay "Remote".
+    expect(resolvePartialLabels([{ text: "b", speakerLabel: "In-room 2" }], [sys("x")])).toEqual([
+      sys("x"),
+    ]);
+  });
+
   it("leaves mic partials alone", () => {
     const finals: UtteranceLike[] = [{ text: "a", speakerLabel: "Speaker 1" }];
     const mic: UtteranceLike = { text: "me", speakerLabel: "mic" };
