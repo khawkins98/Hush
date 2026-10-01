@@ -133,7 +133,7 @@ impl SpeakerStore for SqliteSpeakerStore {
     async fn list(&self) -> Result<Vec<SpeakerIdentity>> {
         sqlx::query_as::<_, SpeakerIdentityRow>(
             "SELECT id, display_name, utterance_count, confidence_state, \
-                    created_at, updated_at \
+                    created_at, updated_at, embedding_version \
              FROM speaker_identities \
              ORDER BY id",
         )
@@ -219,6 +219,7 @@ struct SpeakerIdentityRow {
     confidence_state: String,
     created_at: String,
     updated_at: String,
+    embedding_version: i64,
 }
 
 impl From<SpeakerIdentityRow> for SpeakerIdentity {
@@ -230,6 +231,7 @@ impl From<SpeakerIdentityRow> for SpeakerIdentity {
             confidence_state: r.confidence_state,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            legacy_voiceprint: r.embedding_version < CURRENT_EMBEDDING_VERSION,
         }
     }
 }
@@ -323,6 +325,18 @@ mod tests {
             listed,
             vec![legacy, current],
             "names stay visible in the UI"
+        );
+        let flags: Vec<(i64, bool)> = s
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|i| (i.id, i.legacy_voiceprint))
+            .collect();
+        assert_eq!(
+            flags,
+            vec![(legacy, true), (current, false)],
+            "the Settings list can badge pre-CMN voiceprints"
         );
     }
 

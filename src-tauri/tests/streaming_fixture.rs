@@ -261,7 +261,7 @@ fn gappy_meeting_signal(jfk: &CapturedAudio) -> Vec<f32> {
 /// Real-audio A/B harness for the #1013 streaming options. Feeds the
 /// gappy signal through a real Silero-gated streaming session in 500 ms
 /// ticks (the pump cadence) and prints every final with its emit lag.
-/// Run with and without `HUSH_VAD_BOUNDARY=1`,
+/// Run with and without `HUSH_VAD_BOUNDARY=0` (boundary mode is the default),
 /// `HUSH_STREAM_LOCAL_AGREEMENT=1`, `HUSH_FINAL_MIN_AVG_LOGPROB=…`,
 /// `RUST_LOG=hush=debug` to compare:
 ///

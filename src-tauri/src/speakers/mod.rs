@@ -65,6 +65,13 @@ pub struct SpeakerIdentity {
     pub confidence_state: String,
     pub created_at: String,
     pub updated_at: String,
+    /// True when the stored voiceprint predates [`CURRENT_EMBEDDING_VERSION`]
+    /// (computed before the CMN feature fix). Such identities still label
+    /// old meetings but never auto-match new ones; the Settings → Speakers
+    /// list badges them so the user can merge a new speaker into the named
+    /// identity to re-enrol it. Only the boolean crosses IPC — never the
+    /// embedding or its version number.
+    pub legacy_voiceprint: bool,
     // Embedding NOT serialised to frontend — biometric data stays on backend.
 }
 

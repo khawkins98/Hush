@@ -211,8 +211,16 @@ const VAD_BOUNDARY_MIN_SPEECH_FRAMES: u32 = 5;
 /// `HUSH_VAD_BOUNDARY=1` → `Some(silence_frames)`; off otherwise.
 /// Read once per session (same freeze-at-construction rule as the other
 /// VAD knobs).
+/// VAD-boundary windowing is on by default (promoted from opt-in after
+/// the #1013 fixture showed finals landing in ~1.8 s vs ~5.5 s with no
+/// junk); `HUSH_VAD_BOUNDARY=0` (or `false`/`off`) restores the purely
+/// time-based windows for A/B comparison.
+fn vad_boundary_enabled(raw: Option<&str>) -> bool {
+    !matches!(raw.map(str::trim), Some("0" | "false" | "off"))
+}
+
 fn vad_boundary_config_from_env() -> Option<u64> {
-    if !matches!(std::env::var("HUSH_VAD_BOUNDARY").as_deref(), Ok("1")) {
+    if !vad_boundary_enabled(std::env::var("HUSH_VAD_BOUNDARY").ok().as_deref()) {
         return None;
     }
     let ms = std::env::var("HUSH_VAD_BOUNDARY_SILENCE_MS")
@@ -1549,6 +1557,16 @@ impl std::fmt::Debug for WhisperTranscription {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn vad_boundary_is_on_unless_explicitly_disabled() {
+        assert!(super::vad_boundary_enabled(None));
+        assert!(super::vad_boundary_enabled(Some("1")));
+        for off in ["0", "false", "off", " 0 "] {
+            assert!(!super::vad_boundary_enabled(Some(off)), "{off:?}");
+        }
+    }
+
     use super::*;
     use crate::audio::CaptureFormat;
     use std::sync::Mutex;
@@ -2208,13 +2226,14 @@ mod tests {
     }
 
     #[test]
-    fn boundary_mode_off_by_default() {
+    fn boundary_mode_on_by_default() {
         let session = WhisperStreamingSession::new_for_test(
             meeting_capture_format(),
             vad_gate_streaming_config(),
             Box::new(AlwaysSpeechVad),
         );
-        // HUSH_VAD_BOUNDARY isn't set by any test.
-        assert!(session.boundary.is_none());
+        // HUSH_VAD_BOUNDARY isn't set by any test; boundary windowing is
+        // the default since the #1013 follow-up (`=0` opts out).
+        assert!(session.boundary.is_some());
     }
 }

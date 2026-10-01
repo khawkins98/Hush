@@ -291,44 +291,41 @@ pub async fn stop_dictation(
     // Absolute floor (#1013): below this a press is an accidental tap
     // whatever the VAD thinks — not even a clipped "k" fits.
     const MIN_PRESS_MS: i64 = 300;
-    let by_duration = match duration_ms {
-        Some(ms) => ms < MIN_DICTATION_MS,
-        // Conservative: missing duration (impossible format) →
-        // treat as too-short rather than crash whisper with
-        // unknown input.
-        None => true,
-    };
     // VAD trim + pad (#1013): when the Silero VAD finds speech, hand
     // whisper just the speech (plus padding, zero-padded to 1.25 s) —
     // which also lets a real sub-second "yes" through instead of
-    // dropping it. A press the VAD finds empty keeps the old rule:
-    // under 1 s is a no-op, longer clips are transcribed as-is (a VAD
-    // miss must never silently eat quiet speech).
+    // dropping it. A press the VAD finds empty is a no-op at any length:
+    // pre-fix, a ≥ 1 s hiss-only press still reached whisper and pasted
+    // confabulations like "(bells chiming)". `NoSpeech` is only reported
+    // when every frame was scored — long clips only score their edges
+    // and treat the middle as speech, so they can never come back empty —
+    // and the VAD scores a mic-gained copy, so a boosted quiet mic isn't
+    // judged silent. If the VAD is off or unavailable (`Skipped`), the
+    // old duration rule applies.
     let gain_db = f32::from_bits(
         state
             .runtime_flags
             .mic_gain_db
             .load(std::sync::atomic::Ordering::Relaxed),
     );
-    let too_short = match vad_trim_dictation(state.inference.vad.as_ref(), &captured, gain_db) {
-        DictationTrim::Skipped | DictationTrim::NoSpeech => by_duration,
-        DictationTrim::Trimmed(trimmed) => {
-            let floor = duration_ms.map_or(true, |ms| ms < MIN_PRESS_MS);
-            if floor {
-                true
-            } else {
-                tracing::info!(
-                    duration_ms = ?duration_ms,
-                    trimmed_ms = trimmed.samples.len() as u64 * 1000
-                        / u64::from(crate::transcription::WHISPER_SAMPLE_RATE),
-                    "dictation: VAD-trimmed clip (#1013)"
-                );
-                captured.samples.zeroize();
-                captured = trimmed;
-                false
-            }
-        }
-    };
+    let trim = vad_trim_dictation(state.inference.vad.as_ref(), &captured, gain_db);
+    let too_short = pipeline::press_is_empty(&trim, duration_ms, MIN_DICTATION_MS, MIN_PRESS_MS);
+    if matches!(trim, DictationTrim::NoSpeech) {
+        tracing::info!(
+            duration_ms = ?duration_ms,
+            "dictation: VAD heard no speech — treating the press as empty"
+        );
+    }
+    if let (DictationTrim::Trimmed(trimmed), false) = (trim, too_short) {
+        tracing::info!(
+            duration_ms = ?duration_ms,
+            trimmed_ms = trimmed.samples.len() as u64 * 1000
+                / u64::from(crate::transcription::WHISPER_SAMPLE_RATE),
+            "dictation: VAD-trimmed clip (#1013)"
+        );
+        captured.samples.zeroize();
+        captured = trimmed;
+    }
     if too_short {
         tracing::info!(duration_ms = ?duration_ms, "dictation: skipped — recording too short");
         // Hide the Processing HUD on the too-short path —

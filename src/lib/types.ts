@@ -138,6 +138,9 @@ export type SpeakerIdentity = {
   confidenceState: "provisional" | "confirmed";
   createdAt: string;
   updatedAt: string;
+  /// Voiceprint predates the CMN feature fix: still labels old meetings,
+  /// never auto-matches new ones. Merge a new speaker into it to re-enrol.
+  legacyVoiceprint: boolean;
 };
 
 export type PackStatus = {

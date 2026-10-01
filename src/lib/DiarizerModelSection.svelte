@@ -6,6 +6,7 @@
   tied to the visible Settings section.
 -->
 <script lang="ts">
+  import SpeakerIdentitiesSection from "./SpeakerIdentitiesSection.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
 
@@ -311,6 +312,8 @@
   {#if diarizer.speakerIdentityError}
     <p class="settings-error" role="alert">{diarizer.speakerIdentityError}</p>
   {/if}
+
+  <SpeakerIdentitiesSection enabled={diarizer.speakerIdentityEnabled} />
 </section>
 
 <style>

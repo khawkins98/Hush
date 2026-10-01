@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Saved speakers: rename, merge, delete (Settings → Meeting).** The
+  speakers Hush remembers across meetings are now listed with their
+  utterance counts. Profiles saved before the recognition upgrade are
+  marked **Older voice profile**: they still label old meetings but aren't
+  matched in new ones. To keep a name, use **Merge into…** on the newly
+  detected speaker and pick the older profile — it keeps its name and
+  learns the new voice.
+
+- **Meeting transcripts land within a second or two (now on by default).**
+  Hush transcribes each stretch of speech between pauses as a unit
+  instead of waiting for a fixed time window, so finished lines appear in
+  about 1–2 s instead of up to 8 s, with fewer mid-sentence splits. Set
+  `HUSH_VAD_BOUNDARY=0` to go back to the old behaviour.
+
 - **English-only models (#1013).** The model picker now offers **Base
   (English only, compact)** at 82 MB and **Small (English only, compact)**
   at 264 MB. They're tuned for English and can't transcribe any other
@@ -25,9 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now start a meeting recording, the same way the Record button does.
 
 - **Experimental transcription options, off by default (#1013).** For
-  A/B testing: `HUSH_VAD_BOUNDARY=1` transcribes each stretch of speech
-  between pauses as a unit, so finished lines land within about a second
-  instead of about eight. `HUSH_STREAM_LOCAL_AGREEMENT=1` commits text
+  A/B testing: `HUSH_STREAM_LOCAL_AGREEMENT=1` commits text
   that two passes in a row agree on. `HUSH_CONFIDENCE_SHADING=1` dims
   words the model is unsure of in the live meeting transcript.
   `HUSH_FINAL_MIN_AVG_LOGPROB` drops low-confidence lines. See
@@ -154,6 +166,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new defaults. Change any of them in Settings → General / Vocabulary.
 
 ### Fixed
+
+- **A push-to-talk press with only background noise is ignored.** Before,
+  a press of a second or more with no speech in it still went to Whisper,
+  which could paste things like "(bells chiming)". If the voice detector
+  hears no speech at all, the press now does nothing, whatever its length.
 
 - **Fewer phantom lines in meeting transcripts (#1013).** Hush now drops
   whole lines that are video-outro or subtitle-credit text ("Thanks for
