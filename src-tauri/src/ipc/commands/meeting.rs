@@ -602,21 +602,10 @@ fn sanitise_meeting_sources(sources: Vec<AudioSource>) -> Result<Vec<AudioSource
 /// stale double-click reaches here as a recoverable error rather
 /// than a panic.
 ///
-/// After a successful stop the transcribers AND the diarizer are
-/// rebuilt in the background (#636). Old `WhisperContext` compute
-/// buffers (KV cache, mel scratch, beam scratch) and the old ORT
-/// `Session` stay live in their slots until the new contexts are
-/// ready (~1 s for transcribers, ~80 ms for the diarizer); the
-/// background task then atomically installs each new context,
-/// dropping the old `Arc`s so the C++ destructors can release the
-/// buffers.
-///
-/// Keeping old contexts live during the rebuild window means a
-/// rapid stop-then-start sequence always finds a valid transcriber
-/// AND a valid diarizer in their slots. The new `OnnxDiarizer`
-/// instance has its own fresh `SessionClusterState` so speaker
-/// labels do not bleed across meeting boundaries — the reset
-/// happens at swap-time, not at null-time.
+/// Historical name: until 2026-10-01 this also rebuilt the whisper
+/// contexts in the background after every stop (#636). That rebuild is
+/// gone — see the comment at the end of the function body and
+/// learnings.md 2026-10-01. The name is kept to avoid churning callers.
 ///
 /// Extracted from the IPC command body so the CoreAudio auto-stop
 /// path in `run_meeting_detection_task` can share the same logic.
@@ -628,12 +617,8 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
     // was involved. `stop_manual` returns as soon as the audio device is
     // released; the pump's tail finalization (flush, #667 identity
     // resolution, DB close) keeps running in the background `finalizing`
-    // lane. We only need this flag to decide whether to rebuild the
-    // transcribe contexts after the stop:
-    //
-    //   - meeting was active → rebuild (bound whisper #612 C-heap growth).
-    //   - "no meeting session active" → no pump ran, the transcribe slots
-    //     are still live for dictation, so skip the pointless rebuild.
+    // lane. The flag decides whether the HUD is ours to drive: with no
+    // meeting active it may be showing a dictation.
     let had_active = state.meeting_manager.has_active_session();
 
     // Flip the HUD to "Stopping…" rather than hiding it up front. Pre-fix
@@ -689,107 +674,21 @@ pub(crate) async fn stop_meeting_and_rebuild_transcriber(
             None => crate::hud::hide_async(app),
         }
 
-        // `stop_manual` returned the moment the audio device was released;
-        // the pump's continuation (tail flush, speaker-identity resolution,
-        // DB close) is parked in the manager's `finalizing` lane and STILL
-        // RUNNING. It holds its own Arc snapshot of the meeting transcribe
-        // context (proposal §A "Concurrency safety"), so swapping a fresh
-        // Arc into the slot here does not disturb the in-flight finalization.
+        // No whisper context rebuild here (it ran from #636 until
+        // 2026-10-01). whisper-rs loads the context `_no_state`, so the
+        // context holds only the immutable weights + vocab; every buffer
+        // that grows with use (KV cache, mel, compute scratch) lives in the
+        // per-session `WhisperState`s, which drop with the streaming
+        // sessions at the end of this meeting's finalization. A rebuild
+        // reclaimed nothing — it re-read the full weights from disk and,
+        // now that both slots share one context, would briefly hold a
+        // second copy of them. learnings.md 2026-10-01 has the measurement.
         //
-        // Rebuild the transcribers (dictation + meeting) in the background.
-        // The old Arcs stay live in their slots while the rebuild runs
-        // (~1 s), so a rapid stop-then-start always finds a valid
-        // transcriber and doesn't run idle / fall back to source labels for
-        // the new session. Only overwrite a slot when the rebuild returns
-        // Some — a failure is logged at error! and the existing (possibly
-        // high-watermarked) context stays live rather than leaving
-        // dictation/meetings broken until restart.
-        //
-        // The DIARIZER is deliberately NOT rebuilt here. Earlier iterations
-        // swapped in a fresh `OnnxDiarizer` to reset cluster state across
-        // the meeting boundary, but that is now both redundant and harmful:
-        //   - Redundant: the pump calls `diarize.reset()` at the START of
-        //     each session (#794), clearing `SessionClusterState`; and a new
-        //     meeting `start_manual` awaits the in-flight `finalizing` lane
-        //     before opening, so no two meetings ever share live cluster
-        //     state. `OnnxDiarizer` has no other growing/session state
-        //     besides `clusters`, which `reset()` fully replaces.
-        //   - Harmful: the background finalization reads THIS session's
-        //     cluster centroids (`session_centroids()`, #667) AFTER the slow
-        //     tail `finish()`. A rebuild (~80 ms) wins the race against that
-        //     tail (up to 60 s) and would install an EMPTY diarizer, so the
-        //     centroid read would see nothing and #667 identity resolution
-        //     would silently no-op for every backgrounded meeting. Keeping
-        //     the slot's diarizer stable across the stop boundary lets the
-        //     finalization read the session's real centroids.
-        //
-        // Old WhisperContext compute buffers (KV cache, mel scratch, beam
-        // scratch) are freed when the new Arcs replace the old ones and
-        // their refcounts hit zero (#636).
-        let settings_bg = Arc::clone(&state.settings);
-        let models_dir_bg = state.models.models_dir.clone();
-        let inference_threads_bg = Arc::clone(&state.runtime_flags.inference_threads);
-        let mic_gain_db_bg = Arc::clone(&state.runtime_flags.mic_gain_db);
-        let transcribe_slot = Arc::clone(&state.inference.transcribe);
-        let transcribe_meeting_slot = Arc::clone(&state.inference.transcribe_meeting);
-        // Snapshot the generation counter before spawning (#801). If a
-        // model_select completes during the rebuild window it bumps this
-        // counter; we compare on commit and discard the stale result so
-        // the user-chosen model is never overwritten by the old rebuild.
-        let gen_snapshot = state
-            .inference
-            .transcriber_generation
-            .load(std::sync::atomic::Ordering::Acquire);
-        let generation_bg = Arc::clone(&state.inference.transcriber_generation);
-
-        tauri::async_runtime::spawn(async move {
-            let (dictation, meeting) = tokio::join!(
-                crate::ipc::pipeline::build_transcriber(
-                    &settings_bg,
-                    &models_dir_bg,
-                    &inference_threads_bg,
-                    &mic_gain_db_bg,
-                ),
-                crate::ipc::pipeline::build_transcriber(
-                    &settings_bg,
-                    &models_dir_bg,
-                    &inference_threads_bg,
-                    &mic_gain_db_bg,
-                ),
-            );
-            // Only install a new context when the rebuild succeeded AND
-            // no model_select ran during the rebuild window. If the
-            // generation advanced, the user already chose a new model —
-            // installing the stale rebuild result would overwrite it (#801).
-            let current_gen = generation_bg.load(std::sync::atomic::Ordering::Acquire);
-            if current_gen != gen_snapshot {
-                tracing::info!(
-                    gen_snapshot,
-                    current_gen,
-                    "meeting stop: model_select ran during rebuild; discarding stale rebuild result"
-                );
-                return;
-            }
-            // Generation unchanged — safe to install rebuild results.
-            if dictation.is_none() {
-                tracing::error!(
-                    "meeting stop: dictation transcriber rebuild returned None; \
-                     dictation will keep using the previous context until the \
-                     next model selection"
-                );
-            } else if let Ok(mut g) = transcribe_slot.lock() {
-                *g = dictation;
-            }
-            if meeting.is_none() {
-                tracing::error!(
-                    "meeting stop: meeting transcriber rebuild returned None; \
-                     next meeting will keep using the previous context until the \
-                     next model selection"
-                );
-            } else if let Ok(mut g) = transcribe_meeting_slot.lock() {
-                *g = meeting;
-            }
-        });
+        // The DIARIZER is not rebuilt either: the pump calls
+        // `diarize.reset()` at the start of each session (#794), and the
+        // background finalization reads THIS session's centroids
+        // (`session_centroids()`, #667) after the slow tail `finish()`, so
+        // swapping in a fresh diarizer here would race it and empty them.
     }
 
     stop_result

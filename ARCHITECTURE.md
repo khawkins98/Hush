@@ -76,18 +76,17 @@ The load-bearing seams:
 | `runtime_flags: RuntimeFlags` | `hud_enabled`, `sound_cues_enabled` (+ per-cue start/complete), `meeting_autostart_mode`, `diarization_enabled`, `speaker_identity_enabled`, `diarizer_threshold`, `inference_threads`, `mic_gain_db`, `autostart_path_stale`, `pending_cancel`, `system_audio_level`, `whisper_consecutive_empty_ticks`, `session_is_auto` | Atomics (and one `Mutex`) shared between the IPC layer and background tasks; settings-backed ones are read on the hot path without a DB round-trip |
 | `ptt: PttState` | `combo`, `active`, `spawned` | Push-to-talk hotkey combo, active flag, and listener task handle |
 | `update_check: UpdateCheckCache` | `last`, `inflight` | Manual update-check result cache + in-flight de-dup lock |
-| `inference: InferenceState` | `transcribe`, `transcribe_meeting`, `diarize`, `diarize_slot`, `vad`, `transcriber_generation` | Hot-swap slots for both transcription paths, the diarizer, and the VAD model; generation counter guards stale rebuild races |
+| `inference: InferenceState` | `transcribe`, `transcribe_meeting`, `diarize`, `diarize_slot`, `vad` | Hot-swap slots for both transcription paths (one shared `WhisperContext`), the diarizer, and the VAD model |
 | `models: ModelStore` | `models_dir`, `downloads` | GGUF/ONNX directory path + in-flight download cancel-handle registry |
 | `http: reqwest::Client` | — | Single shared HTTP client (used by both downloads and update-check) |
 | `settings: Arc<dyn SettingsRepository>` | — | Settings seam (flat because it's used across sub-struct domains) |
 
-Two `InferenceState` fields carry cross-layer invariants worth flagging when adjacent code changes:
-- `transcriber_generation: Arc<AtomicU64>` — race guard for background transcriber rebuilds. Any async task that rebuilds a transcriber must snapshot/compare the generation before installing its result ([#801](https://github.com/khawkins98/Hush/issues/801)).
+One `AppState` field carries a cross-layer invariant worth flagging when adjacent code changes:
 - `hotkey_toggle_error` lives on `AppState` and records the one-time startup result of `register_hotkeys`; the UI surfaces it via IPC. Don't re-diagnose by retrying from the frontend.
 
 **Hot-swappable slots** (all in `InferenceState`):
 
-- `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` — model hot-swap propagates without restart. `AppState` holds **two** independent slots ([#248](https://github.com/khawkins98/Hush/issues/248)): `inference.transcribe` (dictation hot path, read by `stop_dictation`) and `inference.transcribe_meeting` (cloned into `SessionManager`). `model_select` loads two `WhisperTranscription` instances from the same GGUF and writes both via `swap_transcriber(new_dictation, new_meeting)` — the underlying model weights are mmap'd, so the marginal RAM cost is small. The split removes mutex contention between a dictation-hotkey press and an in-flight meeting pump tick.
+- `TranscribeSlot = Arc<Mutex<Option<Arc<dyn Transcribe>>>>` — model hot-swap propagates without restart. `AppState` holds **two** independent slots ([#248](https://github.com/khawkins98/Hush/issues/248)): `inference.transcribe` (dictation hot path, read by `stop_dictation`) and `inference.transcribe_meeting` (cloned into `SessionManager`). Both slots are filled from **one** model load (`pipeline::LoadedTranscribers`): the meeting transcriber is `WhisperTranscription::share_context()` of the dictation one, so they share a single `WhisperContext` (whisper.cpp copies every weight tensor into private memory on load, so a second load would hold the weights twice: +~470 MB for small, +~1.5 GB for large-v3-turbo) while each slot keeps its own inference gate. Dictation never queues behind an in-flight meeting pump tick; each inference runs on its own `WhisperState`, and whisper.cpp only reads the context during inference. `model_select` writes the pair via `swap_transcriber(new_dictation, new_meeting)`. See learnings.md 2026-10-01 "whisper.cpp does NOT mmap the model".
 - `DiarizeSlot = Arc<RwLock<Arc<dyn Diarize>>>` (`inference.diarize_slot`) — wespeaker model download takes effect on the next pump tick.
 - `inference_threads: Arc<AtomicI32>` ([#255](https://github.com/khawkins98/Hush/issues/255)) — Settings → General slider value, shared between AppState and every loaded `WhisperTranscription` (both slots above) so a slider change takes effect on the next inference call without a model reload.
 
@@ -214,7 +213,7 @@ CoreAudio HAL thread  ──notify_one()──▶  Notify  ──notified().awai
 | 5 | ✅ true | `Always` | ❌ false | ❌ false | `Other`/`Media` | `Idle` | — (app not a meeting app) |
 | 6 | ✅ true | `Always` | ❌ false | ❌ false | `Meeting` | `Start { app_name }` | Caller sets `session_emitted = true`, calls `start_manual` |
 
-**Row 1a — auto-stop:** Mic went quiet and we hold an auto-started session (`session_emitted = true`). Stop the session so users don't end up with a ghost recording after their call ends. Uses the same `stop_meeting_and_rebuild_transcriber` helper as the manual Stop button, so transcribers and diarizer are rebuilt in the background.
+**Row 1a — auto-stop:** Mic went quiet and we hold an auto-started session (`session_emitted = true`). Stop the session so users don't end up with a ghost recording after their call ends. Uses the same `stop_meeting_and_rebuild_transcriber` helper as the manual Stop button (historical name: it no longer rebuilds anything, see learnings.md 2026-10-01).
 
 **Row 1b — mic quiet:** Mic went quiet and no auto-started session is running. Reset `session_emitted` so the next mic activation can start a fresh session.
 

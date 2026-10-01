@@ -130,33 +130,25 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
     // The GGUF parse can take ~50–500 ms; run on a blocking task so the
     // IPC handler doesn't hold the tokio runtime.
     //
-    // Loaded twice — once for the dictation slot, once for the
-    // meeting-pump slot (#248). Both share the mmap'd weights on
-    // disk, so the marginal cost of the second load is small.
+    // Loaded once; the dictation and meeting-pump slots (#248) share the
+    // one `WhisperContext` (see `pipeline::LoadedTranscribers`).
     let models_dir = state.models.models_dir.clone();
     let id_for_load = id.clone();
     let inference_threads = std::sync::Arc::clone(&state.runtime_flags.inference_threads);
     let mic_gain_db = std::sync::Arc::clone(&state.runtime_flags.mic_gain_db);
     let load_result = tauri::async_runtime::spawn_blocking(move || {
-        let dictation = crate::ipc::load_transcriber_for_model(
+        crate::ipc::load_transcriber_for_model(
             &id_for_load,
             &models_dir,
             &inference_threads,
             &mic_gain_db,
-        )?;
-        let meeting = crate::ipc::load_transcriber_for_model(
-            &id_for_load,
-            &models_dir,
-            &inference_threads,
-            &mic_gain_db,
-        )?;
-        Ok::<_, anyhow::Error>((dictation, meeting))
+        )
     })
     .await
     .map_err(|e| IpcError::Internal(format!("blocking task panicked: {e}")))?;
 
     match load_result {
-        Ok((Some(dictation), Some(meeting))) => {
+        Ok(Some(loaded)) => {
             // Persist first so a swap failure still leaves the setting
             // consistent; if swap panics the app likely restarts anyway.
             state
@@ -165,11 +157,11 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
                 .await
                 .map_err(|e| IpcError::Settings(e.to_string()))?;
             state
-                .swap_transcriber(Some(dictation), Some(meeting))
+                .swap_transcriber(Some(loaded.dictation), Some(loaded.meeting))
                 .map_err(|e| IpcError::Internal(e.to_string()))?;
             Ok(ModelSelectResult { loaded: true })
         }
-        Ok((None, None)) => {
+        Ok(None) => {
             // File not yet on disk, or whisper feature off. Persist
             // the selection so the picker remembers across restarts
             // and the user just needs to Download.
@@ -179,19 +171,6 @@ pub async fn model_select(state: State<'_, AppState>, id: String) -> IpcResult<M
                 .await
                 .map_err(|e| IpcError::Settings(e.to_string()))?;
             Ok(ModelSelectResult { loaded: false })
-        }
-        Ok((Some(_), None)) | Ok((None, Some(_))) => {
-            // One slot loaded and the other didn't — the two
-            // WhisperContext instances would be out of sync. Log and
-            // surface an error without persisting (#870).
-            tracing::error!(
-                model_id = %id,
-                "model_select: partial load success — dictation/meeting slots out of sync; \
-                 likely the file changed between the two loads"
-            );
-            Err(IpcError::Internal(
-                "partial model load (one slot succeeded, one failed) — try again".into(),
-            ))
         }
         Err(e) => {
             // File was on disk but failed to load (corrupted GGUF,

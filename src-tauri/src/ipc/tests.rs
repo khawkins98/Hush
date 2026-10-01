@@ -1425,3 +1425,68 @@ async fn seed_history(repo: std::sync::Arc<MemHistory>, n: usize) {
         .unwrap();
     }
 }
+
+/// The startup + `model_select` loaders must load the model ONCE and hand
+/// both slots transcribers over that one load (learnings.md 2026-10-01),
+/// and `swap_transcriber` must install that pair. Uses the real catalog
+/// resolution path: `HUSH_TEST_MODEL` must be a catalog file
+/// (e.g. `ggml-small-q8_0.bin`); its directory stands in for `models_dir`.
+#[cfg(feature = "whisper")]
+#[tokio::test]
+#[ignore = "requires HUSH_TEST_MODEL pointing at a catalog whisper GGUF"]
+async fn build_transcriber_loads_one_pair_and_swap_installs_it() {
+    let model =
+        std::path::PathBuf::from(std::env::var("HUSH_TEST_MODEL").expect("set HUSH_TEST_MODEL"));
+    let filename = model.file_name().unwrap().to_string_lossy().into_owned();
+    let meta = crate::transcription::catalog::whisper_models()
+        .into_iter()
+        .find(|m| m.filename == filename)
+        .expect("HUSH_TEST_MODEL must be a catalog model file");
+    let models_dir = model.parent().unwrap().to_path_buf();
+    let settings: Arc<dyn SettingsRepository> = Arc::new(MemSettings {
+        map: std::sync::Mutex::new(std::collections::HashMap::from([(
+            crate::settings::keys::SELECTED_MODEL_ID.to_owned(),
+            meta.id.clone(),
+        )])),
+    });
+    let threads = Arc::new(std::sync::atomic::AtomicI32::new(2));
+    let gain = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+    let pair = super::pipeline::build_transcriber(&settings, &models_dir, &threads, &gain)
+        .await
+        .expect("startup loader returns a pair");
+    assert!(!Arc::ptr_eq(&pair.dictation, &pair.meeting));
+    assert_eq!(pair.dictation.model_label(), filename);
+    assert_eq!(pair.meeting.model_label(), filename);
+
+    let hot = load_transcriber_for_model(&meta.id, &models_dir, &threads, &gain)
+        .expect("model_select loader")
+        .expect("file is on disk");
+    let state = mock_state();
+    state
+        .swap_transcriber(
+            Some(Arc::clone(&hot.dictation)),
+            Some(Arc::clone(&hot.meeting)),
+        )
+        .unwrap();
+    let d = state.inference.transcribe.lock().unwrap().clone().unwrap();
+    let m = state
+        .inference
+        .transcribe_meeting
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap();
+    assert!(Arc::ptr_eq(&d, &hot.dictation));
+    assert!(Arc::ptr_eq(&m, &hot.meeting));
+    // Both slots really infer on the shared context.
+    let silence = CapturedAudio {
+        samples: vec![0.0; 16_000],
+        format: CaptureFormat {
+            sample_rate: 16_000,
+            channels: 1,
+        },
+    };
+    d.transcribe(&silence).expect("dictation slot infers");
+    m.transcribe(&silence).expect("meeting slot infers");
+}

@@ -1543,8 +1543,8 @@ async fn run_meeting_detection_task(app: tauri::AppHandle) {
                 // Mic went quiet while we hold an auto-started session.
                 // Stop the session so users aren't left with a ghost
                 // recording after their call ends. Uses the same helper
-                // as the manual Stop button so transcribers and diarizer
-                // are rebuilt in the background, ready for the next call.
+                // as the manual Stop button so HUD and session teardown
+                // stay identical between the two paths.
                 session_emitted = false;
                 auto_start_declined = false;
                 tracing::info!("meeting detection: mic inactive — auto-stopping session");

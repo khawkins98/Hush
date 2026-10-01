@@ -138,10 +138,13 @@ fn meeting_pump_transcribes_fixture_via_audiosession_seam() {
             transcribe_slot,
             emitter,
             diarize,
+            Arc::new(hush_lib::vad::NoopVad),
             override_repo,
             mic_gain_db,
             Arc::new(hush_lib::speakers::MemSpeakerStore),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(AtomicU32::new(0)),
+            Arc::new(AtomicU32::new(0)),
         );
 
         // Start a manual meeting session on the mic source.
@@ -150,6 +153,7 @@ fn meeting_pump_transcribes_fixture_via_audiosession_seam() {
                 vec![AudioSource::default_microphone()],
                 Some("fixture-test".into()),
                 None,
+                hush_lib::meeting::SessionDictOpts::default(),
             )
             .await
             .expect("start_manual");
@@ -165,6 +169,27 @@ fn meeting_pump_transcribes_fixture_via_audiosession_seam() {
         // Stop the session — flushes the streaming tail to DB.
         manager.stop_manual().await.expect("stop_manual");
         eprintln!("meeting_fixture: session stopped");
+
+        // `stop_manual` returns once the audio device is released; the tail
+        // flush + DB close run in the background finalization lane. The row's
+        // `ended_at` is written last, so wait for it before reading.
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let row = session_repo
+                .get_by_id(session.id)
+                .await
+                .expect("get_by_id")
+                .expect("session row");
+            if row.ended_at.is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background finalization did not close the session within 120 s"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        eprintln!("meeting_fixture: session finalized");
 
         // Query persisted utterances.
         let utterances = session_repo

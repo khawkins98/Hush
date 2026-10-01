@@ -128,8 +128,8 @@ pub struct DataServices {
 ///   serial.
 pub struct AppState {
     pub audio: Arc<dyn AudioCapture>,
-    /// AI inference pipeline: transcriber slots, generation counter,
-    /// diarizer service, and hot-swap slot. See [`InferenceState`]
+    /// AI inference pipeline: transcriber slots, diarizer service, and
+    /// hot-swap slot. See [`InferenceState`]
     /// for the per-field rationale.
     pub inference: InferenceState,
     /// Persistent user-data repositories bundled together. See
@@ -248,13 +248,12 @@ pub struct UpdateCheckCache {
 
 /// AI inference pipeline slots grouped as a single sub-struct (#737).
 ///
-/// All five fields relate to the hot-swappable inference pipeline:
+/// All four fields relate to the hot-swappable inference pipeline:
 /// two mutex-wrapped transcriber slots (dictation + meeting pump,
-/// split under #248 to avoid contention), a generation counter
-/// the meeting pump uses to detect mid-rebuild model swaps (#801),
-/// the composed diarizer service injected into `SessionManager`,
-/// and the hot-swappable inner diarizer slot updated after a
-/// wespeaker model download (#301).
+/// split under #248 so neither queues behind the other's inference —
+/// both backed by ONE shared `WhisperContext`), the composed diarizer
+/// service injected into `SessionManager`, and the hot-swappable inner
+/// diarizer slot updated after a wespeaker model download (#301).
 ///
 /// Grouped here so [`AppState::swap_transcriber`] has a single
 /// named owner, and so model-picker / diarizer-download handlers
@@ -266,15 +265,10 @@ pub struct InferenceState {
     pub transcribe: TranscribeSlot,
     /// Meeting-pump transcriber slot. Distinct from [`Self::transcribe`]
     /// so a chunk-tick inference and a concurrent dictation `stop` don't
-    /// queue up behind one `Mutex<WhisperContext>` (#248). Hot-swapped
-    /// in lockstep with `transcribe` by `model_select`.
+    /// queue up behind one inference gate (#248). Shares the dictation
+    /// slot's loaded weights (`WhisperTranscription::share_context`) and
+    /// is hot-swapped in lockstep with `transcribe` by `model_select`.
     pub transcribe_meeting: TranscribeSlot,
-    /// Monotonically-increasing generation counter. Bumped by
-    /// [`AppState::swap_transcriber`] on every model swap so the
-    /// background `stop_meeting_and_rebuild_transcriber` task can detect
-    /// that a `model_select` completed during the rebuild window and
-    /// skip installing the about-to-be-stale rebuilt context (#801).
-    pub transcriber_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Composed diarizer service handle passed to [`crate::meeting::SessionManager`]
     /// at construction. `FlagGatedDiarizer` wraps this, routing to
     /// `OnnxDiarizer` (wespeaker) when the Speakers toggle and model are
@@ -762,40 +756,32 @@ impl AppState {
         // Step 1 resolves the M3 picker; step 2 keeps the existing dev
         // setup working until a user actually opens the picker once.
         //
-        // Loaded twice so the dictation hot path and the meeting pump
-        // each own a private `WhisperContext` and don't contend on a
-        // single mutex (#248). Marginal RAM cost is small — `whisper-rs`
-        // mmap's the GGUF, so the two contexts share the underlying
-        // weights on disk. Both instances share the same
-        // `inference_threads_arc` so the slider in Settings (#255)
-        // takes effect on every inference call regardless of slot.
-        let transcribe_dictation;
-        let transcribe_meeting;
-        // Load both whisper contexts in parallel (#561). The two loads are
-        // independent and each blocks while mmapping the model file;
-        // running them concurrently halves the sequential cost. Each
-        // `build_transcriber` call wraps `WhisperTranscription::new` in
-        // `spawn_blocking`, so both blocking loads start before either one
-        // completes and run on separate tokio blocking threads.
-        (transcribe_dictation, transcribe_meeting) = tokio::join!(
-            build_transcriber(
-                &settings,
-                &models_dir,
-                &inference_threads_arc,
-                &mic_gain_db_arc,
-            ),
-            build_transcriber(
-                &settings,
-                &models_dir,
-                &inference_threads_arc,
-                &mic_gain_db_arc,
-            ),
-        );
+        // Loaded ONCE and split into two slots that share the
+        // `WhisperContext` (`pipeline::LoadedTranscribers`). whisper.cpp
+        // copies every weight tensor into a private host buffer on load —
+        // it does not mmap the GGUF — so the pre-2026-10 double load held
+        // two full copies of the weights (+~470 MB for small, up to
+        // +~1.5 GB for large-v3-turbo). The slots keep separate inference
+        // gates so dictation never queues behind a meeting-pump tick
+        // (#248). Both share `inference_threads_arc` so the Settings
+        // slider (#255) applies on every inference call regardless of
+        // slot. See learnings.md 2026-10-01.
+        let (transcribe_dictation, transcribe_meeting) = match build_transcriber(
+            &settings,
+            &models_dir,
+            &inference_threads_arc,
+            &mic_gain_db_arc,
+        )
+        .await
+        {
+            Some(pair) => (Some(pair.dictation), Some(pair.meeting)),
+            None => (None, None),
+        };
 
-        record_phase("whisper contexts (parallel load)");
+        record_phase("whisper context");
         tracing::info!(
             elapsed_ms = t_start.elapsed().as_millis(),
-            "app state: whisper contexts loaded"
+            "app state: whisper context loaded"
         );
 
         // Wrap each instance in its own `Arc<Mutex<...>>` so
@@ -1045,11 +1031,11 @@ impl AppState {
     /// the (potentially-slow) GGUF load completes on a blocking task,
     /// so the dictation hot path is never blocked on disk I/O.
     ///
-    /// Both slots receive instances constructed from the same GGUF
-    /// path so the user-visible model stays consistent — the split
-    /// is purely about avoiding `Mutex<WhisperContext>` contention
-    /// between the two inference paths, not about running different
-    /// models per path.
+    /// Both slots receive the pair from one load
+    /// (`pipeline::LoadedTranscribers`), sharing one `WhisperContext`, so
+    /// the user-visible model stays consistent and the weights are held
+    /// once — the split is purely about each inference path having its
+    /// own gate, not about running different models per path.
     ///
     /// Returns the previous dictation-slot value so the caller can
     /// diagnose "did we actually swap something?" if it cares; the
@@ -1072,12 +1058,6 @@ impl AppState {
             .lock()
             .map_err(|_| anyhow::anyhow!("transcribe_meeting mutex poisoned"))?;
         *meeting_guard = new_meeting;
-        // Bump generation so the background rebuild in
-        // stop_meeting_and_rebuild_transcriber can detect that a
-        // model_select completed during the rebuild window (#801).
-        self.inference
-            .transcriber_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok(prev)
     }
 }

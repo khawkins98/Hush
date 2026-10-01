@@ -9,20 +9,30 @@
 //! enabling this module is opt-in (CI installs cmake explicitly, contributors
 //! who only touch the Rust side can ignore it).
 //!
-//! ## Why `Mutex<WhisperContext>` rather than per-call construction
+//! ## Why one shared `WhisperContext` per loaded model
 //!
 //! Loading a GGUF file is the most expensive thing whisper.cpp does — order
-//! of seconds for `base`, tens of seconds for `large-v3`. We pay it once at
-//! construction and serialise inference behind a mutex. The mutex is fine
-//! because dictation is fundamentally serial (one mic, one user, one
-//! transcript at a time); the IPC layer can wrap us in an `Arc` and hand it
-//! to multiple Tauri command handlers without contention concerns.
+//! of seconds for `base`, tens of seconds for `large-v3`. It is also the
+//! biggest memory cost: whisper.cpp `read`s every weight tensor into a
+//! private host buffer (it does NOT mmap the file), so each loaded context
+//! is a full private copy of the weights. We therefore load the model once
+//! and share the context ([`ContextHandle`]) between the dictation and
+//! meeting transcribers via [`WhisperTranscription::share_context`].
 //!
 //! ## Threading
 //!
-//! `whisper.cpp` is not internally thread-safe across `whisper_full` calls
-//! on the same context. We hold the mutex across the full inference call.
-//! Inference itself is configured to use the worker pool whisper.cpp manages
+//! whisper-rs loads the context with `whisper_init_*_no_state`, so the
+//! context holds only the immutable weights + vocab; every mutable buffer
+//! (KV cache, mel, compute scratch, results) lives in a `WhisperState`.
+//! `whisper_full_with_state` only reads the context, which is why
+//! whisper.cpp's own `whisper_full_parallel` runs one state per thread on a
+//! single shared context. So two inferences on separate states may run
+//! concurrently against one context. What we still serialise is inference
+//! *per transcriber* (the [`ContextHandle`] gate) — a scheduling choice,
+//! not a safety one: it keeps a meeting's mic and system-audio sessions
+//! taking turns exactly as they did before the context was shared, while
+//! dictation (a separate transcriber with its own gate) never waits on the
+//! meeting pump (#248). Inference uses the worker pool whisper.cpp manages
 //! internally (`set_n_threads`); we default to a conservative value rather
 //! than spawning per-core threads, because dictation runs in the foreground
 //! and we don't want to starve the UI thread on small machines.
@@ -368,30 +378,88 @@ fn vad_config_from_env() -> (f32, std::time::Duration, bool) {
     )
 }
 
+/// A loaded model shared across transcribers, plus one transcriber's
+/// inference gate.
+///
+/// `ctx` is the expensive part (a private copy of every weight tensor) and
+/// is shared by every handle cloned from the same load. `gate` serialises
+/// inference *within* one transcriber — the dictation transcriber and the
+/// meeting transcriber each get their own (see
+/// [`WhisperTranscription::share_context`]), so they infer concurrently on
+/// separate `WhisperState`s while a meeting's per-source streaming sessions
+/// still take turns. The gate guards no data: whisper.cpp only reads the
+/// context during `whisper_full_with_state`; see the module doc.
+#[derive(Clone)]
+struct ContextHandle {
+    ctx: Arc<WhisperContext>,
+    gate: Arc<Mutex<()>>,
+}
+
+/// Held for the duration of one inference. Derefs to the shared context so
+/// call sites read exactly as they did when the context sat behind its own
+/// mutex.
+struct ContextGuard<'a> {
+    ctx: &'a WhisperContext,
+    _gate: std::sync::MutexGuard<'a, ()>,
+}
+
+impl std::ops::Deref for ContextGuard<'_> {
+    type Target = WhisperContext;
+
+    fn deref(&self) -> &WhisperContext {
+        self.ctx
+    }
+}
+
+impl ContextHandle {
+    fn new(ctx: WhisperContext) -> Self {
+        Self {
+            ctx: Arc::new(ctx),
+            gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    /// Same weights, fresh gate — for a second transcriber that must not
+    /// queue behind this one's inferences.
+    fn share(&self) -> Self {
+        Self {
+            ctx: Arc::clone(&self.ctx),
+            gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    /// Acquire this transcriber's inference gate. Poison is ignored: the
+    /// gate guards `()`, so a panic mid-inference leaves nothing
+    /// inconsistent behind it. Surfacing poison as an error would instead
+    /// brick the slot until restart or a model switch, now that no
+    /// per-meeting rebuild hands out fresh gates.
+    fn lock(&self) -> ContextGuard<'_> {
+        ContextGuard {
+            ctx: &self.ctx,
+            _gate: self.gate.lock().unwrap_or_else(|e| e.into_inner()),
+        }
+    }
+}
+
 /// `whisper-rs` backed implementation of [`Transcribe`].
 ///
 /// Construct with [`WhisperTranscription::new`]; the constructor loads the
 /// model (a one-time multi-second cost on cold start) and the resulting
 /// handle can transcribe many recordings in succession.
 ///
-/// The context is held behind an `Arc<Mutex<...>>` so the streaming
-/// session ([`WhisperStreamingSession`]) can hold its own clone of the
-/// handle and run inferences from a different thread (the meeting
-/// pump's blocking pool). The mutex serialises whisper.cpp calls; the
-/// `Arc` shares ownership across the legacy one-shot path and any
-/// number of concurrent streaming sessions (one per active meeting
-/// audio source).
+/// The context is held in a [`ContextHandle`] so the streaming session
+/// ([`WhisperStreamingSession`]) can hold its own clone of the handle and
+/// run inferences from a different thread (the meeting pump's blocking
+/// pool), and so a second transcriber built by [`Self::share_context`]
+/// reuses the same loaded weights instead of loading its own copy.
 pub struct WhisperTranscription {
-    /// Loaded GGUF model. Held behind an `Arc<Mutex>` because:
-    /// (a) `whisper.cpp` is not safe to call concurrently on the same
-    /// context (see module note) — the mutex enforces serialisation
-    /// across the dictation hot path and any in-flight streaming
-    /// sessions, and
-    /// (b) the streaming session needs to outlive the borrow that
-    /// produced it (the meeting pump moves it across `spawn_blocking`
-    /// boundaries) — the `Arc` handles that without `'static`-bound
-    /// trait method gymnastics.
-    ctx: Arc<Mutex<WhisperContext>>,
+    /// Loaded GGUF model plus this transcriber's inference gate. The
+    /// weights are shared with any transcriber made by
+    /// [`Self::share_context`]; the gate is not. The handle is cloned into
+    /// streaming sessions because they outlive the borrow that produced
+    /// them (the meeting pump moves them across `spawn_blocking`
+    /// boundaries).
+    ctx: ContextHandle,
     /// Where the model was loaded from. Kept for diagnostics — useful in
     /// error messages and the eventual settings panel.
     model_path: PathBuf,
@@ -546,12 +614,29 @@ impl WhisperTranscription {
         self.mic_gain_db = arc;
         self
     }
+
+    /// A second transcriber over the SAME loaded weights, with its own
+    /// inference gate and progress hook. This is how the dictation and
+    /// meeting slots get independent inference (#248) without paying for a
+    /// second private copy of the weights (whisper.cpp copies every tensor
+    /// into host memory on load — see the module doc). The live
+    /// inference-threads and mic-gain atomics are shared, not copied, so
+    /// the Settings sliders keep applying to both.
+    pub fn share_context(&self) -> Self {
+        Self {
+            ctx: self.ctx.share(),
+            model_path: self.model_path.clone(),
+            inference_threads: Arc::clone(&self.inference_threads),
+            mic_gain_db: Arc::clone(&self.mic_gain_db),
+            progress_hook: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 impl LoadedContext {
     fn into_owned(self, model_path: PathBuf) -> Result<WhisperTranscription> {
         Ok(WhisperTranscription {
-            ctx: Arc::new(Mutex::new(self.ctx)),
+            ctx: ContextHandle::new(self.ctx),
             model_path,
             inference_threads: Arc::new(std::sync::atomic::AtomicI32::new(
                 DEFAULT_INFERENCE_THREADS,
@@ -643,23 +728,15 @@ impl WhisperTranscription {
             params.set_initial_prompt(prompt);
         }
 
-        // Acquire the context for the duration of inference. A poisoned
-        // mutex here means a previous call panicked mid-inference; we
-        // surface that as a regular error rather than re-panicking, since a
-        // failed transcription should not take the whole app down.
-        //
-        // The context is wrapped in `Arc<Mutex<...>>` since #108
-        // (streaming) — `lock()` is identical to the bare `Mutex`
-        // shape, so the rest of the run_inference body is unchanged.
-        let ctx = self
-            .ctx
-            .lock()
-            .map_err(|_| anyhow!("whisper context mutex poisoned"))?;
+        // Hold this transcriber's inference gate for the duration of
+        // inference.
+        let ctx = self.ctx.lock();
 
         // `create_state` is required per-call: the state holds the decoder
         // KV cache, which must not be shared across concurrent inferences
-        // (the mutex covers concurrency, but a fresh state also avoids
-        // cross-utterance leakage of attention state).
+        // (the context itself is shared and only read during `full`), and
+        // a fresh state also avoids cross-utterance leakage of attention
+        // state.
         let mut state = ctx
             .create_state()
             .map_err(|e| anyhow!("failed to create whisper state: {e}"))?;
@@ -737,17 +814,19 @@ impl Transcribe for WhisperTranscription {
         prompt: &str,
         vad_session: Box<dyn crate::vad::VadSession>,
     ) -> Result<Box<dyn StreamingTranscribeSession>> {
-        // All meeting streaming sessions share this one Arc<Mutex<WhisperContext>>.
-        // `infer` and `finish` hold the lock across the entire inference with no early
-        // drop, so a live meeting and a finalizing meeting sharing it would freeze
-        // the live transcript behind the old `finish()` for up to 60 s. This shared
-        // Arc is therefore the load-bearing constraint that defers concurrent meetings
-        // in v1 — `SessionManager::start_manual` awaits any in-flight finalization
-        // before opening a new session. To enable concurrency, give each session (or
-        // finalization) its own WhisperContext. See learnings.md 2026-05-26
-        // "Deferred: concurrent meetings" for the resume guide.
+        // All meeting streaming sessions share this transcriber's inference
+        // gate. `infer` and `finish` hold it across the entire inference with
+        // no early drop, so a live meeting and a finalizing meeting sharing it
+        // would freeze the live transcript behind the old `finish()` for up to
+        // 60 s. The shared gate is therefore the load-bearing constraint that
+        // defers concurrent meetings in v1 — `SessionManager::start_manual`
+        // awaits any in-flight finalization before opening a new session. To
+        // enable concurrency, give each session (or finalization) its own gate
+        // via `ContextHandle::share` — no second model load needed. See
+        // learnings.md 2026-05-26 "Deferred: concurrent meetings" for the
+        // resume guide.
         let session = WhisperStreamingSession::new(
-            Arc::clone(&self.ctx),
+            self.ctx.clone(),
             format,
             prompt.to_owned(),
             SlidingWindowConfig::meeting_from_env(),
@@ -761,7 +840,7 @@ impl Transcribe for WhisperTranscription {
 /// Streaming session backed by `whisper-rs` sliding-window inference.
 ///
 /// Holds:
-/// - A clone of the parent [`WhisperTranscription`]'s `Arc<Mutex<WhisperContext>>`
+/// - A clone of the parent [`WhisperTranscription`]'s [`ContextHandle`]
 ///   so this session can run inferences from a different thread (the meeting
 ///   pump's blocking pool) without coupling to the original `&self`'s
 ///   lifetime.
@@ -783,7 +862,7 @@ pub struct WhisperStreamingSession {
     /// GGUF model. The `drain_with_inferer` test helper bypasses
     /// `ctx` entirely so this branching never reaches production code
     /// paths.
-    ctx: Option<Arc<Mutex<WhisperContext>>>,
+    ctx: Option<ContextHandle>,
     /// Capture format the pump is feeding samples in. `feed`
     /// downmixes and resamples to 16 kHz mono before pushing into
     /// the policy machine.
@@ -885,7 +964,7 @@ pub struct WhisperStreamingSession {
 
 impl WhisperStreamingSession {
     fn new(
-        ctx: Arc<Mutex<WhisperContext>>,
+        ctx: ContextHandle,
         capture_format: CaptureFormat,
         prompt: String,
         config: SlidingWindowConfig,
@@ -1290,7 +1369,7 @@ fn finish_with_boundary(
 /// here (not in `streaming.rs`) so the policy module can be tested
 /// without the `whisper` Cargo feature.
 struct WhisperInferer<'a> {
-    ctx: Arc<Mutex<WhisperContext>>,
+    ctx: ContextHandle,
     prompt: &'a str,
     inference_threads: Arc<std::sync::atomic::AtomicI32>,
     /// Persistent reference to the streaming session's reused
@@ -1363,10 +1442,7 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             params.set_initial_prompt(self.prompt);
         }
 
-        let ctx = self
-            .ctx
-            .lock()
-            .map_err(|_| anyhow!("whisper context mutex poisoned"))?;
+        let ctx = self.ctx.lock();
         // Reuse a single WhisperState across calls (#612). Pre-#612
         // this branch ran `ctx.create_state()` per call — over a
         // long session that's hundreds of init/free cycles, and
@@ -1399,9 +1475,9 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
             // failed inference's scratch PLUS the ~76 MB state we just
             // dropped) — purge it like the success path does so a burst
             // of decode failures can't accumulate dirty pages (#985
-            // review follow-up). Release the shared context mutex first
-            // so the purge never extends lock hold time for the other
-            // source's session.
+            // review follow-up). Release the inference gate first so the
+            // purge never extends hold time for the other source's
+            // session.
             drop(ctx);
             crate::alloc_tuning::force_collect();
             return Err(anyhow!("whisper streaming inference failed: {e}"));
@@ -1511,8 +1587,8 @@ impl<'a> WhisperLikeInferer for WhisperInferer<'a> {
         // footprint grows ~1 GB/min over a meeting even though RSS
         // stays bounded (learnings.md 2026-06-01). No-op unless
         // allocator purge tuning is enabled (`alloc_tuning::init`).
-        // Release the shared context mutex first so the purge never
-        // extends lock hold time for the other source's session.
+        // Release the inference gate first so the purge never extends
+        // hold time for the other source's session.
         drop(ctx);
         crate::alloc_tuning::force_collect();
 
@@ -2042,6 +2118,31 @@ mod tests {
             },
         };
         let _ = transcriber.transcribe(&audio).expect("inference");
+    }
+
+    /// `share_context` must hand back the SAME weights (no second copy)
+    /// behind an INDEPENDENT gate (dictation never queues behind the
+    /// meeting pump, #248), with the slider atomics shared.
+    #[test]
+    #[ignore = "requires HUSH_TEST_MODEL env var pointing at a real GGUF file"]
+    fn share_context_shares_weights_but_not_the_gate() {
+        let path = std::env::var("HUSH_TEST_MODEL")
+            .expect("set HUSH_TEST_MODEL to a path to a whisper GGUF file");
+        let dictation = WhisperTranscription::new(path).expect("model load");
+        let meeting = dictation.share_context();
+
+        assert!(Arc::ptr_eq(&dictation.ctx.ctx, &meeting.ctx.ctx));
+        assert!(!Arc::ptr_eq(&dictation.ctx.gate, &meeting.ctx.gate));
+        assert!(Arc::ptr_eq(
+            &dictation.inference_threads,
+            &meeting.inference_threads
+        ));
+        assert!(Arc::ptr_eq(&dictation.mic_gain_db, &meeting.mic_gain_db));
+
+        // Holding one transcriber's gate (an in-flight meeting tick) must
+        // not block the other's (a dictation stop).
+        let _meeting_tick = meeting.ctx.lock();
+        assert!(dictation.ctx.gate.try_lock().is_ok());
     }
 
     // ---- VAD-boundary windowing (#1013) -----------------------------
