@@ -382,6 +382,9 @@ pub async fn stop_dictation(
             tracing::warn!(error = ?e, "emit transcription:progress failed");
         }
     })));
+    // Trailing room for whisper, trimmed or not: a word right at the
+    // end of the buffer is dropped (see `pad_trailing_silence`).
+    pipeline::pad_trailing_silence(&mut captured);
     // Move samples into a named buffer so we can zeroize the raw PCM
     // after transcription on every return path (#879).
     let mut chunks = [std::mem::take(&mut captured.samples)];
