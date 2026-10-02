@@ -1210,3 +1210,127 @@ fn pad_trailing_silence_appends_one_second_per_channel() {
     super::pipeline::pad_trailing_silence(&mut stereo);
     assert_eq!(stereo.samples.len(), 96 + 96_000);
 }
+
+/// Dictation encoder sizing A/B (learnings.md 2026-10-02 "Dictation
+/// audio_ctx"): full window (`HUSH_DICTATION_AUDIO_CTX=0`) vs the
+/// default, over `say` clips of 1–16 s at two levels and three release
+/// timings, through the production trim → pad → transcribe order. Asserts
+/// the default never loops (the large-v3-turbo failure mode); on a model
+/// outside the allowlist the two runs must be identical. Prints timings.
+///
+/// ```sh
+/// HUSH_TEST_MODEL=… cargo test --release --lib --features whisper,diarization-onnx \
+///     dictation_audio_ctx_ab -- --ignored --nocapture --test-threads=1
+/// ```
+#[cfg(all(feature = "whisper", feature = "diarization-onnx", target_os = "macos"))]
+#[test]
+#[ignore]
+fn dictation_audio_ctx_ab() {
+    use crate::transcription::WhisperTranscription;
+    let model = std::env::var("HUSH_TEST_MODEL").unwrap();
+    let whisper = WhisperTranscription::new(&model).unwrap();
+    let vad = crate::vad::onnx::SileroVad::load().unwrap();
+    let say = |voice: &str, text: &str| -> Vec<f32> {
+        let wav = std::env::temp_dir().join(format!("hush-ab-{}.wav", std::process::id()));
+        assert!(std::process::Command::new("say")
+            .args([
+                "-v",
+                voice,
+                "-o",
+                wav.to_str().unwrap(),
+                "--data-format=LEI16@16000",
+                text
+            ])
+            .status()
+            .unwrap()
+            .success());
+        let v = hound::WavReader::open(&wav)
+            .unwrap()
+            .samples::<i16>()
+            .map(|s| s.unwrap() as f32 / 32768.0)
+            .collect();
+        let _ = std::fs::remove_file(&wav);
+        v
+    };
+    let hiss = |n: usize| -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i * 7919 % 1000) as f32 / 1000.0 - 0.5) * 0.0005)
+            .collect()
+    };
+    let texts = [
+        ("Samantha", "Yes, send it."),
+        ("Daniel", "Can you move the standup to ten thirty tomorrow?"),
+        ("Samantha", "After that we can decide whether to ship the release on Friday or wait until next week, maybe."),
+        ("Daniel", "Okay so here is the plan for this afternoon. First we review the pull requests, then we look at the memory numbers from the meeting, and after that we decide on the release."),
+        ("Karen", "The diarizer threshold is point six, the VAD boundary silence is six hundred milliseconds, and the whisper state is recreated every thirty inferences to bound the C heap. Let's write that down in learnings so nobody has to rediscover it, and then file a follow-up for the meeting memory watch."),
+    ];
+    let mut cases: Vec<(String, Vec<f32>)> = Vec::new();
+    for (voice, text) in texts {
+        let sp = say(voice, text);
+        for (level, lead, tail) in [
+            (0.3f32, 600usize, 0usize),
+            (0.3, 600, 1500),
+            (0.05, 300, 200),
+        ] {
+            let mut c = hiss(lead * 16);
+            c.extend(sp.iter().map(|s| s * level));
+            c.extend(hiss(tail * 16));
+            let label = format!("{voice} {:>3}s lvl{level} tail{tail}", sp.len() / 16_000);
+            cases.push((label, c));
+        }
+    }
+    let fmt = crate::audio::CaptureFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    };
+    let run = |samples: &Vec<f32>| -> (String, u128) {
+        let captured = CapturedAudio {
+            samples: samples.clone(),
+            format: fmt,
+        };
+        let mut c = match super::pipeline::vad_trim_dictation(&vad, &captured, 0.0) {
+            super::pipeline::DictationTrim::Trimmed(t) => t,
+            _ => captured,
+        };
+        super::pipeline::pad_trailing_silence(&mut c);
+        let t0 = std::time::Instant::now();
+        let text = whisper.transcribe(&c).unwrap();
+        (text, t0.elapsed().as_millis())
+    };
+    let (mut off_ms, mut on_ms, mut diffs) = (0u128, 0u128, 0usize);
+    for (label, c) in &cases {
+        std::env::set_var("HUSH_DICTATION_AUDIO_CTX", "0");
+        let (off, t_off) = run(c);
+        std::env::remove_var("HUSH_DICTATION_AUDIO_CTX");
+        let (on, t_on) = run(c);
+        let words: Vec<String> = on
+            .split_whitespace()
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
+            .collect();
+        assert!(
+            !words
+                .windows(3)
+                .any(|w| !w[0].is_empty() && w[0] == w[1] && w[1] == w[2]),
+            "{label}: default output loops: {on:?}"
+        );
+        off_ms += t_off;
+        on_ms += t_on;
+        let same = off.trim() == on.trim();
+        if !same {
+            diffs += 1;
+        }
+        eprintln!(
+            "{label}: off {t_off} ms / on {t_on} ms {}\n  off: {off:?}\n  on:  {on:?}",
+            if same { "SAME" } else { "DIFF" }
+        );
+    }
+    std::env::remove_var("HUSH_WHISPER_AUDIO_CTX");
+    eprintln!(
+        "TOTAL off {off_ms} ms on {on_ms} ms ({:.1}x), {diffs}/{} differ",
+        off_ms as f64 / on_ms as f64,
+        cases.len()
+    );
+}

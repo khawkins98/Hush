@@ -34,6 +34,42 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-10-02 — Dictation audio_ctx: on by default for small models only
+
+**What.** Dictation now sizes whisper's encoder window to the clip
+(`audio_ctx`) instead of always encoding 30 s. It does this by default
+only for models on an allowlist, `DICTATION_AUDIO_CTX_MODELS`
+(`ggml-small.bin`, `ggml-small-q8_0.bin`). `HUSH_DICTATION_AUDIO_CTX=0`
+turns it off; `1` forces it on for any model. Meetings still always
+use the full window (see 2026-10-01 "Encoder audio_ctx sizing": a
+shrunk window corrupts the timestamps the streaming slide trusts).
+
+**Evidence.** `dictation_audio_ctx_ab` (`#[ignore]`d, macOS, `say`
+clips) uses 5 sentences of 1–16 s, 3 voices, 2 levels and 3 release
+timings: 15 cases, run through the production trim → 1 s pad (#1022) →
+transcribe order.
+
+| Model | Full → sized (total) | Text |
+|---|---|---|
+| small-q8_0 | 21.5 s → 7.8 s (2.7×) | identical except ", maybe." → ". Maybe." ×2 |
+| small (f16) | 24.4 s → 9.5 s (2.6×) | same two punctuation changes |
+| large-v3-turbo | 99.5 s → 33.7 s (3.0×) | **3/15 loop "Maybe." up to ~50×**; 2 punctuation changes |
+
+Per clip on small-q8_0, a 1 s clip went from ~1.2 s to ~0.25 s, a
+10 s clip from ~1.6 s to ~0.6 s, and a 16 s clip from ~1.7 s to
+~1.1 s. Clips over ~30 s gain nothing.
+
+**Why an allowlist and not a fix for turbo.** The loop is a single
+repeated word, which the #1013 loop detector deliberately exempts, so
+nothing downstream catches it. Whether tiny/base/medium/.en builds
+behave is unmeasured. They stay at the full window until someone runs
+the A/B on them and adds them to the list.
+
+**Caveat.** The evidence is TTS, not real mic audio. Shrinking the
+window is a known source of occasional accuracy loss on stock models,
+so if a dictation mangles a word, `HUSH_DICTATION_AUDIO_CTX=0` is the
+first A/B to try.
+
 ## 2026-10-02 — Whisper drops a last word that ends the buffer: dictation appends 1 s of silence
 
 **Symptom.** After v0.14.0, most dictations lost their last word or two.

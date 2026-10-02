@@ -202,6 +202,42 @@ fn dynamic_audio_ctx(n_samples: usize, margin: i32, floor: i32) -> i32 {
         .clamp(1, WHISPER_FULL_AUDIO_CTX)
 }
 
+/// Dictation models whose shrunk-window output was A/B-tested clean
+/// (learnings.md 2026-10-02 "Dictation audio_ctx"). Dictation sizes the
+/// encoder to the clip by default for these only. Matched on the model
+/// file name. Add a model only after re-running
+/// `zz_dictation_audio_ctx_ab`-style evidence for it:
+/// large-v3-turbo looped "Maybe." up to ~50× on the same clips.
+const DICTATION_AUDIO_CTX_MODELS: &[&str] = &["ggml-small.bin", "ggml-small-q8_0.bin"];
+
+/// Whether dictation should size the encoder window for `model_file`.
+/// `override_` is `HUSH_DICTATION_AUDIO_CTX`: `"0"` forces it off, `"1"`
+/// forces it on for any model, anything else defers to the allowlist.
+fn dictation_audio_ctx_enabled(model_file: &str, override_: Option<&str>) -> bool {
+    match override_.map(str::trim) {
+        Some("0") => false,
+        Some("1") => true,
+        _ => DICTATION_AUDIO_CTX_MODELS.contains(&model_file),
+    }
+}
+
+/// Dictation's `audio_ctx` from raw env values: the clip-sized window
+/// when [`dictation_audio_ctx_enabled`], else `0` (full window).
+/// `margin`/`floor` are the shared `HUSH_WHISPER_AUDIO_CTX_*` knobs.
+fn resolve_dictation_audio_ctx(
+    n_samples: usize,
+    model_file: &str,
+    override_: Option<&str>,
+    margin: Option<&str>,
+    floor: Option<&str>,
+) -> i32 {
+    if dictation_audio_ctx_enabled(model_file, override_) {
+        resolve_audio_ctx(n_samples, Some("1"), margin, floor)
+    } else {
+        0
+    }
+}
+
 /// `audio_ctx` to hand `FullParams::set_audio_ctx` given the raw env
 /// values. `0` is whisper.cpp's "use the model's n_audio_ctx" sentinel,
 /// so the off path is byte-for-byte today's behaviour. Only `"1"` turns
@@ -263,6 +299,42 @@ fn audio_ctx_for(n_samples: usize) -> i32 {
             "whisper: dynamic encoder audio_ctx (HUSH_WHISPER_AUDIO_CTX=1)"
         );
     }
+    ctx
+}
+
+/// Dictation's `audio_ctx`, read per call like [`audio_ctx_for`]. The
+/// global `HUSH_WHISPER_AUDIO_CTX=1` experiment still wins; otherwise
+/// dictation sizes the window by default for allowlisted models, using
+/// the same margin/floor knobs. Meetings never take this path: the
+/// streaming slide trusts timestamps, which a shrunk window corrupts.
+fn dictation_audio_ctx_for(n_samples: usize, model_path: &std::path::Path) -> i32 {
+    let global = audio_ctx_for(n_samples);
+    if global > 0 {
+        return global;
+    }
+    let model_file = model_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    let override_ = std::env::var("HUSH_DICTATION_AUDIO_CTX").ok();
+    let margin = std::env::var("HUSH_WHISPER_AUDIO_CTX_MARGIN").ok();
+    let floor = std::env::var("HUSH_WHISPER_AUDIO_CTX_FLOOR").ok();
+    let ctx = resolve_dictation_audio_ctx(
+        n_samples,
+        model_file,
+        override_.as_deref(),
+        margin.as_deref(),
+        floor.as_deref(),
+    );
+    if ctx == 0 {
+        return 0;
+    }
+    tracing::debug!(
+        audio_ctx = ctx,
+        input_ms = n_samples / 16,
+        model = model_file,
+        "whisper: dictation encoder sized to clip"
+    );
     ctx
 }
 
@@ -838,8 +910,10 @@ impl WhisperTranscription {
         if !prompt.is_empty() {
             params.set_initial_prompt(prompt);
         }
-        // Opt-in encoder sizing; 0 (the default) keeps the full 30 s window.
-        params.set_audio_ctx(audio_ctx_for(pcm.len()));
+        // Encoder sized to the clip for A/B-tested models (2.6–2.7×
+        // faster on small, identical text bar punctuation); 0 keeps the
+        // full 30 s window for every other model.
+        params.set_audio_ctx(dictation_audio_ctx_for(pcm.len(), &self.model_path));
 
         // Hold this transcriber's inference gate for the duration of
         // inference.
@@ -1770,6 +1844,57 @@ mod tests {
         assert_eq!(super::dynamic_audio_ctx(0, 0, 0), 1);
         // A negative margin is ignored, not subtracted.
         assert_eq!(super::dynamic_audio_ctx(176_000, -100, 0), 550);
+    }
+
+    #[test]
+    fn dictation_audio_ctx_on_by_default_only_for_tested_models() {
+        let n = 10 * 16_000; // 10 s → 500 positions + margin
+        let sized = 500 + super::DEFAULT_AUDIO_CTX_MARGIN;
+        for tested in ["ggml-small-q8_0.bin", "ggml-small.bin"] {
+            assert_eq!(
+                super::resolve_dictation_audio_ctx(n, tested, None, None, None),
+                sized,
+                "{tested}"
+            );
+        }
+        // Untested (turbo loops on a shrunk window; others not measured).
+        for untested in [
+            "ggml-large-v3-turbo.bin",
+            "ggml-large-v3-turbo-q8_0.bin",
+            "ggml-base.bin",
+            "ggml-small.en-q8_0.bin",
+            "ggml-medium.bin",
+        ] {
+            assert_eq!(
+                super::resolve_dictation_audio_ctx(n, untested, None, None, None),
+                0,
+                "{untested}"
+            );
+        }
+    }
+
+    #[test]
+    fn dictation_audio_ctx_override_forces_either_way() {
+        let n = 10 * 16_000;
+        assert_eq!(
+            super::resolve_dictation_audio_ctx(n, "ggml-small.bin", Some("0"), None, None),
+            0
+        );
+        assert_eq!(
+            super::resolve_dictation_audio_ctx(n, "ggml-large-v3-turbo.bin", Some("1"), None, None),
+            500 + super::DEFAULT_AUDIO_CTX_MARGIN
+        );
+        // Anything else is "no override".
+        assert_eq!(
+            super::resolve_dictation_audio_ctx(
+                n,
+                "ggml-large-v3-turbo.bin",
+                Some("yes"),
+                None,
+                None
+            ),
+            0
+        );
     }
 
     #[test]
