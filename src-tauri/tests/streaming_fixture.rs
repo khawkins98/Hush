@@ -430,3 +430,95 @@ fn streaming_fixture_isolated_short_word_survives_boundary_commit() {
     eprintln!("short word ({word_ms} ms) finals: {joined:?}");
     assert!(joined.contains("no"), "short word lost; got {joined:?}");
 }
+
+/// Sentence-final words must survive meeting transcription (the
+/// dictation path lost them when its clip ended right on the word — see
+/// learnings.md 2026-10-02). Four `say` sentences with 2 s pauses go
+/// through a real VAD-gated streaming session in 500 ms ticks; each
+/// sentence's last word must appear in the finals. `PROBE_END_TIGHT=1`
+/// stops the meeting 150 ms after the last word (the meeting analogue of
+/// a prompt key release). macOS-only: generates audio with `say`.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn streaming_fixture_sentence_final_words_survive() {
+    let Some(model_path) = read_path_env("HUSH_TEST_MODEL", None) else {
+        return;
+    };
+    let sentences = [
+        ("We should ship the release on Friday, maybe.", "maybe"),
+        (
+            "The memory numbers looked much better this time, honestly.",
+            "honestly",
+        ),
+        ("Can you send the notes to Priya afterwards.", "afterwards"),
+        (
+            "I think that covers everything for today, thanks.",
+            "thanks",
+        ),
+    ];
+    let hiss = |n: usize| -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i * 7919 % 1000) as f32 / 1000.0 - 0.5) * 0.0005)
+            .collect()
+    };
+    let mut signal = hiss(16_000);
+    for (text, _) in sentences {
+        let wav = std::env::temp_dir().join(format!("hush-final-words-{}.wav", std::process::id()));
+        assert!(std::process::Command::new("say")
+            .args([
+                "-o",
+                wav.to_str().unwrap(),
+                "--data-format=LEI16@16000",
+                text
+            ])
+            .status()
+            .expect("run say")
+            .success());
+        let mut r = hound::WavReader::open(&wav).unwrap();
+        signal.extend(
+            r.samples::<i16>()
+                .map(|s| s.unwrap() as f32 / 32768.0 * 0.3),
+        );
+        signal.extend(hiss(32_000));
+        let _ = std::fs::remove_file(&wav);
+    }
+    if std::env::var("PROBE_END_TIGHT").is_ok() {
+        signal.truncate(signal.len() - 32_000 + 2_400);
+    }
+    let transcriber = WhisperTranscription::new(&model_path).expect("load whisper model");
+    let vad = hush_lib::vad::onnx::SileroVad::load().expect("load bundled Silero VAD");
+    use hush_lib::vad::VadModel as _;
+    let mut session = transcriber
+        .start_stream(
+            CaptureFormat {
+                sample_rate: 16_000,
+                channels: 1,
+            },
+            "",
+            vad.new_session(),
+        )
+        .expect("open streaming session");
+    let mut finals = Vec::new();
+    for c in signal.chunks(8_000) {
+        session.feed(c).expect("feed");
+        finals.extend(
+            session
+                .drain()
+                .expect("drain")
+                .into_iter()
+                .filter(|u| u.is_final),
+        );
+    }
+    finals.extend(session.finish().expect("finish"));
+    let all = finals
+        .iter()
+        .map(|u| u.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    eprintln!("finals: {all}");
+    let lower = all.to_lowercase();
+    for (_, word) in sentences {
+        assert!(lower.contains(word), "final word {word:?} lost: {all}");
+    }
+}

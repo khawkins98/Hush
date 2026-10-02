@@ -57,9 +57,13 @@ zeros before every dictation transcription, trimmed or not. The
 regression test is `last_word_survives_prompt_release` (`#[ignore]`d,
 macOS, needs `HUSH_TEST_MODEL`). It generates the clip with `say`,
 because the JFK fixture does not reproduce the bug: its reverb tail
-gives whisper room. The meeting streaming path was not checked for the
-same effect. A VAD-boundary commit cuts 400 ms after speech in the
-same way, so check there next if meeting finals drop words.
+gives whisper room. **Meetings are not affected** (checked 2026-10-02). A VAD-boundary
+commit cuts at last speech + 200 ms. However, the stream keeps going,
+the VAD's own decay leaves room, and `finish()` pads short tails.
+`streaming_fixture_sentence_final_words_survive` (4 `say` sentences)
+kept 28/28 sentence-final words over 7 runs. Those runs covered
+small-q8_0 and large-v3-turbo, two levels, boundary windowing on and
+off, and the meeting stopping 150 ms after the last word.
 
 ## 2026-10-01 — whisper.cpp does NOT mmap the model: one shared `WhisperContext` for both slots; #636 meeting-stop rebuild removed
 
