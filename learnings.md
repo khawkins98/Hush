@@ -55,6 +55,12 @@ transcribe order.
 | small (f16) | 24.4 s → 9.5 s (2.6×) | same two punctuation changes |
 | large-v3-turbo | 99.5 s → 33.7 s (3.0×) | **3/15 loop "Maybe." up to ~50×**; 2 punctuation changes |
 
+A re-run with every clip also decoded under a vocabulary initial
+prompt (production passes the personal dictionary as one) gave 30
+cases. small-q8_0 was 2.5× faster with 4/30 differing, all punctuation
+(", maybe" → ". Maybe" twice; "Okay so" → "Okay, so" twice with the
+prompt). large-v3-turbo on the default was untouched (0/30).
+
 Per clip on small-q8_0, a 1 s clip went from ~1.2 s to ~0.25 s, a
 10 s clip from ~1.6 s to ~0.6 s, and a 16 s clip from ~1.7 s to
 ~1.1 s. Clips over ~30 s gain nothing.

@@ -206,9 +206,9 @@ fn dynamic_audio_ctx(n_samples: usize, margin: i32, floor: i32) -> i32 {
 /// (learnings.md 2026-10-02 "Dictation audio_ctx"). Dictation sizes the
 /// encoder to the clip by default for these only. Matched on the model
 /// file name. Add a model only after re-running
-/// `zz_dictation_audio_ctx_ab`-style evidence for it:
+/// the `dictation_audio_ctx_ab` evidence for it:
 /// large-v3-turbo looped "Maybe." up to ~50× on the same clips.
-const DICTATION_AUDIO_CTX_MODELS: &[&str] = &["ggml-small.bin", "ggml-small-q8_0.bin"];
+pub(crate) const DICTATION_AUDIO_CTX_MODELS: &[&str] = &["ggml-small.bin", "ggml-small-q8_0.bin"];
 
 /// Whether dictation should size the encoder window for `model_file`.
 /// `override_` is `HUSH_DICTATION_AUDIO_CTX`: `"0"` forces it off, `"1"`

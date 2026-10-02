@@ -1216,7 +1216,9 @@ fn pad_trailing_silence_appends_one_second_per_channel() {
 /// default, over `say` clips of 1–16 s at two levels and three release
 /// timings, through the production trim → pad → transcribe order. Asserts
 /// the default never loops (the large-v3-turbo failure mode); on a model
-/// outside the allowlist the two runs must be identical. Prints timings.
+/// outside the allowlist the two runs must be identical. Each clip runs
+/// with no prompt and with a vocabulary prompt (production passes the
+/// personal dictionary as one). Prints timings.
 ///
 /// ```sh
 /// HUSH_TEST_MODEL=… cargo test --release --lib --features whisper,diarization-onnx \
@@ -1283,7 +1285,11 @@ fn dictation_audio_ctx_ab() {
         sample_rate: 16_000,
         channels: 1,
     };
-    let run = |samples: &Vec<f32>| -> (String, u128) {
+    // Real dictation passes the personal dictionary as an initial
+    // prompt; measure with and without one.
+    const VOCAB_PROMPT: &str =
+        "Hush, Tauri, whisper.cpp, diarizer, Silero VAD, Priya, learnings.md.";
+    let run = |samples: &Vec<f32>, prompt: &str| -> (String, u128) {
         let captured = CapturedAudio {
             samples: samples.clone(),
             format: fmt,
@@ -1294,15 +1300,31 @@ fn dictation_audio_ctx_ab() {
         };
         super::pipeline::pad_trailing_silence(&mut c);
         let t0 = std::time::Instant::now();
-        let text = whisper.transcribe(&c).unwrap();
+        let text = whisper.transcribe_with_prompt(&c, prompt).unwrap();
         (text, t0.elapsed().as_millis())
     };
     let (mut off_ms, mut on_ms, mut diffs) = (0u128, 0u128, 0usize);
-    for (label, c) in &cases {
+    let model_file = std::path::Path::new(&model)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("")
+        .to_owned();
+    let allowlisted =
+        crate::transcription::whisper::DICTATION_AUDIO_CTX_MODELS.contains(&model_file.as_str());
+    let cases: Vec<(String, &Vec<f32>, &str)> = cases
+        .iter()
+        .flat_map(|(l, c)| {
+            [
+                (format!("{l} no-prompt"), c, ""),
+                (format!("{l} prompt"), c, VOCAB_PROMPT),
+            ]
+        })
+        .collect();
+    for (label, c, prompt) in &cases {
         std::env::set_var("HUSH_DICTATION_AUDIO_CTX", "0");
-        let (off, t_off) = run(c);
+        let (off, t_off) = run(c, prompt);
         std::env::remove_var("HUSH_DICTATION_AUDIO_CTX");
-        let (on, t_on) = run(c);
+        let (on, t_on) = run(c, prompt);
         let words: Vec<String> = on
             .split_whitespace()
             .map(|w| {
@@ -1327,10 +1349,16 @@ fn dictation_audio_ctx_ab() {
             if same { "SAME" } else { "DIFF" }
         );
     }
-    std::env::remove_var("HUSH_WHISPER_AUDIO_CTX");
+    std::env::remove_var("HUSH_DICTATION_AUDIO_CTX");
     eprintln!(
         "TOTAL off {off_ms} ms on {on_ms} ms ({:.1}x), {diffs}/{} differ",
         off_ms as f64 / on_ms as f64,
         cases.len()
     );
+    if !allowlisted {
+        assert_eq!(
+            diffs, 0,
+            "{model_file} is not allowlisted, so its output must be unchanged"
+        );
+    }
 }
