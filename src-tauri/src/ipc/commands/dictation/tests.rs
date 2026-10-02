@@ -1118,3 +1118,95 @@ fn vad_trim_real_audio() {
     }
     eprintln!("Silero cost for 60 s of audio: {:?}", t0.elapsed());
 }
+
+/// Whisper drops a final word that sits at the very end of its input
+/// (no trailing room). Dictation must append trailing silence so a
+/// prompt key release doesn't eat the last word. Reproduces with a
+/// clean TTS clip ending in "maybe." cut within 300 ms of the word; the
+/// JFK fixture does not reproduce it (its reverb tail gives whisper
+/// room). macOS-only: generates the clip with `say`.
+///
+/// ```sh
+/// HUSH_TEST_MODEL=… cargo test --release --lib --features whisper,diarization-onnx \
+///     last_word_survives_prompt_release -- --ignored --nocapture
+/// ```
+#[cfg(all(feature = "whisper", feature = "diarization-onnx", target_os = "macos"))]
+#[test]
+#[ignore]
+fn last_word_survives_prompt_release() {
+    use crate::transcription::WhisperTranscription;
+    let Ok(model) = std::env::var("HUSH_TEST_MODEL") else {
+        eprintln!("skip: HUSH_TEST_MODEL not set");
+        return;
+    };
+    let wav = std::env::temp_dir().join(format!("hush-last-word-{}.wav", std::process::id()));
+    let status = std::process::Command::new("say")
+        .args(["-o", wav.to_str().unwrap(), "--data-format=LEI16@16000"])
+        .arg(
+            "After that we can decide whether to ship the release on Friday \
+             or wait until next week, maybe.",
+        )
+        .status()
+        .expect("run say");
+    assert!(status.success());
+    let speech: Vec<f32> = hound::WavReader::open(&wav)
+        .unwrap()
+        .samples::<i16>()
+        .map(|s| s.unwrap() as f32 / 32768.0)
+        .collect();
+    let _ = std::fs::remove_file(&wav);
+    let fmt = crate::audio::CaptureFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    };
+    let whisper = WhisperTranscription::new(&model).unwrap();
+    // `say` output ends where the voice ends: append only `tail_ms` of
+    // near-silence, the shape of a press released right after speaking.
+    let mut bare_losses = 0;
+    for tail_ms in [0usize, 150, 300] {
+        let mut samples = speech.clone();
+        samples
+            .extend((0..tail_ms * 16).map(|i| ((i * 7919 % 1000) as f32 / 1000.0 - 0.5) * 0.0005));
+        let mut captured = CapturedAudio {
+            samples,
+            format: fmt,
+        };
+        let bare = whisper.transcribe(&captured).unwrap();
+        if !bare.to_lowercase().contains("maybe") {
+            bare_losses += 1;
+        }
+        super::pipeline::pad_trailing_silence(&mut captured);
+        let padded = whisper.transcribe(&captured).unwrap();
+        eprintln!("tail {tail_ms} ms\n  bare:   {bare:?}\n  padded: {padded:?}");
+        assert!(
+            padded.to_lowercase().contains("maybe"),
+            "tail {tail_ms} ms: last word lost with trailing silence: {padded:?}"
+        );
+    }
+    eprintln!("bare clips that lost the last word: {bare_losses}/3");
+}
+
+#[test]
+fn pad_trailing_silence_appends_one_second_per_channel() {
+    let mut mono = CapturedAudio {
+        samples: vec![0.5; 100],
+        format: crate::audio::CaptureFormat {
+            sample_rate: 16_000,
+            channels: 1,
+        },
+    };
+    super::pipeline::pad_trailing_silence(&mut mono);
+    assert_eq!(mono.samples.len(), 100 + 16_000);
+    assert!(mono.samples[..100].iter().all(|s| *s == 0.5));
+    assert!(mono.samples[100..].iter().all(|s| *s == 0.0));
+
+    let mut stereo = CapturedAudio {
+        samples: vec![0.5; 96],
+        format: crate::audio::CaptureFormat {
+            sample_rate: 48_000,
+            channels: 2,
+        },
+    };
+    super::pipeline::pad_trailing_silence(&mut stereo);
+    assert_eq!(stereo.samples.len(), 96 + 96_000);
+}

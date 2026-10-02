@@ -34,6 +34,37 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-10-02 — Whisper drops a last word that ends the buffer: dictation appends 1 s of silence
+
+**Symptom.** After v0.14.0, most dictations lost their last word or two.
+
+**Cause.** Whisper drops a final word that sits right at the end of its
+input. A clean TTS clip ending "…next week, maybe." and cut within
+300 ms of the word lost "maybe" in 9/9 runs on small-q8_0, and 3/3 on
+large-v3-turbo. That held with and without the VAD trim. Appending 1 s
+of zeros recovered it every time; appending real room tone did no better.
+
+**Why it showed up now.** The #1013 dictation VAD trim (on by default
+since v0.14.0) cuts each press to the last speech frame + 400 ms.
+Before the trim, the user's natural pause before releasing the key gave
+whisper that room. The trim removed it, so a short tail became the
+common case. The trim itself was correct: in every probe, the speech
+region it kept extended to the true end of speech. The logs looked
+damning (3 s cut per press) but that was trailing silence, not speech.
+
+**Fix.** `dictation::pipeline::pad_trailing_silence` appends 1 s of
+zeros before every dictation transcription, trimmed or not. The
+regression test is `last_word_survives_prompt_release` (`#[ignore]`d,
+macOS, needs `HUSH_TEST_MODEL`). It generates the clip with `say`,
+because the JFK fixture does not reproduce the bug: its reverb tail
+gives whisper room. **Meetings are not affected** (checked 2026-10-02). A VAD-boundary
+commit cuts at last speech + 200 ms. However, the stream keeps going,
+the VAD's own decay leaves room, and `finish()` pads short tails.
+`streaming_fixture_sentence_final_words_survive` (4 `say` sentences)
+kept 28/28 sentence-final words over 7 runs. Those runs covered
+small-q8_0 and large-v3-turbo, two levels, boundary windowing on and
+off, and the meeting stopping 150 ms after the last word.
+
 ## 2026-10-01 — whisper.cpp does NOT mmap the model: one shared `WhisperContext` for both slots; #636 meeting-stop rebuild removed
 
 **Correction.** Three earlier entries (2026-04-30 #248, 2026-05-06 #561,

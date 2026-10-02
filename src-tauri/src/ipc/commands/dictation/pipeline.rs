@@ -161,6 +161,25 @@ pub(super) fn vad_trim_dictation(
     outcome
 }
 
+/// Silence appended after every dictation clip before transcription.
+pub(super) const TRAILING_SILENCE_MS: u32 = 1_000;
+
+/// Append [`TRAILING_SILENCE_MS`] of digital silence to a clip.
+///
+/// Whisper drops a final word that sits at the very end of its input:
+/// with the clip ending within ~300 ms of the last word, a clean TTS
+/// "…next week, maybe." lost "maybe" in 9/9 runs (small-q8_0), and 1 s
+/// of appended zeros recovered it in 9/9. A prompt key release produces
+/// exactly that shape, and the #1013 VAD trim made it the common case by
+/// cutting the user's natural trailing pause down to its 400 ms tail pad.
+/// Zeros are enough — real room tone made no difference in the A/B.
+pub(super) fn pad_trailing_silence(captured: &mut crate::audio::CapturedAudio) {
+    let per_second =
+        captured.format.sample_rate as usize * usize::from(captured.format.channels.max(1));
+    let extra = per_second * TRAILING_SILENCE_MS as usize / 1000;
+    captured.samples.resize(captured.samples.len() + extra, 0.0);
+}
+
 /// Body of `start_dictation`: pre-flight transcriber-loaded check,
 /// foreground snapshot, mic-permission probe, and audio-backend
 /// start. The `start_dictation` command shell in `mod.rs` is a thin
