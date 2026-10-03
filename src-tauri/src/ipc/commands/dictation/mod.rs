@@ -401,14 +401,20 @@ pub async fn stop_dictation(
     let audio_ms = pipeline::clip_ms(&captured);
     let expected_ms =
         crate::transcription::estimate::expected_ms_for(&cost_models, &model_file, audio_ms);
-    if let Err(e) = app.emit(
-        crate::events::names::TRANSCRIPTION_ESTIMATE,
-        crate::transcription::estimate::EstimatePayload {
-            audio_ms,
-            expected_ms,
-        },
-    ) {
-        tracing::warn!(error = ?e, "emit transcription:estimate failed");
+    // Only the two windows that render progress: every emit is a
+    // WKWebView evaluateJavaScript call per listening window (#986).
+    let payload = crate::transcription::estimate::EstimatePayload {
+        audio_ms,
+        expected_ms,
+    };
+    for window in ["hud", "main"] {
+        if let Err(e) = app.emit_to(
+            window,
+            crate::events::names::TRANSCRIPTION_ESTIMATE,
+            payload,
+        ) {
+            tracing::warn!(error = ?e, window, "emit transcription:estimate failed");
+        }
     }
     let inference_started = std::time::Instant::now();
     // Move samples into a named buffer so we can zeroize the raw PCM

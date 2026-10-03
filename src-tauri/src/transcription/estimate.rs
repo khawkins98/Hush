@@ -51,6 +51,10 @@ pub const MAX_FIXED_MS: f64 = 10_000.0;
 /// dominates and the rate they imply is meaningless.
 pub const MIN_LEARN_AUDIO_S: f64 = 0.5;
 
+/// A learning sample is clamped to within this factor of the current
+/// prediction (see [`CostStats::observe`]).
+pub const OUTLIER_FACTOR: f64 = 3.0;
+
 /// Exponentially-decayed sufficient statistics for a least-squares
 /// line through (audio seconds, elapsed ms). Persisted as-is.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -91,12 +95,22 @@ impl Coefficients {
 impl CostStats {
     /// Fold one finished run into the stats. Unusable samples (too
     /// short, non-finite, zero time) leave the stats unchanged.
+    ///
+    /// Once there is history, a sample is clamped to within
+    /// [`OUTLIER_FACTOR`]× of the current prediction first. Wall time
+    /// includes waiting on the shared WhisperContext (#1018), so one
+    /// dictation stalled behind a meeting tick could otherwise read as a
+    /// 300 s run and skew the estimate for ~25 presses (#1025 red-team).
     #[must_use]
     pub fn observe(self, audio_ms: u64, elapsed_ms: u64) -> Self {
         let x = audio_ms as f64 / 1000.0;
-        let y = elapsed_ms as f64;
+        let mut y = elapsed_ms as f64;
         if x < MIN_LEARN_AUDIO_S || y <= 0.0 || !x.is_finite() || !y.is_finite() {
             return self;
+        }
+        if self.w > f64::EPSILON {
+            let predicted = self.coefficients().expected_ms(audio_ms) as f64;
+            y = y.clamp(predicted / OUTLIER_FACTOR, predicted * OUTLIER_FACTOR);
         }
         Self {
             w: self.w * DECAY + 1.0,
@@ -261,7 +275,17 @@ mod tests {
     fn negative_slope_is_clamped_to_minimum() {
         // Longer clips came back faster (noise) — never predict a
         // negative rate.
-        let c = learn(&[(2_000, 3_000), (30_000, 1_000)]).coefficients();
+        // Sums built directly: `observe` would clamp the second sample
+        // as an outlier, and this test is about the fit's own guard.
+        let (x1, y1, x2, y2) = (2.0, 3_000.0, 30.0, 1_000.0);
+        let c = CostStats {
+            w: 2.0,
+            sx: x1 + x2,
+            sy: y1 + y2,
+            sxx: x1 * x1 + x2 * x2,
+            sxy: x1 * y1 + x2 * y2,
+        }
+        .coefficients();
         assert_eq!(c.per_audio_s_ms, MIN_PER_AUDIO_S_MS);
         assert!(c.fixed_ms >= 0.0);
     }
@@ -289,5 +313,27 @@ mod tests {
     fn garbage_settings_value_parses_as_empty() {
         assert!(parse_cost_models(Some("not json")).is_empty());
         assert!(parse_cost_models(None).is_empty());
+    }
+
+    #[test]
+    fn one_stalled_run_does_not_poison_the_estimate() {
+        let mut stats = CostStats::default();
+        for _ in 0..12 {
+            stats = stats.observe(10_000, 800);
+        }
+        let before = stats.coefficients().expected_ms(10_000);
+        // A dictation that waited 300 s behind a meeting tick.
+        stats = stats.observe(10_000, 300_000);
+        let after = stats.coefficients().expected_ms(10_000);
+        assert!(after <= before * 2, "before {before} after {after}");
+        // And it recovers within a few normal runs.
+        for _ in 0..3 {
+            stats = stats.observe(10_000, 800);
+        }
+        let recovered = stats.coefficients().expected_ms(10_000);
+        assert!(
+            recovered <= before + before / 2,
+            "before {before} recovered {recovered}"
+        );
     }
 }

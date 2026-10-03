@@ -185,10 +185,6 @@
   let transcriptionEstimate = $state<TranscriptionEstimatePayload | null>(null);
   let estimateReceivedAt = $state<number | null>(null);
   let progressFraction = $state(0);
-  // Whether the page is visible. The backend hides the HUD on a failed
-  // transcription without sending another `hud:state`, so the progress
-  // interval also keys off visibility rather than state alone.
-  let pageVisible = $state(true);
   let showProgressBar = $derived(
     hudState === "processing" && !isShortRun(transcriptionEstimate),
   );
@@ -238,12 +234,16 @@
   });
 
   // Estimated-progress ticker: runs only while the bar is on screen.
-  // Stops on done (hudState changes), on hide, and after a generous cap
-  // so a lost completion signal can't leave it ticking forever.
+  // Stops on done (hudState changes) and after a generous cap, which
+  // also bounds the failed-transcription case where the backend hides
+  // the HUD without another `hud:state`. Deliberately NOT gated on
+  // `document.visibilityState`: this window mounts hidden and WebKit's
+  // page-visibility state is unreliable for it (see the hudState and
+  // elapsed-timer notes), so a visibility gate could freeze the bar.
   $effect(() => {
     const est = transcriptionEstimate;
     const startedAt = estimateReceivedAt;
-    if (!showProgressBar || !pageVisible || est === null || startedAt === null) return;
+    if (!showProgressBar || est === null || startedAt === null) return;
     const capMs = Math.max(60_000, est.expectedMs * 6);
     let id: ReturnType<typeof setInterval> | undefined;
     const tick = () => {
@@ -255,10 +255,6 @@
     id = setInterval(tick, ESTIMATE_TICK_MS);
     return () => clearInterval(id);
   });
-
-  function onVisibilityChange() {
-    pageVisible = document.visibilityState !== "hidden";
-  }
 
   let unlistenState: UnlistenFn | null = null;
   let unlistenProgress: UnlistenFn | null = null;
@@ -314,8 +310,6 @@
             pendingEndsAtMs = null;
           }
           if (next === "done") {
-            // The text is on the clipboard: the run is really finished.
-            progressFraction = 1;
             // Auto-dismiss after 1.5 s so the user sees "Copied!" before
             // the HUD disappears (#669). A new recording cancels this.
             hideAfter(1500);
@@ -377,9 +371,6 @@
       },
     );
 
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    onVisibilityChange();
-
     unlistenProgress = await listen<number>(
       Events.TranscriptionProgress,
       (event) => {
@@ -414,7 +405,6 @@
     unlistenProgress = null;
     unlistenEstimate?.();
     unlistenEstimate = null;
-    document.removeEventListener("visibilitychange", onVisibilityChange);
     unlistenCallEndCancelled?.();
     unlistenCallEndCancelled = null;
     unlistenCallMayHaveEnded?.();
