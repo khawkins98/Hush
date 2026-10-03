@@ -25,7 +25,13 @@
     listenForStatusLineChanges,
     readStatusLineEnabled,
   } from "./status-line";
-  import type { MeetingSessionDetail } from "./types";
+  import {
+    ESTIMATE_TICK_MS,
+    displayedFraction,
+    isShortRun,
+    transcribingLabel,
+  } from "./transcription-estimate";
+  import type { MeetingSessionDetail, TranscriptionEstimatePayload } from "./types";
 
   type Props = {
     recording: boolean;
@@ -98,12 +104,38 @@
   // the open main window updates without reload.
   let statusLineEnabled = $state(false);
   let unlistenStatusLine: UnlistenFn | null = null;
-  // Transcription progress 0–100 (#566). Non-null only while
-  // `transcribing` is true and the backend has fired at least one
-  // progress tick. Resets when `recording` flips back to true so
-  // back-to-back dictations each start with a clean bar.
+  // whisper.cpp's progress 0–100 (#566) — only a floor under the
+  // estimated bar, since it ticks once per 30 s window. Both reset
+  // when `recording` flips back to true so back-to-back dictations
+  // each start with a clean bar.
   let transcriptionProgress = $state<number | null>(null);
   let unlistenProgress: UnlistenFn | null = null;
+  // One-per-dictation estimate (`transcription:estimate`), animated
+  // locally — same model as the HUD, see lib/transcription-estimate.ts.
+  let transcriptionEstimate = $state<TranscriptionEstimatePayload | null>(null);
+  let estimateReceivedAt = $state<number | null>(null);
+  let progressFraction = $state(0);
+  let unlistenEstimate: UnlistenFn | null = null;
+  let showDeterminate = $derived(transcribing && !isShortRun(transcriptionEstimate));
+
+  // 10 Hz ticker, alive only while the determinate bar is showing; the
+  // effect tears it down when transcription finishes. Capped so a lost
+  // completion can't leave it running.
+  $effect(() => {
+    const est = transcriptionEstimate;
+    const startedAt = estimateReceivedAt;
+    if (!showDeterminate || est === null || startedAt === null) return;
+    const capMs = Math.max(60_000, est.expectedMs * 6);
+    let id: ReturnType<typeof setInterval> | undefined;
+    const tick = () => {
+      const elapsed = Date.now() - startedAt;
+      progressFraction = displayedFraction(elapsed, est.expectedMs, transcriptionProgress);
+      if (elapsed > capMs && id !== undefined) clearInterval(id);
+    };
+    tick();
+    id = setInterval(tick, ESTIMATE_TICK_MS);
+    return () => clearInterval(id);
+  });
 
   // "Copied!" confirmation flash (#928). Mirrors the HUD's done state
   // by subscribing to the same `hud:state` events. Reverts to null
@@ -145,6 +177,9 @@
           ? formatElapsed(Date.now() - effectiveStartMs)
           : ELAPSED_ZERO;
       transcriptionProgress = null;
+      transcriptionEstimate = null;
+      estimateReceivedAt = null;
+      progressFraction = 0;
       // Reset the "Copied!" flash when a new recording starts.
       if (doneTimer !== null) {
         clearTimeout(doneTimer);
@@ -178,6 +213,14 @@
     unlistenProgress = await listen<number>(Events.TranscriptionProgress, (event) => {
       transcriptionProgress = event.payload;
     });
+    unlistenEstimate = await listen<TranscriptionEstimatePayload>(
+      Events.TranscriptionEstimate,
+      (event) => {
+        transcriptionEstimate = event.payload;
+        estimateReceivedAt = Date.now();
+        progressFraction = 0;
+      },
+    );
     // Mirror the HUD's "done" state (#928): subscribe to the same
     // `hud:state` backend events so we can flash "Copied!" when the
     // clipboard write completes, then self-dismiss after ~1.5 s.
@@ -198,6 +241,8 @@
     unlistenStatusLine = null;
     unlistenProgress?.();
     unlistenProgress = null;
+    unlistenEstimate?.();
+    unlistenEstimate = null;
     unlistenHudState?.();
     unlistenHudState = null;
     if (doneTimer !== null) {
@@ -235,14 +280,15 @@
   </div>
   {#if transcribing}
     <!--
-      Stage 1 (loading model): indeterminate sweep animation.
-      Stage 2 (decoding): determinate fill driven by whisper.cpp progress.
+      Indeterminate sweep until the estimate arrives, and for runs too
+      short to be worth a bar; otherwise the locally-animated estimate.
     -->
     <div class="transcription-progress-bar" aria-hidden="true">
-      {#if transcriptionProgress !== null}
+      {#if showDeterminate}
         <div
           class="transcription-progress-fill"
-          style="width: {transcriptionProgress}%"
+          data-testid="record-progress"
+          style="width: {progressFraction * 100}%"
         ></div>
       {:else}
         <div class="transcription-progress-indeterminate"></div>
@@ -352,7 +398,7 @@
       {/if}
       {meetingOnlyActive ? "— press Stop" : "— release hotkey or press Stop"}
     {:else if transcribing}
-      {transcriptionProgress !== null ? "Transcribing… (2 of 2)" : "Loading model… (1 of 2)"}
+      {transcribingLabel(transcriptionEstimate)}
     {:else if busy}
       Processing…
     {:else if hudDone}
@@ -694,7 +740,8 @@
     height: 100%;
     background: var(--accent, #f49e17);
     border-radius: 2px;
-    transition: width 0.3s ease;
+    /* One tick (ESTIMATE_TICK_MS) so 10 Hz updates glide. */
+    transition: width 100ms linear;
   }
   .transcription-progress-indeterminate {
     height: 100%;

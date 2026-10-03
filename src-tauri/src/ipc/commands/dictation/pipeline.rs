@@ -207,6 +207,66 @@ pub(super) fn collapse_dictation_loops(text: &str) -> String {
     }
 }
 
+/// Length in ms of a captured clip. `checked_div` guards a degenerate
+/// zero-rate format so it can't panic the dictation hot path.
+pub(super) fn clip_ms(captured: &crate::audio::CapturedAudio) -> u64 {
+    let per_second =
+        u64::from(captured.format.sample_rate) * u64::from(captured.format.channels.max(1));
+    (captured.samples.len() as u64)
+        .saturating_mul(1000)
+        .checked_div(per_second)
+        .unwrap_or(0)
+}
+
+/// Load the learned transcription-timing stats (see
+/// [`crate::transcription::estimate`]). Best-effort: a read error just
+/// means the estimate uses defaults this time.
+pub(super) async fn load_cost_models(
+    state: &AppState,
+) -> crate::transcription::estimate::CostModels {
+    let raw = match state
+        .settings
+        .get(crate::settings::keys::DICTATION_COST_MODEL)
+        .await
+    {
+        Ok(raw) => raw,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load dictation cost model; using defaults");
+            None
+        }
+    };
+    crate::transcription::estimate::parse_cost_models(raw.as_deref())
+}
+
+/// Fold one finished dictation's timing into the persisted stats.
+/// Fire-and-forget like the history insert: a lost sample only makes
+/// the next progress bar slightly less accurate.
+pub(super) fn spawn_record_cost(
+    settings: Arc<dyn crate::settings::SettingsRepository>,
+    models: crate::transcription::estimate::CostModels,
+    model: String,
+    audio_ms: u64,
+    elapsed_ms: u64,
+) {
+    tauri::async_runtime::spawn(async move {
+        let updated =
+            crate::transcription::estimate::record_run(models, &model, audio_ms, elapsed_ms);
+        let json = match serde_json::to_string(&updated) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to encode dictation cost model");
+                return;
+            }
+        };
+        if let Err(e) = settings
+            .set(crate::settings::keys::DICTATION_COST_MODEL, &json)
+            .await
+        {
+            tracing::warn!(error = ?e, "failed to persist dictation cost model");
+        }
+    });
+}
+
 /// Body of `start_dictation`: pre-flight transcriber-loaded check,
 /// foreground snapshot, mic-permission probe, and audio-backend
 /// start. The `start_dictation` command shell in `mod.rs` is a thin

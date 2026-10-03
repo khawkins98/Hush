@@ -183,6 +183,13 @@ pub mod keys {
     ///
     /// Absent / unrecognised values default to `"american"`.
     pub const LANGUAGE_STYLE: &str = "language_style";
+
+    /// Learned dictation transcription timing, used for the HUD's
+    /// estimated progress bar. JSON object keyed by model file name,
+    /// each value a [`crate::transcription::estimate::CostStats`].
+    /// Written after every successful dictation; absent or unreadable
+    /// means "use the defaults and relearn".
+    pub const DICTATION_COST_MODEL: &str = "dictation_cost_model";
 }
 
 /// Repository trait at the storage boundary.

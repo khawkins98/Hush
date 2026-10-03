@@ -256,7 +256,9 @@ pub async fn stop_dictation(
     tracing::info!(
         duration_ms = ?duration_ms,
         model = transcriber.model_label(),
-        "dictation: recording stopped (1/3 — loading model)"
+        // The model is already resident (shared WhisperContext, #1018);
+        // this step is VAD trim + prompt prep, not a model load.
+        "dictation: recording stopped (1/3 — preparing audio)"
     );
 
     // Short-press shortcut (#197): when the recording is too brief
@@ -370,8 +372,10 @@ pub async fn stop_dictation(
     // surfaced normally to the frontend's structured-error
     // renderer.
     //
-    // Register a progress hook so the HUD can show "Processing… N%"
-    // while whisper.cpp runs (#566). Cleared immediately after
+    // Register a progress hook (#566). whisper.cpp only reports per
+    // 30 s window, so on its own it's too coarse for a bar; the
+    // frontend uses it as a floor under the estimate emitted below
+    // (long clips span several windows). Cleared immediately after
     // inference so the Arc<AppHandle> isn't held longer than needed.
     let app_clone = app.clone();
     transcriber.set_progress_hook(Some(Arc::new(move |progress: i32| {
@@ -385,6 +389,34 @@ pub async fn stop_dictation(
     // Trailing room for whisper, trimmed or not: a word right at the
     // end of the buffer is dropped (see `pad_trailing_silence`).
     pipeline::pad_trailing_silence(&mut captured);
+
+    // One estimate event per dictation; the HUD and the main window
+    // animate their progress bars locally from it. whisper.cpp's own
+    // progress only ticks per 30 s window, so a typical dictation went
+    // 0 % → 100 % with nothing between. One emit, not a stream: every
+    // emit is a WKWebView evaluateJavaScript call that leaks (#986).
+    // `audio_ms` is the clip whisper actually sees (trimmed + padded).
+    let model_file = transcriber.model_label();
+    let cost_models = pipeline::load_cost_models(&state).await;
+    let audio_ms = pipeline::clip_ms(&captured);
+    let expected_ms =
+        crate::transcription::estimate::expected_ms_for(&cost_models, &model_file, audio_ms);
+    // Only the two windows that render progress: every emit is a
+    // WKWebView evaluateJavaScript call per listening window (#986).
+    let payload = crate::transcription::estimate::EstimatePayload {
+        audio_ms,
+        expected_ms,
+    };
+    for window in ["hud", "main"] {
+        if let Err(e) = app.emit_to(
+            window,
+            crate::events::names::TRANSCRIPTION_ESTIMATE,
+            payload,
+        ) {
+            tracing::warn!(error = ?e, window, "emit transcription:estimate failed");
+        }
+    }
+    let inference_started = std::time::Instant::now();
     // Move samples into a named buffer so we can zeroize the raw PCM
     // after transcription on every return path (#879).
     let mut chunks = [std::mem::take(&mut captured.samples)];
@@ -405,6 +437,21 @@ pub async fn stop_dictation(
     // Inference complete — unhook the progress callback so the
     // Arc<AppHandle> is released promptly.
     transcriber.set_progress_hook(None);
+    let elapsed_ms = u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    tracing::info!(
+        audio_ms,
+        expected_ms,
+        elapsed_ms,
+        model = %model_file,
+        "dictation: transcription timing (estimate vs actual)"
+    );
+    pipeline::spawn_record_cost(
+        Arc::clone(&state.settings),
+        cost_models,
+        model_file,
+        audio_ms,
+        elapsed_ms,
+    );
     // Concatenate the final utterances. The default impl emits
     // exactly one; a future streaming backend may emit several.
     // Skip non-final utterances — those are partial revisions

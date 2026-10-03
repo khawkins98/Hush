@@ -14,7 +14,7 @@
 // snapshot index you can compare across branches or releases.
 
 import { expect, test } from "@playwright/test";
-import { installMocks } from "./_mock";
+import { fireEvent, installMocks } from "./_mock";
 
 const SHOT_DIR = "/tmp/hush-uxwalk-shots";
 
@@ -476,5 +476,38 @@ test.describe("UX walkthrough — HUD", () => {
     // just want to see the pill markup.
     await page.waitForTimeout(200);
     await shot(page, "30-hud");
+  });
+});
+
+test.describe("UX walkthrough — HUD transcription progress", () => {
+  // Real HUD window size (tauri.conf.json `hud`: 320×64).
+  test.use({ viewport: { width: 320, height: 64 } });
+
+  async function toProcessing(page: import("@playwright/test").Page) {
+    await installMocks(page);
+    await page.goto("/hud");
+    await expect(page.locator("button.hud-dismiss")).toBeVisible();
+    await fireEvent(page, "hud:state", { state: "recording", startedAtMs: Date.now() });
+    await fireEvent(page, "hud:state", { state: "processing" });
+  }
+
+  test("short run — shimmer", async ({ page }) => {
+    await toProcessing(page);
+    await fireEvent(page, "transcription:estimate", { audioMs: 4000, expectedMs: 900 });
+    await shot(page, "31-hud-transcribing-short");
+  });
+
+  test("long run — estimated bar", async ({ page }) => {
+    await toProcessing(page);
+    await fireEvent(page, "transcription:estimate", { audioMs: 42_000, expectedMs: 4000 });
+    await page.waitForTimeout(1600);
+    await shot(page, "32-hud-transcribing-long");
+  });
+
+  test("done — copied", async ({ page }) => {
+    await toProcessing(page);
+    await fireEvent(page, "transcription:estimate", { audioMs: 42_000, expectedMs: 4000 });
+    await fireEvent(page, "hud:state", { state: "done" });
+    await shot(page, "33-hud-done");
   });
 });

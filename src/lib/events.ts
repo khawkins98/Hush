@@ -141,12 +141,16 @@ export const Events = {
   LogEvent: "log:event",
   /// Backend → HUD window and main window: whisper.cpp inference
   /// progress during dictation transcription (integer 0–100).
-  /// Throttled to every 5 percentage points in Rust to keep
-  /// event-bus traffic low. The HUD shows "Processing… N%" in
-  /// its label; the main window's RecordPanel renders a thin
-  /// progress bar under the waveform during the transcribing
-  /// phase (#566).
+  /// whisper.cpp reports once per 30 s window, so a short clip only
+  /// ever sends 0 and 100. Used as a floor under the estimated bar
+  /// (see `TranscriptionEstimate`), never shown as a number (#566).
   TranscriptionProgress: "transcription:progress",
+  /// Backend → HUD window and main window: fired once per dictation
+  /// as whisper starts, payload `TranscriptionEstimatePayload`
+  /// (`{ audioMs, expectedMs }`). Both windows animate their progress
+  /// bars locally from it (`lib/transcription-estimate.ts`); there are
+  /// no per-frame emits because each emit leaks WKWebView memory (#986).
+  TranscriptionEstimate: "transcription:estimate",
   /// Backend → main (Settings → About): per-chunk progress while an
   /// update downloads. Payload `{ chunkLen, total | null }` — a delta,
   /// accumulated by the listener. Emitted by `ipc/commands/updater.rs`.
