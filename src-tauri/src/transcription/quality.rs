@@ -123,20 +123,42 @@ pub fn is_media_artefact_final(text: &str) -> bool {
 // Intra-segment n-gram loop detector
 // ---------------------------------------------------------------------------
 
-/// Smallest n-gram the loop detector considers. Single-word repeats
-/// ("yeah yeah yeah", "no no no") are ordinary speech and are never
-/// touched.
-const LOOP_MIN_NGRAM: usize = 2;
-/// Largest n-gram considered. Longer loops are whole sentences, which
-/// the cross-final repetition guard in `streaming.rs` already handles.
-const LOOP_MAX_NGRAM: usize = 6;
-/// Minimum consecutive repetitions of the same n-gram.
-const LOOP_MIN_REPEATS: usize = 3;
-/// Length guard: the repeated run must cover at least this many words.
-/// Keeps short emphatic repeats ("you know, you know, you know" = 6
-/// words) as spoken, while a real decoder loop — which runs on for 4+
-/// iterations of a phrase — is caught.
-const LOOP_MIN_RUN_WORDS: usize = 8;
+/// Thresholds for [`collapse_ngram_loops_with`]: a `min_ngram..=max_ngram`
+/// word phrase repeated ≥ `min_repeats` times back to back, covering
+/// ≥ `min_run_words` words, is collapsed to one copy.
+#[derive(Debug, Clone, Copy)]
+pub struct LoopRule {
+    /// Single-word repeats ("yeah yeah yeah") are ordinary speech, so
+    /// this stays ≥ 2 in every rule.
+    pub min_ngram: usize,
+    pub max_ngram: usize,
+    pub min_repeats: usize,
+    pub min_run_words: usize,
+}
+
+/// Meeting finals (#1013): short segments, so a 3× run of ≥ 8 words is
+/// already a loop. Keeps short emphatic repeats ("you know, you know,
+/// you know" = 6 words). Phrases over 6 words are whole sentences, which
+/// the cross-final repetition guard in `streaming.rs` handles.
+pub const MEETING_LOOP_RULE: LoopRule = LoopRule {
+    min_ngram: 2,
+    max_ngram: 6,
+    min_repeats: 3,
+    min_run_words: 8,
+};
+
+/// Dictation (2026-10-03): one press can be minutes of text with
+/// deliberate repeats (counting, "I'm sorry, I'm sorry, …", a repeated
+/// formula), and nothing downstream catches a sentence-length loop, so
+/// the rule is stricter on repeats but reaches longer phrases. Spares
+/// every deliberate repeat the #1024 red-team tried (all ≤ 3 repeats or
+/// ≤ 10 words) while still catching the real 6-word ×6 loop (36 words).
+pub const DICTATION_LOOP_RULE: LoopRule = LoopRule {
+    min_ngram: 2,
+    max_ngram: 12,
+    min_repeats: 4,
+    min_run_words: 16,
+};
 
 /// Normalise one word for loop comparison: lowercase, strip surrounding
 /// punctuation. "Go," and "go." compare equal.
@@ -159,8 +181,8 @@ fn is_periodic(gram: &[String]) -> bool {
 /// confabulation), whisper.cpp's entropy check never gets a fallback
 /// pass to retry, so a looped decode is emitted as-is: "we need to we
 /// need to we need to we need to ship it". This finds any 2–6 word
-/// n-gram repeated ≥ [`LOOP_MIN_REPEATS`] times back-to-back whose run
-/// spans ≥ [`LOOP_MIN_RUN_WORDS`] words, and keeps a single copy.
+/// n-gram repeated ≥ 3 times back-to-back whose run spans ≥ 8 words
+/// ([`MEETING_LOOP_RULE`]), and keeps a single copy.
 /// Meetily, Vexa and Handy (MIT / Apache-2.0 / MIT) all ship some form
 /// of repeated-n-gram guard; this one is our own implementation.
 ///
@@ -169,8 +191,13 @@ fn is_periodic(gram: &[String]) -> bool {
 /// The kept copy uses the original casing/punctuation of the first
 /// occurrence.
 pub fn collapse_ngram_loops(text: &str) -> Option<String> {
+    collapse_ngram_loops_with(text, &MEETING_LOOP_RULE)
+}
+
+/// [`collapse_ngram_loops`] with explicit thresholds.
+pub fn collapse_ngram_loops_with(text: &str, rule: &LoopRule) -> Option<String> {
     let words: Vec<&str> = text.split_whitespace().collect();
-    if words.len() < LOOP_MIN_RUN_WORDS {
+    if words.len() < rule.min_run_words {
         return None;
     }
     let keys: Vec<String> = words.iter().map(|w| loop_key(w)).collect();
@@ -178,8 +205,8 @@ pub fn collapse_ngram_loops(text: &str) -> Option<String> {
     let mut changed = false;
     let mut i = 0;
     'outer: while i < words.len() {
-        for n in LOOP_MIN_NGRAM..=LOOP_MAX_NGRAM {
-            if i + n * LOOP_MIN_REPEATS > words.len() {
+        for n in rule.min_ngram..=rule.max_ngram {
+            if i + n * rule.min_repeats > words.len() {
                 break;
             }
             // An all-empty-key n-gram (pure punctuation tokens) is not a
@@ -200,7 +227,7 @@ pub fn collapse_ngram_loops(text: &str) -> Option<String> {
             {
                 reps += 1;
             }
-            if reps >= LOOP_MIN_REPEATS && reps * n >= LOOP_MIN_RUN_WORDS {
+            if reps >= rule.min_repeats && reps * n >= rule.min_run_words {
                 out.extend_from_slice(&words[i..i + n]);
                 i += reps * n;
                 changed = true;

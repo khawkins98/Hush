@@ -53,10 +53,20 @@ involved: it caps at 1500 for clips over 30 s, the same as before.
   own loop escape, is therefore off.
 
 **Fix.** `dictation::pipeline::collapse_dictation_loops` runs the #1013
-`collapse_ngram_loops` (2–6-word phrase ≥ 3× back to back, keep one
-copy) on every dictation, after bracket stripping and before
-replacements. It logs at INFO when it fires. Single-word repeats stay
-exempt, as on meetings.
+collapser on every dictation, after bracket stripping and before
+replacements, and logs at INFO when it fires.
+
+It uses its own stricter `DICTATION_LOOP_RULE`: a 2–12-word phrase
+≥ 4× back to back over ≥ 16 words. Meetings keep `MEETING_LOOP_RULE`,
+which is 2–6 words ≥ 3× over ≥ 8 words. The meeting rule was too
+eager for dictation: the #1024 red-team showed it eating deliberate
+repeats ("one, two, three" counted 3×, "I'm sorry, I'm sorry, …" 4×,
+a dictated formula 3×). It also missed loops of phrases longer than
+6 words, which on meetings the cross-final guard catches; dictation has
+no such guard. `dictation_keeps_deliberate_repeats` pins those cases.
+Single-word repeats stay exempt everywhere. When it fires, the
+collapse rejoins words with single spaces, so newlines in that
+dictation are lost; whisper rarely emits them.
 
 **Not done.** Re-enabling the temperature fallback for long dictations
 only (where #974's silence-hallucination risk is lower now that the VAD

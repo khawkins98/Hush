@@ -181,8 +181,9 @@ pub(super) fn pad_trailing_silence(captured: &mut crate::audio::CapturedAudio) {
 }
 
 /// Collapse whisper repetition loops in a dictation transcript, using
-/// the same rule as meeting finals (`quality::collapse_ngram_loops`:
-/// a 2–6-word phrase repeated ≥ 3× back to back, keep one copy).
+/// [`DICTATION_LOOP_RULE`](crate::transcription::quality::DICTATION_LOOP_RULE):
+/// a 2–12-word phrase repeated ≥ 4× back to back over ≥ 16 words, keep
+/// one copy. Stricter than meetings' rule so deliberate repeats survive.
 /// Dictation never ran it before 2026-10-03, when an 81 s press came back
 /// with "a little bit more, you know," looped a dozen times. Long presses
 /// are the risk: whisper.cpp primes each 30 s window with the previous
@@ -190,7 +191,10 @@ pub(super) fn pad_trailing_silence(captured: &mut crate::audio::CapturedAudio) {
 /// start of a call), and dictation pins T=0 with no fallback ladder
 /// (#974), so nothing inside whisper breaks the loop.
 pub(super) fn collapse_dictation_loops(text: &str) -> String {
-    match crate::transcription::quality::collapse_ngram_loops(text) {
+    match crate::transcription::quality::collapse_ngram_loops_with(
+        text,
+        &crate::transcription::quality::DICTATION_LOOP_RULE,
+    ) {
         Some(collapsed) => {
             tracing::info!(
                 before_words = text.split_whitespace().count(),

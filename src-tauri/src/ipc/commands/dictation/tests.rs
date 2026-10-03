@@ -1371,24 +1371,38 @@ fn dictation_collapses_phrase_loops() {
         maybe it's a little bit more, you know, a little bit more, you know, \
         a little bit more, you know, a little bit more, you know, a little bit more, \
         you know, a little bit more, you know, So, I think it's a bit of a technical question.";
-    let out = super::pipeline::collapse_dictation_loops(looped);
     assert_eq!(
-        out.matches("a little bit more").count(),
-        1,
-        "loop not collapsed: {out}"
-    );
-    assert!(out.starts_with("so we could better, you know,"), "{out}");
-    assert!(
-        out.ends_with("So, I think it's a bit of a technical question."),
-        "{out}"
+        super::pipeline::collapse_dictation_loops(looped),
+        "so we could better, you know, tell, you know, maybe it's, you know, \
+         maybe it's a little bit more, you know, So, I think it's a bit of a technical question."
     );
 
-    // Ordinary speech, including deliberate short repeats, is untouched.
-    for clean in [
+    // A sentence-length loop (10 words ×4) is caught too: dictation has no
+    // cross-final guard to fall back on.
+    let long = "start here. ".to_owned()
+        + &"we should move the release to next week instead. ".repeat(4)
+        + "end.";
+    let out = super::pipeline::collapse_dictation_loops(&long);
+    assert_eq!(out.matches("we should move").count(), 1, "{out}");
+}
+
+/// Deliberate repeats a user might dictate must survive (#1024 red-team
+/// cases, all ≥ 8 words so they reach the detector).
+#[test]
+fn dictation_keeps_deliberate_repeats() {
+    for kept in [
+        "one, two, three, one, two, three, one, two, three",
+        "1 2 3 1 2 3 1 2 3",
+        "hip hip hooray hip hip hooray hip hip hooray",
+        "I'm sorry, I'm sorry, I'm sorry, I'm sorry.",
+        "Never again. Never again. Never again. Never again.",
+        "the bits are zero zero one zero zero one zero zero one",
+        "x equals y plus one, x equals y plus one, x equals y plus one",
+        "Row one, column A. Row one, column A. Row one, column A. done",
+        "next item, next item, next item, next item, then stop",
+        "you know, you know, you know, you know,",
         "Yes, send it.",
-        "no no no no, not that one",
-        "you know, it was fine, you know, mostly",
     ] {
-        assert_eq!(super::pipeline::collapse_dictation_loops(clean), clean);
+        assert_eq!(super::pipeline::collapse_dictation_loops(kept), kept);
     }
 }
