@@ -1362,3 +1362,33 @@ fn dictation_audio_ctx_ab() {
         );
     }
 }
+
+/// A real 81 s dictation (2026-10-03) came back with a phrase looped a
+/// dozen times. Dictation must collapse it like meeting finals do.
+#[test]
+fn dictation_collapses_phrase_loops() {
+    let looped = "so we could better, you know, tell, you know, maybe it's, you know, \
+        maybe it's a little bit more, you know, a little bit more, you know, \
+        a little bit more, you know, a little bit more, you know, a little bit more, \
+        you know, a little bit more, you know, So, I think it's a bit of a technical question.";
+    let out = super::pipeline::collapse_dictation_loops(looped);
+    assert_eq!(
+        out.matches("a little bit more").count(),
+        1,
+        "loop not collapsed: {out}"
+    );
+    assert!(out.starts_with("so we could better, you know,"), "{out}");
+    assert!(
+        out.ends_with("So, I think it's a bit of a technical question."),
+        "{out}"
+    );
+
+    // Ordinary speech, including deliberate short repeats, is untouched.
+    for clean in [
+        "Yes, send it.",
+        "no no no no, not that one",
+        "you know, it was fine, you know, mostly",
+    ] {
+        assert_eq!(super::pipeline::collapse_dictation_loops(clean), clean);
+    }
+}

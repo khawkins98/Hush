@@ -453,7 +453,7 @@ pub async fn stop_dictation(
     // a confusing "Transcription" panel readout. After stripping, an
     // all-sentinel result becomes the empty string — the frontend
     // renders a friendly "no audio detected" copy in that case.
-    let stripped = strip_whisper_brackets(raw_text.trim());
+    let stripped = pipeline::collapse_dictation_loops(&strip_whisper_brackets(raw_text.trim()));
     let text = apply_replacements(&stripped, &rules);
 
     // Every early return between the Processing and Done transitions must

@@ -180,6 +180,29 @@ pub(super) fn pad_trailing_silence(captured: &mut crate::audio::CapturedAudio) {
     captured.samples.resize(captured.samples.len() + extra, 0.0);
 }
 
+/// Collapse whisper repetition loops in a dictation transcript, using
+/// the same rule as meeting finals (`quality::collapse_ngram_loops`:
+/// a 2–6-word phrase repeated ≥ 3× back to back, keep one copy).
+/// Dictation never ran it before 2026-10-03, when an 81 s press came back
+/// with "a little bit more, you know," looped a dozen times. Long presses
+/// are the risk: whisper.cpp primes each 30 s window with the previous
+/// window's text even with `no_context` (it only clears the prompt at the
+/// start of a call), and dictation pins T=0 with no fallback ladder
+/// (#974), so nothing inside whisper breaks the loop.
+pub(super) fn collapse_dictation_loops(text: &str) -> String {
+    match crate::transcription::quality::collapse_ngram_loops(text) {
+        Some(collapsed) => {
+            tracing::info!(
+                before_words = text.split_whitespace().count(),
+                after_words = collapsed.split_whitespace().count(),
+                "dictation: collapsed a whisper repetition loop"
+            );
+            collapsed
+        }
+        None => text.to_owned(),
+    }
+}
+
 /// Body of `start_dictation`: pre-flight transcriber-loaded check,
 /// foreground snapshot, mic-permission probe, and audio-backend
 /// start. The `start_dictation` command shell in `mod.rs` is a thin
