@@ -107,6 +107,7 @@ pub mod names {
     pub const LOG_EVENT: &str = "log:event";
     pub const MENU_GOTO_SECTION: &str = "menu:goto-section";
     pub const SETTINGS_GOTO_TAB: &str = "settings:goto-tab";
+    pub const TRANSCRIPTION_ESTIMATE: &str = "transcription:estimate";
     pub const TRANSCRIPTION_PROGRESS: &str = "transcription:progress";
     pub const UPDATER_RESULT: &str = "updater:result";
 }

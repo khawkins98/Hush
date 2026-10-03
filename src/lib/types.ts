@@ -51,6 +51,16 @@ export interface CallMayHaveEndedPayload {
   signalSummary: string;
 }
 
+/// Payload for the `Events.TranscriptionEstimate` Tauri event, fired
+/// once per dictation as transcription starts. Mirrors `EstimatePayload`
+/// in `src-tauri/src/transcription/estimate.rs`.
+export interface TranscriptionEstimatePayload {
+  /// Length of the clip whisper transcribes (after VAD trim + pad).
+  audioMs: number;
+  /// Learned expected wall-clock transcription time.
+  expectedMs: number;
+}
+
 export type KnownIpcError =
   | { kind: "audio"; message: string }
   | { kind: "audio-device-lost"; message: string }

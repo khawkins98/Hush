@@ -95,11 +95,13 @@ test.describe("HUD timer reset across sessions (#481)", () => {
   });
 });
 
-// Transcription progress indicator (#566): the label shows "Processing…"
-// without a percentage until the first `transcription:progress` event
-// arrives, then updates to "Transcribing… N%". Progress resets between
-// recording cycles so back-to-back sessions don't show a stale percentage.
-test.describe("HUD transcription progress indicator (#566)", () => {
+// Estimated transcription progress. whisper.cpp only reports progress
+// per 30 s window, so the backend emits one `transcription:estimate`
+// (`{ audioMs, expectedMs }`) and the HUD animates locally from it:
+// "Processing…" until the estimate, then a shimmer for short runs or an
+// advancing bar for long ones, and "Copied!" only once the text is ready.
+// whisper's own `transcription:progress` is a floor, never a number.
+test.describe("HUD estimated transcription progress", () => {
   async function bootstrap(page: Parameters<typeof installMocks>[0]) {
     await installMocks(page);
     await page.goto("/hud");
@@ -112,45 +114,69 @@ test.describe("HUD transcription progress indicator (#566)", () => {
     await fireEvent(page, "hud:state", { state: "processing" });
   }
 
-  test("shows 'Processing…' before any progress event", async ({ page }) => {
+  const progressOf = (page: Parameters<typeof installMocks>[0]) =>
+    page
+      .locator('[data-testid="hud-progress"]')
+      .getAttribute("data-progress")
+      .then((v) => Number(v));
+
+  test("shows 'Processing…' with a shimmer before the estimate", async ({ page }) => {
     await bootstrap(page);
     await expect(page.locator(".hud-label")).toHaveText("Processing…");
+    await expect(page.locator('[data-testid="hud-shimmer"]')).toBeVisible();
   });
 
-  test("updates label to 'Transcribing… N%' on transcription:progress event", async ({
+  test("short run: plain 'Transcribing…' and a shimmer, no bar", async ({ page }) => {
+    await bootstrap(page);
+    await fireEvent(page, "transcription:estimate", { audioMs: 4000, expectedMs: 900 });
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing…");
+    await expect(page.locator('[data-testid="hud-shimmer"]')).toBeVisible();
+    await expect(page.locator('[data-testid="hud-progress"]')).toHaveCount(0);
+  });
+
+  test("long run: audio-length copy and a bar that advances but stays short of full", async ({
     page,
   }) => {
     await bootstrap(page);
-    await fireEvent(page, "transcription:progress", 42);
-    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 42%");
-  });
+    await fireEvent(page, "transcription:estimate", { audioMs: 42_000, expectedMs: 4000 });
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing 42 s of audio…");
+    await expect(page.locator('[data-testid="hud-shimmer"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="hud-progress"]')).toBeVisible();
 
-  test("label updates as progress increases", async ({ page }) => {
-    await bootstrap(page);
-    await fireEvent(page, "transcription:progress", 25);
-    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 25%");
-    await fireEvent(page, "transcription:progress", 75);
-    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 75%");
+    await expect.poll(() => progressOf(page)).toBeGreaterThan(0.1);
+    const early = await progressOf(page);
+    await expect.poll(() => progressOf(page)).toBeGreaterThan(early);
+    // whisper's own 100 is only a floor — the bar never fills before
+    // the text is actually ready.
     await fireEvent(page, "transcription:progress", 100);
-    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 100%");
+    await expect.poll(() => progressOf(page)).toBeGreaterThanOrEqual(0.95);
+    expect(await progressOf(page)).toBeLessThan(1);
   });
 
-  test("progress resets to 'Processing…' on next recording cycle", async ({
-    page,
-  }) => {
+  test("done: snaps to 'Copied!' and drops the bar", async ({ page }) => {
     await bootstrap(page);
-    await fireEvent(page, "transcription:progress", 80);
-    await expect(page.locator(".hud-label")).toHaveText("Transcribing… 80%");
+    await fireEvent(page, "transcription:estimate", { audioMs: 42_000, expectedMs: 4000 });
+    await expect(page.locator('[data-testid="hud-progress"]')).toBeVisible();
+    await fireEvent(page, "hud:state", { state: "done" });
+    await expect(page.locator(".hud-label")).toHaveText("Copied!");
+    await expect(page.locator(".hud-done-check")).toBeVisible();
+    await expect(page.locator('[data-testid="hud-progress"]')).toHaveCount(0);
+  });
 
-    // New recording cycle — progress must clear so the next Processing
-    // transition starts clean rather than flashing the previous session's
-    // final percentage.
+  test("estimate resets on the next recording cycle", async ({ page }) => {
+    await bootstrap(page);
+    await fireEvent(page, "transcription:estimate", { audioMs: 42_000, expectedMs: 4000 });
+    await expect(page.locator(".hud-label")).toHaveText("Transcribing 42 s of audio…");
+
+    // A new cycle must start clean rather than flashing the previous
+    // session's estimate on the next Processing transition.
     await fireEvent(page, "hud:state", {
       state: "recording",
       startedAtMs: Date.now(),
     });
     await fireEvent(page, "hud:state", { state: "processing" });
     await expect(page.locator(".hud-label")).toHaveText("Processing…");
+    await expect(page.locator('[data-testid="hud-progress"]')).toHaveCount(0);
   });
 });
 

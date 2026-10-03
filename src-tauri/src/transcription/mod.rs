@@ -50,6 +50,7 @@
 
 pub mod catalog;
 pub mod download;
+pub mod estimate;
 pub mod quality;
 pub mod resample;
 pub mod streaming;

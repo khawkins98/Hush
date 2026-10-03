@@ -32,6 +32,13 @@
   // the Transcribe panel must render identical elapsed strings for the
   // same recording, so both import the single tested helper.
   import { formatElapsed } from "$lib/recording-time";
+  import {
+    ESTIMATE_TICK_MS,
+    displayedFraction,
+    isShortRun,
+    transcribingLabel,
+  } from "$lib/transcription-estimate";
+  import type { TranscriptionEstimatePayload } from "$lib/types";
 
   // Wire shape mirrors `HudStatePayload` in `src-tauri/src/hud/mod.rs`
   // (camelCase per `serde(rename_all = "camelCase")`). `startedAtMs`
@@ -166,11 +173,25 @@
       : 1
   );
 
-  // Transcription progress 0–100, set while hudState === "processing" (#566).
-  // Reset to null on each new recording cycle so back-to-back dictations
-  // start without a stale percentage. Null means "no progress yet" and
-  // keeps the label as plain "Processing…" until the first tick arrives.
+  // whisper.cpp's own progress 0–100 (#566). Only a floor under the
+  // estimated bar: it ticks once per 30 s window, so on its own a short
+  // dictation went 0 → 100 with nothing between. Reset each recording.
   let transcriptionProgress = $state<number | null>(null);
+
+  // The backend's one-per-dictation estimate (`transcription:estimate`)
+  // and when it arrived. The bar animates locally from these on a
+  // 10 Hz interval — no per-frame emits from Rust (#986). Null until
+  // whisper starts; reset on each new recording.
+  let transcriptionEstimate = $state<TranscriptionEstimatePayload | null>(null);
+  let estimateReceivedAt = $state<number | null>(null);
+  let progressFraction = $state(0);
+  // Whether the page is visible. The backend hides the HUD on a failed
+  // transcription without sending another `hud:state`, so the progress
+  // interval also keys off visibility rather than state alone.
+  let pageVisible = $state(true);
+  let showProgressBar = $derived(
+    hudState === "processing" && !isShortRun(transcriptionEstimate),
+  );
 
   // Recording-duration timer (#360). `recordingStartedAt` is set
   // when the backend emits `hud:state === "recording"`, freezes
@@ -216,8 +237,32 @@
     };
   });
 
+  // Estimated-progress ticker: runs only while the bar is on screen.
+  // Stops on done (hudState changes), on hide, and after a generous cap
+  // so a lost completion signal can't leave it ticking forever.
+  $effect(() => {
+    const est = transcriptionEstimate;
+    const startedAt = estimateReceivedAt;
+    if (!showProgressBar || !pageVisible || est === null || startedAt === null) return;
+    const capMs = Math.max(60_000, est.expectedMs * 6);
+    let id: ReturnType<typeof setInterval> | undefined;
+    const tick = () => {
+      const elapsed = Date.now() - startedAt;
+      progressFraction = displayedFraction(elapsed, est.expectedMs, transcriptionProgress);
+      if (elapsed > capMs && id !== undefined) clearInterval(id);
+    };
+    tick();
+    id = setInterval(tick, ESTIMATE_TICK_MS);
+    return () => clearInterval(id);
+  });
+
+  function onVisibilityChange() {
+    pageVisible = document.visibilityState !== "hidden";
+  }
+
   let unlistenState: UnlistenFn | null = null;
   let unlistenProgress: UnlistenFn | null = null;
+  let unlistenEstimate: UnlistenFn | null = null;
   let unlistenCallEndCancelled: UnlistenFn | null = null;
   let unlistenCallMayHaveEnded: UnlistenFn | null = null;
 
@@ -269,6 +314,8 @@
             pendingEndsAtMs = null;
           }
           if (next === "done") {
+            // The text is on the clipboard: the run is really finished.
+            progressFraction = 1;
             // Auto-dismiss after 1.5 s so the user sees "Copied!" before
             // the HUD disappears (#669). A new recording cancels this.
             hideAfter(1500);
@@ -313,10 +360,25 @@
             // Reset progress from previous cycle so we don't show
             // a stale percentage on the next Processing transition.
             transcriptionProgress = null;
+            transcriptionEstimate = null;
+            estimateReceivedAt = null;
+            progressFraction = 0;
           }
         }
       },
     );
+
+    unlistenEstimate = await listen<TranscriptionEstimatePayload>(
+      Events.TranscriptionEstimate,
+      (event) => {
+        transcriptionEstimate = event.payload;
+        estimateReceivedAt = Date.now();
+        progressFraction = 0;
+      },
+    );
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    onVisibilityChange();
 
     unlistenProgress = await listen<number>(
       Events.TranscriptionProgress,
@@ -350,6 +412,9 @@
     unlistenState = null;
     unlistenProgress?.();
     unlistenProgress = null;
+    unlistenEstimate?.();
+    unlistenEstimate = null;
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     unlistenCallEndCancelled?.();
     unlistenCallEndCancelled = null;
     unlistenCallMayHaveEnded?.();
@@ -372,8 +437,10 @@
   let label = $derived.by(() => {
     switch (hudState) {
       case "processing":
-        return transcriptionProgress !== null
-          ? `Transcribing… ${Math.round(transcriptionProgress)}%`
+        // "Processing…" covers VAD trim + prompt prep before whisper
+        // starts; after that, plain copy instead of a fake-precise %.
+        return transcriptionEstimate !== null
+          ? transcribingLabel(transcriptionEstimate)
           : "Processing…";
       case "done":
         return "Copied!";
@@ -619,13 +686,26 @@
         window.
       -->
       <AudioWaveform mode="recording" levelScale={480} silenceFloorPct={15} />
+    {:else if showProgressBar}
+      <!--
+        Estimated progress for runs long enough to be worth a bar. Width
+        transitions over one tick so the 10 Hz updates read as motion.
+      -->
+      <div
+        class="hud-progress-track"
+        role="presentation"
+        data-testid="hud-progress"
+        data-progress={progressFraction.toFixed(3)}
+      >
+        <div class="hud-progress-fill" style="--progress: {progressFraction}"></div>
+      </div>
     {:else if hudState === "processing" || hudState === "stopping"}
       <!--
         Processing / stopping: a slim shimmer in the waveform's slot so
         the pill doesn't reflow on transition ("Hush is still working
         but isn't capturing audio right now").
       -->
-      <div class="hud-shimmer" role="presentation">
+      <div class="hud-shimmer" role="presentation" data-testid="hud-shimmer">
         <div class="hud-shimmer-fill"></div>
       </div>
     {:else if hudState === "pending"}
@@ -983,6 +1063,28 @@
     100% { background-position: -100% 0; }
   }
 
+  /* Narrower than the shimmer and a smaller label so "Transcribing
+     42 s of audio…" fits the 320 px pill without truncating. */
+  .hud-processing .hud-label {
+    font-size: 12px;
+  }
+  .hud-progress-track {
+    flex-shrink: 0;
+    width: 36px;
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .hud-progress-fill {
+    width: calc(var(--progress, 0) * 100%);
+    height: 100%;
+    border-radius: 3px;
+    background: #f49e17;
+    /* Matches ESTIMATE_TICK_MS so interval updates glide. */
+    transition: width 100ms linear;
+  }
+
   /* Pending: nothing is being recorded yet, so the dot is orange, not
      the red "recording" dot. Draining bar counts down to auto-start. */
   .hud-pending .hud-dot {
@@ -1022,6 +1124,7 @@
   @media (prefers-reduced-motion: reduce) {
     .hud-dot { animation: none; }
     .hud-shimmer-fill { animation: none; background-position: 50% 0; }
+    .hud-progress-fill { transition: none; }
     /* Show a static half-width bar instead of animating */
     .hud-countdown-bar { width: 50%; }
   }
