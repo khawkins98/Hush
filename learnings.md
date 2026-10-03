@@ -34,6 +34,45 @@ High-impact lessons for anyone building a similar Tauri + macOS + audio + AI app
 
 ---
 
+## 2026-10-03 — Dictation now collapses whisper repetition loops; `no_context` doesn't stop cross-window priming
+
+**Symptom.** An 81 s dictation came back with "a little bit more, you
+know," looped a dozen times. Clip-sized `audio_ctx` (#1023) was not
+involved: it caps at 1500 for clips over 30 s, the same as before.
+
+**Why whisper didn't break it.**
+- In the vendored whisper.cpp, `no_context` only clears `prompt_past`
+  at the start of a `whisper_full` call (`whisper.cpp:5441`). Inside the
+  call, every 30 s seek window rebuilds `prompt_past` from the previous
+  window's tokens unconditionally (`:6103`). So a long dictation is
+  always primed window to window, and setting `no_context` on dictation
+  would not help. Meetings set it too, but their windows are ≤ 30 s, so
+  it never mattered there.
+- Dictation pins T=0 with no fallback ladder (#974). The
+  compression-ratio-triggered temperature fallback, which is whisper's
+  own loop escape, is therefore off.
+
+**Fix.** `dictation::pipeline::collapse_dictation_loops` runs the #1013
+collapser on every dictation, after bracket stripping and before
+replacements, and logs at INFO when it fires.
+
+It uses its own stricter `DICTATION_LOOP_RULE`: a 2–12-word phrase
+≥ 4× back to back over ≥ 16 words. Meetings keep `MEETING_LOOP_RULE`,
+which is 2–6 words ≥ 3× over ≥ 8 words. The meeting rule was too
+eager for dictation: the #1024 red-team showed it eating deliberate
+repeats ("one, two, three" counted 3×, "I'm sorry, I'm sorry, …" 4×,
+a dictated formula 3×). It also missed loops of phrases longer than
+6 words, which on meetings the cross-final guard catches; dictation has
+no such guard. `dictation_keeps_deliberate_repeats` pins those cases.
+Single-word repeats stay exempt everywhere. When it fires, the
+collapse rejoins words with single spaces, so newlines in that
+dictation are lost; whisper rarely emits them.
+
+**Not done.** Re-enabling the temperature fallback for long dictations
+only (where #974's silence-hallucination risk is lower now that the VAD
+trim exists) is the structural fix for long-form loops. It's a policy
+call that needs its own A/B.
+
 ## 2026-10-02 — Dictation audio_ctx: on by default for small models only
 
 **What.** Dictation now sizes whisper's encoder window to the clip

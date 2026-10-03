@@ -1362,3 +1362,47 @@ fn dictation_audio_ctx_ab() {
         );
     }
 }
+
+/// A real 81 s dictation (2026-10-03) came back with a phrase looped a
+/// dozen times. Dictation must collapse it like meeting finals do.
+#[test]
+fn dictation_collapses_phrase_loops() {
+    let looped = "so we could better, you know, tell, you know, maybe it's, you know, \
+        maybe it's a little bit more, you know, a little bit more, you know, \
+        a little bit more, you know, a little bit more, you know, a little bit more, \
+        you know, a little bit more, you know, So, I think it's a bit of a technical question.";
+    assert_eq!(
+        super::pipeline::collapse_dictation_loops(looped),
+        "so we could better, you know, tell, you know, maybe it's, you know, \
+         maybe it's a little bit more, you know, So, I think it's a bit of a technical question."
+    );
+
+    // A sentence-length loop (10 words ×4) is caught too: dictation has no
+    // cross-final guard to fall back on.
+    let long = "start here. ".to_owned()
+        + &"we should move the release to next week instead. ".repeat(4)
+        + "end.";
+    let out = super::pipeline::collapse_dictation_loops(&long);
+    assert_eq!(out.matches("we should move").count(), 1, "{out}");
+}
+
+/// Deliberate repeats a user might dictate must survive (#1024 red-team
+/// cases, all ≥ 8 words so they reach the detector).
+#[test]
+fn dictation_keeps_deliberate_repeats() {
+    for kept in [
+        "one, two, three, one, two, three, one, two, three",
+        "1 2 3 1 2 3 1 2 3",
+        "hip hip hooray hip hip hooray hip hip hooray",
+        "I'm sorry, I'm sorry, I'm sorry, I'm sorry.",
+        "Never again. Never again. Never again. Never again.",
+        "the bits are zero zero one zero zero one zero zero one",
+        "x equals y plus one, x equals y plus one, x equals y plus one",
+        "Row one, column A. Row one, column A. Row one, column A. done",
+        "next item, next item, next item, next item, then stop",
+        "you know, you know, you know, you know,",
+        "Yes, send it.",
+    ] {
+        assert_eq!(super::pipeline::collapse_dictation_loops(kept), kept);
+    }
+}
