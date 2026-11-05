@@ -2,7 +2,10 @@
 
 Practical reference for setting up, running, and testing Hush locally.
 
-For contribution rules, branch naming, commit format, and IPC recipes see [CONTRIBUTING.md](../CONTRIBUTING.md). For the full architecture see [ARCHITECTURE.md](../ARCHITECTURE.md).
+This guide owns setup, commands and validation. [CONTRIBUTING](../CONTRIBUTING.md)
+owns contribution rules; the [IPC recipe](./ipc-commands.md) owns command changes;
+[ARCHITECTURE](../ARCHITECTURE.md) explains the runtime. For installing a release
+instead of building, use [getting started](./getting-started.md).
 
 ---
 
@@ -11,7 +14,7 @@ For contribution rules, branch naming, commit format, and IPC recipes see [CONTR
 | Tool | Version | Notes |
 |---|---|---|
 | Rust | stable | `rustup update stable` |
-| Node.js | ≥ 20 | nvm recommended — `nvm install 22` |
+| Node.js | 24 | Matches the frontend CI jobs; with nvm: `nvm install 24` |
 | cmake | any | **macOS only** — required by `whisper-rs` to build whisper.cpp bindings. `brew install cmake` |
 
 > Linux and Windows compile cleanly via CI but are not hands-on tested. macOS 26 is the primary target.
@@ -27,9 +30,10 @@ npm install
 ```
 
 `npm install` runs the `prepare` script, which sets `core.hooksPath = .githooks`.
-This activates a pre-push hook that runs `cargo fmt --check`, `cargo clippy`, and
-`npm run check` before every push — the same gates as CI. To skip on an emergency
-push use `git push --no-verify`.
+This activates a pre-push hook that runs Rust formatting,
+`cargo clippy --lib --no-default-features -- -D warnings` and `npm run check`
+before every push. These are local checks, not the complete CI matrix. The
+[hook](../.githooks/pre-push) owns its exact commands and failure hints.
 
 The hook prints the failing step and a short remediation hint when something
 breaks, so you don't have to scroll back through the full output to find what
@@ -38,13 +42,11 @@ went wrong. Set `HUSH_SLOW_HOOKS=1` in your shell to additionally run
 keep the hook interactive-friendly during rapid iteration; a good idea before
 the final push to a PR).
 
-**rustfmt version gap.** CI pins a January-2026 stable toolchain; local stable
-is typically newer. The two disagree on borderline line-wraps. The hook catches
-the bulk of formatting issues but can't guarantee parity. If CI's `rustfmt
-check` fails after a push, copy the exact diff from the CI log and apply it
-manually — running local `cargo fmt --all` won't reproduce the CI version's
-output. Tracked in `learnings.md` under "2026-05-05 — CI rustfmt version
-differs from local toolchain".
+**Toolchain differences.** Use the [CI workflow](../.github/workflows/ci.yml)
+as the authority for Rust setup. Formatting can differ across toolchains; if CI
+and a local check disagree, inspect the failing diff and toolchain versions
+rather than assuming local `cargo fmt` reproduces the CI output. Dated findings
+remain in `learnings.md`.
 
 The first `npm run tauri dev` will compile whisper.cpp via `whisper-rs` (several minutes on a clean machine) and build the default-on `tract-onnx` diarizer from source. There are **no** vendored ORT binaries or one-time network downloads in the current path.
 
@@ -54,167 +56,63 @@ Subsequent runs are incremental.
 
 ## Which command to run
 
-| What you're trying to do | Command |
+Run these from the repository root. Cleanup/reset utilities stop processes or
+change installed-app/permission state; read the [reset effects](#macos-tcc-quirks-and-dev-reset)
+before choosing them. The table is a task index, not a script to execute top-to-bottom.
+
+| Task | Command / next step |
 |---|---|
-| Fast UI / layout / design iteration — browser, mock data, no backend | `npm run dev` → http://localhost:1420 |
-| Iterate on UI or Rust logic with the real backend — the normal dev loop | `npm run tauri dev` |
-| Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
-| Diarizer only (no whisper compile cost) | `cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx` |
-| Test Microphone / Input Monitoring TCC prompts, or the installer experience | `npm run tauri:dmg` (macOS only) → drag to ~/Applications |
-| Run Rust unit tests | `cd src-tauri && cargo test --lib` |
-| Run frontend unit tests (Vitest) | `npm run test:unit` |
-| Run frontend type check | `npm run check` |
-| Run frontend e2e tests (Playwright) | `npm run test:e2e` |
-| Kill stale dev server processes | `npm run dev-cleanup` |
-| Reset to vanilla first-run state (test onboarding) | `npm run dev-reset` — kills processes, wipes TCC grants/settings/prefs/caches/autostart/app installs (preserves dictionary, replacements, vocab packs, and transcription history); add `--nuke-dictionary` / `--nuke-db` to also wipe those (macOS only) |
-| Re-test TCC permission flow without losing app state | `npm run dev-reset:keep` — TCC-focused reset: wipes TCC grants + removes app installs, but preserves settings, dictionary, replacements, prefs, caches, autostart, history (macOS only) |
-| Diagnose memory growth (RSS + physical footprint + per-region attribution) | `npm run memwatch` — see [`docs/memory-debugging.md`](./memory-debugging.md) (macOS only) |
+| Browser/UI iteration with fake data, no native backend | `npm run dev` → http://localhost:1420 |
+| Normal development with the real backend | `npm run tauri dev` |
+| Native shell without Whisper or the ONNX diarizer | `npm run tauri -- dev -- --no-default-features` |
+| Native shell with only the diarization feature | `npm run tauri -- dev --features diarization-onnx -- --no-default-features` |
+| Installed-app permission or DMG smoke | `npm run tauri:dmg` on macOS, then drag to `~/Applications` |
+| Frontend type/accessibility check (required for each PR) | `npm run check` |
+| Frontend logic/state tests | `npm run test:unit`; watch: `npm run test:unit:watch` |
+| Browser e2e using mocked IPC | `npm run test:e2e`; interactive: `npm run test:e2e:ui` |
+| One browser spec | `npm run test:e2e -- tests/e2e/meeting-panel.spec.ts` |
+| Native-binary e2e | `npm run test:e2e:tauri`; [additional setup](../tests/e2e-tauri/README.md) |
+| Rust unit tests | `(cd src-tauri && cargo test --lib)`; [feature variants](#rust-unit-tests-cargo-test---lib) |
+| Rust formatting and lint | `(cd src-tauri && cargo fmt --all -- --check)`; `(cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings)`; use `(cd src-tauri && cargo clippy --all-targets -- -D warnings)` for the default-feature paths |
+| Stop stale dev processes | `npm run dev-cleanup`; inspect [the process cleanup script](../scripts/dev-cleanup.sh) first |
+| Reset onboarding state, preserving vocabulary/history by default | `npm run dev-reset`; deletion flags and permission scope [below](#macos-tcc-quirks-and-dev-reset) |
+| Reset permissions/install identity while keeping app state | `npm run dev-reset:keep`; [effects below](#macos-tcc-quirks-and-dev-reset) |
+| Memory sampling | `npm run memwatch`; [methodology](./memory-debugging.md) |
+| Visual review exports | [Walkthrough](#ux-screenshot-walkthrough-npm-run-testuxwalk) and [screenshot export](#ui-reference-sheets-npm-run-testscreenshots) |
 
----
+### Browser playground versus native app
 
-## Full annotated command reference
+`npm run dev` sets `HUSH_MOCK=1`. The same mock IPC stubs used by Playwright seed
+fake history, permissions, models and settings; this does not exercise real audio,
+transcription or permission prompts. Backend events do not arrive as they would
+in the app. If a changed seed appears stale, stop the server, clear the local
+`node_modules/.vite` cache and restart. See [Path A](#frontend-e2e--path-a-npm-run-teste2e)
+for the test/playground seed distinction.
 
-```bash
-# Browser playground with a MOCKED backend. Runs `HUSH_MOCK=1 vite dev`
-# and opens at http://localhost:1420. There's no Tauri runtime, so a
-# seeded in-memory IPC bus (tests/e2e/setup/mock-defaults.ts) stands in
-# for the real backend: populated history, granted permissions, an
-# installed model, in-session-stateful settings toggles. Fastest loop
-# for UI / layout / design work (HMR + browser devtools + many tabs),
-# but it's FAKE DATA — for real transcription/audio/permissions use
-# `npm run tauri dev`. Backend events (audio levels, download progress)
-# don't fire. If you edit the mock seed and changes don't show, clear
-# the stale Vite cache: `rm -rf node_modules/.vite`.
-npm run dev
+`npm run dev:tauri` is the mock-free Vite server used by Tauri's
+`beforeDevCommand`; running that server alone does not launch the Rust app.
+The feature variants use the npm-installed Tauri CLI, so no separate `cargo tauri`
+installation is assumed. The second `--` forwards `--no-default-features` to
+Cargo; see [Tauri CLI runner arguments](https://v2.tauri.app/reference/cli/#dev).
+Default app builds include `whisper` and
+`diarization-onnx`; the latter builds from source with tract-onnx. The shell with both backends disabled returns `IpcError::TranscriptionUnavailable` for transcription and
+uses `NoopDiarizer` for meetings. It still needs the native platform toolchain;
+`--no-default-features` is not a browser-only build.
 
-# The real (mock-free) Vite dev server. This is what `tauri dev` runs
-# via its beforeDevCommand — you rarely run it directly.
-npm run dev:tauri
+System-audio capture uses the macOS CoreAudio process-tap backend without an
+extra capture feature flag. ScreenCaptureKit remains linked for the permission diagnostic path; that is distinct from needing a Screen Recording grant. Check
+[the permissions guide](./macos-permissions.md) before diagnosing capture failures.
 
-# Run the full app. Default features are `whisper` (needs cmake on macOS) +
-# `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
-# no vendored binaries — compiles from source, no network needed).
-# ScreenCaptureKit is linked unconditionally on macOS for the
-# permission-diagnostic path; system-audio capture itself uses the
-# CoreAudio process-tap backend and needs no extra feature flag.
-npm run tauri dev
+### Installer assets
 
-# UI-only path: app shell with no Whisper backend and no ONNX diarizer.
-# Transcription returns IpcError::TranscriptionUnavailable; meetings get
-# NoopDiarizer. No cmake required — good for pure frontend work.
-cd src-tauri && cargo tauri dev --no-default-features
+After editing the installer background SVG, regenerate its committed PNG with:
 
-# Diarizer-only (no whisper): useful for iterating on the diarization
-# stack without paying the whisper.cpp compile cost.
-cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx
-
-# macOS-only: clean up stale DMG volumes, build the release .app + .dmg,
-# and open the DMG in Finder. THE canonical path for anything that depends
-# on macOS treating Hush as a proper app — Microphone / Input Monitoring
-# TCC prompts in particular — and for the installer experience
-# (drag-to-Applications, Gatekeeper). Dragging from the DMG sets the
-# quarantine xattr, which the app strips + exec-restarts on first launch
-# to get a clean TCC identity — the real user flow. Slow: full release
-# compile (5–10 min), so it's a smoke-test tool, not hot-iteration (use
-# `npm run tauri dev` for that, though it can't test TCC). The former
-# `tauri:bundle` shortcut was retired 2026-06-05 — it skipped the
-# quarantine/exec-restart path and tested a codepath users never hit.
-npm run tauri:dmg
-
-# Rust unit tests.
-# Default features include `whisper` + `diarization-onnx`, so the
-# default build needs cmake and builds tract-onnx from source.
-# For a lightweight path (no cmake), use --no-default-features.
-cd src-tauri && cargo test --lib
-cd src-tauri && cargo test --lib --no-default-features        # fast, no cmake needed
-cd src-tauri && cargo test --lib --features whisper            # plus whisper-gated paths
-cd src-tauri && cargo test --lib --features diarization-onnx   # plus diarizer-gated paths
-
-# Run a single Rust test or a whole module
-cd src-tauri && cargo test --lib audio::tests::name_of_test
-cd src-tauri && cargo test --lib meeting::
-
-# Integration tests (#[ignore]'d by default — need external resources)
-# HUSH_TEST_AUDIO defaults to the bundled jfk.wav; only HUSH_TEST_MODEL is required.
-cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test audio_fixture -- --ignored
-
-# Streaming + meeting pump integration tests (also #[ignore]'d)
-cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
-cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
-
-# Diarization integration test (two-speaker assertion + cluster stability)
-# Requires wespeaker ONNX model and two short WAV clips with distinct voices.
-# Download model: huggingface-cli download Wespeaker/wespeaker-voxceleb-resnet34-LM voxceleb_resnet34_LM.onnx
-cd src-tauri && HUSH_DIARIZATION_MODEL_PATH=/path/to/voxceleb_resnet34_LM.onnx \
-  HUSH_TEST_SPEAKER1_WAV=/path/to/speaker1.wav \
-  HUSH_TEST_SPEAKER2_WAV=/path/to/speaker2.wav \
-  cargo test --features diarization-onnx --test diarization_fixture -- --ignored --nocapture
-
-# Frontend type check (svelte-check) — required clean for every PR
-npm run check
-
-# Frontend unit tests (Vitest) — fast, no Tauri runtime or browser needed.
-# Covers Svelte state modules (permissions, dictation, meeting-sessions,
-# history) and their derived/reactive logic.
-npm run test:unit
-npm run test:unit:watch    # re-runs on file changes during development
-
-# Frontend e2e — Path A (Playwright + mocked Tauri IPC)
-npm run test:e2e
-npm run test:e2e:ui                                             # interactive UI
-
-# Run a single Path A spec
-npx playwright test tests/e2e/meeting-panel.spec.ts
-
-# Frontend e2e — Path B (tauri-driver + WebdriverIO, real binary)
-# Prereq: `cargo install tauri-driver --locked` and a debug build:
-#   npm run tauri build -- --debug
-# See tests/e2e-tauri/README.md for full setup.
-npm run test:e2e:tauri
-
-# Kill stale tauri/vite processes from a previous dev run (process cleanup only).
-npm run dev-cleanup
-
-# Full vanilla reset — kills processes AND wipes TCC grants, settings,
-# dictionary, preferences, caches, autostart, and app installs. Transcription
-# and meeting history is preserved by default so you don't lose recordings
-# between dev cycles.
-# Use this before testing onboarding, first-run permission prompts, or any
-# "new user" flow.
-# Pass --nuke-db to also wipe history; --nuke-models to remove downloaded
-# models; --user <name> to target another account.
-npm run dev-reset
-
-# TCC-focused reset — for when you want to re-test the macOS permission flow
-# without losing your dictionary, text replacements, window layout, or other
-# app state. Kills processes, resets TCC grants (current + legacy bundle IDs),
-# removes app installs (to avoid stale codesign-identity TCC rows). PRESERVES:
-# settings, dictionary, replacements, prefs plist, caches, autostart, history,
-# downloaded models. After running, `npm run tauri:dmg` (drag to
-# ~/Applications) re-installs and the permission flow tests on top of your
-# real working state.
-npm run dev-reset:keep
-
-# Memory diagnostics — sample the running Hush process's RSS + physical
-# footprint + full vmmap snapshots on an interval (default 30 s; pass a
-# number for a custom interval). Output goes to /tmp/hush-memwatch-*/.
-# Activity Monitor's "Memory" column is physical footprint, NOT RSS — leaks
-# can hide entirely in compressed dirty pages that RSS-based monitoring
-# misses. Full methodology: docs/memory-debugging.md.
-npm run memwatch
-npm run memwatch -- 15
-
-# Lint + format
-cd src-tauri && cargo clippy --all-targets -- -D warnings
-cd src-tauri && cargo fmt --all
-
-# Cross-platform lint — run before every PR that touches Rust.
-# The standard clippy above runs on macOS where cfg(target_os="macos") code
-# is active, so it won't catch unused imports, missing Default impls, or other
-# lint failures that only appear on Linux. This command simulates the Linux CI
-# path and must be clean before opening or updating a PR.
-cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings
+```sh
+bash scripts/generate-dmg-background.sh
 ```
+
+This requires `rsvg-convert` (`brew install librsvg`). The installed-DMG path is
+for native permission/installer claims, not every hot-reload iteration.
 
 ---
 
@@ -239,7 +137,14 @@ To get back to a completely clean state for testing onboarding or first-run perm
 npm run dev-reset
 ```
 
-This wipes all TCC grants, settings, preferences, and caches. Your dictionary terms, text replacements, enabled vocabulary packs, transcription history, and meeting sessions are **preserved** by default. Pass `--nuke-dictionary` to also wipe the vocabulary, or `--nuke-db` to wipe history (deletes the whole database, vocabulary included). Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
+This stops Hush/dev processes, removes Hush app installs, resets the permission
+grants listed in the script, and clears Hush settings, preferences and caches.
+In particular, the unscoped `ListenEvent` reset clears Input Monitoring grants
+for **all apps**, which may then prompt again. Your dictionary terms, text replacements, enabled vocabulary packs, transcription history, and meeting sessions are **preserved** by default. Pass `--nuke-dictionary` to also wipe the vocabulary, or `--nuke-db` to wipe history (deletes the whole database, vocabulary included). Permission rows from previous builds may still appear in System Settings — remove any stale "Hush" entries there manually before testing onboarding. See [`scripts/dev-reset.sh`](../scripts/dev-reset.sh) for exactly what is deleted.
+
+Additional flags: `--nuke-models` removes downloaded models; `--user <name>`
+targets another account. Forward flags with `npm run dev-reset -- <flags>` and
+review the script before using them.
 
 If you only need to re-test the permission flow itself and want to keep your dictionary, text replacements, window layout, and other settings intact, use the softer mode instead:
 
@@ -277,10 +182,10 @@ The check is cheap: launch, wait for the "starting Hush" trace log, confirm no p
 
 Pure-logic tests at the trait + module boundaries. No real audio device needed. The default build (features `whisper` + `diarization-onnx`) needs cmake and builds tract-onnx from source; for a fast no-cmake pass use `--no-default-features`.
 
-- **`--no-default-features`** — no cmake required; covers most paths. Fast (~100 ms total).
+- **`--no-default-features`** — no cmake required; covers most paths. Test execution is fast on a warm build; cold native dependency compilation can take much longer.
 - **Default features** — same tests, but also exercises feature-gated code. Needs cmake + tract-onnx.
-- **`--features whisper`** — adds whisper-gated paths. Needs cmake.
-- **`--features diarization-onnx`** — adds diarizer-gated paths.
+- **`--no-default-features --features whisper`** — Whisper without the default ONNX feature; needs cmake.
+- **`--no-default-features --features diarization-onnx`** — ONNX diarizer without Whisper. Cargo features are additive unless defaults are disabled.
 - **Hand-rolled mocks** at every trait seam (`Noop*`, `Mem*` impls in `src-tauri/src/ipc/tests.rs`) — preferred over `mockall` for clearer test failure messages. `MemHistory` enables round-trip assertions; `Noop*` variants return defaults. Compose test `AppState` instances via `AppStateBuilder`.
 - **Async tests** use `#[tokio::test]`. SQLite-backed tests use `SqliteDatabase::open_in_memory()` — no disk, no shared state.
 
@@ -290,6 +195,20 @@ Two patterns:
 
 - **`wiremock`-driven HTTP tests** for the model-download path. The orchestrator is pure logic; the wiremock server stands in for Hugging Face. See `src-tauri/src/transcription/download.rs`.
 - **`#[ignore]`'d env-var fixtures** for things that need a binary the repo can't ship. `audio_fixture` / `streaming_fixture` / `meeting_fixture` require `HUSH_TEST_MODEL`; `HUSH_TEST_AUDIO` is optional and defaults to the bundled `jfk.wav`. The diarization fixture reads `HUSH_DIARIZATION_MODEL_PATH` plus the speaker WAV env vars documented in `src-tauri/tests/fixtures/README.md`.
+
+For an ignored audio/streaming/meeting fixture, set `HUSH_TEST_MODEL` to an
+existing compatible model, then select the test explicitly:
+
+```sh
+(cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test audio_fixture -- --ignored)
+(cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test streaming_fixture -- --ignored --nocapture)
+(cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture)
+```
+
+No model path means those ignored tests have not exercised real inference.
+Use the [fixture README](../src-tauri/tests/fixtures/README.md) for the distinct
+ONNX model and labelled-audio requirements. Run a focused Rust unit with, for
+example, `(cd src-tauri && cargo test --lib --no-default-features meeting::)`.
 
 When adding an integration test that needs an external resource, prefer `#[ignore]` + an env-var pointer over committing the resource — keeps the repo small and lets contributors opt in.
 
@@ -312,11 +231,12 @@ Before merging anything that touches the dictation hot path, run through the man
 
 ### UX screenshot walkthrough (`npm run test:uxwalk`)
 
-Captures a PNG of every significant screen and state (empty, populated, error, dialogs, etc.) into `/tmp/hush-uxwalk-shots/`. Use it to spot visual regressions, layout gaps, or stale copy across a branch or after a large refactor.
+Exports the states defined in the walkthrough spec into `/tmp/hush-uxwalk-shots/`.
+Read the passed/skipped test summary before claiming a state was exercised. Use it to spot visual regressions, layout gaps, or stale copy across a branch or after a large refactor.
 
 ```bash
 npm run test:uxwalk
-# Opens ~16 PNGs in /tmp/hush-uxwalk-shots/
+# Captured PNGs are under /tmp/hush-uxwalk-shots/
 # On macOS: open /tmp/hush-uxwalk-shots/
 ```
 
@@ -324,26 +244,24 @@ The script is `tests/e2e/zz-uxwalk.spec.ts`. It runs as part of the normal CI su
 
 ### UI reference sheets (`npm run test:screenshots`)
 
-Captures all 16 screens in **both light and dark mode** (32 PNGs total) and composites them into two large reference images. Intended for design handoff or design review — pass the images to a designer working on UI changes without needing the app running.
+The current [screenshot spec](../tests/e2e/zz-screenshots.spec.ts) exports the
+single `brand` palette to `tmp/uxwalk/brand/*.png`. It uses mocked IPC; inspect the
+run's passed/skipped summary before describing which states were captured.
+The package script still prints an old light/dark output hint; the spec owns
+the actual output location.
 
-```bash
-# 1. Capture all 32 screenshots (light + dark, 800×600 each)
+```sh
 npm run test:screenshots
-# Output: tmp/uxwalk/light/*.png  tmp/uxwalk/dark/*.png
-
-# 2. Composite into two reference sheets
-python3 scripts/make-ui-reference.py
-# Output: tmp/uxwalk/ui-reference-light.png
-#         tmp/uxwalk/ui-reference-dark.png
 ```
 
-The reference sheets are **not committed** — `tmp/` is in `.gitignore`. Regenerate any time after a UI change by running both commands above.
+View the individual PNGs for design review. They are not committed (`tmp/` is
+ignored), and they do not establish native audio or permission behavior.
 
-**What the sheets include:** 4-column grid of every major screen state (dictation idle/recording/transcribing/populated, first-run modal, history empty/populated/meeting, and all settings tabs), app icon in the header, DMG background tiled as the canvas texture with a theme-appropriate tint, and per-screenshot labels.
-
-**Scripts involved:**
-- `tests/e2e/zz-screenshots.spec.ts` — Playwright spec; forces theme via `localStorage.setItem("hush.theme", ...)` before page load
-- `scripts/make-ui-reference.py` — Pillow compositing script; requires `pip3 install Pillow`
+**Legacy compositor:** [`scripts/make-ui-reference.py`](../scripts/make-ui-reference.py)
+expects `tmp/uxwalk/light/` and `dark/` and writes two theme sheets. It does not
+consume the current `brand` export. Running it after the current screenshot task
+is not a maintained end-to-end recipe; use the PNGs directly until the compositor
+is updated. Its Pillow dependency does not change that input mismatch.
 
 ### Type check (`npm run check`)
 
@@ -400,7 +318,9 @@ meeting pump: inference tick  utterances=0 elapsed_ms=1
 
 ... and every tick shows `elapsed_ms` near 0 with no `"streaming tick: inference ran"` lines from `streaming.rs`.
 
-**Means:** The ring buffer is empty. The audio capture source isn't pushing samples. Check ScreenCaptureKit permissions (install via `npm run tauri:dmg` → drag to ~/Applications first) and microphone TCC grants.
+**Means:** The ring buffer is empty. The audio capture source isn't pushing samples. Check the selected audio source and microphone TCC grants on an installed build.
+Follow [macOS permission troubleshooting](./macos-permissions.md): system audio
+does not need a separate Screen Recording grant.
 
 ### Failure mode 2 — Whisper no-speech filtering
 

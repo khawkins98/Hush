@@ -19,32 +19,20 @@ See §13.8 of `hush-prd.md` for the full reasoning.
 
 ## Development environment
 
-Prerequisites: Rust stable (`rustup update stable`), Node.js ≥ 20 (`nvm install 22`), and on macOS cmake (`brew install cmake`) for the whisper.cpp bindings.
-
-```bash
-git clone https://github.com/khawkins98/Hush.git
-cd Hush
-npm install
-npm run tauri dev
-```
-
-For the full command reference — which command to run when, macOS TCC quirks, the ScreenCaptureKit dylib workaround, and all test commands — see **[docs/developing.md](./docs/developing.md)**.
-
----
+Start with [Developing Hush](./docs/developing.md#first-time-setup) for the toolchain
+and checkout setup, then choose a command from its
+[task table](./docs/developing.md#which-command-to-run). That guide owns the
+commands, test capabilities, native permission path and troubleshooting.
 
 ## Dev workflow: which command to run
 
-| What you're trying to do | Command |
-|---|---|
-| Fast UI / layout work — browser + mock data, no backend | `npm run dev` → http://localhost:1420 |
-| Iterate on UI or Rust logic with the real backend — the normal dev loop | `npm run tauri dev` |
-| Frontend-only work, no cmake needed | `cd src-tauri && cargo tauri dev --no-default-features` |
-| Test Microphone / Input Monitoring TCC prompts, or the installer experience | `npm run tauri:dmg` (macOS only) → drag to ~/Applications |
-| Run Rust unit tests | `cd src-tauri && cargo test --lib` |
-| Run frontend type check | `npm run check` |
-| Run frontend e2e tests | `npm run test:e2e` |
-
-**`npm run tauri dev` vs `tauri:dmg`:** The dev binary is unsigned; macOS TCC attributes mic/keyboard access to the parent terminal, so those permissions behave differently than in a real app. `tauri:dmg` builds a release DMG you drag to `~/Applications` — Finder sets the quarantine xattr and the app strips it + exec-restarts on first launch, the same flow real users get. Use it when verifying permission flows, system-audio capture, or the install experience (drag-to-Applications, Gatekeeper). It's a full release compile (5–10 min), so it's a smoke-test tool, not your day-to-day loop — use `npm run tauri dev` for that. (The former `tauri:bundle` shortcut was retired 2026-06-05: it skipped the quarantine/exec-restart path, so it tested a codepath users never hit.)
+- Browser/UI iteration uses a mocked backend; real audio needs the native app.
+- Permission and installer claims need the installed-DMG path. An unsigned dev
+  binary exercises a different macOS identity.
+- Use [the validation sections](./docs/developing.md#testing-layers) appropriate to
+  the changed behavior, including the required frontend check and native startup
+  smoke when applicable. Reset utilities have side effects; inspect their scope
+  before using them.
 
 ---
 
@@ -138,95 +126,10 @@ For commands, what each layer catches, and when to run each one, see **[docs/dev
 
 ## Adding a new IPC command
 
-A `#[tauri::command]` is touched in **four** places that all have to stay in sync. Skipping a step doesn't always fail CI — sometimes the symptom is a runtime `undefined` field in the frontend or a missing-handler runtime error — so this list is the canonical recipe.
-
-### 1. Define the Rust types
-
-In `src-tauri/src/ipc/commands/mod.rs` (or one of the existing domain submodules — `commands/meeting.rs`, `commands/models.rs`, `commands/macos.rs` — extracted under #82), add the request/response struct. New domain-cohesive command groups should follow the same submodule pattern. Apply `#[serde(rename_all = "camelCase")]` so the wire shape matches JS conventions:
-
-```rust
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MyCommandResult {
-    pub example_field: String,
-    pub another_field: u32,  // serialises as `anotherField`
-}
-```
-
-Define the command itself with `#[tauri::command]`:
-
-```rust
-#[tauri::command]
-pub async fn my_command(state: State<'_, AppState>, arg: String) -> IpcResult<MyCommandResult> {
-    // ...
-}
-```
-
-Errors should map to a variant of `IpcError` so the frontend's `formatErrorDisplay` (in `src/lib/errors.ts`) can produce a tailored `{ headline, hint?, details? }` for the shared `ErrorDisplay` component. Adding a new error variant means updating that mapper — see step 4 below.
-
-### 2. Register the command in the Tauri builder
-
-In `src-tauri/src/lib.rs`, add the command to the `tauri::generate_handler![...]` macro:
-
-```rust
-.invoke_handler(tauri::generate_handler![
-    // ... existing commands ...
-    ipc::commands::my_command,                       // for top-level commands
-    ipc::commands::meeting::meeting_my_command,      // for submodule commands
-])
-```
-
-The macro looks for `__cmd__<name>` siblings in the same module as the function. Use the **full module path** (`ipc::commands::my_command`, or `ipc::commands::meeting::…` for submodule commands), not a re-export — `pub use` does not carry the macro's hidden symbol. (See `learnings.md` 2026-04-25 for the trap that cost us once.)
-
-### 3. Add the TypeScript type and call site
-
-Declare a TypeScript type that matches the Rust struct's serialised shape. Two conventional locations:
-
-- **Shared across the page and panel components.** Add it to `src/lib/types.ts` (the post-#84 split moved cross-cutting types here) and `import type { MyCommandResult } from "$lib/types";` from both the parent page and any child panel that needs it.
-- **Used only by `+page.svelte`.** Declare it inline in the `<script>` block at the top of the page.
-
-```typescript
-export type MyCommandResult = {
-    exampleField: string;
-    anotherField: number;
-};
-```
-
-Then `invoke<MyCommandResult>("my_command", { arg: "..." })`.
-
-**The shape must match exactly.** A typo here (`example_field` instead of `exampleField`, `string` instead of `number`) compiles fine and produces silent `undefined`s at runtime. The Playwright e2e suite catches this *only* if a spec asserts on the field — it's not automatic.
-
-### 4. Update the Playwright mock
-
-In `tests/e2e/_mock.ts`, add a default handler so e2e tests have a stub for the new command:
-
-```typescript
-my_command: (args: unknown) => {
-    const a = args as { arg: string };
-    return { exampleField: a.arg, anotherField: 42 };
-},
-```
-
-The mock's field shape must mirror the Rust struct — same camelCase names, same types. A round-5 review caught a regression where the model-card mock had `sizeBytes` / `speed` fields while the Rust side serialised `sizeMb` / `speedRating`; tests passed by luck.
-
-If the new command needs error simulation in a test, override at the spec level (`installMocks(page, { my_command: () => { throw { kind: "settings", message: "..." } } })`).
-
-If the command introduces a new `IpcError` variant, also update `formatErrorDisplay` in `src/lib/errors.ts` so the user gets tailored copy in the shared `ErrorDisplay` instead of the generic default.
-
-### Verifying
-
-After all four steps:
-
-```bash
-cd src-tauri && cargo build --lib   # Rust struct + command compile
-cargo test --lib                    # IPC tests still pass
-cd ..
-npm run check                       # TypeScript types compile
-npm run test:e2e                    # Mocks work end-to-end
-npm run tauri dev                   # Real backend roundtrip (if it touches startup)
-```
-
-If any of these surface a mismatch, fix at the appropriate layer above. The four places are coupled; CI catches Rust-only and TS-only breaks but cannot catch type-shape mismatches between them — that's a hands-on smoke responsibility.
+Use [the complete IPC recipe](./docs/ipc-commands.md). It owns the four-place
+sync rule, full-path registration requirement, mock serialization constraints,
+error mapping, per-window plugin permissions and verification commands. Keep
+all four representations aligned in the same change.
 
 ---
 
@@ -254,7 +157,13 @@ Your PR touches code — keep the docs honest too:
 | Developer workflow, commands, or new gotcha | `docs/developing.md` |
 | New module or seam added/removed | `ARCHITECTURE.md` module map |
 
-`docs/developing.md` is the live reference contributors reach for first. If a new feature adds a flag, a command variant, a required env-var, a workaround for a platform quirk, or a debugging technique — it belongs there, not just in commit messages or PR descriptions.
+Keep one maintained home for each task: `docs/developing.md` owns commands and
+validation, `docs/ipc-commands.md` owns the IPC contribution recipe, and
+`ARCHITECTURE.md` owns the module/seam map. Update the relevant home and link from
+entry points instead of repeating command catalogs in README or agent guidance.
+Keep historical proposals, dated measurements, `CHANGELOG.md` and `learnings.md`
+in their recorded scope. Documentation changes must preserve source-attribution,
+permission-reset and validation requirements.
 
 ### Diagnostic logging (Rust audio/transcription code)
 
