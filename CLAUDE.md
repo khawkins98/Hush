@@ -10,126 +10,11 @@ Primary target: **macOS 26 only.** macOS 15 and older are explicitly out of scop
 
 ## Common commands
 
-```bash
-# Browser playground with a MOCKED backend (FAKE DATA, no Tauri). Fast
-# UI/layout loop; real transcription/audio/permissions need `npm run
-# tauri dev`. Full notes (caveats, the stale-cache fix, dev:tauri) live
-# in docs/developing.md → "Which command to run".
-npm run dev
-
-# Run the full app. Default features are `whisper` (needs cmake on
-# macOS) + `diarization-onnx` (pure-Rust ONNX inference via `tract-onnx`;
-# no vendored binaries — compiles from source, no network needed).
-npm run tauri dev
-
-# UI-only path: launches the app shell with no Whisper backend
-# and no ONNX diarizer. Transcription returns
-# IpcError::TranscriptionUnavailable; meetings get NoopDiarizer.
-cd src-tauri && cargo tauri dev --no-default-features
-
-# Diarizer-only (no whisper): rare but useful for iterating on the
-# diarization stack without paying whisper.cpp compile cost.
-cd src-tauri && cargo tauri dev --no-default-features --features diarization-onnx
-
-# macOS-only: build a release DMG and open it for install. THE canonical
-# path for anything that depends on macOS treating Hush as a proper app —
-# Microphone / Input Monitoring TCC prompts in particular. Dragging the
-# .app from the mounted DMG to ~/Applications is what makes TCC reliable:
-# Finder sets the quarantine xattr, and the app strips it + exec-restarts
-# on first launch (lib.rs::handle_quarantine_strip) to establish a clean
-# TCC identity — the exact codepath real users hit. (The retired
-# `tauri:bundle` cp'd the app in place, so it never ran that path and
-# tested the wrong thing; see "macOS TCC testing" below.) Automatically
-# ejects stale Hush DMG mounts left by previous builds. Slow: full
-# release compile (5–10 min), so it's a smoke-test tool, not hot-iteration
-# (use `npm run tauri dev` for that). DMG lands at
-# src-tauri/target/release/bundle/dmg/*.dmg.
-npm run tauri:dmg
-
-# Regenerate the DMG installer background PNG from its SVG source.
-# Requires rsvg-convert (brew install librsvg). Run after editing
-# src-tauri/assets/dmg-background.svg, then commit the updated PNG.
-bash scripts/generate-dmg-background.sh
-
-# Rust unit tests — fast, no real audio device needed.
-cd src-tauri && cargo test --lib
-cd src-tauri && cargo test --lib --features whisper             # plus whisper-gated paths
-cd src-tauri && cargo test --lib --features diarization-onnx    # plus diarizer-gated paths
-
-# Run a single Rust test or module
-cd src-tauri && cargo test --lib audio::tests::name_of_test
-cd src-tauri && cargo test --lib meeting::                       # whole module
-
-# Integration tests (#[ignore]'d by default, need external resources)
-cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test audio_fixture -- --ignored
-cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper --test streaming_fixture -- --ignored --nocapture
-cd src-tauri && HUSH_TEST_MODEL=/path/to/ggml-base.bin cargo test --features whisper,test-utils --test meeting_fixture -- --ignored --nocapture
-
-# Frontend type check (svelte-check) — required clean for every PR
-npm run check
-
-# Frontend unit tests (vitest) — pure logic + state module derived logic.
-# Fast (~1 s), no browser needed. Run before every PR that touches
-# src/lib/**/*.ts or src/lib/state/**/*.svelte.ts.
-npm run test:unit
-npm run test:unit:watch                                          # interactive watch mode
-
-# Frontend e2e — Path A (Playwright + mocked Tauri IPC)
-npm run test:e2e
-npm run test:e2e:ui                                              # interactive
-
-# Run a single Path A spec
-npx playwright test tests/e2e/meeting-panel.spec.ts
-
-# UX screenshot walkthrough — captures ~16 PNGs of every significant
-# screen state to /tmp/hush-uxwalk-shots/. Use for visual review after
-# UI changes. Script: tests/e2e/zz-uxwalk.spec.ts
-npm run test:uxwalk
-
-# Frontend e2e — Path B (tauri-driver + WebdriverIO, real binary)
-# Prereq: `cargo install tauri-driver --locked` and a debug build:
-#   npm run tauri build -- --debug
-# See `tests/e2e-tauri/README.md` for full setup. CI integration is
-# deferred until tauri-driver's macOS support stabilises.
-npm run test:e2e:tauri
-
-# Reset stale dev servers (kills tauri/vite processes only)
-npm run dev-cleanup
-
-# Full vanilla reset — kills processes AND wipes TCC grants, settings,
-# preferences, caches, autostart, and app installs. Dictionary terms,
-# replacements, enabled vocab packs, and transcription/meeting history are
-# preserved by default. Use before testing onboarding or new-user flows.
-# Pass --nuke-dictionary to also wipe the vocabulary; --nuke-db to wipe the
-# whole DB (history included); --nuke-models to remove downloaded models;
-# --user <name> for another account.
-npm run dev-reset
-
-# TCC-focused reset — only clears the things that affect macOS permission
-# testing: kills processes, resets TCC grants, removes app installs. Preserves
-# Hush app state (settings, dictionary, replacements, prefs, caches, autostart,
-# history, models). Use when re-testing the permission flow without losing
-# your real working state.
-npm run dev-reset:keep
-
-# Memory diagnostics (macOS): sample the running Hush process's RSS +
-# physical footprint + per-sample vmmap snapshots → /tmp/hush-memwatch-*/.
-# IMPORTANT: Activity Monitor "Memory" = physical footprint, NOT RSS; leaks
-# in this codebase have repeatedly hidden in compressed dirty pages that
-# RSS-based monitoring misses. Every memory claim needs BOTH numbers.
-# Methodology + vmmap region attribution: docs/memory-debugging.md.
-npm run memwatch
-
-# Lint + format
-cd src-tauri && cargo clippy --all-targets -- -D warnings
-cd src-tauri && cargo fmt --all
-
-# Cross-platform lint (required before every PR): simulates the Linux CI path.
-# macOS clippy misses errors in #[cfg(target_os = "macos")]-gated code, unused
-# imports that are only used behind a cfg, and new_without_default on constructors
-# whose signatures differ across platforms. Run this before committing Rust changes.
-cd src-tauri && cargo clippy --lib --no-default-features -- -D warnings
-```
+Use [Developing Hush](./docs/developing.md) for setup, command variants and the
+validation matrix. `npm run dev` is a browser with fake backend data;
+`npm run tauri dev` launches the real app. Native permission testing uses the
+installed DMG path, not the unsigned dev binary. Reset commands can alter macOS
+permission grants and remove app installs; read the documented effects first.
 
 ## Architecture: trait-seam pattern
 
@@ -153,52 +38,31 @@ When adding a command that touches a seam:
 
 ## The four-place IPC sync rule
 
-A `#[tauri::command]` lives in **four** places that must stay aligned. CI catches Rust-only and TS-only breaks; it cannot catch shape mismatches between them — that's a hands-on responsibility. Any time you add or change a command:
-
-1. **Rust struct + handler** in `src-tauri/src/ipc/commands/mod.rs` (or a domain submodule like `commands/meeting.rs`) with `#[serde(rename_all = "camelCase")]`.
-2. **Register** in `src-tauri/src/lib.rs` inside `tauri::generate_handler![...]` using the **full module path**:
-   - Top-level commands: `ipc::commands::my_command`.
-   - Submodule commands: `ipc::commands::meeting::meeting_start_manual`.
-   - `pub use` re-exports do **not** carry the macro's hidden `__cmd__<name>` symbol — see `learnings.md` 2026-04-25 for why we ate that lesson once already. The header of `commands/mod.rs` cites this so future contributors don't try.
-3. **TypeScript type** in `src/lib/types.ts` (or inline in `+page.svelte` if scoped to the page), then `invoke<MyResult>("my_command", ...)`.
-4. **Playwright mock** in `tests/e2e/_mock.ts` with a default handler whose field shape mirrors the Rust struct exactly. Mocks are serialized via `toString()` and rebuilt in the page context, so they can't capture closure variables — any per-test counters must go through `page.exposeFunction`.
-
-A new `IpcError` variant also needs `formatErrorDisplay` in `src/lib/errors.ts` updated to map it to the structured `{ headline, hint?, details? }` shape that `ErrorDisplay.svelte` renders. Page-level surfaces wrap that in their own `ErrorDisplay` slot.
-
-A new IPC the **settings UI** needs to invoke runs in the main window, so any required Tauri plugin permissions belong in `capabilities/default.json`. The non-main windows (`hud`, `menu-bar`, `debug`) each have their own capability file and must be granted separately if they ever start invoking plugin commands. Custom `#[tauri::command]` functions don't need permission entries, but Tauri plugin commands (autostart, clipboard, etc.) do. Add explicitly.
+Follow [Add or change an IPC command](./docs/ipc-commands.md): Rust handler and
+wire types, full-path registration, TypeScript types/call site and Playwright
+mock must stay aligned. New error variants also need their display mapper;
+plugin commands need permissions for the window that invokes them. Keep the
+mock serialization constraint and real-backend verification in that recipe.
 
 ## Dev-launch smoke (required for startup-touching changes)
 
-CI does not run a real Tauri runtime. A panic at app boot (plugin init, capability misconfig, `AppState::build_default` failure, `tauri.conf.json` issue, missing rpath for a transitively-linked dylib) is **invisible to CI** and only surfaces when someone pulls the branch. Run `npm run tauri dev` once before opening a PR that touches:
-
-- `src-tauri/src/lib.rs` (especially the `tauri::Builder` chain or `setup` hook)
-- `src-tauri/tauri.conf.json`
-- `src-tauri/Cargo.toml` — adding/removing a Tauri plugin dep, **or making a transitive dep unconditional** (e.g. dropping a feature flag that gated a crate which links system frameworks; the crate's build-script-baked rpaths don't propagate from a transitive dep, see `learnings.md` 2026-04-27).
-- `src-tauri/.cargo/config.toml` (link-arg / rpath changes)
-- `src-tauri/capabilities/*.json`
-- `src-tauri/src/app_menu/` (native macOS menu — a malformed `MenuBuilder` chain panics during `setup`).
-- Anything that adds or removes a `.plugin(...)` call
+CI does not boot a real Tauri runtime. Changes to startup, plugins, capabilities,
+window configuration, menu construction or linking require the
+[dev-launch smoke](./docs/developing.md#dev-launch-smoke). Preserve its trigger
+list and run the app before claiming startup works.
 
 ## macOS TCC testing
 
-**The one canonical workflow for TCC / permission testing:**
+Follow [the native permission workflow](./docs/developing.md#macos-tcc-quirks-and-dev-reset)
+and [recovery guide](./docs/macos-permissions.md). Install by dragging from the
+DMG to `~/Applications`: the quarantine-strip/exec-restart path is part of the
+real permission flow. An unsigned `tauri dev` launch does not validate it.
 
-    npm run dev-reset  # REQUIRED when testing IM from scratch — see note below
-    npm run tauri:dmg  # build release DMG → opens in Finder
-    # then drag Hush.app from the mounted DMG → ~/Applications, and open it
-
-Dragging from the DMG is load-bearing: Finder sets the `com.apple.quarantine` xattr, and on first launch the app strips it and **exec-restarts** (`lib.rs::handle_quarantine_strip`) to establish a clean TCC identity. That restart is the exact codepath real users hit — so testing this way validates the real permission flow, not an approximation.
-
-**Why `tauri:bundle` was retired (2026-06-05).** The old `tauri:bundle` `cp -R`'d a debug `.app` into `~/Applications` and `open`'d it. Because `cp` never sets the quarantine xattr, that path **never ran the quarantine-strip-exec-restart** — so it exercised a *different* startup codepath than any real install, making it both flaky and misleading as a TCC smoke test. `tauri:dmg` does the job reliably and tests the real install UX; the speed edge `tauri:bundle` had is covered by `npm run tauri dev` (which can't test TCC, and that's fine — you don't TCC-test every iteration). See `learnings.md` 2026-06-05.
-
-Use `npm run tauri dev` for fast UI/Rust iteration — it can't test TCC reliably (unsigned binary; TCC attributes it to the parent terminal).
-
-**`dev-reset` is required when testing Input Monitoring from a clean state.**  
-`npm run dev-reset` runs a nuclear `tccutil reset ListenEvent` (no bundle ID) that clears all IM grants for the user — necessary because TCC entries created during quarantine or by ad-hoc cdhash don't match the plain bundle-ID-scoped reset. It also removes *both* `~/Applications/Hush.app` and `/Applications/Hush.app`. The `/Applications` removal is critical: old DMG installs from before the re-signing fix carry a linker-signed codesign identifier (`hush-<hash>`) instead of `io.github.khawkins98.hush`. TCC uses the **codesign identifier** (not `CFBundleIdentifier`) to key permission rows, so the two installs have completely separate TCC universes and running both produces a confusing split where one shows Denied and the other shows NotDetermined. See `learnings.md` 2026-05-13 "Linker-signed vs re-signed TCC identity".
-
-Stale `Hush.app` rows after rebuilds are recovered by manually removing them with `−` in System Settings → Privacy, then running `npm run dev-reset`, then `npm run tauri:dmg`.
-
-The full troubleshooting guide lives in [`docs/macos-permissions.md`](./docs/macos-permissions.md).
+For a deliberately clean Input Monitoring test, the documented reset is required:
+its unscoped `ListenEvent` reset affects **all apps**, and it removes Hush installs
+from both Applications locations to clear conflicting signing identities. Choose
+the documented reset mode before running it; vocabulary/history are preserved by
+default unless the corresponding deletion flags are supplied.
 
 ## Conventions
 
