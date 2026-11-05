@@ -161,6 +161,12 @@ Keep one maintained home for each task: `docs/developing.md` owns commands and
 validation, `docs/ipc-commands.md` owns the IPC contribution recipe, and
 `ARCHITECTURE.md` owns the module/seam map. Update the relevant home and link from
 entry points instead of repeating command catalogs in README or agent guidance.
+Keep README focused on what Hush does, installation, material limitations and
+useful next steps. Detailed network verification belongs in `docs/privacy.md`,
+the dated comparison in `docs/comparison.md`, and full attribution in
+`docs/acknowledgements.md`; keep visible credits and source-use restrictions at
+the entrance. Prefer plain, active prose and descriptive links over slogans,
+repeated feature claims or another command catalog.
 Keep historical proposals, dated measurements, `CHANGELOG.md` and `learnings.md`
 in their recorded scope. Documentation changes must preserve source-attribution,
 permission-reset and validation requirements.
